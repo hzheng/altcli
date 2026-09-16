@@ -1,0 +1,1082 @@
+openapi: 3.1.0
+info:
+  title: CoderCrew host API
+  version: 0.1.0
+  description: Web-first manual tmux console for any number of registered panes, grouped by worktree into projects with
+    named relay pairs. Native iOS is reserved. This contract and the TypeScript types are manually maintained in the starter.
+servers:
+- url: http://127.0.0.1:8787
+  description: Local host; use the configured HTTPS Tailscale origin for remote access.
+security:
+- ownerToken: []
+paths:
+  /api/v1/state:
+    get:
+      operationId: getConsoleState
+      summary: Read registered sessions, current snapshots, recent commands and manual ownership
+      responses:
+        '200':
+          description: Fresh server state; individual panes may be unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConsoleState'
+        '401':
+          description: Token missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Host/origin denied or real input disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: Internal error; delivery may be uncertain
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '503':
+          description: Host configuration incomplete
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/v1/commands:
+    post:
+      operationId: submitCommand
+      summary: Attempt a human-selected command in one worktree
+      description: No automatic relay or task-completion inference. Holds the target's worktree while the command is
+        in flight; other worktrees are unaffected. A delivered record settles the hold at once. Rejected preflight
+        means no send attempt. A failure after sending began is recorded as uncertain and keeps the worktree held
+        until a human acknowledges it through /control/release. Every POST requires an explicit bearer token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommandInput'
+      responses:
+        '200':
+          description: Stored transport result, including delivered, rejected, or uncertain; not proof of agent
+            completion
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandRecord'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Token missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Host/origin denied or real input disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Agent not registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Reserved turn, ID conflict, or changed state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '413':
+          description: Body exceeds 16 KiB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '415':
+          description: JSON media type required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: Internal error; delivery may be uncertain
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '503':
+          description: Host configuration incomplete
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/v1/control/release:
+    post:
+      operationId: acknowledgeUncertainDelivery
+      summary: Acknowledge an uncertain delivery after inspecting the terminal
+      description: Clears the hold that an uncertain (or restart-interrupted) command keeps on its worktree. Requires
+        human confirmation. Does not resend, interrupt an agent, approve code, or mark a task complete. The expected
+        command ID must still hold the worktree.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReleaseInput'
+      responses:
+        '200':
+          description: Hold cleared
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReleaseResult'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Token missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Host/origin denied or real input disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Reserved turn, ID conflict, or changed state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '413':
+          description: Body exceeds 16 KiB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '415':
+          description: JSON media type required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: Internal error; delivery may be uncertain
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '503':
+          description: Host configuration incomplete
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/v1/sessions:
+    post:
+      operationId: registerSession
+      summary: Register one live tmux pane as an agent
+      description: Records the pane's identity and the foreground process name observed now; sends no input. Shells and
+        generic interpreters are refused. A label that maps to an existing id re-points that registration at the new pane.
+        Refused while the affected worktree has a command in flight or an unacknowledged uncertain delivery, or when
+        moving a paired session to another repository.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegistrationInput'
+      responses:
+        '200':
+          description: Registration stored; no input was sent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistrationResult'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Token missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Host/origin denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Reserved turn, shell or generic process, duplicate pane, unsafe pane, or tmux failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '413':
+          description: Body exceeds 16 KiB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '415':
+          description: JSON media type required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '503':
+          description: Host configuration incomplete
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/v1/sessions/{id}:
+    delete:
+      operationId: removeSession
+      summary: Forget one registration
+      description: The tmux pane and its agent keep running; only CoderCrew forgets the pane. Refused while the worktree's
+        worktree is held or while the session belongs to a pair. Command history keeps the agent id.
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/AgentId'
+      responses:
+        '200':
+          description: Registration removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemoveResult'
+        '400':
+          description: Invalid id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Token missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Host/origin denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: No registration with this id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: The worktree is held
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '503':
+          description: Host configuration incomplete
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/v1/panes/preview:
+    get:
+      operationId: previewPane
+      summary: Read the last lines of any live pane
+      description: Bounded read-only capture for the registration picker, so a human can tell similar panes apart. No
+        identity check applies because nothing is registered yet. The token holder can read any pane on the server.
+      parameters:
+      - name: paneId
+        in: query
+        required: true
+        description: Exact pane ID, URL-encoded (a "%" becomes "%25").
+        schema:
+          type: string
+          pattern: ^%\d+$
+      responses:
+        '200':
+          description: Captured text; not a lifecycle or readiness signal
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PanePreview'
+        '400':
+          description: Invalid pane ID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Token missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Host/origin denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: tmux failure, e.g. no such pane or no server
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '503':
+          description: Host configuration incomplete
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/v1/pairs:
+    post:
+      operationId: createPair
+      summary: Name two registered sessions that alternate on one worktree
+      description: Grouping and validation only; no automation. Both sessions must be registered with the same repository
+        root, so they share one index. Refused while that worktree is held.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PairInput'
+      responses:
+        '200':
+          description: Pair stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RelayPair'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Token missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Host/origin denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: A named session is not registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Different worktrees, duplicate pair name, or reserved turn
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '413':
+          description: Body exceeds 16 KiB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '415':
+          description: JSON media type required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '503':
+          description: Host configuration incomplete
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/v1/pairs/{id}:
+    delete:
+      operationId: removePair
+      summary: Forget one pair
+      description: Both sessions stay registered. Refused while the pair's worktree has a reserved turn.
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/AgentId'
+      responses:
+        '200':
+          description: Pair removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemoveResult'
+        '400':
+          description: Invalid id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Token missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Host/origin denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: No pair with this id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: The worktree is held
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '503':
+          description: Host configuration incomplete
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/v1/events:
+    post:
+      operationId: recordTurnEvent
+      summary: Record a turn-complete event from a CLI's own hook
+      description: Called by hooks/codercrew-turn-complete.sh, registered as Claude Code's Stop hook and Codex's notify
+        command on the same host. The event is matched to a registered pane by exact tmux identity and tied to the
+        last command delivered there. It is informational; it authorizes nothing, sends nothing, and never clears a
+        hold. An event from an unregistered pane is kept so a misconfigured hook is visible.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventInput'
+      responses:
+        '200':
+          description: Event recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TurnEvent'
+        '400':
+          description: Invalid event
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Token missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Host/origin denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '413':
+          description: Body exceeds 16 KiB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '415':
+          description: JSON media type required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '503':
+          description: Host configuration incomplete
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+components:
+  securitySchemes:
+    ownerToken:
+      type: http
+      scheme: bearer
+      description: Random 256-bit host token (64 hex characters). Never include it in a URL.
+  schemas:
+    AgentId:
+      type: string
+      pattern: ^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$
+      description: Lowercase slug derived from the registration label, e.g. codex or claude-code.
+    AdapterMode:
+      type: string
+      enum:
+      - mock
+      - tmux
+    AgentType:
+      type: string
+      enum:
+      - codex
+      - claude
+      - other
+      description: Which CLI the human says runs in the pane; suggested from the process name, confirmed at registration.
+    DeliveryStatus:
+      type: string
+      enum:
+      - recorded
+      - sending
+      - delivered
+      - uncertain
+      - rejected
+    PaneIdentity:
+      type: object
+      properties:
+        paneId:
+          type: string
+        panePid:
+          type: string
+        serverPid:
+          type: string
+        serverStarted:
+          type: string
+        socketPath:
+          type: string
+      required:
+      - paneId
+      - panePid
+      - serverPid
+      - serverStarted
+      - socketPath
+    SessionRegistration:
+      type: object
+      properties:
+        id:
+          $ref: '#/components/schemas/AgentId'
+        label:
+          type: string
+        agentType:
+          $ref: '#/components/schemas/AgentType'
+        repository:
+          type: string
+          description: Real path of the worktree root. Sessions sharing it form one project and one reservation scope.
+        expectedCommand:
+          type: string
+          description: Foreground process name observed at registration; a native CLI may report a version string. Never a
+            shell or generic interpreter.
+        identity:
+          $ref: '#/components/schemas/PaneIdentity'
+        relayPrompt:
+          type: string
+        registeredAt:
+          type: string
+          format: date-time
+      required:
+      - id
+      - label
+      - agentType
+      - repository
+      - expectedCommand
+      - identity
+      - relayPrompt
+      - registeredAt
+    PanePreview:
+      type: object
+      properties:
+        paneId:
+          type: string
+        text:
+          type: string
+        capturedAt:
+          type: string
+          format: date-time
+      required:
+      - paneId
+      - text
+      - capturedAt
+    RelayPair:
+      type: object
+      description: Two registered sessions that alternate reviews on one worktree. Grouping and validation only.
+      properties:
+        id:
+          $ref: '#/components/schemas/AgentId'
+        name:
+          type: string
+        repository:
+          type: string
+        sessions:
+          type: array
+          minItems: 2
+          maxItems: 2
+          items:
+            $ref: '#/components/schemas/AgentId'
+        createdAt:
+          type: string
+          format: date-time
+      required:
+      - id
+      - name
+      - repository
+      - sessions
+      - createdAt
+    PairInput:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 40
+          description: Human name; its slug becomes the pair id.
+        sessions:
+          type: array
+          minItems: 2
+          maxItems: 2
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/AgentId'
+      required:
+      - name
+      - sessions
+      additionalProperties: false
+    Reservation:
+      type: object
+      description: A worktree with a command in flight or an unacknowledged uncertain delivery.
+      properties:
+        repository:
+          type: string
+        activeCommandId:
+          type: string
+          format: uuid
+      required:
+      - repository
+      - activeCommandId
+    EventInput:
+      type: object
+      properties:
+        source:
+          $ref: '#/components/schemas/AgentType'
+        event:
+          type: string
+          const: turn_complete
+        paneId:
+          type: string
+          pattern: ^%\d+$
+          description: $TMUX_PANE inside the pane.
+        socketPath:
+          type: string
+          description: First field of $TMUX; matched when present.
+        cwd:
+          type: string
+        sessionId:
+          type: string
+          maxLength: 200
+          description: The CLI's own session or thread id, when its payload carries one.
+      required:
+      - source
+      - event
+      - paneId
+      additionalProperties: false
+    TurnEvent:
+      type: object
+      properties:
+        agentId:
+          oneOf:
+          - $ref: '#/components/schemas/AgentId'
+          - type: 'null'
+          description: The registered session the event matched, or null for an unregistered pane.
+        paneId:
+          type: string
+        source:
+          $ref: '#/components/schemas/AgentType'
+        sessionId:
+          type:
+          - string
+          - 'null'
+        commandId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+          description: The last command delivered to that session before the event, if any.
+        receivedAt:
+          type: string
+          format: date-time
+      required:
+      - agentId
+      - paneId
+      - source
+      - sessionId
+      - commandId
+      - receivedAt
+    AvailablePane:
+      type: object
+      description: One live pane on the configured tmux server, for the human to choose. Not a readiness or lifecycle signal.
+      properties:
+        identity:
+          $ref: '#/components/schemas/PaneIdentity'
+        command:
+          type: string
+        cwd:
+          type: string
+        dead:
+          type: boolean
+        inMode:
+          type: boolean
+        synchronized:
+          type: boolean
+        location:
+          type: string
+          description: Current session:window.pane; informational and may change.
+        registeredAs:
+          oneOf:
+          - $ref: '#/components/schemas/AgentId'
+          - type: 'null'
+      required:
+      - identity
+      - command
+      - cwd
+      - dead
+      - inMode
+      - synchronized
+      - location
+      - registeredAs
+    RegistrationInput:
+      type: object
+      properties:
+        paneId:
+          type: string
+          pattern: ^%\d+$
+        label:
+          type: string
+          minLength: 1
+          maxLength: 40
+          description: Human label; its slug becomes the agent id.
+        agentType:
+          $ref: '#/components/schemas/AgentType'
+        repository:
+          type: string
+          description: Absolute path; defaults to the pane's current directory.
+        relayPrompt:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          description: Single-line prompt sent by Relay; defaults to "relay".
+      required:
+      - paneId
+      - label
+      additionalProperties: false
+    RegistrationResult:
+      type: object
+      properties:
+        session:
+          $ref: '#/components/schemas/SessionRegistration'
+        replaced:
+          type: boolean
+          description: True when an existing registration with the same id was re-pointed at this pane.
+      required:
+      - session
+      - replaced
+    RemoveResult:
+      type: object
+      properties:
+        removed:
+          type: boolean
+          const: true
+      required:
+      - removed
+    Snapshot:
+      type: object
+      properties:
+        agentId:
+          $ref: '#/components/schemas/AgentId'
+        text:
+          type: string
+        capturedAt:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum:
+          - available
+          - unavailable
+        error:
+          type: string
+      required:
+      - agentId
+      - text
+      - capturedAt
+      - status
+      description: A replaceable bounded screen capture, not a transcript or lifecycle/completion event.
+    CommandRecord:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$
+        agentId:
+          $ref: '#/components/schemas/AgentId'
+        kind:
+          type: string
+          enum:
+          - relay
+          - instruction
+        text:
+          type: string
+        handoff:
+          type: boolean
+          description: Whether finishing this command hands off to the relay partner. Always true for a relay.
+        status:
+          $ref: '#/components/schemas/DeliveryStatus'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        error:
+          type:
+          - string
+          - 'null'
+        releasedAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+      required:
+      - id
+      - agentId
+      - kind
+      - text
+      - handoff
+      - status
+      - createdAt
+      - updatedAt
+      - error
+      - releasedAt
+    ConsoleState:
+      type: object
+      properties:
+        mode:
+          $ref: '#/components/schemas/AdapterMode'
+        inputEnabled:
+          type: boolean
+        sessions:
+          type: array
+          items:
+            $ref: '#/components/schemas/SessionRegistration'
+        pairs:
+          type: array
+          items:
+            $ref: '#/components/schemas/RelayPair'
+        panes:
+          type: array
+          items:
+            $ref: '#/components/schemas/AvailablePane'
+        panesError:
+          type:
+          - string
+          - 'null'
+          description: Set when the pane listing itself failed, e.g. no tmux server; sessions may still be listed.
+        snapshots:
+          type: array
+          items:
+            $ref: '#/components/schemas/Snapshot'
+        commands:
+          type: array
+          items:
+            $ref: '#/components/schemas/CommandRecord'
+        reservations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Reservation'
+        turns:
+          type: array
+          items:
+            $ref: '#/components/schemas/TurnEvent'
+          description: Latest turn-complete event per registered session, plus the latest unmatched one.
+        serverTime:
+          type: string
+          format: date-time
+      required:
+      - mode
+      - inputEnabled
+      - sessions
+      - panes
+      - panesError
+      - pairs
+      - snapshots
+      - commands
+      - reservations
+      - turns
+      - serverTime
+    ApiError:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+          required:
+          - code
+          - message
+      required:
+      - error
+    ReleaseInput:
+      type: object
+      properties:
+        expectedCommandId:
+          type: string
+          format: uuid
+          pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$
+        confirmReady:
+          const: true
+          type: boolean
+      required:
+      - expectedCommandId
+      - confirmReady
+    ReleaseResult:
+      type: object
+      properties:
+        released:
+          type: boolean
+          const: true
+      required:
+      - released
+    CommandInput:
+      oneOf:
+      - type: object
+        properties:
+          requestId:
+            type: string
+            format: uuid
+            pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$
+          agentId:
+            $ref: '#/components/schemas/AgentId'
+          confirmReady:
+            type: boolean
+            const: true
+          kind:
+            const: relay
+            type: string
+          text:
+            type: string
+            minLength: 1
+            maxLength: 2000
+            description: 'Optional context; the controller sends one line, "<registered relay prompt>: <text>".'
+        required:
+        - requestId
+        - agentId
+        - confirmReady
+        - kind
+        additionalProperties: false
+      - type: object
+        properties:
+          requestId:
+            type: string
+            format: uuid
+            pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$
+          agentId:
+            $ref: '#/components/schemas/AgentId'
+          confirmReady:
+            type: boolean
+            const: true
+          kind:
+            const: instruction
+            type: string
+          text:
+            type: string
+            minLength: 1
+            maxLength: 2000
+            description: Nonblank single-line input; maximum 2,000 UTF-8 bytes. Controls, DEL/C1 and Unicode line
+              separators are rejected. The byte limit is stricter than maxLength for multibyte text.
+          handoff:
+            type: boolean
+            description: When true, finishing this instruction hands off to the relay partner as an accepted-and-improved
+              turn would; its result is the next thing to review. Default false.
+        required:
+        - requestId
+        - agentId
+        - confirmReady
+        - kind
+        - text
+        additionalProperties: false
+      description: A unique client UUID v4 is required. Same ID and payload returns the stored result without redelivery.
+        Reuse with a different payload conflicts. Never retry automatically after an uncertain response.

@@ -1,0 +1,16 @@
+name: Check
+on:
+  push:
+  pull_request:
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - run: npm --prefix web ci
+      - run: ./scripts/check.sh
+      - run: cd web && npx playwright install --with-deps chromium
+      - run: cd web && npm run e2e

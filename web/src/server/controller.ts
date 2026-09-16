@@ -1,0 +1,138 @@
+import { realpath } from "node:fs/promises";
+import type { AvailablePane, CommandInput, CommandRecord, ConsoleState, EventInput, PairInput, PanePreview, RegistrationInput, RegistrationResult, RelayPair, SessionRegistration, Snapshot, TurnEvent } from "../contracts/api.ts";
+import { AppError, messageOf } from "../core/errors.ts";
+import { assertAgentCommand, suggestAgentType } from "../core/policy.ts";
+import { paneId as validPaneId, singleLine, slugify } from "../core/validation.ts";
+import type { TerminalAdapter } from "./adapters/terminal.ts";
+import type { Config } from "./config.ts";
+import { assertExternalDataDir } from "./paths.ts";
+import { Store } from "./store.ts";
+export class Controller {
+  readonly config: Config;
+  readonly store: Store;
+  readonly adapter: TerminalAdapter;
+  constructor(config: Config, store: Store, adapter: TerminalAdapter) {
+    this.config = config; this.store = store; this.adapter = adapter;
+    this.store.recoverInterrupted();
+  }
+  async snapshot(session: SessionRegistration): Promise<Snapshot> {
+    try {
+      const text = await this.adapter.capture(session);
+      return { agentId: session.id, text, capturedAt: new Date().toISOString(), status: "available" };
+    } catch (error) {
+      return { agentId: session.id, text: "", capturedAt: new Date().toISOString(), status: "unavailable", error: messageOf(error) };
+    }
+  }
+  async panes(sessions: SessionRegistration[]): Promise<Pick<ConsoleState, "panes" | "panesError">> {
+    try {
+      const panes: AvailablePane[] = (await this.adapter.listPanes()).map((pane) => ({ ...pane,
+        registeredAs: sessions.find((s) => s.identity.socketPath === pane.identity.socketPath && s.identity.paneId === pane.identity.paneId)?.id ?? null }));
+      return { panes, panesError: null };
+    } catch (error) {
+      return { panes: [], panesError: messageOf(error) };
+    }
+  }
+  async state(): Promise<ConsoleState> {
+    const sessions = this.store.sessions();
+    const [snapshots, panes] = await Promise.all([Promise.all(sessions.map((s) => this.snapshot(s))), this.panes(sessions)]);
+    const registered = new Set(sessions.map((s) => s.id));
+    return { mode: this.config.mode, inputEnabled: this.config.inputEnabled, sessions, pairs: this.store.pairs(), ...panes, snapshots,
+      commands: this.store.recent(), reservations: this.store.reservations(),
+      turns: this.store.latestTurns().filter((t) => t.agentId === null || registered.has(t.agentId)), serverTime: new Date().toISOString() };
+  }
+  /**
+   * Records what a CLI's own hook reported (Claude Code Stop, Codex notify). It is matched to a registered pane by
+   * exact tmux identity and correlated with the last command delivered there. It authorizes nothing and sends nothing.
+   */
+  recordEvent(input: EventInput): TurnEvent {
+    if (input.event === "outcome") {
+      // The follow-up completes the turn event it belongs to; a stray follow-up with no turn to complete is just recorded.
+      const latest = this.store.latestEventForPane(input.paneId);
+      if (latest && latest.event.outcomeState === "pending") {
+        const completed: TurnEvent = { ...latest.event, outcome: input.outcome ?? null, reason: input.outcome ? input.reason ?? null : null, outcomeState: input.outcome ? "reported" : "none" };
+        this.store.updateEvent(latest.id, completed);
+        return completed;
+      }
+    }
+    const session = this.store.sessions().find((s) => s.identity.paneId === input.paneId && (input.socketPath === undefined || s.identity.socketPath === input.socketPath));
+    // The turn answers the command whose text is the prompt the CLI recorded. Without a prompt (older hook), assume
+    // the latest delivery. A prompt that matches nothing means the agent answered something else, e.g. text typed in
+    // the terminal, or a delivery altered by text already sitting in its input line.
+    const delivered = session ? this.store.recent().filter((c) => c.agentId === session.id && c.status === "delivered") : [];
+    const command = input.prompt === undefined ? delivered[0] : delivered.find((c) => c.text.trim() === input.prompt!.trim());
+    // Only a relay is expected to end with an outcome line; while the CLI's record of that message is incomplete, wait.
+    const outcomeState: TurnEvent["outcomeState"] = input.outcome ? "reported" : command?.kind === "relay" && input.settled === false ? "pending" : "none";
+    const event: TurnEvent = { agentId: session?.id ?? null, paneId: input.paneId, source: input.source, sessionId: input.sessionId ?? null,
+      commandId: command?.id ?? null, prompt: input.prompt ?? null, outcome: input.outcome ?? null, reason: input.outcome ? input.reason ?? null : null, outcomeState, receivedAt: new Date().toISOString() };
+    this.store.addEvent(event);
+    return event;
+  }
+  /** Read-only tail of any live pane for the registration picker. Exposes that pane's screen to the token holder. */
+  async preview(paneId: string): Promise<PanePreview> {
+    return { paneId: validPaneId(paneId), text: await this.adapter.peek(paneId), capturedAt: new Date().toISOString() };
+  }
+  /** Records a human-chosen pane. Sends no input. The observed foreground process becomes the identity to re-check before every capture and send. */
+  async register(input: RegistrationInput): Promise<RegistrationResult> {
+    const pane = await this.adapter.inspect(input.paneId);
+    assertAgentCommand(pane.command);
+    const repository = this.config.mode === "tmux" ? await realpath(input.repository ?? pane.cwd).catch(() => {
+      throw new AppError("INVALID_REPOSITORY", "Repository path does not exist on the host.");
+    }) : input.repository ?? pane.cwd;
+    const session: SessionRegistration = { id: slugify(input.label), label: input.label, agentType: input.agentType ?? suggestAgentType(pane.command), repository,
+      expectedCommand: pane.command, identity: pane.identity, relayPrompt: singleLine(input.relayPrompt ?? "relay"), registeredAt: new Date().toISOString() };
+    await this.adapter.preflight(session);
+    if (this.config.mode === "tmux") assertExternalDataDir(this.config.dataDir, session.repository);
+    return { session, replaced: this.store.saveSession(session) };
+  }
+  remove(id: string): void { this.store.removeSession(id); }
+  /** A pair is grouping and validation only: both sessions must share one worktree root, hence one index. */
+  createPair(input: PairInput): RelayPair {
+    const sessions = this.store.sessions();
+    const members = input.sessions.map((id) => {
+      const session = sessions.find((s) => s.id === id);
+      if (!session) throw new AppError("NOT_REGISTERED", `"${id}" is not a registered session.`, 404);
+      return session;
+    }) as [SessionRegistration, SessionRegistration];
+    if (members[0].repository !== members[1].repository) {
+      throw new AppError("DIFFERENT_WORKTREE", `"${members[0].label}" (${members[0].repository}) and "${members[1].label}" (${members[1].repository}) do not share a worktree, so they cannot alternate on one index.`, 409);
+    }
+    const pair: RelayPair = { id: slugify(input.name), name: input.name, repository: members[0].repository, sessions: input.sessions, createdAt: new Date().toISOString() };
+    this.store.savePair(pair);
+    return pair;
+  }
+  removePair(id: string): void { this.store.removePair(id); }
+  async submit(input: CommandInput): Promise<CommandRecord> {
+    const session = this.store.sessions().find((s) => s.id === input.agentId);
+    if (!session) throw new AppError("NOT_REGISTERED", "Register this session first.", 404);
+    if (!this.config.inputEnabled) throw new AppError("READ_ONLY", "Real input is disabled. Enable it on the host only after completing the local checks.", 403);
+    // A relay with context becomes one line, "<prompt>: <context>", so the reviewer sees both and the size limit still applies.
+    const text = singleLine(input.kind === "relay" ? (input.text ? `${session.relayPrompt}: ${input.text}` : session.relayPrompt) : input.text);
+    if (this.config.mode === "tmux") assertExternalDataDir(this.config.dataDir, session.repository);
+    const now = new Date().toISOString();
+    let record: CommandRecord = { id: input.requestId, agentId: input.agentId, kind: input.kind, text, handoff: input.kind === "relay" || input.handoff === true,
+      status: "recorded", createdAt: now, updatedAt: now, error: null, releasedAt: null };
+    const reservation = this.store.reserve(record, session.repository);
+    if (!reservation.created) return reservation.record; // Never redeliver a duplicate ID.
+    try {
+      await this.adapter.preflight(session);
+    } catch (error) {
+      record = { ...record, status: "rejected", error: messageOf(error), updatedAt: new Date().toISOString() };
+      this.store.update(record);
+      this.store.release(record.id); // No delivery attempt occurred.
+      return this.store.get(record.id)!;
+    }
+    record = { ...record, status: "sending", updatedAt: new Date().toISOString() };
+    this.store.update(record); // Durable boundary BEFORE terminal input.
+    try {
+      await this.adapter.send(session, text);
+      record = { ...record, status: "delivered", updatedAt: new Date().toISOString() };
+    } catch (error) {
+      record = { ...record, status: "uncertain", error: messageOf(error), updatedAt: new Date().toISOString() };
+    }
+    this.store.update(record);
+    // A clean delivery settles the worktree: the readiness confirmation on the next send is the human's
+    // reconciliation. Only an uncertain delivery keeps the worktree reserved until someone inspects the terminal.
+    if (record.status === "delivered") { this.store.release(record.id); return this.store.get(record.id)!; }
+    return record;
+  }
+}
