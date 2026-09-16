@@ -42,14 +42,16 @@ screen text.
   human to send; `accept_without_improvement` and `no_incoming_handoff` stay put
   and say the chain ended; no outcome moves the target but says the line was
   missing.
-- Auto-relay is a per-page checkbox, off by default. When on, an
-  `accept_and_improve` from the current target sends `relay` to the partner with
-  the same command path as a click (identity re-check, hold, UUID, no replay), the
-  checkbox standing in for the per-send readiness tick. It stops itself, stating
-  the reason, on any other outcome, a missing line, a partner not presumed idle,
-  a send that is not `delivered`, a held worktree, a stale connection, a read-only
-  console, or after 20 automatic turns. The first turn of a chain is always the
-  human's.
+- Auto-relay is a checkbox, on by default; only the human changes it, and an
+  untick is remembered by the browser. When on, an `accept_and_improve` from the
+  current target sends `relay` to the partner with the same command path as a
+  click (identity re-check, hold, UUID, no replay), the checkbox standing in for
+  the per-send readiness tick. It does not continue, and states the reason, on
+  any other outcome, a missing line, a partner not presumed idle, a send that is
+  not `delivered`, a held worktree, a stale connection, a read-only console, or
+  after 20 automatic turns in a row; it never unticks itself, because a box the
+  console resets is one the human cannot rely on. The first turn of a chain is
+  always the human's, and each human send starts a new chain.
 
 ### Instructions, and instructions that hand off
 
@@ -73,7 +75,7 @@ agent was busy or its input line was not empty: leftover text turns a delivered
 `relay` into `xxxrelay`, the agent answers that, and the relay was being credited
 with a turn that never ran the skill. A turn whose prompt matches nothing leaves
 the command open: the pane says *answered a different prompt*, the session stays
-*working*, no hand-off happens, and auto-relay stops. Without a prompt (an older
+*working*, no hand-off happens, and auto-relay does not continue. Without a prompt (an older
 hook) the latest delivery is assumed, as before.
 
 ## What this does not do

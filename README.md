@@ -46,8 +46,8 @@ hook and Codex's `notify` command, so each panel shows when its agent's turn end
 (from the CLI itself, never from screen text), including the reviewer's final
 `RELAY-OUTCOME:` line. A finished relay hands the target to the other agent with the
 box pre-ticked; an objection comes back with its reason and a prefilled instruction to
-the author. Optional **auto-relay** keeps a chain going on `accept_and_improve` only and
-stops itself on anything else.
+the author. **Auto-relay** (on by default) keeps a chain going on `accept_and_improve`
+only; on anything else it waits for you and says why.
 
 `CODERCREW_ENABLE_INPUT=false` in `web/.env.local` turns the console read-only. The
 `mock` adapter (`CODERCREW_ADAPTER=mock`) drives the automated tests with simulated

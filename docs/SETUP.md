@@ -191,13 +191,15 @@ receives (a stray `xxx` makes `relay` arrive as `xxxrelay`); the pane then shows
 *answered a different prompt*, the command stays open, and nothing is handed off.
 Clear the input line, or type the command in the terminal yourself, and take over.
 
-**Auto-relay** is a checkbox in the composer, off by default and per page. When it
-is on and a reviewer reports `accept_and_improve`, the console sends `relay` to the
-other agent without a click, counting the turn. It switches itself off, and says
-why, on anything else: an objection, a completed chain, nothing to review, a
-missing outcome line, a partner that may still be working, a send that was not
-`delivered`, a held worktree, a stale connection, or 20 automatic turns. The first
-turn of a chain is always yours.
+**Auto-relay** is a checkbox in the composer, on by default. When a reviewer
+reports `accept_and_improve`, the console sends `relay` to the other agent without
+a click, counting the turn. On anything else it does not continue, and says why:
+an objection, a completed chain, nothing to review, a missing outcome line, a
+partner that may still be working, a send that was not `delivered`, a held
+worktree, a stale connection, or 20 automatic turns in a row. The box stays
+ticked through all of that; only you change it, and an untick is remembered by
+the browser. The first turn of a chain is always yours, and each send of yours
+starts a new chain.
 
 What you get: each panel shows **IDLE · turn ended HH:MM:SS** or **WORKING ·
 since HH:MM:SS** (only once that CLI's hook has reported at least once, so a host
@@ -223,7 +225,7 @@ pane is shown as a notice, which is how you notice a stale registration.
 - [ ] A pair is refused for sessions on different repositories; a paired session cannot be removed until the pair is.
 - [ ] A reserved turn in one project leaves another project's composer available.
 - [ ] After `node scripts/install-hooks.mjs` and a CLI restart, finishing a turn flips the panel to IDLE and moves the target to the other agent.
-- [ ] A review ending in `RELAY-OUTCOME: strong_objection — …` shows the reason on the panel and prefills the instruction to the author; auto-relay, if on, switches itself off.
+- [ ] A review ending in `RELAY-OUTCOME: strong_objection — …` shows the reason on the panel and prefills the instruction to the author; auto-relay does not continue and stays ticked.
 - [ ] An uncertain delivery blocks further sends and registration changes in that worktree until acknowledged; a clean delivery does not.
 - [ ] Copy mode, synchronized input, unexpected cwd, and unavailable tmux fail closed.
 - [ ] Reusing a request ID never delivers the same command a second time.

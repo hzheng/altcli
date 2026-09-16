@@ -45,8 +45,9 @@ viewport, against the mock adapter (see the appendix). Each web step is also ava
 What they prove and what they don't: the smoke and Vitest suites use fake tmux
 runners and the mock adapter; they never touch tmux, a repository, or a CLI. The
 e2e suite drives the real console against a mock backend with its own temporary
-store. It starts its own dev servers on ports 8787 and 8788 (one per viewport), so **stop the dev server first**
-or it fails to bind. CI runs exactly `./scripts/check.sh` and the e2e step.
+store. It starts its own dev servers on ports 8787 and 8788 (one per viewport), so
+either stop the dev server first or move the suite: `CODERCREW_E2E_PORT=9787
+./scripts/check.sh --e2e` uses 9787 and 9788. CI runs exactly `./scripts/check.sh` and the e2e step.
 
 ## 3. First run: a harmless pane on a private tmux server
 

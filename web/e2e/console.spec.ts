@@ -186,7 +186,7 @@ test("a CLI hook event marks the pane idle, hands the target to the relay partne
   await expect(tabs(page).getByRole("button", { name: /Claude Code/ })).toHaveAttribute("aria-pressed", "true"); // stays put
   await expect(page.getByLabel("Ready to send", { exact: true })).toBeChecked();
   // "Send, then relay": a work request whose result is the next thing for the partner to review.
-  await expect(page.getByLabel("Auto-relay", { exact: true })).not.toBeChecked(); // the checkbox is irrelevant to Send & relay
+  await page.getByLabel("Auto-relay", { exact: true }).uncheck(); // on by default, and irrelevant to Send & relay
   await page.getByLabel(/Instruction to/).fill("implement the change you both agreed on");
   await page.getByRole("button", { name: "Send & relay ↗" }).click();
   await expect(page.getByRole("status")).toContainText("DELIVERED");
@@ -242,11 +242,11 @@ test("a CLI hook event marks the pane idle, hands the target to the relay partne
   expect((await hook("%9", "claude")).ok()).toBe(true); // an unregistered pane is surfaced, not hidden
   await expect(page.getByText(/pane %9 .* is not registered/)).toBeVisible();
 });
-test("auto-relay continues on accept_and_improve without a click and stops itself on an objection", async ({ page }) => {
+test("auto-relay continues on accept_and_improve without a click and waits, still ticked, on an objection", async ({ page }) => {
   await unlock(page);
   const hook = (paneId: string, source: string, extra: Record<string, string> = {}) => page.request.post("/api/v1/events", { headers: { Authorization: `Bearer ${"a".repeat(64)}` }, data: { source, event: "turn_complete", paneId, socketPath: "", ...extra } });
   const auto = page.getByLabel("Auto-relay", { exact: true });
-  await auto.check();
+  await auto.check(); // a no-op unless an earlier test's untick was remembered
   await expect(page.getByText(/0\/20 automatic turns/)).toBeVisible();
   await page.getByRole("button", { name: /Relay/ }).click(); // the first turn is always the human's
   await expect(page.getByRole("status")).toContainText("DELIVERED: the terminal accepted the text for Codex");
@@ -255,14 +255,18 @@ test("auto-relay continues on accept_and_improve without a click and stops itsel
   await expect(page.getByText(/1\/20 automatic turns/)).toBeVisible();
   await expect(tabs(page).getByRole("button", { name: /Claude Code/ })).toHaveAttribute("aria-pressed", "true");
   expect((await hook("%1", "claude", { outcome: "strong_objection", reason: "Index rewritten outside the contract." })).ok()).toBe(true);
-  await expect(auto).not.toBeChecked();
-  await expect(page.getByRole("status")).toContainText("Auto-relay stopped: the reviewer objected.");
+  await expect(page.getByRole("status")).toContainText("Auto-relay did not continue: the reviewer objected.");
+  await expect(auto).toBeChecked(); // never unticked by the console
   await expect(page.getByLabel(/Instruction to/)).toHaveValue(/Claude Code rejected your handoff: Index rewritten/);
   await expect(tabs(page).getByRole("button", { name: /Codex/ })).toHaveAttribute("aria-pressed", "true");
   // Nothing was sent automatically after the objection: the newest command is still the auto-relay to Claude Code.
   await page.locator("details.history summary").click();
   await expect(page.locator("details.history tbody tr").first()).toContainText("Claude Code");
   await expect(page.locator("details.history tbody tr").first()).toContainText("relay");
+  // Only the human unticks it, and this browser remembers that across page loads (the token is not stored, so unlock again).
+  await auto.uncheck();
+  await unlock(page);
+  await expect(auto).not.toBeChecked();
 });
 test("unknown token cannot read agent output", async ({ page }) => {
   await unlock(page, "b".repeat(64));

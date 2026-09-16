@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { CommandRecord, ConsoleState, HandoffOutcome, SessionRegistration, TurnEvent } from "../contracts/api";
 /** Auto-relay stops by itself after this many automatic turns per activation; the human re-enables it deliberately. */
 const AUTO_RELAY_LIMIT = 20;
+const AUTO_RELAY_KEY = "codercrew.autoRelay";
 /** How long a relay's outcome line may stay pending before the console reports it missing and stops automation. */
 const OUTCOME_PATIENCE_MS = 45_000;
 const OUTCOME_LABEL: Record<HandoffOutcome, string> = { accept_and_improve: "ACCEPTED + IMPROVED", accept_without_improvement: "ACCEPTED, NOTHING TO HAND OFF", strong_objection: "OBJECTION", no_incoming_handoff: "NO INCOMING HANDOFF" };
@@ -18,9 +19,12 @@ export function Console() {
   const [selectedPairId, setSelectedPairId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
-  // Standing consent, per page: on accept_and_improve, send `relay` to the other agent without a click.
-  const [autoRelay, setAutoRelay] = useState(false);
+  // Standing consent: on accept_and_improve, send `relay` to the other agent without a click. On by default; only the
+  // human changes it, and an untick is remembered in this browser. A chain that cannot continue says why and waits.
+  const [autoRelay, setAutoRelay] = useState(true);
   const [autoTurns, setAutoTurns] = useState(0);
+  useEffect(() => { try { if (localStorage.getItem(AUTO_RELAY_KEY) === "false") setAutoRelay(false); } catch { /* storage unavailable: stay on */ } }, []);
+  const chooseAutoRelay = (on: boolean) => { setAutoRelay(on); setAutoTurns(0); try { localStorage.setItem(AUTO_RELAY_KEY, String(on)); } catch { /* per-browser convenience only */ } };
   const [text, setText] = useState("");
   const [ready, setReady] = useState(false);
   const [sending, setSending] = useState(false);
@@ -115,13 +119,13 @@ export function Console() {
     const key = seen.get(current.id);
     if (!key || before.get(current.id) === key || !currentEvent) return;
     const at = currentEvent.receivedAt;
-    const stopAuto = (why: string) => { if (autoRelay) { setAutoRelay(false); setMessage((m) => `${m} Auto-relay stopped: ${why}`); } };
+    const holdAuto = (why: string) => { if (autoRelay) setMessage((m) => `${m} Auto-relay did not continue: ${why}`); };
     if (!currentEvent.commandId) {
       // The turn did not answer anything sent from here. With a command still open, the delivery was probably altered
       // by text left in the input line, or is queued behind terminal work; either way a human must look.
       if (currentSent && currentEvent.prompt !== null) {
         setMessage(`${current.label} finished a turn that was not the one sent from here: its prompt was "${currentEvent.prompt.slice(0, 80)}". Your ${currentSent.kind} ("${currentSent.text.slice(0, 40)}") is still open; check the pane for leftover input or a queued turn, then take over.`);
-        stopAuto("the agent answered a different prompt.");
+        holdAuto("the agent answered a different prompt.");
       }
       return;
     }
@@ -139,7 +143,7 @@ export function Console() {
     const continueChain = () => {
       if (!autoRelay) return;
       const why = cannotRelay() ?? (autoTurns >= AUTO_RELAY_LIMIT ? `${AUTO_RELAY_LIMIT} automatic turns reached.` : null);
-      if (why) { stopAuto(why); return; }
+      if (why) { holdAuto(why); return; }
       setAutoTurns((n) => n + 1);
       void send("relay", partner!, true);
     };
@@ -160,12 +164,12 @@ export function Console() {
           setSelected(partner); setText(`${current.label} rejected your handoff: ${reason} Address it, then hand off again.`);
           setMessage(`${finished}: OBJECTION — ${reason} An instruction to ${labelOf(partner)} is prefilled; review it, then Send.`);
         } else setMessage(`${finished}: OBJECTION — ${reason}`);
-        stopAuto("the reviewer objected.");
+        holdAuto("the reviewer objected.");
         break;
-      case "accept_without_improvement": setMessage(`${finished}: accepted with nothing to hand off, so the relay chain is complete. Run the final task-level checks yourself.`); stopAuto("the chain is complete."); break;
-      case "no_incoming_handoff": setMessage(`${finished}: it found nothing to review.`); stopAuto("there was nothing to review."); break;
+      case "accept_without_improvement": setMessage(`${finished}: accepted with nothing to hand off, so the relay chain is complete. Run the final task-level checks yourself.`); holdAuto("the chain is complete."); break;
+      case "no_incoming_handoff": setMessage(`${finished}: it found nothing to review.`); holdAuto("there was nothing to review."); break;
       case "accept_and_improve": handOff(currentEvent.reason ? `accepted and improved — ${currentEvent.reason.replace(/[.。]?$/, ".")}` : "accepted and improved."); continueChain(); break;
-      default: handOff(overdue(currentEvent) ? `no RELAY-OUTCOME line arrived within ${OUTCOME_PATIENCE_MS / 1000} s; check the pane and take over.` : "no RELAY-OUTCOME line in its final message; check the pane."); stopAuto("no RELAY-OUTCOME line.");
+      default: handOff(overdue(currentEvent) ? `no RELAY-OUTCOME line arrived within ${OUTCOME_PATIENCE_MS / 1000} s; check the pane and take over.` : "no RELAY-OUTCOME line in its final message; check the pane."); holdAuto("no RELAY-OUTCOME line.");
     }
   }, [state?.turns, now]); // eslint-disable-line react-hooks/exhaustive-deps
   const livePane = (session: SessionRegistration) => state?.panes.find((pane) => pane.identity.socketPath === session.identity.socketPath && pane.identity.paneId === session.identity.paneId);
@@ -173,7 +177,8 @@ export function Console() {
   async function send(kind: "relay" | "instruction", targetId = current?.id, auto = false, handoff = false) {
     const target = sessions.find((session) => session.id === targetId);
     if (submission.current || !target || (!auto && !ready)) return;
-    if (auto && (stale || !state?.inputEnabled || unknownRequest || state?.reservations.some((r) => r.repository === target.repository))) { setAutoRelay(false); setMessage("Auto-relay stopped: the console is not in a state to send."); return; }
+    if (auto && (stale || !state?.inputEnabled || unknownRequest || state?.reservations.some((r) => r.repository === target.repository))) { setMessage("Auto-relay did not continue: the console is not in a state to send."); return; }
+    if (!auto) setAutoTurns(0); // a human send starts a new chain
     submission.current = true; setSending(true); setReady(false);
     const requestId = crypto.randomUUID();
     try {
@@ -184,12 +189,11 @@ export function Console() {
         ? `the terminal accepted the text for ${target.label}. ${hooked ? `Its hook will report when the turn ends.` : `It has never reported a turn end yet, so watch its panel (see SETUP section 6 for hooks).`}`
         : "recorded.")}`);
       if (record.status === "delivered" && !auto) setText("");
-      if (auto && record.status !== "delivered" && autoRelay) { setAutoRelay(false); setMessage((m) => `${m} Auto-relay stopped: delivery was ${record.status}.`); }
+      if (auto && record.status !== "delivered") setMessage((m) => `${m} Auto-relay did not continue: delivery was ${record.status}.`);
     } catch (error) {
       setMessage(`${error instanceof Error ? error.message : "Connection interrupted."} No automatic retry was made.`);
       // 5xx and transport failures may happen after dispatch. Require explicit inspection.
       if (!(error instanceof HttpError) || error.status >= 500) setUnknownRequest(requestId);
-      if (auto && autoRelay) setAutoRelay(false);
     } finally {
       await refresh(); submission.current = false; setSending(false);
     }
@@ -302,8 +306,8 @@ export function Console() {
           ? <>Nothing has been sent to {current?.label} from this console{currentSent ? " since it last reported" : ""}, so it is presumed at its prompt; untick if its terminal is busy, shows a permission dialog, or has text left in its input line.</>
           : <>I verified that {current?.label ?? "the selected agent"} is at an empty input prompt, no permission dialog is active, and no other agent is writing.</>}</label>
         </form>
-        <label className="readiness auto"><input type="checkbox" aria-label="Auto-relay" checked={autoRelay} disabled={!state?.inputEnabled || !current || !partnerOf(current.id)} onChange={(event) => { setAutoRelay(event.target.checked); setAutoTurns(0); }} />
-          Auto-relay{autoRelay ? ` (${autoTurns}/${AUTO_RELAY_LIMIT} automatic turns)` : ""}: keep the chain going by itself when a reviewer reports <code>accept_and_improve</code>. Anything else stops it: an objection, a completed chain, a missing outcome line, a busy partner, a non-delivered send, or {AUTO_RELAY_LIMIT} turns. Independent of this box: <strong>Send</strong> never relays; <strong>Send &amp; relay</strong> always relays once the work is done.</label>
+        <label className="readiness auto"><input type="checkbox" aria-label="Auto-relay" checked={autoRelay} disabled={!state?.inputEnabled || !current || !partnerOf(current.id)} onChange={(event) => chooseAutoRelay(event.target.checked)} />
+          Auto-relay{autoRelay ? ` (${autoTurns}/${AUTO_RELAY_LIMIT} automatic turns)` : ""}: keep the chain going by itself when a reviewer reports <code>accept_and_improve</code>. On anything else it waits for you and says why: an objection, a completed chain, a missing outcome line, a busy partner, a non-delivered send, or {AUTO_RELAY_LIMIT} turns in a row; your next send starts a new chain. Only you change this box; an untick is remembered in this browser. Independent of this box: <strong>Send</strong> never relays; <strong>Send &amp; relay</strong> always relays once the work is done.</label>
         {message && <p className="feedback" role="status">{message}</p>}
         <p className="fine">Delivered = the terminal accepted the text. Turn ended = the agent's own hook said so. Nothing is sent, retried, staged, or interrupted without your click.</p>
       </section>

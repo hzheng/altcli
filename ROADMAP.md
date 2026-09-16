@@ -144,7 +144,7 @@ Automate mechanical turn-taking only after the manual console is reliable. Use e
 - [ ] Add a persistent command queue, duplicate suppression, delivery acknowledgments where available, and recovery for uncertain delivery.
 - [ ] Enforce one scheduled writer, while treating external edits and unfinished write-capable background work as reasons to pause.
 - [ ] Add explicit manual takeover, resume, and pause-after-turn controls. An immediate interrupt requires reconciliation before another handoff.
-- [ ] Add configurable turn limits and clear pause conditions for objections, errors, unexpected repository changes, and exhausted budgets. Auto-relay stops on objections, missing outcomes, non-delivered sends, held worktrees, and a fixed 20-turn cap (ADR-0010); a configurable limit and repository-change detection remain open.
+- [ ] Add configurable turn limits and clear pause conditions for objections, errors, unexpected repository changes, and exhausted budgets. Auto-relay pauses on objections, missing outcomes, non-delivered sends, held worktrees, and a fixed 20-turn cap (ADR-0010); a configurable limit and repository-change detection remain open.
 - [ ] Add a final task-scoped review and check step before marking the overall task complete. A settled relay is not, by itself, proof that the task meets its requirements.
 
 ### Exit criteria
