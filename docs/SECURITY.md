@@ -1,100 +1,74 @@
-# Security boundary and limits
+# Security and operational boundary
 
-CoderCrew is a privileged local application: it can submit instructions to coding
-agents that may already have filesystem, shell, network, and credential access.
-It is not a sandbox and does not reduce those agents' existing permissions.
+CoderCrew controls coding agents with their existing host privileges. It is not a
+sandbox, process attestation system or lock against external filesystem writers.
+A malicious agent running as the same Unix user can access the token or tmux socket.
 
-## Starter defaults
+## Access
 
-The backend binds to `127.0.0.1:8787`. All API reads and writes require a randomly
-generated 256-bit bearer token. The server validates an exact host/origin allowlist,
-refuses cross-site browser requests, and does not enable permissive CORS.
-Authentication does not depend on cookies; native clients may omit Origin but
-must supply the same bearer token. The UI shell alone contains no live output.
+The backend binds to 127.0.0.1. Every API read/write, including hook intake and run
+actions, requires the 256-bit owner bearer token. Exact host/origin allowlists,
+cross-site refusal, bounded JSON and literal terminal arguments remain enforced.
+Output is displayed as React text. Do not introduce HTML interpretation or a
+shell-execution endpoint. The token grants read access to all pane previews on the
+configured tmux server, even panes not registered as workers.
 
-`node scripts/setup.mjs` generates `web/.env.local` with restrictive permissions and never
-overrides it. No real access token is shipped. Tokens must never use a
-`NEXT_PUBLIC_*` variable, appear in a URL, or be committed. Rotate a token by replacing
-it with a new random 64-character hex value and restarting the host. Browser tokens
-live only in page memory. This is not a complete login/pairing/session product.
+Keep token/config/store backups private. Setup uses restrictive file modes; browser
+tokens remain only in memory. Never use NEXT_PUBLIC_* for a secret. Hook posting is
+restricted to loopback; ordinary remote access uses private Tailscale Serve, not
+public Funnel. Production CSP, device pairing/revocation and rate-limit hardening
+remain acceptance work, not claimed protections.
 
-The default adapter is tmux and input is enabled: a send still needs a registered
-pane, a fresh identity check, and the per-command readiness confirmation. The
-host-side `CODERCREW_ENABLE_INPUT=false` switch makes the console read-only; it
-cannot be changed by a browser request. The `mock` adapter simulates panes for the
-automated tests and never touches a terminal.
-There is no generic shell execution, arbitrary tmux command, skill-installation,
-filesystem-browsing, or Git-mutation endpoint. The registration endpoints only
-record or forget a pane the token holder chose from the live listing; they never
-send input, and they are refused while the worktree has a command in flight or an
-unacknowledged uncertain delivery.
+## Delivery and execution
 
-The console state includes every pane on the configured tmux server, with its
-current directory and process name, so the token holder can pick one, and the
-preview endpoint returns the last lines of any pane on request. Treat the token as
-full read access to every pane's screen and metadata on that tmux server, even for
-panes that are never registered. Pair endpoints only record which two registered
-sessions share a worktree; they send nothing.
+The transport reservation protects delivery only. A separate server-owned run
+retains execution ownership across clean deliveries. Only current correlated
+completion plus explicit clear background-work evidence can schedule another
+participant. Missing evidence pauses. No outcome line alone proves quiescence or
+correct Git staging. No terminal text is parsed as an authorization signal.
 
-`POST /api/v1/events` accepts turn-complete events from the CLIs' own hooks on
-this host, behind the same token. An event is matched to a pane by exact tmux
-identity and is informational only: it never sends input, clears a hold, or
-advances a turn; it pre-ticks the readiness box, which the human can untick. The
-hook script reads the token from `web/.env.local` and posts to loopback only.
+Events carry exact command nonce and prompt echo, pane/server/socket identity,
+source session and turn. Claude requires a matching start acknowledgment; old
+follow-up events cannot complete a newer turn. Pinned session changes require
+reconciliation/rebinding. Event dedup and next-command creation are transactional.
+The owner token is the trust boundary; these event identities are correlation, not
+cryptographic attestation of a CLI.
 
-Commands use size-limited JSON, UUID v4 identities, explicit agent IDs and human
-readiness confirmation. Terminal bytes are passed as hex arguments to `send-keys`
-without shell interpolation. Screen text is rendered as React text, never injected
-HTML or trusted instructions to the controller. Do not add `dangerouslySetInnerHTML`
-to render agent output. No full ANSI emulator is supplied.
+One backend process per database is supported. Startup pauses active runs and
+never replays uncertain sends. A browser is an observer/controller client, never
+the scheduler. Locking or closing it does not pause the server. Multiple views
+share the same run policy and budget. Use the run's Pause action before takeover.
 
-## Important residual risks
+Pause does not interrupt an in-flight send or running/background process. Explicit
+takeover requires the human to inspect all participants, stop writers and reconcile
+partial input. It releases ownership without recording task success. External
+terminal typing remains outside the controller's filesystem authority; unmarked
+Claude starts pause affected runs when the hook reports them. There is no guarantee
+of observing every external command or descendant writer.
 
-Process names and tmux metadata are transport checks, not attestation. The name
-recorded at registration is whatever the pane reported then; the denylist only
-excludes shells and generic interpreters. A CLI can exit or change state between
-validation and input. The checks before typing and
-before Enter narrow but cannot remove that race. They cannot reliably detect a
-permission prompt, queued input, the model's current task, or hidden background
-writers. The user must inspect the real sessions and confirm readiness. A CLI restarted
-inside a surviving pane can reuse its pane identity and command name; this
-scaffold does not authenticate the CLI conversation/session UUID. Re-register
-after restarting a worker and reconcile any outstanding turn.
+## Git and lifecycle limits
 
-The per-worktree hold prevents this controller from sending a second command into
-a worktree while one is in flight or its delivery is uncertain; other worktrees
-proceed independently. Between clean deliveries the only gate is the per-send
-readiness confirmation. Nothing prevents desktop typing, filesystem edits, or agent
-subprocess writes.
-A malicious agent running as the same Unix user could access the controller's
-files or tmux socket. There is no hostile-agent isolation in this design.
+Pairs require canonical root/gitdir/standard-index identity. Custom per-worker
+GIT_INDEX_FILE and related overrides are unsupported and must not be used. Pane
+identity and process-name checks narrow but do not eliminate the check/use race.
 
-Run one backend process per store. Multi-process recovery, distributed locks, and
-remote worker hosts are outside this starter. Do not use it unattended. Do not
-expose a development server, public Funnel endpoint, or public reverse proxy.
+Codex notify versions may omit background-work proof. Those events are unknown
+and pause, even when the reviewer reports accept_and_improve. Claude versions
+without current Stop response/background fields also pause. No missing field is
+converted into an empty list. Installed-version and real-agent acceptance is
+required before leaving a run unattended.
 
-The token has full owner access. There are no roles, password recovery, per-device
-revocation, hardware-backed credentials, or tested rate limits. A production CSP,
-dependency security review, access-token lifecycle, and phone pairing need work
-before the private-phone milestone can be considered accepted. Basic response
-headers are included, but do not amount to a completed security audit.
+## Installation and storage
 
-## Sensitive data and retention
+The hook installer validates both edit plans first, preserves unrelated entries,
+refuses unsupported TOML, backs up changed files with mode 0600 and atomically
+replaces each file. Two files are not a single transaction; retain backups until
+validation succeeds. Concurrent external edits and configuration formats outside
+the supported subset require manual reconciliation.
 
-SQLite is outside the source tree, with mode-specific stores under the configured
-data directory. Directory/file modes are restricted. Command text, repository
-paths, and audit errors are persisted in plaintext; raw snapshots are not persisted.
-There is no automatic retention cleanup yet. Protect host backups, and do not put
-secrets into prompts. SQLite WAL/SHM files are part of the sensitive store.
-
-Test fixtures use an obvious repeated-character token only in mock tests. Never
-copy that test credential into a real configuration. Verify that `.env.local`,
-SQLite files, and logs are excluded before publishing any repository or ZIP.
-
-## Before private phone access
-
-Complete local acceptance, the dependency/build checks, and a security review.
-Use Tailscale Serve over HTTPS with a narrowly restricted tailnet policy. Keep the
-application token and explicit origin checks in addition to network controls.
-Do not rely on forwarded identity headers without independently designing and
-verifying that trust boundary. See [TAILSCALE.md](TAILSCALE.md).
+SQLite version 4 prevents old runtimes from silently opening the new store. Delivery
+history, lifecycle inbox, run/turn records and prompt text are plaintext outside
+managed worktrees. Workflow/audit retention is not yet pruned. Raw screen snapshots
+are not stored. Hook correlation context is private local data. No log or database
+should be committed. The original review skill remains responsible for staging;
+the controller issues no Git mutations and does not independently prove its outcome.

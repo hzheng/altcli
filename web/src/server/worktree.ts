@@ -4,9 +4,10 @@ import { dirname, join, isAbsolute } from 'node:path';
 import { AppError } from '../core/errors.ts';
 import type { WorktreeIdentity } from '../contracts/workflow.ts';
 
-const gitEnvironment = () => {
-  const env: Record<string, string | undefined> = { ...process.env, GIT_OPTIONAL_LOCKS: '0' };
-  for (const key of Object.keys(env)) if (['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES'].includes(key)) delete env[key as keyof typeof env];
+const gitEnvironment = (): NodeJS.ProcessEnv => {
+  // Retain Next's required NODE_ENV typing as well as the inherited environment.
+  const env: NodeJS.ProcessEnv = { ...process.env, GIT_OPTIONAL_LOCKS: '0' };
+  for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES']) delete env[key];
   return env;
 };
 /** Read-only discovery of the standard worktree/index. Per-process Git overrides are unsupported. */
@@ -25,7 +26,6 @@ export async function resolveWorktree(cwd: string): Promise<WorktreeIdentity | n
   if (paths.length !== 3 || paths.some((p) => !isAbsolute(p) || /[\u0000-\u001f]/.test(p))) throw new AppError('GIT_IDENTITY', 'Ambiguous Git paths. Registration refused.', 409);
   const root = await realpath(paths[0]!);
   const gitDir = await realpath(paths[1]!);
-  // An unborn repository may not have an index yet; its parent still has a real path.
   const indexPath = await realpath(paths[2]!).catch(async (error) => {
     if (error.code !== 'ENOENT') throw error;
     return join(await realpath(dirname(paths[2]!)), paths[2]!.split('/').pop()!);

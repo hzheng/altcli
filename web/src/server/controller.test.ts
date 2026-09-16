@@ -23,14 +23,13 @@ beforeEach(() => {
 });
 afterEach(() => { store.close(); rmSync(directory, { recursive: true, force: true }); });
 function command(agentId = "codex"): CommandInput { return { requestId: randomUUID(), agentId, kind: "relay", confirmReady: true }; }
-/** Makes every send fail after it began, which the controller must record as an uncertain delivery. */
 function failSends(): void { adapter.send = async () => { throw new Error("transport interrupted"); }; }
 test("a clean delivery releases only the transport reservation, not execution ownership", async () => {
   const result = await controller.submit(command());
   expect(result.status).toBe("delivered");
   expect(result.releasedAt).not.toBeNull();
   expect(store.reservations()).toEqual([]);
-  // This internal transport helper has no run policy. HTTP always uses ControlPlane, tested in scripts/workflow.test.ts.
+  // HTTP uses ControlPlane for execution ownership; this covers its internal transport helper.
   expect((await controller.submit(command("claude"))).status).toBe("delivered");
 });
 test("an uncertain delivery holds its worktree until a human acknowledges it", async () => {
@@ -126,7 +125,7 @@ test("registering a live pane records its observed process, a confirmed agent ty
   const state = await controller.state();
   expect(state.sessions.map((s) => s.id)).toEqual(["codex", "claude", "second-codex"]);
   expect(state.panes.map((p) => [p.identity.paneId, p.registeredAs])).toEqual([["%0", "codex"], ["%1", "claude"], ["%2", null], ["%3", "second-codex"]]);
-  expect(state.panesError).toBeNull(); expect(state.pairs).toEqual([]); expect(state.reservations()).toEqual([]);
+  expect(state.panesError).toBeNull(); expect(state.pairs).toEqual([]); expect(state.reservations).toEqual([]);
   expect(state.snapshots.map((s) => s.agentId)).toContain("second-codex");
   store.removeSession("second-codex");
   expect((await controller.register({ paneId: "%3", label: "Second Codex", agentType: "other" })).session.agentType).toBe("other");
@@ -188,8 +187,7 @@ test("pane preview reads any live pane without registering it", async () => {
   await expect(controller.preview("%9")).rejects.toThrow(/does not exist/);
   await expect(controller.preview("demo:1.0")).rejects.toThrow(/exact pane ID/);
 });
-// Completion correlation and lifecycle authorization now live in web/scripts/workflow.test.ts.
-// The transport Controller never matches a turn by prompt text or handles a hook directly.
+// Lifecycle authorization is covered by web/scripts/workflow.test.ts; no prompt-only matching remains here.
 test("the bounded informational events table survives reopen", () => {
   for (let i = 0; i < 520; i++) store.addEvent({ agentId: "codex", paneId: "%0", source: "codex", sessionId: "fixture",
     commandId: null, prompt: null, outcome: null, reason: null, outcomeState: "none", receivedAt: new Date().toISOString() });
