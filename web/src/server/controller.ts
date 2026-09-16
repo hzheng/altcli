@@ -1,5 +1,5 @@
 import { realpath } from "node:fs/promises";
-import type { AvailablePane, CommandInput, CommandRecord, ConsoleState, EventInput, PairInput, PanePreview, RegistrationInput, RegistrationResult, RelayPair, SessionRegistration, Snapshot, TurnEvent } from "../contracts/api.ts";
+import type { AvailablePane, CommandInput, CommandRecord, ConsoleState, PairInput, PanePreview, RegistrationInput, RegistrationResult, RelayPair, SessionRegistration, Snapshot } from "../contracts/api.ts";
 import { AppError, messageOf } from "../core/errors.ts";
 import { assertAgentCommand, suggestAgentType } from "../core/policy.ts";
 import { paneId as validPaneId, singleLine, slugify } from "../core/validation.ts";
@@ -7,6 +7,7 @@ import type { TerminalAdapter } from "./adapters/terminal.ts";
 import type { Config } from "./config.ts";
 import { assertExternalDataDir } from "./paths.ts";
 import { Store } from "./store.ts";
+/** Internal transport/read helpers. HTTP uses ControlPlane to enforce execution ownership. */
 export class Controller {
   readonly config: Config;
   readonly store: Store;
@@ -40,33 +41,6 @@ export class Controller {
       commands: this.store.recent(), reservations: this.store.reservations(),
       turns: this.store.latestTurns().filter((t) => t.agentId === null || registered.has(t.agentId)), serverTime: new Date().toISOString() };
   }
-  /**
-   * Records what a CLI's own hook reported (Claude Code Stop, Codex notify). It is matched to a registered pane by
-   * exact tmux identity and correlated with the last command delivered there. It authorizes nothing and sends nothing.
-   */
-  recordEvent(input: EventInput): TurnEvent {
-    if (input.event === "outcome") {
-      // The follow-up completes the turn event it belongs to; a stray follow-up with no turn to complete is just recorded.
-      const latest = this.store.latestEventForPane(input.paneId);
-      if (latest && latest.event.outcomeState === "pending") {
-        const completed: TurnEvent = { ...latest.event, outcome: input.outcome ?? null, reason: input.outcome ? input.reason ?? null : null, outcomeState: input.outcome ? "reported" : "none" };
-        this.store.updateEvent(latest.id, completed);
-        return completed;
-      }
-    }
-    const session = this.store.sessions().find((s) => s.identity.paneId === input.paneId && (input.socketPath === undefined || s.identity.socketPath === input.socketPath));
-    // The turn answers the command whose text is the prompt the CLI recorded. Without a prompt (older hook), assume
-    // the latest delivery. A prompt that matches nothing means the agent answered something else, e.g. text typed in
-    // the terminal, or a delivery altered by text already sitting in its input line.
-    const delivered = session ? this.store.recent().filter((c) => c.agentId === session.id && c.status === "delivered") : [];
-    const command = input.prompt === undefined ? delivered[0] : delivered.find((c) => c.text.trim() === input.prompt!.trim());
-    // Only a relay is expected to end with an outcome line; while the CLI's record of that message is incomplete, wait.
-    const outcomeState: TurnEvent["outcomeState"] = input.outcome ? "reported" : command?.kind === "relay" && input.settled === false ? "pending" : "none";
-    const event: TurnEvent = { agentId: session?.id ?? null, paneId: input.paneId, source: input.source, sessionId: input.sessionId ?? null,
-      commandId: command?.id ?? null, prompt: input.prompt ?? null, outcome: input.outcome ?? null, reason: input.outcome ? input.reason ?? null : null, outcomeState, receivedAt: new Date().toISOString() };
-    this.store.addEvent(event);
-    return event;
-  }
   /** Read-only tail of any live pane for the registration picker. Exposes that pane's screen to the token holder. */
   async preview(paneId: string): Promise<PanePreview> {
     return { paneId: validPaneId(paneId), text: await this.adapter.peek(paneId), capturedAt: new Date().toISOString() };
@@ -85,7 +59,7 @@ export class Controller {
     return { session, replaced: this.store.saveSession(session) };
   }
   remove(id: string): void { this.store.removeSession(id); }
-  /** A pair is grouping and validation only: both sessions must share one worktree root, hence one index. */
+  /** Internal pair persistence. ControlPlane separately verifies canonical Git identity. */
   createPair(input: PairInput): RelayPair {
     const sessions = this.store.sessions();
     const members = input.sessions.map((id) => {
@@ -101,13 +75,14 @@ export class Controller {
     return pair;
   }
   removePair(id: string): void { this.store.removePair(id); }
-  async submit(input: CommandInput): Promise<CommandRecord> {
+  async submit(input: CommandInput, options: { wireText?: string; beforeSend?: () => Promise<void> } = {}): Promise<CommandRecord> {
     const session = this.store.sessions().find((s) => s.id === input.agentId);
     if (!session) throw new AppError("NOT_REGISTERED", "Register this session first.", 404);
     if (!this.config.inputEnabled) throw new AppError("READ_ONLY", "Real input is disabled. Enable it on the host only after completing the local checks.", 403);
     // A relay with context becomes one line, "<prompt>: <context>", so the reviewer sees both and the size limit still applies.
     const text = singleLine(input.kind === "relay" ? (input.text ? `${session.relayPrompt}: ${input.text}` : session.relayPrompt) : input.text);
     if (this.config.mode === "tmux") assertExternalDataDir(this.config.dataDir, session.repository);
+    if (options.wireText !== undefined) singleLine(options.wireText);
     const now = new Date().toISOString();
     let record: CommandRecord = { id: input.requestId, agentId: input.agentId, kind: input.kind, text, handoff: input.kind === "relay" || input.handoff === true,
       status: "recorded", createdAt: now, updatedAt: now, error: null, releasedAt: null };
@@ -115,6 +90,7 @@ export class Controller {
     if (!reservation.created) return reservation.record; // Never redeliver a duplicate ID.
     try {
       await this.adapter.preflight(session);
+      await options.beforeSend?.();
     } catch (error) {
       record = { ...record, status: "rejected", error: messageOf(error), updatedAt: new Date().toISOString() };
       this.store.update(record);
@@ -124,14 +100,13 @@ export class Controller {
     record = { ...record, status: "sending", updatedAt: new Date().toISOString() };
     this.store.update(record); // Durable boundary BEFORE terminal input.
     try {
-      await this.adapter.send(session, text);
+      await this.adapter.send(session, options.wireText ?? text);
       record = { ...record, status: "delivered", updatedAt: new Date().toISOString() };
     } catch (error) {
       record = { ...record, status: "uncertain", error: messageOf(error), updatedAt: new Date().toISOString() };
     }
     this.store.update(record);
-    // A clean delivery settles the worktree: the readiness confirmation on the next send is the human's
-    // reconciliation. Only an uncertain delivery keeps the worktree reserved until someone inspects the terminal.
+    // Release only the transport reservation. ControlPlane retains execution ownership across clean deliveries.
     if (record.status === "delivered") { this.store.release(record.id); return this.store.get(record.id)!; }
     return record;
   }

@@ -4,9 +4,7 @@
   "private": true,
   "type": "module",
   "license": "UNLICENSED",
-  "engines": {
-    "node": ">=22.18.0"
-  },
+  "engines": { "node": ">=22.18.0" },
   "scripts": {
     "dev": "next dev --hostname 127.0.0.1 --port 8787",
     "build": "next build",
@@ -16,8 +14,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "e2e": "playwright test",
-    "check": "npm run test:smoke && npm run typecheck && npm test && npm run build",
-    "check:e2e": "npm run check && npm run e2e"
+    "check": "npm run test:smoke && npm run test:workflow && npm run typecheck && npm test && npm run build",
+    "check:e2e": "npm run check && npm run e2e",
+    "test:workflow": "node --experimental-strip-types --test scripts/workflow.test.ts"
   },
   "dependencies": {
     "better-sqlite3": "12.11.1",

@@ -1,6 +1,8 @@
-import { parseCommand } from "@/core/validation";
-import { endpoint, jsonBody } from "@/server/http";
-import { controller } from "@/server/runtime";
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
-export async function POST(request: Request) { return endpoint(request, async () => controller().submit(parseCommand(await jsonBody(request)))); }
+import { parseStart } from '../../../../core/workflow-validation.ts';
+import { endpoint, jsonBody } from '../../../../server/http.ts';
+import { controller } from '../../../../server/runtime.ts';
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+export async function POST(request: Request) {
+  return endpoint(request, async () => controller().submit(parseStart(await jsonBody(request))));
+}

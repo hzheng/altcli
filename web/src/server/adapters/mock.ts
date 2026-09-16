@@ -1,7 +1,7 @@
 import type { AgentId, PaneState, SessionRegistration } from "../../contracts/api.ts";
 import { AppError } from "../../core/errors.ts";
 import type { ListedPane, TerminalAdapter } from "./terminal.ts";
-const IDENTITY = { panePid: "demo", serverPid: "demo", serverStarted: "demo", socketPath: "mock" };
+const IDENTITY = { panePid: "10", serverPid: "20", serverStarted: "100", socketPath: "/tmp/codercrew-mock" };
 /** Simulated tmux server: two coding CLIs already registered by default, a shell to demonstrate refusal, and a spare CLI to register. */
 export function mockPanes(): ListedPane[] {
   return [
@@ -29,12 +29,11 @@ export class MockAdapter implements TerminalAdapter {
     return this.output.get(session.id) ?? `[MOCK ${session.label}]\n\nThis is a simulated pane, not a connected coding agent.\nNo repository has been read or modified.\n\nReady to preview a manual command.\n> `;
   }
   async send(session: SessionRegistration, text: string): Promise<void> {
-    // Test hook: this exact instruction simulates a transport failure after input may have landed.
-    if (text === "mock:uncertain") throw new AppError("TMUX_FAILED", "Simulated transport failure after typing began.", 409);
+    if (text.replace(/ \[codercrew-command:[0-9a-f-]+\]$/i, "") === "mock:uncertain") throw new AppError("TMUX_FAILED", "Simulated transport failure after typing began.", 409);
     this.output.set(session.id, `${await this.capture(session)}${text}\n\n[MOCK] Input received. No review or code change was performed.\n> `);
   }
 }
 export function mockSessions(): SessionRegistration[] {
   return [{ id: "codex", label: "Codex", agentType: "codex" as const, paneId: "%0", expectedCommand: "codex" }, { id: "claude", label: "Claude Code", agentType: "claude" as const, paneId: "%1", expectedCommand: "2.1.272" }]
-    .map(({ paneId, ...session }) => ({ ...session, repository: "/demo/project", identity: { paneId, ...IDENTITY }, relayPrompt: "relay", registeredAt: "2026-09-14T00:00:00.000Z" }));
+    .map(({ paneId, ...session }) => ({ ...session, repository: "/demo/project", identity: { paneId, ...IDENTITY }, relayPrompt: "relay", registeredAt: "2026-09-14T00:00:00Z" }));
 }
