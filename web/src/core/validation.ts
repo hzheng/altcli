@@ -36,6 +36,14 @@ export function requestId(value: unknown): string {
   }
   return value;
 }
+/** Prompt text for a CLI: one or more lines, CRLF normalized, no other control characters, at most 2,000 UTF-8 bytes. */
+export function promptText(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) throw new AppError("INVALID_TEXT", "Enter a nonempty instruction.");
+  const text = value.replace(/\r\n?/g, "\n");
+  if (/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u2028\u2029]/u.test(text)) throw new AppError("INVALID_TEXT", "Text may not contain control characters other than line breaks.");
+  if (new TextEncoder().encode(text).length > 2000) throw new AppError("INVALID_TEXT", "Maximum instruction size is 2,000 UTF-8 bytes.");
+  return text;
+}
 export function singleLine(value: unknown): string {
   if (typeof value !== "string" || !value.trim()) throw new AppError("INVALID_TEXT", "Enter a nonempty instruction.");
   // Refuse terminal controls, line separators, DEL, and C1 controls.
@@ -52,7 +60,7 @@ export function parseCommand(value: unknown): CommandInput {
   if (body.confirmReady !== true) throw new AppError("READINESS_REQUIRED", "Confirm that the selected agent is at an empty input prompt and the other agent is not writing.");
   if (body.kind !== "relay" && body.kind !== "instruction") throw new AppError("INVALID_KIND", "Unknown command kind.");
   // An instruction needs text; a relay may carry context that the controller appends to the registered prompt.
-  const text = body.kind === "instruction" || (body.text !== undefined && body.text !== "") ? singleLine(body.text) : undefined;
+  const text = body.kind === "instruction" || (body.text !== undefined && body.text !== "") ? promptText(body.text) : undefined;
   if (body.handoff !== undefined && typeof body.handoff !== "boolean") throw new AppError("INVALID_BODY", "handoff must be a boolean.");
   return { requestId: requestId(body.requestId), agentId: agentId(body.agentId), kind: body.kind, ...(text !== undefined ? { text } : {}),
     ...(body.handoff !== undefined ? { handoff: body.handoff } : {}), confirmReady: true };

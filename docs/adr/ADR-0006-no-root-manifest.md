@@ -7,8 +7,8 @@
 ## Context
 
 ADR-0002 added a root `package.json` whose only content was scripts forwarding
-into `web/`. It declared no dependencies and owned no code. The reference project
-(TimedGoal) has neither a root manifest nor root launchers: every task is
+into `web/`. It declared no dependencies and owned no code. A single-workspace
+layout needs neither a root manifest nor root launchers: every task is
 `cd web && npm run <task>`, with `pre*` hooks and `web/scripts/` for tooling.
 
 Two things in CoderCrew are genuinely not web-package concerns: `scripts/setup.mjs`
@@ -32,6 +32,6 @@ directory into `~/.claude/skills` and `~/.codex/skills`.
 
 ## Consequences
 
-Commands run from `web/` or by path from the root, matching TimedGoal. `npm run`
+Commands run from `web/` or by path from the root. `npm run`
 inside `web/` remains the discoverable task menu. `.nvmrc` stays at the root for
 `nvm use` before `cd web`.

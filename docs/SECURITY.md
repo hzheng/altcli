@@ -52,11 +52,13 @@ Pairs require canonical root/gitdir/standard-index identity. Custom per-worker
 GIT_INDEX_FILE and related overrides are unsupported and must not be used. Pane
 identity and process-name checks narrow but do not eliminate the check/use race.
 
-Codex notify versions may omit background-work proof. Those events are unknown
-and pause, even when the reviewer reports accept_and_improve. Claude versions
-without current Stop response/background fields also pause. No missing field is
-converted into an empty list. Installed-version and real-agent acceptance is
-required before leaving a run unattended.
+Codex notify does not supply background-work proof, so the server compares the
+processes under or attached to the pane before delivery and at completion. This
+detects surviving work in the pane's process tree or on its controlling terminal;
+it is not process attestation and cannot prove the absence of deliberately detached
+work. An unreadable process table remains unknown and pauses. Claude versions
+without current Stop response/background fields also pause. Installed-version and
+real-agent acceptance is required before leaving a run unattended.
 
 ## Installation and storage
 

@@ -33,7 +33,8 @@ function identity() {
 async function main() {
   const target = identity(); if (!target) return;
   const payload = JSON.parse(source === 'claude' ? readFileSync(0, 'utf8') : args.at(-1) ?? '{}');
-  if (source === 'codex') { const event = codexCompletion(payload, target); if (event) await post(event); return; }
+  // This hook is itself a child of the CLI while it posts; the server excludes it from process evidence by pid.
+  if (source === 'codex') { const event = codexCompletion(payload, target); if (event) await post({ ...event, reporterPid: String(process.pid) }); return; }
   if (source !== 'claude' || typeof payload.session_id !== 'string' || payload.agent_id) return;
   const directory = join(homedir(), '.local', 'share', 'codercrew', 'hook-turns');
   const path = join(directory, `${contextKey(target, payload.session_id)}.json`);

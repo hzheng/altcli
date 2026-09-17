@@ -52,6 +52,7 @@ test('only the final nonempty line is an outcome, not an example earlier in the 
 });
 test('a unique marker distinguishes identical relay instructions', () => {
   assert.equal(marker(`relay: [codercrew-command:${ID}]`), ID);
+  assert.equal(marker(`first line\nsecond line [codercrew-command:${ID}]`), ID);
   assert.equal(marker('relay'), undefined);
   assert.equal(marker(`relay: [codercrew-command:${ID}] altered`), undefined);
 });

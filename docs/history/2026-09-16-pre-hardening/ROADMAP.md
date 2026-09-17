@@ -19,7 +19,7 @@ Keep the human in control first. Add deterministic relay automation later, follo
 | --- | --- | --- |
 | Project name | CoderCrew: the crew is Codex, Claude Code, and the developer | Confirmed September 16 |
 | Backend | Node.js with TypeScript source | Confirmed September 14 |
-| Frontend | TypeScript; React / Next.js App Router for the scaffold | TypeScript confirmed; framework selected from TimedGoal reference |
+| Frontend | TypeScript; React / Next.js App Router for the scaffold | TypeScript confirmed; Next.js App Router selected |
 | Worker sessions | Keep the coding CLIs running in tmux; register any number of panes from the console's live pane list | Confirmed; multi-pane registration September 15 |
 | Main interface | Central reading panel and central command submission | Confirmed |
 | Remote access | Reach the web interface from an iPhone through Tailscale | Planned product requirement |
@@ -33,7 +33,7 @@ Keep the human in control first. Add deterministic relay automation later, follo
 | Snapshot updates | Polling; replace current pane snapshots | Initial implementation choice |
 | Native iOS | Reserve ios/ and a versioned HTTP contract; no native implementation yet | Deferred |
 
-The user subsequently confirmed TypeScript for both the frontend and backend and requested a stack similar to TimedGoal. The starter therefore selects Next.js App Router, React, Tailwind, SQLite, Vitest, and Playwright. See [ADR-0002](docs/adr/ADR-0002-timedgoal-aligned-typescript-stack.md). These later choices settle the original open stack decisions without changing the staged product rollout.
+The user subsequently confirmed TypeScript for both the frontend and backend and requested a Next.js web stack. The starter therefore selects Next.js App Router, React, Tailwind, SQLite, Vitest, and Playwright. See [ADR-0002](docs/adr/ADR-0002-typescript-web-stack.md). These later choices settle the original open stack decisions without changing the staged product rollout.
 
 ## First useful release
 

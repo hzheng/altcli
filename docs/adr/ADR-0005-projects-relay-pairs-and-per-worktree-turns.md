@@ -30,10 +30,10 @@ display and routing metadata; it grants nothing and is never used as an identity
 ### A project is a worktree root
 
 Sessions registered with the same real repository root form one project. Projects
-are derived, not stored: there is no project table, id, or endpoint. The console
-shows one tab per root and scopes its target buttons, panels, and pairs to the
-selected project. A root's basename is the display name; the full path is shown
-beneath it.
+are derived, not stored: there is no project table, id, or endpoint. The console's
+primary tabs are named relay pairs, labeled with the root basename in parentheses.
+Selecting a pair selects its project and scopes the target buttons and panels to
+that pair. The full root path is shown beneath it.
 
 ### Named relay pairs
 
@@ -45,8 +45,8 @@ worktree, hence the index. A linked `git worktree` has a different root and corr
 fails. No git command is invoked; the controller stays git-free (AGENTS.md).
 
 A paired session cannot be removed or re-pointed to another repository until the pair
-is removed. The console's "Show pair" filters the project view to the pair's two
-panels so the operator sees exactly the relay in progress.
+is removed. Selecting the pair's tab filters the project view to the pair's two panels
+so the operator sees exactly the relay in progress.
 
 ### The manual turn is reserved per worktree
 

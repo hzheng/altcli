@@ -3,17 +3,19 @@ import { object, parseCommand, parseEvent, requestId, agentId } from './validati
 import type { HookEvent, RunAction, StartInput } from '../contracts/workflow.ts';
 
 export function parseStart(value: unknown): StartInput {
-  const { pairId, autoContinue, ...command } = object(value);
+  const { pairId, autoContinue, turnLimit, ...command } = object(value);
   if (autoContinue !== undefined && typeof autoContinue !== 'boolean') throw new AppError('INVALID_BODY', 'autoContinue must be a boolean.');
+  if (turnLimit !== undefined && (!Number.isInteger(turnLimit) || (turnLimit as number) < 1 || (turnLimit as number) > 200)) throw new AppError('INVALID_BODY', 'turnLimit must be an integer from 1 to 200.');
   return { ...parseCommand(command), ...(pairId !== undefined ? { pairId: agentId(pairId) } : {}),
-    ...(autoContinue !== undefined ? { autoContinue } : {}) };
+    ...(autoContinue !== undefined ? { autoContinue } : {}), ...(turnLimit !== undefined ? { turnLimit: turnLimit as number } : {}) };
 }
 export function parseHook(value: unknown): HookEvent {
-  const { commandId, sourceTurnId, identity, backgroundState, event, ...rest } = object(value);
+  const { commandId, sourceTurnId, identity, backgroundState, reporterPid, event, ...rest } = object(value);
   if (!['turn_started', 'turn_complete', 'outcome'].includes(String(event))) throw new AppError('INVALID_EVENT', 'Unknown lifecycle event.');
   const legacy = parseEvent({ ...rest, event: event === 'turn_started' ? 'turn_complete' : event });
   if (sourceTurnId !== undefined && (typeof sourceTurnId !== 'string' || !/^[A-Za-z0-9:_-]{1,200}$/.test(sourceTurnId))) throw new AppError('INVALID_EVENT', 'Invalid source turn identity.');
   if (backgroundState !== undefined && !['clear', 'active', 'unknown'].includes(String(backgroundState))) throw new AppError('INVALID_EVENT', 'Invalid background state.');
+  if (reporterPid !== undefined && (typeof reporterPid !== 'string' || !/^\d{1,10}$/.test(reporterPid))) throw new AppError('INVALID_EVENT', 'Invalid reporter process id.');
   let pane;
   if (identity !== undefined) {
     const fields = object(identity);
@@ -25,7 +27,8 @@ export function parseHook(value: unknown): HookEvent {
   return { ...legacy, event: event as HookEvent['event'],
     ...(commandId !== undefined ? { commandId: requestId(commandId) } : {}),
     ...(sourceTurnId !== undefined ? { sourceTurnId: sourceTurnId as string } : {}),
-    ...(pane ? { identity: pane } : {}), ...(backgroundState !== undefined ? { backgroundState: backgroundState as HookEvent['backgroundState'] } : {}) };
+    ...(pane ? { identity: pane } : {}), ...(backgroundState !== undefined ? { backgroundState: backgroundState as HookEvent['backgroundState'] } : {}),
+    ...(reporterPid !== undefined ? { reporterPid: reporterPid as string } : {}) };
 }
 export function parseRunAction(value: unknown): RunAction {
   const body = object(value);

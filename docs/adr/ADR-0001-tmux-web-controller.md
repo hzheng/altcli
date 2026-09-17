@@ -1,6 +1,6 @@
 # ADR-0001: Build a tmux-backed web controller for Codex and Claude Code
 
-> **September 14 follow-on:** CoderCrew is the project name. TypeScript is now confirmed for both sides, and the user requested TimedGoal stack alignment and an iOS reservation. [ADR-0002](ADR-0002-timedgoal-aligned-typescript-stack.md) resolves the original open stack choices; [ADR-0003](ADR-0003-manual-dispatch-boundary.md) records the scaffold's manual dispatch boundary. The historical wording below is retained; it is not the latest stack-selection status. The exact original is archived under `docs/history/2026-09-13/`.
+> **September 14 follow-on:** CoderCrew is the project name. TypeScript is now confirmed for both sides, and the user requested a Next.js web stack and an iOS reservation. [ADR-0002](ADR-0002-typescript-web-stack.md) resolves the original open stack choices; [ADR-0003](ADR-0003-manual-dispatch-boundary.md) records the scaffold's manual dispatch boundary. The historical wording below is retained; it is not the latest stack-selection status. The exact original is archived under `docs/history/2026-09-13/`.
 
 **Date:** September 13, 2026  
 **Status:** Accepted direction; implementation options explicitly marked below remain provisional.  

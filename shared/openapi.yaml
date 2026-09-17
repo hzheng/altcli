@@ -645,6 +645,11 @@ components:
         registeredAt:
           type: string
           format: date-time
+        cliPid:
+          type:
+          - string
+          - 'null'
+          description: Foreground CLI process id pinned at registration; absent on legacy registrations.
       required:
       - id
       - label
@@ -745,6 +750,10 @@ components:
           type: string
           maxLength: 200
           description: The CLI's own session or thread id, when its payload carries one.
+        reporterPid:
+          type: string
+          pattern: ^\d{1,10}$
+          description: Transient Codex hook process id, excluded from process evidence.
       required:
       - source
       - event
@@ -928,6 +937,24 @@ components:
       - updatedAt
       - error
       - releasedAt
+    HistoryCommand:
+      allOf:
+      - $ref: '#/components/schemas/CommandRecord'
+      - type: object
+        properties:
+          runId:
+            type:
+            - string
+            - 'null'
+            description: The server run this command belonged to, from the durable ledger; null when it predates the ledger.
+          pairId:
+            type:
+            - string
+            - 'null'
+            description: The pair frozen into that run, for history filtering; null for a single-agent turn.
+        required:
+        - runId
+        - pairId
     ConsoleState:
       type: object
       properties:
@@ -939,6 +966,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/SessionRegistration'
+        instances:
+          type: array
+          items:
+            $ref: '#/components/schemas/InstanceState'
         pairs:
           type: array
           items:
@@ -959,7 +990,7 @@ components:
         commands:
           type: array
           items:
-            $ref: '#/components/schemas/CommandRecord'
+            $ref: '#/components/schemas/HistoryCommand'
         reservations:
           type: array
           items:
@@ -976,6 +1007,7 @@ components:
       - mode
       - inputEnabled
       - sessions
+      - instances
       - panes
       - panesError
       - pairs
@@ -1036,11 +1068,20 @@ components:
           kind:
             const: relay
             type: string
+          pairId:
+            $ref: '#/components/schemas/AgentId'
+          autoContinue:
+            type: boolean
+          turnLimit:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 20
           text:
             type: string
             minLength: 1
             maxLength: 2000
-            description: 'Optional context; the controller sends one line, "<registered relay prompt>: <text>".'
+            description: 'Optional context; the controller sends "<registered relay prompt>: <text>". Line breaks are allowed.'
         required:
         - requestId
         - agentId
@@ -1061,12 +1102,22 @@ components:
           kind:
             const: instruction
             type: string
+          pairId:
+            $ref: '#/components/schemas/AgentId'
+          autoContinue:
+            type: boolean
+          turnLimit:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 20
           text:
             type: string
             minLength: 1
             maxLength: 2000
-            description: Nonblank single-line input; maximum 2,000 UTF-8 bytes. Controls, DEL/C1 and Unicode line
-              separators are rejected. The byte limit is stricter than maxLength for multibyte text.
+            description: Nonblank input of one or more lines; maximum 2,000 UTF-8 bytes. CRLF is normalized to LF;
+              other controls, DEL/C1 and Unicode line separators are rejected. Multi-line text reaches the terminal
+              as one bracketed paste. The byte limit is stricter than maxLength for multibyte text.
           handoff:
             type: boolean
             description: When true, finishing this instruction hands off to the relay partner as an accepted-and-improved
@@ -1080,3 +1131,17 @@ components:
         additionalProperties: false
       description: A unique client UUID v4 is required. Same ID and payload returns the stored result without redelivery.
         Reuse with a different payload conflicts. Never retry automatically after an uncertain response.
+    InstanceState:
+      type: object
+      properties:
+        agentId:
+          $ref: '#/components/schemas/AgentId'
+        status:
+          type: string
+          enum:
+          - current
+          - replaced
+          - unknown
+      required:
+      - agentId
+      - status

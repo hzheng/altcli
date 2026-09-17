@@ -24,9 +24,10 @@ were replaced with tests of the new guarantees. They were not merely disabled.
 
 ## Explicit remaining limits
 
-- Codex notify may lack background-work evidence. Such completions pause; no field
-  is assumed or inferred. Installed CLI versions and the complete mixed-agent run
-  still need host acceptance.
+- Codex notify lacks background-work evidence, so the server uses a before/after
+  process comparison scoped to the pane. Unreadable or unavailable evidence pauses;
+  deliberately detached work remains outside this observational boundary. Installed
+  CLI versions and the complete mixed-agent run still need host acceptance.
 - Standard Git index identity only; custom worker environment overrides are not
   attested. External desktop input and child-process writes remain an operational
   boundary, not filesystem isolation.

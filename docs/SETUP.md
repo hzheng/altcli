@@ -49,13 +49,15 @@ readiness before starting. Keep desktop input out of that owned worktree.
 Send never relays. Send & relay requests one review; the continuation preference
 governs subsequent accept_and_improve handoffs. Relay starts a review. The selected
 pair and policy are copied into a server run; later viewing changes cannot redirect
-it. A maximum of 20 automatic turns is enforced per run, on the server.
+it. The maximum number of automatic turns (default 20, set in the composer) is
+frozen into the run and enforced on the server.
 
-A finished response with unknown or active background work pauses. In particular,
-Codex notify payloads without background proof cannot auto-advance. Inspect workers
-and use Pause / take over, then explicit ownership release, before a new manual
-start. This is a compatibility boundary, not an assumption that notify provides
-fields it does not document.
+A finished response with unknown or active background work pauses. Claude supplies
+that evidence in its current Stop payload. Codex notify does not, so the server
+compares the processes under or attached to the pane before delivery and at
+completion. An unreadable process table or changed pane identity remains unknown.
+Inspect workers and use Pause / take over, then explicit ownership release, before
+a new manual start.
 
 Pause prevents further scheduling but does not interrupt processes or retract input.
 A backend restart pauses all owned runs without replay. Closing or locking a browser

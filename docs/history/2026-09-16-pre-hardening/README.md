@@ -55,7 +55,7 @@ panes; it is not part of the product flow.
 
 ## Technology and layout
 
-Following the inspected TimedGoal `web/` workspace: **Next.js App Router, React,
+The `web/` workspace uses **Next.js App Router, React,
 TypeScript on both client and Node backend, Tailwind CSS, SQLite with
 better-sqlite3/raw SQL, Vitest, and Playwright**. This is one host-resident Next.js
 application, not a Vite frontend plus a separate Express server.
@@ -75,7 +75,7 @@ codercrew/
     SECURITY.md                 Threat boundary and current limitations
     TAILSCALE.md                Private phone access, after local validation
     SKILLS.md                   Skill ownership and use in other repositories
-    SOURCES.md                  TimedGoal reference and official documentation
+    SOURCES.md                  Reference sources and official documentation
   web/
     src/app/                    React pages and Node API route handlers
     src/components/             Responsive console, pane registration, relay pairs
@@ -95,7 +95,7 @@ The Node runtime owns tmux access. The browser cannot select arbitrary binaries,
 issue tmux subcommands, or send arbitrary shell commands through an execution API.
 No ttyd, xterm.js, node-pty, agent SDK, or third model is required in this scaffold.
 The architecture and source-reference scope are recorded in
-[ADR-0002](docs/adr/ADR-0002-timedgoal-aligned-typescript-stack.md).
+[ADR-0002](docs/adr/ADR-0002-typescript-web-stack.md).
 
 ## What is included
 
@@ -155,7 +155,6 @@ There is no root `package.json`: `web/package.json` owns every npm task, and roo
 console, a safe tmux dry run against a `cat` pane, and the first real relay.
 
 `web/package-lock.json` is committed from a local install and CI uses `npm ci`.
-The direct dependency versions are pinned to the inspected TimedGoal manifest.
 
 ## Phone access and native iOS
 
@@ -165,7 +164,7 @@ and tailnet access restrictions. Do not expose the controller publicly. See
 [docs/TAILSCALE.md](docs/TAILSCALE.md).
 
 `ios/` reserves a future client of the host API. It does not promise Swift code
-sharing, local coding-agent execution on iOS, or TimedGoal's standalone data model.
+sharing, local coding-agent execution on iOS, or a standalone data model.
 
 ## Documentation and license
 
@@ -174,6 +173,5 @@ The active roadmap reflects CoderCrew's name and the newly confirmed TypeScript
 backend. The uploaded handoff skill is preserved byte-for-byte at
 `skills/review-handoff/SKILL.md`.
 
-No TimedGoal application source was copied. Its stack and workspace conventions
-were used as a reference. This starter is marked private/`UNLICENSED`; no public
+This starter is marked private/`UNLICENSED`; no public
 license or trademark clearance is implied. Choose a license before publishing.

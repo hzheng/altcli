@@ -33,8 +33,9 @@ execution ownership separate from transport; pause and human takeover; restart
 pauses without replay. Browser views never implement the scheduler.
 
 Current Stop payload replaces lagging transcript fallback. Missing/active background
-state pauses; legacy follow-up events cannot advance anything. Codex notify versions
-without quiescence evidence therefore require manual reconciliation.
+state pauses; legacy follow-up events cannot advance anything. Codex notify carries no
+quiescence evidence, so the server supplies differential process evidence for Codex
+turns (processes newly associated with the pane that survive completion).
 
 Remaining acceptance: installed-version hook fixtures and supervised mixed-agent
 relay, complete fault-injection sequence, non-browser lifecycle intake, restart and

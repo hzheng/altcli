@@ -77,9 +77,13 @@ reconciliation and explicit rebinding.
 
 A response can end while background work remains. Only explicit clear evidence
 can release execution ownership or schedule the next worker automatically. Missing
-background-task/cron fields are unknown, not empty. Codex notify versions that lack
-this evidence therefore pause. The implementation does not invent quiescence or
-silently bypass this gate for convenience.
+background-task/cron fields are unknown, not empty. Claude relies on those payload
+fields. Codex notify does not carry them, so for Codex only the server records the
+processes under or attached to the pane before delivery and compares them with a
+fresh process-table read at completion. A newly associated surviving process is
+active; unreadable evidence is unknown. This is observational evidence, not proof
+against deliberately detached work, and it never substitutes for Claude's in-process
+task report.
 
 ### Human policy and browser lifetime
 
@@ -92,7 +96,8 @@ it cannot alter routing or create a second advancement.
 Plain Send never relays. Send & relay requests one review; further reviews depend
 on the run's continuation preference. Only `accept_and_improve` continues a review
 chain. Other outcomes pause or end the chain; a completed chain is not a completed
-task. The hard budget is 20 automatic turns per run, persisted on the server.
+task. The budget of automatic turns (default 20, chosen at start) is persisted on
+the server with the run.
 
 Pause prevents subsequent scheduling; it does not interrupt an in-flight send or
 running agent. Explicit takeover requires inspecting and stopping all writers and

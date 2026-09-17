@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { agentId, label, parseCommand, parseEvent, parsePair, parseRegistration, singleLine, slugify } from "../src/core/validation.ts";
+import { agentId, label, parseCommand, parseEvent, parsePair, parseRegistration, promptText, singleLine, slugify } from "../src/core/validation.ts";
 import { assertAgentCommand, assertIdentity, sameRequest, suggestAgentType } from "../src/core/policy.ts";
 import { authorize } from "../src/server/auth.ts";
 import { loadConfig } from "../src/server/config.ts";
@@ -13,6 +13,7 @@ import { ENTER_SETTLE_MS, inputArgs, inspectPane, listPanes, createRunner, TmuxA
 import { MockAdapter, mockPanes, mockSessions } from "../src/server/adapters/mock.ts";
 import { jsonBody } from "../src/server/http.ts";
 import { isWithin } from "../src/server/paths.ts";
+import { isCodexHelper, processesForPane } from "../src/server/processes.ts";
 import type { PaneState, SessionRegistration } from "../src/contracts/api.ts";
 const id = "d2007c18-13e5-48d3-85e5-1f5b73c804f2";
 const token = "a".repeat(64);
@@ -29,11 +30,12 @@ test("valid manual command keeps explicit destination and UUID", () => {
 test("readiness must be explicitly true", () => {
   assert.throws(() => parseCommand({ requestId: id, agentId: "codex", kind: "relay" }), /Confirm/);
 });
-test("a relay may carry single-line context; an instruction must carry text", () => {
+test("a relay may carry multi-line context; an instruction must carry text", () => {
   assert.equal(parseCommand({ requestId: id, agentId: "codex", kind: "relay", confirmReady: true }).text, undefined);
   assert.equal(parseCommand({ requestId: id, agentId: "codex", kind: "relay", text: "", confirmReady: true }).text, undefined);
   assert.equal(parseCommand({ requestId: id, agentId: "codex", kind: "relay", text: "focus on the migration", confirmReady: true }).text, "focus on the migration");
-  assert.throws(() => parseCommand({ requestId: id, agentId: "codex", kind: "relay", text: "a\nb", confirmReady: true }));
+  assert.equal(parseCommand({ requestId: id, agentId: "codex", kind: "relay", text: "a\nb", confirmReady: true }).text, "a\nb");
+  assert.throws(() => parseCommand({ requestId: id, agentId: "codex", kind: "relay", text: "a\u001bb", confirmReady: true }), /control/);
   assert.throws(() => parseCommand({ requestId: id, agentId: "codex", kind: "instruction", confirmReady: true }), /nonempty/);
   assert.equal(parseCommand({ requestId: id, agentId: "codex", kind: "instruction", text: "do it", handoff: true, confirmReady: true }).handoff, true);
   assert.throws(() => parseCommand({ requestId: id, agentId: "codex", kind: "instruction", text: "do it", handoff: "yes", confirmReady: true }), /boolean/);
@@ -98,6 +100,45 @@ test("text size is bounded in UTF-8 bytes, not JavaScript character count", () =
 });
 test("empty and whitespace-only commands are rejected", () => {
   for (const value of ["", "  ", null, 3]) assert.throws(() => singleLine(value));
+});
+test("only Codex's own helper binaries are exempt from background-work evidence", () => {
+  for (const command of ["/opt/homebrew/Caskroom/codex/0.154.0/bin/codex-code-mode-host", "codex-app-server", "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl"]) assert.ok(isCodexHelper(command), command);
+  for (const command of ["codex", "codex-fake", "node", "/usr/bin/tail", "/tmp/codex-fake/evil", "node_repl", "/Users/x/codex-notes/run.sh"]) assert.ok(!isCodexHelper(command), command);
+});
+test("pane process evidence retains tty-attached work after its parent exits", () => {
+  const rows = [
+    { pid: "10", ppid: "1", tty: "ttys001", command: "-zsh" },
+    { pid: "20", ppid: "10", tty: "ttys001", command: "codex" },
+    { pid: "30", ppid: "1", tty: "ttys001", command: "sleep" },
+    { pid: "40", ppid: "1", tty: "??", command: "unrelated" },
+  ];
+  assert.deepEqual(processesForPane(rows, "10"), [{ pid: "20", command: "codex" }, { pid: "30", command: "sleep" }]);
+  // A root with no controlling terminal (Linux "?", macOS "??") keeps only its descendants; daemons are not its work.
+  for (const none of ["?", "??"]) {
+    const detached = [{ pid: "10", ppid: "1", tty: none, command: "-zsh" }, { pid: "20", ppid: "10", tty: none, command: "codex" }, { pid: "50", ppid: "1", tty: none, command: "launchd-helper" }];
+    assert.deepEqual(processesForPane(detached, "10"), [{ pid: "20", command: "codex" }]);
+  }
+});
+test("prompt text keeps line breaks, normalizes CRLF, and refuses other controls", () => {
+  assert.equal(promptText("first\r\nsecond\rthird"), "first\nsecond\nthird");
+  for (const value of ["a\tb", "a\u001bb", "a\u0085b", "", "  ", null]) assert.throws(() => promptText(value));
+  assert.throws(() => promptText("x".repeat(2001)), /2,000/);
+});
+test("a multi-line prompt is delivered as one bracketed paste, then Enter; a single line is still typed", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "codercrew-smoke-"));
+  try {
+    const calls: { args: string[]; input?: string }[] = [];
+    const run = async (args: string[], input?: string) => { calls.push({ args, input }); return args[0] === "display-message" ? `%1\t11\t22\t123\t/tmp/tmux-test\tcodex\t${directory}\t0\t0\t0\n` : ""; };
+    const testSession = { ...session, repository: directory };
+    await new TmuxAdapter(run).send(testSession, "line one; $(x)\nline two");
+    assert.deepEqual(calls.map((c) => c.args[0]), ["display-message", "load-buffer", "paste-buffer", "display-message", "send-keys"]);
+    const [, load, paste] = calls; const name = load!.args[2]!;
+    assert.deepEqual(load!.args, ["load-buffer", "-b", name, "-"]); assert.equal(load!.input, "line one; $(x)\nline two");
+    assert.deepEqual(paste!.args, ["paste-buffer", "-p", "-d", "-b", name, "-t", "%1"]);
+    assert.deepEqual(calls.at(-1)!.args, ["send-keys", "-t", "%1", "Enter"]);
+    calls.length = 0; await new TmuxAdapter(run).send(testSession, "one line");
+    assert.deepEqual(calls.map((c) => c.args[0]), ["display-message", "send-keys", "display-message", "send-keys"]);
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });
 test("hex transport preserves punctuation, semicolons and Unicode literally", () => {
   const text = "Review $(echo hi); path\\name 中文;";

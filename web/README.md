@@ -1,7 +1,7 @@
 # CoderCrew web workspace
 
 Next.js App Router, React, TypeScript, Tailwind, SQLite/better-sqlite3, Vitest, and
-Playwright, selected from the inspected TimedGoal workspace. Node 24 is suggested.
+Playwright. Node 24 is suggested.
 
 Repository operations run from the root with plain `node`; every npm task runs here:
 

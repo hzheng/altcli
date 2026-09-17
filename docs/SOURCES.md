@@ -12,22 +12,8 @@ separated below. Repository access was read-only; no GitHub files were changed.
 - The uploaded `ROADMAP.md` and `ADR-0001-tmux-web-controller.md`. Exact originals
   are archived under `docs/history/2026-09-13/`. Their original date is retained.
 - The conversation's September 14 decisions: CoderCrew as project name,
-  TypeScript frontend and backend, web-first development, TimedGoal as a stack
-  reference, native iOS reserved, and a ZIP starter delivery.
-
-## Inspected TimedGoal reference
-
-Repository: https://github.com/hzheng/timedgoal  
-Revision: `46622ce84d4d19cde0c101532502c9a8e9bd3298`
-
-- [web/package.json](https://github.com/hzheng/timedgoal/blob/46622ce84d4d19cde0c101532502c9a8e9bd3298/web/package.json): dependency names and versions, Next scripts, TypeScript, Vitest, Playwright.
-- [web/README.md](https://github.com/hzheng/timedgoal/blob/46622ce84d4d19cde0c101532502c9a8e9bd3298/web/README.md): App Router, Tailwind, raw-SQL SQLite, and backend/domain separation.
-- Repository tree at that revision: separate `web/` and `ios/` areas and root architecture/roadmap documents.
-
-Only stack and structural conventions were adopted. No application source,
-account logic, business rules, sync engine, licensing choice, or deployment promise
-was copied. CoderCrew-specific auth, command state, polling, turn reservations, and
-file layout are new scaffold choices, not requirements inferred from TimedGoal.
+  TypeScript frontend and backend, web-first development, native iOS reserved,
+  and a ZIP starter delivery.
 
 ## Official technical references
 
@@ -38,7 +24,7 @@ file layout are new scaffold choices, not requirements inferred from TimedGoal.
 - [Claude Code skills](https://code.claude.com/docs/en/skills): project `.claude/skills` discovery.
 - [Tailscale Serve](https://tailscale.com/docs/reference/tailscale-cli/serve): private service exposure and Serve configuration.
 
-Dependency versions are taken from the inspected manifest, not asserted to be the
-latest available packages. The packaging runtime could not resolve npm's registry;
+Dependency versions are not asserted to be the latest available packages. The
+packaging runtime could not resolve npm's registry;
 no registry download, dependency audit, lockfile resolution, or full web build was
 completed. Consult `VALIDATION.md` for the actual checks.

@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
+import { basename } from 'node:path';
 import type { CommandRecord, PairInput, RegistrationInput, RegistrationResult, SessionRegistration } from '../contracts/api.ts';
-import type { Execution, HookEvent, HookReceipt, ManagedSession, RunAction, StartInput, WorkflowState } from '../contracts/workflow.ts';
+import type { BackgroundEvidence, Execution, HookEvent, HookReceipt, InstanceState, ManagedSession, ProcessRecord, RunAction, StartInput, WorkflowState } from '../contracts/workflow.ts';
 import { AppError } from '../core/errors.ts';
 import { singleLine, slugify } from '../core/validation.ts';
 import { assertAgentCommand, suggestAgentType } from '../core/policy.ts';
@@ -9,6 +10,7 @@ import { Controller } from './controller.ts';
 import { WorkflowStore, wireText } from './workflow-store.ts';
 import { resolveWorktree, sameWorktree } from './worktree.ts';
 import { assertExternalDataDir } from './paths.ts';
+import { isCodexHelper } from './processes.ts';
 
 /** The only controller exposed to HTTP. The older Controller supplies transport/read-model helpers, not scheduling. */
 export class ControlPlane {
@@ -29,8 +31,18 @@ export class ControlPlane {
     this.workflow.recover();
   }
   async state(): Promise<WorkflowState> {
-    return { ...await this.transport.state(), sessions: this.store.sessions() as ManagedSession[],
-      runs: this.workflow.runs(), executions: this.workflow.activeExecutions() };
+    const sessions = this.store.sessions() as ManagedSession[];
+    const instances = await Promise.all(sessions.map((s) => this.instance(s)));
+    const base = await this.transport.state();
+    const runsOf = this.workflow.runsOf(base.commands.map((c) => c.id));
+    const commands = base.commands.map((c) => ({ ...c, runId: runsOf.get(c.id)?.runId ?? null, pairId: runsOf.get(c.id)?.pairId ?? null }));
+    return { ...base, commands, sessions, runs: this.workflow.runs(), executions: this.workflow.activeExecutions(), instances };
+  }
+  /** Same CLI process as at registration? A registration made before pids were recorded stays unknown until renewed. */
+  private async instance(session: ManagedSession): Promise<InstanceState> {
+    if (!session.cliPid) return { agentId: session.id, status: 'unknown' };
+    const live = await this.adapter.foreground(session).catch(() => null);
+    return { agentId: session.id, status: live === null ? 'unknown' : live === session.cliPid ? 'current' : 'replaced' };
   }
   preview(id: string) { return this.transport.preview(id); }
   private unlocked(session: SessionRegistration): void {
@@ -51,8 +63,10 @@ export class ControlPlane {
     }
     const session: ManagedSession = { id: slugify(input.label), label: input.label, agentType: input.agentType ?? suggestAgentType(pane.command),
       repository: worktree?.root ?? (this.config.mode === 'mock' ? pane.cwd : await realpath(pane.cwd)), expectedCommand: pane.command,
-      identity: pane.identity, relayPrompt: singleLine(input.relayPrompt ?? 'relay'), registeredAt: new Date().toISOString(), registrationId: randomUUID(), worktree };
+      identity: pane.identity, relayPrompt: singleLine(input.relayPrompt ?? 'relay'), registeredAt: new Date().toISOString(), registrationId: randomUUID(), worktree, cliPid: null };
     await this.adapter.preflight(session);
+    session.cliPid = await this.adapter.foreground(session);
+    if (this.config.mode === 'tmux' && !session.cliPid) throw new AppError('PROCESS_UNAVAILABLE', 'Could not identify the CLI process. Inspect the pane and try registration again.', 409);
     if (this.config.mode === 'tmux') assertExternalDataDir(this.config.dataDir, session.repository);
     const old = this.store.sessions().find((s) => s.id === session.id);
     if (old) this.unlocked(old);
@@ -87,6 +101,7 @@ export class ControlPlane {
     if ((input.autoContinue || input.handoff) && !pair) throw new AppError('PAIR_REQUIRED', 'Select an explicit pair to arm automatic handoffs.', 409);
     const participants = pair ? pair.sessions.map((id) => this.store.sessions().find((s) => s.id === id) as ManagedSession) : [session];
     if (participants.some((s) => !s?.registrationId)) throw new AppError('REGISTRATION_REQUIRED', 'Re-register the pair participants.', 409);
+    if (this.config.mode === 'tmux' && participants.some((s) => !s.cliPid)) throw new AppError('REGISTRATION_REQUIRED', 'Re-register every participant so its current CLI process can be pinned.', 409);
     if (pair && !sameWorktree(participants[0]!.worktree, participants[1]!.worktree)) throw new AppError('DIFFERENT_WORKTREE', 'Pair participants must share a verified worktree and index.', 409);
     if (this.store.get(input.requestId) && !this.workflow.execution(input.requestId)) throw new AppError('ID_CONFLICT', 'This request ID belongs to an older transport command.', 409);
     if (input.autoContinue || input.handoff) for (const participant of participants) wireText({ ...input, kind: 'relay', text: undefined }, participant);
@@ -101,26 +116,46 @@ export class ControlPlane {
     const run = this.workflow.run(runId); if (!run) return;
     const turn = this.workflow.claim(run.currentCommandId); if (!turn) return;
     await this.deliver(turn);
-    this.workflow.drain(turn.commandId);
+    for (const pending of this.workflow.pendingEvents(turn.commandId)) {
+      const evidence = pending.event === 'turn_complete' && pending.backgroundState === 'unknown'
+        ? await this.evidence(this.workflow.execution(turn.commandId)!, pending.reporterPid) : null;
+      this.workflow.receive(pending, evidence);
+    }
     const next = this.workflow.run(runId);
     if (next?.status === 'running' && next.currentCommandId !== turn.commandId) await this.pump(runId);
   }
   private async deliver(turn: Execution): Promise<void> {
     const run = this.workflow.run(turn.runId)!;
     const participant = run.participants.find((s) => s.id === turn.agentId)!;
+    let baseline: ProcessRecord[] | null = null;
     try {
       const record = await this.transport.submit(turn.input, { wireText: turn.wireText, beforeSend: async () => {
         const current = this.store.sessions().find((s) => s.id === participant.id) as ManagedSession | undefined;
         if (current?.registrationId !== participant.registrationId) throw new AppError('TARGET_CHANGED', 'Worker registration changed.', 409);
+        if (participant.cliPid && await this.adapter.foreground(participant) !== participant.cliPid) throw new AppError('TARGET_CHANGED', 'The CLI in this pane exited or restarted since registration. Re-register the worker.', 409);
         if (this.config.mode === 'tmux') {
           const live = await this.adapter.inspect(participant.identity.paneId);
           if (participant.worktree && !sameWorktree(await resolveWorktree(live.cwd), participant.worktree)) {
             throw new AppError('TARGET_CHANGED', 'Git worktree or index identity changed.', 409);
           }
         }
+        // Codex notify carries no background-work fields, so the server keeps its own evidence: what ran under the pane before this turn.
+        if (participant.agentType === 'codex') baseline = await this.adapter.processes(participant).catch(() => null);
       } });
-      this.workflow.delivered(record.id, record);
+      this.workflow.delivered(record.id, record, baseline);
     } catch { this.workflow.dispatchFailed(turn.commandId); }
+  }
+  /** Differential process evidence for a Codex completion: anything started under the pane during the turn that is still alive is background work.
+   * Claude reports its own in-process background tasks; a process tree cannot see those, so this never substitutes for a Claude payload. */
+  private async evidence(turn: Execution, reporterPid?: string): Promise<BackgroundEvidence | null> {
+    const participant = this.workflow.run(turn.runId)?.participants.find((s) => s.id === turn.agentId);
+    if (!participant || participant.agentType !== 'codex' || !turn.baselineProcesses) return null;
+    try {
+      const live = await this.adapter.processes(participant);
+      const started = live.filter((p) => p.pid !== reporterPid && !isCodexHelper(p.command) && !turn.baselineProcesses!.some((b) => b.pid === p.pid));
+      return started.length ? { state: 'active', detail: started.map((p) => `${basename(p.command)} pid ${p.pid}`).join(', ') }
+        : { state: 'clear', detail: 'no process started during the turn survives' };
+    } catch { return null; }
   }
 
   async recordEvent(input: HookEvent): Promise<HookReceipt> {
@@ -132,8 +167,9 @@ export class ControlPlane {
         }
       }
     }
-    const receipt = this.workflow.receive(input);
     const turn = input.commandId ? this.workflow.execution(input.commandId) : undefined;
+    const evidence = turn && input.event === 'turn_complete' && input.backgroundState === 'unknown' ? await this.evidence(turn, input.reporterPid) : null;
+    const receipt = this.workflow.receive(input, evidence);
     if (turn) await this.pump(turn.runId);
     return receipt;
   }

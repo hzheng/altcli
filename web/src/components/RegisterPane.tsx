@@ -26,9 +26,8 @@ export function RegisterPane({ token, panes, panesError, disabled, onRegistered,
   }, [id, token]);
   function choose(p: AvailablePane) {
     setId(p.identity.paneId); setReplace(false); setError('');
-    const old = sessions.find((s) => s.id === p.registeredAs);
-    setAgentType(old?.agentType ?? suggestAgentType(p.command)); setRelayPrompt(old?.relayPrompt ?? 'relay');
-    setLabel(old?.label ?? `${suggestAgentType(p.command)} ${p.identity.paneId}`);
+    setAgentType(suggestAgentType(p.command)); setRelayPrompt('relay');
+    setLabel(`${suggestAgentType(p.command)} ${p.identity.paneId}`);
   }
   async function register() {
     if (!pane || busy || disabled || (existing && !replace)) return;
@@ -48,9 +47,13 @@ export function RegisterPane({ token, panes, panesError, disabled, onRegistered,
     <ul className="pane-list" aria-label="Live tmux panes">{panes.map((p) => {
       let blocked = p.dead || p.inMode || p.synchronized;
       try { assertAgentCommand(p.command); } catch { blocked = true; }
-      return <li key={p.identity.paneId} className={p.identity.paneId === id ? 'selected' : blocked ? 'blocked' : ''}>
+      // A registered pane is not re-pointed from here: remove that registration first, then it becomes selectable again.
+      const registered = p.registeredAs ? sessions.find((s) => s.id === p.registeredAs)?.label ?? p.registeredAs : null;
+      return <li key={p.identity.paneId} className={p.identity.paneId === id ? 'selected' : blocked || registered ? 'blocked' : ''}>
         <span className="mono">{p.location} · {p.identity.paneId}</span><span>{p.command}</span><span className="cwd">{p.cwd}</span>
-        {blocked ? <span>Not an eligible foreground CLI, or unsafe pane mode.</span> : <button disabled={disabled || busy} aria-label={`Select ${p.identity.paneId}`} onClick={() => choose(p)}>{p.registeredAs ? 'Rebind' : 'Select'}</button>}
+        {registered ? <span>Already registered as "{registered}".</span>
+          : blocked ? <span>Not an eligible foreground CLI, or unsafe pane mode.</span>
+          : <button disabled={disabled || busy} aria-label={`Select ${p.identity.paneId}`} onClick={() => choose(p)}>Select</button>}
       </li>;
     })}</ul>
     {pane && <form onSubmit={(e) => { e.preventDefault(); void register(); }}>

@@ -93,13 +93,131 @@ test('changed source turn or CLI session pauses instead of borrowing another com
   assert.equal(plane.workflow.run(command.requestId)!.status, 'paused'); assert.equal(sent.length, 1);
 });
 test('unknown or active background work retains ownership', async () => {
-  for (const backgroundState of ['unknown', 'active'] as const) {
-    const command = start({ pairId: store.pairs()[0]?.id ?? pair().id, autoContinue: true }); await plane.submit(command);
+  // Unknown from a Claude payload has no server-side substitute; see the Codex process-evidence tests for the one case that does.
+  for (const [backgroundState, agentId] of [['unknown', 'claude'], ['active', 'codex']] as const) {
+    const command = start({ agentId, pairId: store.pairs()[0]?.id ?? pair().id, autoContinue: true }); await plane.submit(command);
     await complete(command.requestId, { backgroundState });
     assert.equal(plane.workflow.run(command.requestId)!.status, 'paused');
     assert.equal(plane.workflow.owner('/demo/project/.git/index'), command.requestId); stopped(command.requestId);
   }
   assert.equal(sent.length, 2);
+});
+test('a Codex completion without payload evidence continues only when nothing started during the turn survives', async () => {
+  const helpers = [{ pid: '101', command: '/opt/codex/codex-code-mode-host' }, { pid: '102', command: '/app/node_repl' }];
+  adapter.trees.set('codex', helpers);
+  const command = start({ pairId: pair().id, autoContinue: true }); await plane.submit(command);
+  assert.deepEqual(plane.workflow.execution(command.requestId)!.baselineProcesses, helpers);
+  // Long-lived helpers that predate the turn are not background work; a helper that exited is not either; the notify hook posting this is not.
+  adapter.trees.set('codex', [helpers[0]!, { pid: '303', command: 'node' }]);
+  await complete(command.requestId, { backgroundState: 'unknown', reporterPid: '303' });
+  assert.deepEqual(sent.map((s) => s.agent), ['codex', 'claude']);
+  assert.equal(plane.workflow.run(command.requestId)!.status, 'running');
+});
+test('a process started during a Codex turn that is still alive is active background work; the reporting hook and Codex helpers are not', async () => {
+  adapter.trees.set('codex', []);
+  const command = start({ pairId: pair().id, autoContinue: true }); await plane.submit(command);
+  adapter.trees.set('codex', [{ pid: '101', command: '/opt/homebrew/Caskroom/codex/0.154.0/bin/codex-code-mode-host' },
+    { pid: '102', command: '/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl' }, { pid: '303', command: 'node' }, { pid: '202', command: '/usr/bin/tail' }]);
+  await complete(command.requestId, { backgroundState: 'unknown', reporterPid: '303' });
+  const run = plane.workflow.run(command.requestId)!;
+  assert.equal(run.status, 'paused'); assert.match(run.reason, /remains active \(tail pid 202\)/);
+  assert.equal(plane.workflow.owner('/demo/project/.git/index'), command.requestId); assert.equal(sent.length, 1);
+});
+test('process evidence never substitutes for a missing Claude payload, a missing baseline, or an unreadable tree', async () => {
+  const command = start({ agentId: 'claude', pairId: pair().id, autoContinue: true }); await plane.submit(command);
+  assert.equal(plane.workflow.execution(command.requestId)!.baselineProcesses, null);
+  await complete(command.requestId, { backgroundState: 'unknown' });
+  assert.equal(plane.workflow.run(command.requestId)!.status, 'paused'); stopped(command.requestId);
+  adapter.processes = async () => { throw new Error('ps unavailable'); };
+  const codex = start({ pairId: store.pairs()[0]!.id, autoContinue: true }); await plane.submit(codex);
+  assert.equal(plane.workflow.execution(codex.requestId)!.baselineProcesses, null);
+  await complete(codex.requestId, { backgroundState: 'unknown' });
+  assert.match(plane.workflow.run(codex.requestId)!.reason, /unknown; inspect the workers/); assert.equal(sent.length, 2);
+});
+test('a Codex completion buffered during dispatch is judged with evidence gathered after delivery', async () => {
+  adapter.trees.set('codex', []);
+  const command = start({ pairId: pair().id, autoContinue: true });
+  let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; });
+  adapter.send = async (session, text) => { sent.push({ agent: session.id, text }); if (session.id === 'codex') await gate; };
+  const submitting = plane.submit(command);
+  while (plane.workflow.execution(command.requestId)?.status !== 'dispatching') await new Promise((r) => setTimeout(r, 5));
+  const receipt = await plane.recordEvent(event(command.requestId, { backgroundState: 'unknown', reporterPid: '303' }));
+  assert.equal(receipt.accepted, false); assert.match(receipt.reason, /Buffered/);
+  adapter.trees.set('codex', [{ pid: '303', command: 'node' }]);
+  release(); await submitting;
+  assert.deepEqual(sent.map((s) => s.agent), ['codex', 'claude']);
+});
+test('a duplicate Codex event from a new hook process stays idempotent', async () => {
+  adapter.trees.set('codex', []);
+  const command = start({ pairId: pair().id, autoContinue: true }); await plane.submit(command);
+  const done = event(command.requestId, { backgroundState: 'unknown', reporterPid: '301' });
+  await plane.recordEvent(done); await plane.recordEvent({ ...done, reporterPid: '302' });
+  const run = plane.workflow.run(command.requestId)!;
+  assert.equal(run.status, 'running'); assert.equal(run.automaticTurns, 1); assert.equal(sent.length, 2);
+});
+test('the automatic turn limit is chosen at start, frozen into the run, and enforced by the server', async () => {
+  const command = start({ pairId: pair().id, autoContinue: true, turnLimit: 1 }); await plane.submit(command);
+  assert.equal(plane.workflow.run(command.requestId)!.turnLimit, 1);
+  await assert.rejects(plane.submit({ ...command, turnLimit: 2 }), /different work or policy/);
+  await complete(command.requestId);
+  const run = plane.workflow.run(command.requestId)!; assert.equal(run.automaticTurns, 1); assert.equal(run.status, 'running');
+  await complete(run.currentCommandId);
+  assert.equal(plane.workflow.run(command.requestId)!.reason, 'Automatic turn budget reached.'); assert.equal(sent.length, 2);
+  stopped(command.requestId);
+  assert.equal(plane.workflow.run((await plane.submit(start())).id)!.turnLimit, 20);
+});
+test('a multi-line instruction correlates with the flattened echo the hooks produce', async () => {
+  const command = start({ kind: 'instruction', text: 'check these:\n- one\n- two', handoff: true, pairId: pair().id }); await plane.submit(command);
+  const wire = plane.workflow.execution(command.requestId)!.wireText;
+  assert.equal(wire, `check these:\n- one\n- two [codercrew-command:${command.requestId}]`);
+  assert.equal(sent[0]!.text, wire);
+  // hooks/protocol.mjs `plain` turns every control character into a space; a CLI that stored CR instead of LF flattens the same way.
+  await complete(command.requestId, { prompt: wire.replace(/\n/g, '\r').replace(/[\u0000-\u001f]/g, ' ') });
+  assert.deepEqual(sent.map((s) => s.agent), ['codex', 'claude']);
+  await assert.rejects(plane.submit(start({ kind: 'instruction', text: 'a\tb' })), /control characters/);
+});
+test('a CLI that exited or restarted in its pane is reported and refused delivery until re-registered', async () => {
+  const codex = store.sessions().find((s) => s.id === 'codex') as ManagedSession;
+  store.saveSession({ ...codex, cliPid: '500' } as ManagedSession); adapter.foregrounds.set('codex', '500');
+  assert.deepEqual((await plane.state()).instances, [{ agentId: 'codex', status: 'current' }, { agentId: 'claude', status: 'unknown' }]);
+  const first = start(); assert.equal((await plane.submit(first)).status, 'delivered'); stopped(first.requestId);
+  adapter.foregrounds.set('codex', '501'); // the shell spawned a new CLI, or is itself in the foreground again
+  assert.equal((await plane.state()).instances[0]!.status, 'replaced');
+  const second = start(); const record = await plane.submit(second);
+  assert.equal(record.status, 'rejected'); assert.match(record.error!, /exited or restarted/);
+  assert.equal(plane.workflow.run(second.requestId)!.status, 'paused'); assert.equal(sent.length, 1);
+});
+test('a real-mode registration without a pinned CLI pid must be renewed', async () => {
+  plane.transport.config.mode = 'tmux';
+  await assert.rejects(plane.submit(start()), /current CLI process can be pinned/);
+  assert.equal(sent.length, 0);
+});
+test('an auxiliary Codex turn that quotes the command is ignored; the exact completion still advances', async () => {
+  const command = start({ pairId: pair().id, autoContinue: true }); await plane.submit(command);
+  const wire = plane.workflow.execution(command.requestId)!.wireText;
+  const title = await plane.recordEvent(event(command.requestId, { sourceTurnId: 'title-turn', outcome: undefined, prompt: `Generate a concise task title. Do not answer the request.\n\nUser prompt: ${wire}` }));
+  assert.equal(title.accepted, false); assert.match(title.reason, /not its completion/);
+  const run = plane.workflow.run(command.requestId)!;
+  assert.equal(run.status, 'running'); assert.match(run.reason, /still waiting for the exact completion/); assert.equal(sent.length, 1);
+  assert.equal(plane.workflow.execution(command.requestId)!.sessionId, null);
+  await complete(command.requestId);
+  assert.deepEqual(sent.map((s) => s.agent), ['codex', 'claude']);
+  const other = start({ requestId: randomUUID(), agentId: 'claude' });
+  await assert.rejects(plane.submit(other), /execution owner/);
+});
+test('a prompt that does not contain the delivered command still pauses the run', async () => {
+  const command = start({ pairId: pair().id, autoContinue: true }); await plane.submit(command);
+  await plane.recordEvent(event(command.requestId, { prompt: `something else [codercrew-command:${command.requestId}]` }));
+  assert.equal(plane.workflow.run(command.requestId)!.status, 'paused'); assert.equal(sent.length, 1);
+});
+test('history commands carry the run and pair they belonged to, including server continuations', async () => {
+  const paired = start({ pairId: pair().id, autoContinue: true }); await plane.submit(paired); await complete(paired.requestId);
+  const run = plane.workflow.run(paired.requestId)!; stopped(run.id);
+  const single = start(); await plane.submit(single);
+  const commands = (await plane.state()).commands;
+  assert.deepEqual(commands.filter((c) => c.runId === run.id).map((c) => [c.agentId, c.pairId]), [['claude', 'main'], ['codex', 'main']]);
+  assert.deepEqual(commands.find((c) => c.id === single.requestId)!.pairId, null);
+  assert.equal(commands.find((c) => c.id === single.requestId)!.runId, single.requestId);
 });
 test('contradictory duplicate payload pauses, rather than scheduling twice', async () => {
   const command = start({ pairId: pair().id, autoContinue: true }); await plane.submit(command);
@@ -175,7 +293,11 @@ test('a desktop start pauses a run; registration mutations cannot change its par
 test('protocol parsing refuses ambiguous inputs and retains exact identities', () => {
   assert.throws(() => parseStart({ ...start(), pairId: 'Not a slug' }), /slug/);
   assert.throws(() => parseStart({ ...start(), autoContinue: 'true' }), /boolean/);
+  for (const turnLimit of ['20', 0, 201, 2.5]) assert.throws(() => parseStart({ ...start(), turnLimit }), /1 to 200/);
+  assert.equal(parseStart({ ...start(), turnLimit: 7 }).turnLimit, 7);
   assert.throws(() => parseHook({ source: 'codex', event: 'turn_complete', paneId: '%0', sourceTurnId: 'bad\nturn' }), /identity/);
+  assert.throws(() => parseHook({ source: 'codex', event: 'turn_complete', paneId: '%0', reporterPid: 12 }), /reporter/);
+  assert.equal(parseHook({ source: 'codex', event: 'turn_complete', paneId: '%0', reporterPid: '12' }).reporterPid, '12');
 });
 test('text that only fits without the correlation marker is refused before any durable write', async () => {
   const command = start({ kind: 'instruction', text: 'x'.repeat(1950) });
@@ -197,6 +319,9 @@ test('canonical Git identity handles subdirectories, separate repositories, and 
 test('a copied nonce cannot credit a prompt altered by leftover terminal text', async () => {
   const command = start({ pairId: pair().id, autoContinue: true }); await plane.submit(command);
   await complete(command.requestId, { prompt: `leftover${plane.workflow.execution(command.requestId)!.wireText}` });
-  assert.equal(sent.length, 1); assert.equal(plane.workflow.run(command.requestId)!.status, 'paused');
-  assert.match(plane.workflow.run(command.requestId)!.reason, /differs/);
+  // Not credited: no continuation, nothing bound. The run keeps ownership and tells the human why it is still waiting.
+  assert.equal(sent.length, 1); assert.equal(plane.workflow.execution(command.requestId)!.status, 'delivered');
+  const run = plane.workflow.run(command.requestId)!;
+  assert.equal(run.status, 'running'); assert.match(run.reason, /leftover input/);
+  assert.equal(plane.workflow.owner('/demo/project/.git/index'), command.requestId);
 });

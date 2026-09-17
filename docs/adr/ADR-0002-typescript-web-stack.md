@@ -1,4 +1,4 @@
-# ADR-0002: Use a TimedGoal-aligned TypeScript web workspace
+# ADR-0002: Use a TypeScript web workspace
 
 **Date:** September 14, 2026  
 **Status:** Selected for the requested project scaffold  
@@ -7,16 +7,9 @@
 ## Context
 
 The user named the project CoderCrew, confirmed TypeScript for both the web frontend
-and Node backend, requested a skeleton based on the stack in
-`hzheng/timedgoal`, and reserved native iOS implementation for later.
-
-The inspected TimedGoal revision was
-`46622ce84d4d19cde0c101532502c9a8e9bd3298` on its default `main` branch.
-`web/README.md` identifies Next.js App Router, TypeScript, Tailwind, better-sqlite3
-with raw SQL, Vitest, and Playwright. `web/package.json` supplies the dependency
-versions used in this starter. The repository has separate `web/` and `ios/`
-areas. Those are source-derived observations, not assumptions about earlier
-TimedGoal versions.
+and Node backend, requested a Next.js App Router skeleton with Tailwind,
+better-sqlite3 with raw SQL, Vitest, and Playwright, and reserved native iOS
+implementation for later. The repository has separate `web/` and `ios/` areas.
 
 ## Decision
 
@@ -45,12 +38,11 @@ or model account. Real input is separately opt-in even after selecting tmux mode
 
 Use a root forwarding `package.json`, one actual npm dependency workspace under
 `web/`, and no additional monorepo manager. Use Node 24 as the suggested development
-runtime. Direct package versions match the inspected reference manifest; no
-unverified lockfile is included.
+runtime. No unverified lockfile is included.
 
 Reserve `ios/` with documentation, not an Xcode project. The prospective native
-app is a client of the host controller. This does not adopt TimedGoal's standalone
-iOS storage, account system, domain-core bridge, or cross-language code generation.
+app is a client of the host controller. No standalone iOS storage, account system,
+domain-core bridge, or cross-language code generation is adopted.
 
 ## Why this choice
 
@@ -60,7 +52,7 @@ console and low-volume personal coordination. Keeping backend logic independent
 of route handlers permits a separate long-lived worker later if real scheduling
 or a persistent terminal stream makes that useful.
 
-These are design judgments for CoderCrew, not requirements imposed by TimedGoal.
+These are design judgments for CoderCrew.
 
 ## Explicit non-decisions
 
@@ -95,6 +87,4 @@ agent framework merely to justify the name.
 
 ## References
 
-See [SOURCES.md](../SOURCES.md) for the inspected reference files and official
-technical documentation. No application code or private credentials were copied
-from TimedGoal.
+See [SOURCES.md](../SOURCES.md) for the official technical documentation.

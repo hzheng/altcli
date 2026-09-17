@@ -17,7 +17,7 @@ The suggested runtime is still Node 24; Node 26 was what the host had.
 | `cd web && npm test` (Vitest) | 22 tests passed | SQLite store and controller: per-worktree reservation, duplicate suppression, uncertainty, recovery of several reservations, registration/replacement/removal, pairs and their refusals, turn-locked changes per worktree, preview, listing failure, reopen, version 1 to 2 migration |
 | `cd web && npm run typecheck` | Passed | Full dependency-aware TypeScript check including Next route types |
 | `cd web && npm run build` | Passed | Production build of all routes including `/api/v1/sessions`, `/api/v1/sessions/[id]`, `/api/v1/pairs`, `/api/v1/pairs/[id]`, and `/api/v1/panes/preview` |
-| Playwright e2e (desktop Chromium and iPhone 13 viewport) | 10 tests passed | Mock relay and release, pane registration with preview and agent type, shell refusal, project tabs, removal, pair creation/filtering/refusal/removal, independent reservations across projects, wrong token; run against `next start` on an alternate port because a dev server occupied 8787 |
+| Playwright e2e (desktop Chromium and iPhone 13 viewport) | 16 tests passed | Mock relay and release, pane registration with preview and agent type, shell refusal, pair tabs labeled with their project, removal, pair creation/filtering/refusal/removal, independent reservations across projects, wrong token; run against `next start` on an alternate port because a dev server occupied 8787 |
 | Private tmux 3.6a server (`tmux -L`, throwaway, killed afterwards) | Passed | Real `display-message`/`list-panes` metadata parsing, `synchronize-panes` and copy-mode detection, literal delivery of `$(echo hi)`, backslash, `;`, CJK, accents and emoji through `send-keys -H`, Enter as a separate step, process gate failing closed against `cat` |
 | Full round trip in tmux mode through the HTTP API against a `cat` pane on a private socket (`next start`, real input enabled, throwaway store) | Passed | Live listing showed the pane; preview returned its screen; registration recorded `expectedCommand: cat`, type `other`; an instruction with `$(echo …)` and CJK was `delivered` and appeared literally in the capture; the worktree reservation was held, then released; after the process exited the panel went `unavailable` with tmux's reason. This is [docs/TESTING.md](docs/TESTING.md) level 4. |
 
@@ -67,8 +67,8 @@ agent readiness, or the safety of unattended operation.
 - Linux hosts, Safari on iPhone, Tailscale deployment, host restart acceptance,
   and a security audit.
 
-No live-agent run is claimed. Package versions were taken from the inspected
-TimedGoal manifest; the lockfile resolves them as installed locally.
+No live-agent run is claimed. The lockfile resolves package versions as installed
+locally.
 
 ## Local validation before real input
 

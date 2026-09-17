@@ -67,8 +67,8 @@ agent readiness, or the safety of unattended operation.
 - Linux hosts, Safari on iPhone, Tailscale deployment, host restart acceptance,
   and a security audit.
 
-No live-agent run is claimed. Package versions were taken from the inspected
-TimedGoal manifest; the lockfile resolves them as installed locally.
+No live-agent run is claimed. The lockfile resolves package versions as installed
+locally.
 
 ## Local validation before real input
 

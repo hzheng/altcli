@@ -1,15 +1,19 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, sep } from "node:path";
 import type { PaneState, SessionRegistration } from "../../contracts/api.ts";
 import { AppError } from "../../core/errors.ts";
 import { assertIdentity } from "../../core/policy.ts";
-import { paneId as validPaneId, singleLine } from "../../core/validation.ts";
+import { paneId as validPaneId, promptText, singleLine } from "../../core/validation.ts";
+import type { ProcessRecord } from "../../contracts/workflow.ts";
 import type { ListedPane, TerminalAdapter } from "./terminal.ts";
-export type Runner = (args: string[]) => Promise<string>;
+import { foregroundPid, paneProcesses } from "../processes.ts";
+/** `input`, when given, is written to tmux's stdin (only `load-buffer -` reads it). */
+export type Runner = (args: string[], input?: string) => Promise<string>;
 export function createRunner(binary = "tmux", socket?: string): Runner {
-  return (args) => new Promise((resolve, reject) => {
-    execFile(binary, [...(socket ? ["-S", socket] : []), ...args],
+  return (args, input) => new Promise((resolve, reject) => {
+    const child = execFile(binary, [...(socket ? ["-S", socket] : []), ...args],
       { encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024, shell: false },
       (error, stdout, stderr) => {
         if (!error) return resolve(stdout);
@@ -17,6 +21,7 @@ export function createRunner(binary = "tmux", socket?: string): Runner {
         const detail = (stderr || error.message).split("\n")[0]?.trim();
         reject(new AppError("TMUX_FAILED", `tmux ${args[0]} failed${detail ? `: ${detail}` : ""}. Inspect tmux on the host.`, 409));
       });
+    if (input !== undefined) child.stdin?.end(input); else child.stdin?.end();
   });
 }
 const SEP = "\t";
@@ -68,11 +73,22 @@ export class TmuxAdapter implements TerminalAdapter {
   }
   async send(session: SessionRegistration, text: string): Promise<void> {
     await this.preflight(session);
-    await this.run(inputArgs(session.identity.paneId, text));
+    if (text.includes("\n")) {
+      // A multi-line prompt arrives the way a terminal delivers a paste: one bracketed paste, which both CLIs insert
+      // without submitting (LF becomes CR as a terminal would send it). A single line is still typed as keystrokes.
+      const buffer = `codercrew-${randomUUID()}`;
+      await this.run(["load-buffer", "-b", buffer, "-"], promptText(text));
+      await this.run(["paste-buffer", "-p", "-d", "-b", buffer, "-t", validPaneId(session.identity.paneId)]);
+    } else await this.run(inputArgs(session.identity.paneId, text));
     await new Promise((resolve) => setTimeout(resolve, ENTER_SETTLE_MS));
     // Do not submit text if the CLI exited while characters were being delivered.
     // This narrows but cannot eliminate the terminal check/use race.
     await this.preflight(session);
     await this.run(["send-keys", "-t", session.identity.paneId, "Enter"]);
   }
+  async processes(session: SessionRegistration): Promise<ProcessRecord[]> {
+    await this.preflight(session);
+    return paneProcesses(session.identity.panePid);
+  }
+  foreground(session: SessionRegistration): Promise<string | null> { return foregroundPid(session.identity.panePid); }
 }

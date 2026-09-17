@@ -1,22 +1,25 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { CommandRecord, TurnEvent } from '../contracts/api.ts';
-import type { Execution, HookEvent, HookReceipt, ManagedSession, RelayRun, StartInput } from '../contracts/workflow.ts';
+import type { BackgroundEvidence, Execution, HookEvent, HookReceipt, ManagedSession, ProcessRecord, RelayRun, StartInput } from '../contracts/workflow.ts';
 import { AppError } from '../core/errors.ts';
-import { singleLine } from '../core/validation.ts';
+import { promptText } from '../core/validation.ts';
 import type { Store } from './store.ts';
 
 const json = JSON.stringify;
+export const DEFAULT_TURN_LIMIT = 20;
 const now = () => new Date().toISOString();
 const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical)
   : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).sort(([a],[b]) => a.localeCompare(b)).map(([k,v]) => [k, canonical(v)])) : value;
 const hash = (value: unknown) => createHash('sha256').update(json(canonical(value))).digest('hex');
+/** The hooks flatten control characters to spaces before echoing a prompt (protocol.mjs `plain`); compare in that form. */
+const flat = (text: string | null | undefined) => (text ?? '').replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').trim();
 const identityMatches = (a: ManagedSession['identity'], b?: HookEvent['identity']) => !!b &&
   (['paneId', 'panePid', 'serverPid', 'serverStarted', 'socketPath'] as const).every((k) => a[k] === b[k]);
 export function wireText(input: StartInput, session: ManagedSession): string {
   const text = input.kind === 'relay' ? `${session.relayPrompt}: ${input.text ?? ''}`.trimEnd() : input.text!;
   const wire = `${text} [codercrew-command:${input.requestId}]`;
   if (new TextEncoder().encode(wire).length > 2000) throw new AppError('INVALID_TEXT', 'The text plus its 57-byte correlation marker exceeds 2,000 UTF-8 bytes. Shorten the text.');
-  return singleLine(wire);
+  return promptText(wire);
 }
 /** A durable execution ledger, separate from transport receipts and the bounded history view. */
 export class WorkflowStore {
@@ -45,6 +48,13 @@ export class WorkflowStore {
     return (this.store.db.prepare(`SELECT value FROM workflow_runs WHERE id IN (SELECT run_id FROM workflow_owners)
       OR id IN (SELECT id FROM workflow_runs ORDER BY rowid DESC LIMIT 30) ORDER BY rowid DESC`).all() as {value:string}[]).map((r) => JSON.parse(r.value));
   }
+  /** Run and pair for each listed command id, from the durable ledger, in one query. */
+  runsOf(commandIds: string[]): Map<string, { runId: string; pairId: string | null }> {
+    if (!commandIds.length) return new Map();
+    const rows = this.store.db.prepare(`SELECT t.id AS id, t.run_id AS runId, json_extract(r.value, '$.pairId') AS pairId
+      FROM workflow_turns t JOIN workflow_runs r ON r.id = t.run_id WHERE t.id IN (${commandIds.map(() => '?').join(',')})`).all(...commandIds) as {id:string;runId:string;pairId:string|null}[];
+    return new Map(rows.map((row) => [row.id, { runId: row.runId, pairId: row.pairId }]));
+  }
   activeExecutions(): Execution[] {
     return this.runs().filter((r) => r.status === 'running' || r.status === 'paused').map((r) => this.execution(r.currentCommandId)!).filter(Boolean);
   }
@@ -70,7 +80,7 @@ export class WorkflowStore {
       if (existing) {
         const existingRun = this.run(existing.runId)!;
         if (existing.runId !== input.requestId || existing.input.kind !== input.kind || existing.agentId !== input.agentId || existing.wireText !== wire || existingRun.pairId !== pairId ||
-          existingRun.autoContinue !== (input.autoContinue === true) || (existing.input.handoff === true) !== (input.handoff === true)) {
+          existingRun.autoContinue !== (input.autoContinue === true) || existingRun.turnLimit !== (input.turnLimit ?? DEFAULT_TURN_LIMIT) || (existing.input.handoff === true) !== (input.handoff === true)) {
           throw new AppError('ID_CONFLICT', 'This request ID is already bound to different work or policy.', 409);
         }
         return existing;
@@ -81,9 +91,9 @@ export class WorkflowStore {
       const timestamp = now();
       const run: RelayRun = { id: input.requestId, repository: first.repository, lockKey, pairId, participants,
         autoContinue: input.autoContinue === true, pauseRequested: false, status: 'running', reason: 'Waiting for this command to finish.',
-        currentCommandId: input.requestId, automaticTurns: 0, turnLimit: 20, createdAt: timestamp, updatedAt: timestamp };
+        currentCommandId: input.requestId, automaticTurns: 0, turnLimit: input.turnLimit ?? DEFAULT_TURN_LIMIT, createdAt: timestamp, updatedAt: timestamp };
       const turn: Execution = { commandId: input.requestId, runId: run.id, agentId: first.id, input, wireText: wire,
-        status: 'planned', sessionId: null, sourceTurnId: null, continuation: false };
+        status: 'planned', sessionId: null, sourceTurnId: null, continuation: false, baselineProcesses: null };
       this.saveRun(run); this.saveExecution(turn);
       this.store.db.prepare('INSERT INTO workflow_owners(lock_key,run_id) VALUES (?,?)').run(lockKey, run.id);
       return turn;
@@ -96,11 +106,11 @@ export class WorkflowStore {
       turn.status = 'dispatching'; this.saveExecution(turn); return turn;
     }).immediate();
   }
-  delivered(id: string, record: CommandRecord): void {
+  delivered(id: string, record: CommandRecord, baselineProcesses: ProcessRecord[] | null = null): void {
     this.store.db.transaction(() => {
       const turn = this.execution(id)!; const run = this.run(turn.runId)!;
       turn.status = record.status === 'delivered' ? 'delivered' : record.status === 'rejected' ? 'rejected' : 'uncertain';
-      this.saveExecution(turn);
+      turn.baselineProcesses = baselineProcesses; this.saveExecution(turn);
       if (turn.status !== 'delivered') this.stop(run, record.error ?? 'Delivery requires human reconciliation.');
     }).immediate();
   }
@@ -108,29 +118,32 @@ export class WorkflowStore {
     const turn = this.execution(id)!; turn.status = 'uncertain'; this.saveExecution(turn);
     this.stop(this.run(turn.runId)!, 'Delivery may have occurred. Inspect the terminal; it will not be replayed.');
   }
-  receive(input: HookEvent): HookReceipt {
+  /** `evidence` is the server's own background-work reading for this completion; it is consulted only when the hook reports unknown. */
+  receive(input: HookEvent, evidence: BackgroundEvidence | null = null): HookReceipt {
     if (!input.commandId || !input.sourceTurnId || !input.sessionId || !input.identity || input.event === 'outcome') {
       // Old hooks/follow-ups remain diagnostic only. They can never complete a newer command.
       return { accepted: false, reason: 'Uncorrelated lifecycle event; update hooks or reconcile manually.', event: null };
     }
     const key = hash([input.source, input.identity, input.sessionId, input.sourceTurnId, input.event]);
+    const { reporterPid: _reporterPid, ...semanticInput } = input;
+    const digest = hash(semanticInput); // reporterPid identifies the transient hook process, not the lifecycle event.
     return this.store.db.transaction(() => {
       const row = this.store.db.prepare('SELECT digest,receipt FROM workflow_events WHERE id=?').get(key) as {digest:string;receipt:string|null} | undefined;
-      if (row && row.digest !== hash(input)) {
+      if (row && row.digest !== digest) {
         const turn = this.execution(input.commandId!); if (turn) this.stop(this.run(turn.runId)!, 'Conflicting payload for an existing lifecycle event.');
         return { accepted: false, reason: 'Lifecycle event identity conflict.', event: null };
       }
       if (row?.receipt) return JSON.parse(row.receipt) as HookReceipt;
-      if (!row) this.store.db.prepare('INSERT INTO workflow_events(id,command_id,digest,value) VALUES (?,?,?,?)').run(key, input.commandId, hash(input), json(input));
-      return this.apply(key, input);
+      if (!row) this.store.db.prepare('INSERT INTO workflow_events(id,command_id,digest,value) VALUES (?,?,?,?)').run(key, input.commandId, digest, json(input));
+      return this.apply(key, input, evidence);
     }).immediate();
   }
-  /** Drain completion events that arrived before the terminal transport returned. */
-  drain(id: string): void {
-    const rows = this.store.db.prepare('SELECT id,value FROM workflow_events WHERE command_id=? AND receipt IS NULL ORDER BY rowid').all(id) as {id:string;value:string}[];
-    for (const row of rows) this.store.db.transaction(() => { this.apply(row.id, JSON.parse(row.value) as HookEvent); }).immediate();
+  /** Lifecycle events that arrived before the terminal transport returned. The caller gathers evidence per event. */
+  pendingEvents(id: string): HookEvent[] {
+    return (this.store.db.prepare('SELECT value FROM workflow_events WHERE command_id=? AND receipt IS NULL ORDER BY rowid').all(id) as {value:string}[])
+      .map((row) => JSON.parse(row.value) as HookEvent);
   }
-  private apply(key: string, input: HookEvent): HookReceipt {
+  private apply(key: string, input: HookEvent, evidence: BackgroundEvidence | null): HookReceipt {
     const done = (reason: string, event: TurnEvent | null = null): HookReceipt => {
       const receipt = { accepted: event !== null, reason, event };
       this.store.db.prepare('UPDATE workflow_events SET receipt=? WHERE id=?').run(json(receipt), key);
@@ -146,7 +159,14 @@ export class WorkflowStore {
     if (turn.status === 'planned' || turn.status === 'uncertain' || turn.status === 'rejected') return done('Command was not confirmed delivered; manual reconciliation required.');
     if (turn.status === 'dispatching') return { accepted: false, reason: 'Buffered until delivery is established.', event: null };
     if (turn.status === 'finished') return done('This command already has a completion.');
-    if (input.prompt?.trim() !== turn.wireText.trim()) {
+    if (flat(input.prompt) !== flat(turn.wireText)) {
+      if (flat(input.prompt).includes(flat(turn.wireText))) {
+        // Codex also notifies for auxiliary turns (thread-title generation) whose prompt quotes the user prompt, marker
+        // included. That is not this command's completion; keep waiting for the exact one. The same shape arises when
+        // leftover input preceded the delivered text, and then no exact completion will come: say so for the human.
+        run.reason = 'A turn quoting this command finished with a different prompt; still waiting for the exact completion. If the pane held leftover input before delivery, pause and take over.';
+        this.saveRun(run); return done('A prompt that only quotes the delivered command is not its completion.');
+      }
       this.stop(run, 'The CLI prompt differs from the delivered command. Check for leftover or queued input.'); return done(run.reason);
     }
     const bound = this.store.db.prepare('SELECT session_id FROM workflow_bindings WHERE registration_id=?').get(participant.registrationId) as {session_id:string} | undefined;
@@ -160,8 +180,10 @@ export class WorkflowStore {
     if (input.event === 'turn_started') return done('Source turn acknowledged.', this.asTurnEvent(input, participant.id, null));
     const event = this.asTurnEvent(input, participant.id, input.commandId!);
     this.store.addEvent(event);
-    if (input.settled !== true || input.backgroundState !== 'clear') {
-      this.stop(run, input.backgroundState === 'active' ? 'Background work remains active; ownership was not transferred.' : 'Completion or background-work state is unknown; inspect the workers.');
+    const background = input.backgroundState === 'unknown' && evidence ? evidence : { state: input.backgroundState, detail: null };
+    if (input.settled !== true || background.state !== 'clear') {
+      this.stop(run, background.state === 'active' ? `Background work remains active${background.detail ? ` (${background.detail})` : ''}; ownership was not transferred.`
+        : 'Completion or background-work state is unknown; inspect the workers.');
       return done(run.reason, event);
     }
     turn.status = 'finished'; this.saveExecution(turn);
@@ -179,7 +201,7 @@ export class WorkflowStore {
     const nextId = randomUUID();
     const nextInput: StartInput = { requestId: nextId, agentId: partner.id, kind: 'relay', confirmReady: true };
     const next: Execution = { commandId: nextId, runId: run.id, agentId: partner.id, input: nextInput, wireText: wireText(nextInput, partner),
-      status: 'planned', sessionId: null, sourceTurnId: null, continuation: true };
+      status: 'planned', sessionId: null, sourceTurnId: null, continuation: true, baselineProcesses: null };
     // Event receipt, new command, current-turn change, and budget are one SQLite transaction.
     run.currentCommandId = nextId; run.automaticTurns++; run.reason = 'Next review scheduled by the server.';
     this.saveExecution(next); this.saveRun(run);

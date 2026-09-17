@@ -17,19 +17,22 @@ not stop a run. A backend restart pauses owned runs without replaying commands.
 | Capability | Current behavior |
 | --- | --- |
 | Reading and registration | Discover panes, preview output, register explicit instances, group canonical Git worktrees |
-| Command delivery | Bounded one-line text, exact pane checks, durable delivery receipt and uncertainty |
+| Command delivery | Bounded text (multi-line delivered as one bracketed paste), exact pane checks, durable delivery receipt and uncertainty |
 | Relay pairing | An explicitly selected pair is frozen into each run |
-| Automatic continuation | Server-only; exact correlated completion, clear background-work evidence, immutable participants, maximum 20 automatic turns |
+| Automatic continuation | Server-only; exact correlated completion, clear background-work evidence, immutable participants, a per-run maximum of automatic turns (default 20) frozen at start |
 | Unknown evidence | Pause and retain execution ownership; never guess from terminal text or recent history |
 | Human control | Explicit readiness on start; pause does not interrupt; takeover requires inspection of all participants |
 | Full terminal / native iOS / supervisor | Not implemented |
 
-**Important compatibility limit:** the existing Codex `notify` payload may not
-provide proof that background work is clear. Missing proof stays `unknown`, so
-that completion pauses a run. No unsupported field is assumed to exist. Claude
-uses `UserPromptSubmit` and the current Stop payload, including background-task
-and cron information when available. Older or incomplete hooks also fail closed.
-Use manual takeover after inspecting the workers when evidence is unavailable.
+**Background-work evidence:** Claude uses `UserPromptSubmit` and the current
+Stop payload, including background-task and cron information when available.
+The Codex `notify` payload carries no such fields, so for a Codex participant the
+server keeps its own evidence: it records the processes under or attached to the
+pane just before delivery and, at completion, treats any process newly associated
+with that pane that is still alive as active background work. Long-lived Codex
+helpers that predate the turn are not counted. When neither source can answer (an older hook,
+an unreadable process table, a pane whose identity changed), the completion stays
+`unknown` and pauses the run. Use manual takeover after inspecting the workers.
 
 ## Start
 
@@ -116,5 +119,4 @@ The review-to-change map is in [docs/REVIEW-RESOLUTION.md](docs/REVIEW-RESOLUTIO
 Historical documents under `docs/history/` are records, not current capability claims.
 
 The source remains private-package/`UNLICENSED`; no public license is selected by
-this change. No TimedGoal application source was copied. Its stack and directory
-conventions were the reference.
+this change.

@@ -22,8 +22,8 @@ links the relay skill into the CLIs' skill directories separately.
 
 `web/package-lock.json` is committed and CI uses `npm ci`; prefer
 `npm --prefix web ci` for clean installs. If a dependency version cannot be
-resolved, compare `web/package.json` with your current TimedGoal manifest and use
-compatible installed versions deliberately; record the change in ADR-0002. Do not
+resolved, choose compatible installed versions deliberately and record the change
+in ADR-0002. Do not
 ignore an installation failure. On macOS, a native better-sqlite3 build may require
 Xcode Command Line Tools.
 

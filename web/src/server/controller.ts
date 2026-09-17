@@ -2,7 +2,7 @@ import { realpath } from "node:fs/promises";
 import type { AvailablePane, CommandInput, CommandRecord, ConsoleState, PairInput, PanePreview, RegistrationInput, RegistrationResult, RelayPair, SessionRegistration, Snapshot } from "../contracts/api.ts";
 import { AppError, messageOf } from "../core/errors.ts";
 import { assertAgentCommand, suggestAgentType } from "../core/policy.ts";
-import { paneId as validPaneId, singleLine, slugify } from "../core/validation.ts";
+import { paneId as validPaneId, promptText, singleLine, slugify } from "../core/validation.ts";
 import type { TerminalAdapter } from "./adapters/terminal.ts";
 import type { Config } from "./config.ts";
 import { assertExternalDataDir } from "./paths.ts";
@@ -80,9 +80,9 @@ export class Controller {
     if (!session) throw new AppError("NOT_REGISTERED", "Register this session first.", 404);
     if (!this.config.inputEnabled) throw new AppError("READ_ONLY", "Real input is disabled. Enable it on the host only after completing the local checks.", 403);
     // A relay with context becomes one line, "<prompt>: <context>", so the reviewer sees both and the size limit still applies.
-    const text = singleLine(input.kind === "relay" ? (input.text ? `${session.relayPrompt}: ${input.text}` : session.relayPrompt) : input.text);
+    const text = promptText(input.kind === "relay" ? (input.text ? `${session.relayPrompt}: ${input.text}` : session.relayPrompt) : input.text);
     if (this.config.mode === "tmux") assertExternalDataDir(this.config.dataDir, session.repository);
-    if (options.wireText !== undefined) singleLine(options.wireText);
+    if (options.wireText !== undefined) promptText(options.wireText);
     const now = new Date().toISOString();
     let record: CommandRecord = { id: input.requestId, agentId: input.agentId, kind: input.kind, text, handoff: input.kind === "relay" || input.handoff === true,
       status: "recorded", createdAt: now, updatedAt: now, error: null, releasedAt: null };

@@ -7,7 +7,7 @@ not claims about the current implementation.
 | Record | Current interpretation |
 | --- | --- |
 | [ADR-0001](docs/adr/ADR-0001-tmux-web-controller.md) | External tmux controller; human-first workflow, optional terminal extension and later supervisor |
-| [ADR-0002](docs/adr/ADR-0002-timedgoal-aligned-typescript-stack.md) | TimedGoal-aligned TypeScript stack, web workspace and SQLite; root wrapper later removed |
+| [ADR-0002](docs/adr/ADR-0002-typescript-web-stack.md) | TypeScript web stack, web workspace and SQLite; root wrapper later removed |
 | [ADR-0003](docs/adr/ADR-0003-manual-dispatch-boundary.md) | Original manual ownership and uncertain-delivery contract; extended by later records |
 | [ADR-0004](docs/adr/ADR-0004-observed-process-identity-and-console-registration.md) | Observed process checks and explicit pane registration; instance generations added by ADR-0011 |
 | [ADR-0005](docs/adr/ADR-0005-projects-relay-pairs-and-per-worktree-turns.md) | Multiple sessions and named pairs; actual Git root/index identity now required by ADR-0011 |

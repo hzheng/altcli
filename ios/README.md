@@ -12,4 +12,4 @@ Start from `../shared/openapi.yaml` and `../web/src/contracts/api.ts`. Decide
 pairing/authentication, secure credential storage, push notifications, background
 behavior, accessibility, and Swift model generation before implementation.
 Do not assume automatic TypeScript-to-Swift translation or a local iOS agent runtime.
-Do not copy TimedGoal's standalone database/authority design into this project.
+Do not give the iOS app a standalone database or authority of its own.
