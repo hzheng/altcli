@@ -21,12 +21,11 @@ export function assertIdentity(session: SessionRegistration, pane: PaneState): v
     if (session.identity[key] !== pane.identity[key]) throw new AppError("TARGET_CHANGED", "tmux identity changed. Re-register this session.", 409);
   }
   if (pane.dead || pane.inMode || pane.synchronized) throw new AppError("UNSAFE_PANE", "Pane is dead, in copy mode, or has synchronized input enabled.", 409);
-  // The name recorded at registration is a transport check only; a native CLI may report a version string as its name.
   assertAgentCommand(session.expectedCommand);
   if (pane.command !== session.expectedCommand) {
     throw new AppError("WRONG_PROCESS", `The registered process "${session.expectedCommand}" is not in the foreground; the pane reports "${pane.command}". Check the desktop terminal.`, 409);
   }
 }
-export function sameRequest(previous: { agentId: string; kind: string; text: string }, next: { agentId: string; kind: string; text: string }): boolean {
-  return previous.agentId === next.agentId && previous.kind === next.kind && previous.text === next.text;
+export function sameRequest(previous: { agentId: string; kind: string; text: string; handoff?: boolean }, next: { agentId: string; kind: string; text: string; handoff?: boolean }): boolean {
+  return previous.agentId === next.agentId && previous.kind === next.kind && previous.text === next.text && Boolean(previous.handoff) === Boolean(next.handoff);
 }

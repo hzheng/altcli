@@ -15,7 +15,7 @@ export class Store {
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("busy_timeout = 5000");
     const version = this.db.pragma("user_version", { simple: true }) as number;
-    if (version > 3) throw new Error("Unsupported database version. Do not downgrade this store.");
+    if (version > 4) throw new Error("Unsupported database version. Do not downgrade this store.");
     this.db.transaction(() => {
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -25,7 +25,7 @@ export class Store {
         CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT, value TEXT NOT NULL);
       `);
       if (version === 1) this.migrateFromV1();
-      this.db.exec("PRAGMA user_version = 3"); // v3 only adds the events table
+      this.db.exec("PRAGMA user_version = 4"); // v4 reserves the durable workflow schema; older runtimes must refuse it
     })();
   }
   /** v1 had one global reservation in `control` and sessions without agentType. */
@@ -146,15 +146,6 @@ export class Store {
         SELECT MAX(id) FROM events GROUP BY COALESCE(agent_id, '')
       ) ORDER BY id`).all() as { value: string }[]).map((r) => ({ outcome: null, reason: null, outcomeState: "none", prompt: null, ...JSON.parse(r.value) } as TurnEvent)); // rows older than these fields
   }
-  /** The latest event for a pane, with its row id, so a follow-up can complete it in place. */
-  latestEventForPane(paneId: string): { id: number; event: TurnEvent } | undefined {
-    const rows = this.db.prepare("SELECT id, value FROM events ORDER BY id DESC LIMIT 50").all() as { id: number; value: string }[];
-    for (const row of rows) { const event = JSON.parse(row.value) as TurnEvent; if (event.paneId === paneId) return { id: row.id, event }; }
-    return undefined;
-  }
-  updateEvent(id: number, event: TurnEvent): void {
-    this.db.prepare("UPDATE events SET value=? WHERE id=?").run(JSON.stringify(event), id);
-  }
   recoverInterrupted(): void {
     // Called only by the one backend instance.
     // Single host process only; a second server sharing this DB is unsupported.
@@ -162,7 +153,7 @@ export class Store {
       const record = this.get(reservation.activeCommandId);
       if (!record) { this.db.prepare("DELETE FROM reservations WHERE repository=?").run(reservation.repository); continue; }
       if (["recorded", "sending"].includes(record.status)) this.update({ ...record, status: "uncertain", updatedAt: new Date().toISOString(), error: "Backend restarted during delivery. Inspect the terminal; this command will not be replayed." });
-      // A delivered or rejected command holds nothing (ADR-0008); holds left by the earlier rule are settled here.
+      // Release stale transport-only holds; WorkflowStore owns the separate execution lease.
       else if (record.status === "delivered" || record.status === "rejected") this.release(record.id);
     }
   }

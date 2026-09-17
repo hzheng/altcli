@@ -130,10 +130,11 @@ test("the process name observed at registration must still be in the foreground"
   assert.doesNotThrow(() => assertIdentity(claude, { ...pane, command: "2.1.272" }));
   for (const command of ["zsh", "codex", "2.1.273", "claude"]) assert.throws(() => assertIdentity(claude, { ...pane, command }), /not in the foreground/);
 });
-test("duplicate request equivalence includes agent, kind and resolved text", () => {
+test("duplicate request equivalence includes agent, kind, resolved text and handoff policy", () => {
   const a = { agentId: "codex", kind: "relay", text: "relay" };
   assert.equal(sameRequest(a, { ...a }), true);
   for (const key of ["agentId", "kind", "text"] as const) assert.equal(sameRequest(a, { ...a, [key]: "changed" }), false);
+  assert.equal(sameRequest({ ...a, handoff: false }, { ...a, handoff: true }), false);
 });
 test("bearer authentication is required even for mock reads", () => {
   assert.doesNotThrow(() => authorize(request(), token, origins));
@@ -237,35 +238,37 @@ test("mock panes include a shell to demonstrate refusal and a spare CLI to regis
   await assert.rejects(adapter.peek("%9"), /does not exist/);
   assert.ok(mockPanes().every((p) => mockSessions().every((s) => s.identity.paneId !== p.identity.paneId || s.expectedCommand === p.command)));
 });
-test("the Claude Stop hook posts at once and a detached follow-up delivers the outcome once the transcript settles", async () => {
+test("Claude hooks bind the actual prompt and current Stop response without reading a lagging transcript", { timeout: 10000 }, async () => {
   const { createServer } = await import("node:http");
   const { execFile } = await import("node:child_process");
-  const { appendFile, writeFile } = await import("node:fs/promises");
+  const { writeFile } = await import("node:fs/promises");
   const directory = await mkdtemp(join(tmpdir(), "codercrew-hook-"));
+  const posts: Record<string, unknown>[] = [];
+  const server = createServer((req, res) => { let body = ""; req.on("data", (c) => { body += c; }); req.on("end", () => { posts.push(JSON.parse(body)); res.end("{}"); }); });
   try {
-    const received = new Promise<Record<string, unknown>[]>((resolve) => {
-      const posts: Record<string, unknown>[] = [];
-      const server = createServer((req, res) => { let body = ""; req.on("data", (c) => { body += c; }); req.on("end", () => { res.end("{}"); posts.push(JSON.parse(body) as Record<string, unknown>); if (posts.length === 2) { server.close(); resolve(posts); } }); });
-      server.listen(0, "127.0.0.1", () => { void (async () => {
-        const port = (server.address() as { port: number }).port;
-        const transcript = join(directory, "t.jsonl");
-        const entry = (id: string, stop: string, block: Record<string, unknown>) => JSON.stringify({ type: "assistant", message: { id, stop_reason: stop, content: [block] } }) + "\n";
-        const human = JSON.stringify({ type: "user", origin: { kind: "human" }, message: { role: "user", content: "relay: focus on the migration" } }) + "\n";
-        const injected = JSON.stringify({ type: "user", isMeta: true, message: { role: "user", content: "Base directory for this skill: ..." } }) + "\n";
-        // At Stop time only the prompt, the injected skill text and a tool_use entry have been flushed; the final text lands 300 ms later.
-        await writeFile(transcript, human + injected + entry("m1", "tool_use", { type: "tool_use", name: "Bash" }));
-        await writeFile(join(directory, "env"), "CODERCREW_TOKEN=" + token + "\n");
-        const child = execFile("sh", [fileURLToPath(new URL("../../hooks/codercrew-turn-complete.sh", import.meta.url)), "claude"],
-          { env: { ...process.env, TMUX: undefined, TMUX_PANE: "%7", CODERCREW_URL: `http://127.0.0.1:${port}`, CODERCREW_ENV: join(directory, "env") } });
-        child.stdin!.end(JSON.stringify({ session_id: "s1", hook_event_name: "Stop", transcript_path: transcript }));
-        setTimeout(() => { void appendFile(transcript, entry("m2", "end_turn", { type: "text", text: "Findings.\n\nRELAY-OUTCOME: accept_and_improve — Tightened the test." })); }, 300);
-      })(); });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as { port: number }).port;
+    await writeFile(join(directory, "tmux"), "#!/bin/sh\nprintf '%s\\n' '%7\t11\t12\t13\t/tmp/tmux-fixture'\n", { mode: 0o700 });
+    await writeFile(join(directory, "env"), `CODERCREW_TOKEN=${token}\n`);
+    const transcript = join(directory, "lagging.jsonl");
+    await writeFile(transcript, JSON.stringify({ type: "assistant", message: { stop_reason: "end_turn", content: "RELAY-OUTCOME: accept_and_improve" } }));
+    const invoke = (payload: Record<string, unknown>) => new Promise<void>((resolve, reject) => {
+      const child = execFile(process.execPath, [fileURLToPath(new URL("../../hooks/codercrew-turn-complete.mjs", import.meta.url)), "claude"],
+        { env: { ...process.env, HOME: directory, PATH: `${directory}:${process.env.PATH}`, TMUX: "/tmp/tmux-fixture,12,0", TMUX_PANE: "%7",
+          CODERCREW_ENV: join(directory, "env"), CODERCREW_URL: `http://127.0.0.1:${port}` }, timeout: 5000 },
+        (error) => error ? reject(error) : resolve());
+      child.stdin!.end(JSON.stringify({ session_id: "test-session", ...payload }));
     });
-    const [first, followUp] = await received;
-    assert.deepEqual([first!.event, first!.settled, first!.outcome], ["turn_complete", false, null]); // posted at once, CLI not held
-    assert.deepEqual([followUp!.event, followUp!.settled, followUp!.outcome, followUp!.reason], ["outcome", true, "accept_and_improve", "Tightened the test."]);
-    for (const body of [first!, followUp!]) { assert.equal(body.paneId, "%7"); assert.equal(body.sessionId, "s1"); assert.equal(body.source, "claude"); assert.equal(body.prompt, "relay: focus on the migration"); } // the human prompt, not the injected skill text
-  } finally { await rm(directory, { recursive: true, force: true }); }
+    await invoke({ hook_event_name: "UserPromptSubmit", prompt: `relay: [codercrew-command:${id}]` });
+    await invoke({ hook_event_name: "Stop", transcript_path: transcript, last_assistant_message: "RELAY-OUTCOME: strong_objection - Current rejection.", background_tasks: [], session_crons: [] });
+    assert.equal(posts.length, 2); assert.equal(posts[0]!.event, "turn_started");
+    assert.equal(posts[1]!.outcome, "strong_objection"); assert.equal(posts[1]!.commandId, id);
+    assert.equal(posts[0]!.sourceTurnId, posts[1]!.sourceTurnId); assert.equal(posts[1]!.backgroundState, "clear");
+    await invoke({ hook_event_name: "Stop", transcript_path: transcript }); assert.equal(posts.length, 2);
+    await invoke({ hook_event_name: "UserPromptSubmit", prompt: `relay: [codercrew-command:${id}]` });
+    await invoke({ hook_event_name: "UserPromptSubmit", prompt: `relay: [codercrew-command:${id}]` });
+    assert.equal(posts.at(-1)!.commandId, undefined);
+  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); await rm(directory, { recursive: true, force: true }); }
 });
 test("JSON boundary rejects wrong media type and oversized request bodies", async () => {
   await assert.rejects(jsonBody(new Request("http://localhost", { method: "POST", body: "{}" })));

@@ -1,179 +1,120 @@
 # CoderCrew
 
-**A self-hosted control center for AI coding agents.**
+**A self-hosted control center for coding agents already running in tmux.**
 
-Read Codex, Claude Code, or any other coding CLI running in tmux in one browser
-interface, issue a single-line instruction or `relay`, and keep their existing tmux
-sessions alive independently of the browser.
-Start with human-operated control. Add deterministic relay automation, then an
-optional AI supervisor. A native iOS client is reserved for a future phase.
+Read multiple Codex and Claude Code sessions, select an explicit review pair, and
+start a manual instruction or a bounded, server-owned relay. The same responsive
+web console is intended for desktop and private iPhone access through Tailscale.
+Native iOS and a third AI supervisor remain deferred.
 
-> **Starter status:** source scaffold with a mock console and a guarded tmux adapter.
-> This is not a production release or an autonomous orchestrator. The build, unit,
-> browser, and private-tmux checks have passed locally; real coding-CLI sessions and
-> the phone path have not. See [VALIDATION.md](VALIDATION.md) before enabling real input.
+## Status and boundaries
+
+This is an experimental implementation, not a production release or a security
+certification. See [VALIDATION.md](VALIDATION.md) for exactly what was exercised.
+The server, not the browser, owns active runs. Closing or locking a page does
+not stop a run. A backend restart pauses owned runs without replaying commands.
+
+| Capability | Current behavior |
+| --- | --- |
+| Reading and registration | Discover panes, preview output, register explicit instances, group canonical Git worktrees |
+| Command delivery | Bounded one-line text, exact pane checks, durable delivery receipt and uncertainty |
+| Relay pairing | An explicitly selected pair is frozen into each run |
+| Automatic continuation | Server-only; exact correlated completion, clear background-work evidence, immutable participants, maximum 20 automatic turns |
+| Unknown evidence | Pause and retain execution ownership; never guess from terminal text or recent history |
+| Human control | Explicit readiness on start; pause does not interrupt; takeover requires inspection of all participants |
+| Full terminal / native iOS / supervisor | Not implemented |
+
+**Important compatibility limit:** the existing Codex `notify` payload may not
+provide proof that background work is clear. Missing proof stays `unknown`, so
+that completion pauses a run. No unsupported field is assumed to exist. Claude
+uses `UserPromptSubmit` and the current Stop payload, including background-task
+and cron information when available. Older or incomplete hooks also fail closed.
+Use manual takeover after inspecting the workers when evidence is unavailable.
 
 ## Start
 
-Use Node 24 (`.nvmrc`), or another compatible Node version >=22.18.0.
+Use Node 24 (`.nvmrc`). The application package is only under `web/`.
 
 ```bash
-cd codercrew
-nvm use                         # Optional when the right Node version is already active
-node scripts/setup.mjs          # Creates web/.env.local with a random local token
+node scripts/setup.mjs
 npm --prefix web ci
 cd web && npm run dev
 ```
 
-Open `http://127.0.0.1:8787` and paste the token printed by setup. It is also stored
-in `web/.env.local`. Do not share it. Setup never overwrites an existing file. The
-token stays in browser memory, not local storage.
+Open `http://127.0.0.1:8787` and enter the token from `web/.env.local`. The token
+stays in page memory. For first use set `CODERCREW_ENABLE_INPUT=false`, restart the
+backend, and verify captures before enabling input. `mock` is a test adapter;
+`tmux` remains the normal product path.
 
-The first screen lists the panes of your tmux server. If no server is running it
-says so and shows the one command to start a CLI in tmux. Select the pane running
-your first coding CLI: that fixes the **project** (its repository), and from then
-on only panes inside that worktree can be added, because a review relay between
-two repositories makes no sense. Name it, **Register pane**; the panel stays open
-until the second agent is in. Then pick a target, confirm it is at an empty prompt,
-and press **Relay** (optionally with context typed in the box, sent as `relay: …`)
-or **Send** a one-line instruction. Delivery and completion are
-intentionally different concepts: read the pane to see what the agent did; the
-readiness box you tick before the next send is your confirmation that it finished.
-Only a delivery the transport could not confirm asks you to check the terminal.
+Read [docs/SETUP.md](docs/SETUP.md) before issuing commands. Install the updated
+hooks with `node scripts/install-hooks.mjs` and restart the CLIs. The installer
+backs up changed files, preserves unrelated hook entries, and refuses unsupported
+TOML instead of guessing. Review any refusal manually; it never needs your global
+configuration uploaded anywhere.
 
-`node scripts/install-hooks.mjs` registers one small script as Claude Code's `Stop`
-hook and Codex's `notify` command, so each panel shows when its agent's turn ended
-(from the CLI itself, never from screen text), including the reviewer's final
-`RELAY-OUTCOME:` line. A finished relay hands the target to the other agent with the
-box pre-ticked; an objection comes back with its reason and a prefilled instruction to
-the author. **Auto-relay** (on by default) keeps a chain going on `accept_and_improve`
-only; on anything else it waits for you and says why.
+## Using a run
 
-`CODERCREW_ENABLE_INPUT=false` in `web/.env.local` turns the console read-only. The
-`mock` adapter (`CODERCREW_ADAPTER=mock`) drives the automated tests with simulated
-panes; it is not part of the product flow.
+Register the intended panes and create a named pair. A directory containing two
+repositories is not one worktree; the backend discovers the actual root and index.
+Select the pair, inspect every participant, then confirm readiness explicitly.
+
+**Send** addresses one agent and never relays. **Send & relay** requests one review
+when the instruction finishes, even with the continuation preference off. **Relay**
+starts a review, with optional context. The preference only determines whether a
+new explicitly started run continues after `accept_and_improve`; it is not an armed
+run by itself. An objection, missing evidence, exhausted budget, uncertain delivery,
+or changed instance pauses the run.
+
+Commands carry a unique `[codercrew-command:<UUID>]` suffix. Hooks must echo the
+exact prompt and bind its source turn/session; identical `relay` strings cannot
+borrow each other's completion. Relay commands use the `relay:` prefix. The global
+instruction rule must recognize that prefix as documented in [SKILLS](docs/SKILLS.md).
+The marker is bookkeeping, not a new task. The skill's Git staging contract is
+unchanged by this PR.
+
+Use **Pause / take over** before desktop intervention. Pause keeps ownership and
+does not send Ctrl-C or stop background jobs. After inspecting and stopping writers,
+explicit takeover releases ownership without claiming success. No command is
+silently retried. Final task-level tests and review remain your responsibility.
 
 ## Technology and layout
 
-Following the inspected TimedGoal `web/` workspace: **Next.js App Router, React,
-TypeScript on both client and Node backend, Tailwind CSS, SQLite with
-better-sqlite3/raw SQL, Vitest, and Playwright**. This is one host-resident Next.js
-application, not a Vite frontend plus a separate Express server.
+One host-resident Next.js App Router application: React, TypeScript frontend and
+Node backend, Tailwind, SQLite through `better-sqlite3`, Vitest, and Playwright.
+No ttyd, PTY emulator, message broker, separate worker service, or new npm workspace.
 
 ```text
-codercrew/
-  README.md                     Start here
-  ROADMAP.md                    Current phases and completion criteria
-  Architecture_Decision.md      ADR index
-  skills/review-handoff/        The relay skill; installed by symlink into both CLIs
-  AGENTS.md / CLAUDE.md          Coding-agent project guidance
-  docs/
-    adr/                        Architecture records: stack, identity, projects and pairs
-    history/                    Original roadmap and ADR, preserved unchanged
-    TESTING.md                  Ordered setup and end-to-end test path, clone to relay
-    SETUP.md                    Real tmux registration and manual verification
-    SECURITY.md                 Threat boundary and current limitations
-    TAILSCALE.md                Private phone access, after local validation
-    SKILLS.md                   Skill ownership and use in other repositories
-    SOURCES.md                  TimedGoal reference and official documentation
-  web/
-    src/app/                    React pages and Node API route handlers
-    src/components/             Responsive console, pane registration, relay pairs
-    src/client/                 Browser API client
-    src/contracts/              JSON-only TypeScript API types
-    src/core/                   Framework-independent validation and policy
-    src/server/                 Controller, auth, SQLite, and terminal adapters
-    scripts/                    Offline smoke tests
-    e2e/                        Desktop and mobile-viewport browser tests
-  shared/openapi.yaml           HTTP contract for web and future native clients
-  ios/README.md                 Reserved native-client boundary; no Xcode app yet
-  scripts/                      Setup, skill installation, hook installation
-  hooks/                        Turn-complete hook for Claude Code (Stop) and Codex (notify)
+web/src/components/       Browser views and explicit human actions
+web/src/server/           ControlPlane, WorkflowStore, transport Controller, tmux adapter
+web/src/contracts/        JSON-only API and workflow types
+web/src/core/             Validation and policy
+hooks/                   CLI lifecycle normalization and correlation
+scripts/                 Repository checks and conservative local installers
+shared/openapi.yaml      HTTP contract, including runs and lifecycle receipts
+docs/adr/                Architectural decisions
+ios/                     Reserved future host-API client
 ```
 
-The Node runtime owns tmux access. The browser cannot select arbitrary binaries,
-issue tmux subcommands, or send arbitrary shell commands through an execution API.
-No ttyd, xterm.js, node-pty, agent SDK, or third model is required in this scaffold.
-The architecture and source-reference scope are recorded in
-[ADR-0002](docs/adr/ADR-0002-timedgoal-aligned-typescript-stack.md).
+`WorkflowStore` owns execution independently of `Store`'s short-lived delivery
+reservation. All active runs and commands remain visible even when the history
+panel shows only the latest 30 deliveries. One backend process per database is
+supported. Restart the development backend after server-code changes; hot reload
+must not replace a live scheduler or close its database during delivery.
 
-## What is included
-
-The source implements a desktop multi-pane and mobile selected-pane reading view
-for any number of registered panes, grouped into projects by worktree root; a
-registration form fed by the live tmux pane list with a read-only preview of the
-chosen pane and a confirmed agent type; named relay pairs validated to share one
-worktree; bounded snapshot polling; a central composer with explicit target
-selection; manual relay delivery; per-request UUIDs; SQLite command history; a
-per-worktree hold while a command is in flight or its delivery is uncertain; and
-explicit human acknowledgement of uncertain deliveries.
-Snapshots replace one another; they are not accumulated as a transcript. Pairs group
-and validate; they do not automate turns.
-
-The tmux adapter checks registered pane/server identity, the process name observed
-at registration, repository location, copy mode, and synchronized input before
-every capture and send. Shells and generic interpreters can never be registered.
-It never creates or kills an agent. These checks do **not** establish semantic
-readiness or eliminate the race between inspecting a terminal and typing into it.
-A read-only switch (`CODERCREW_ENABLE_INPUT=false`) disables Send and Relay.
-
-Automatic turn-taking, permission-dialog handling, full terminal emulation,
-notifications, third-agent supervision, and native iOS implementation are **not
-implemented**. Turn-complete events from the CLIs' hooks are ingested and shown;
-they suggest the next target and pre-tick readiness but never send anything.
-
-## Connect existing sessions
-
-Follow [docs/SETUP.md](docs/SETUP.md). In outline:
-
-1. Run the coding CLIs in tmux on the same host as CoderCrew.
-2. Set `CODERCREW_ADAPTER=tmux`, leaving input disabled initially.
-3. In the console, pick each CLI's pane from the live list, check its preview, and register it with a label and type.
-   Sessions on the same repository form a project; name the two that alternate as a relay pair.
-4. Verify read-only captures, target checks, and the local manual acceptance list.
-5. Explicitly enable real input only after that verification.
-
-The relay skill reaches the agents through `node scripts/install-skills.mjs`, which links
-`skills/review-handoff` into `~/.claude/skills` and `~/.codex/skills` for every
-repository; it needs nothing outside this clone. Mapping the bare word `relay` to
-the skill is a one-line rule in your global instruction files. See
-[docs/SKILLS.md](docs/SKILLS.md).
-
-## Development commands
+## Checks and documentation
 
 ```bash
-./scripts/check.sh              # Skill links + web gate (test:smoke, typecheck, test, build); what CI runs
-./scripts/check.sh --e2e        # The same plus the browser tests (once: cd web && npx playwright install chromium)
-node scripts/install-skills.mjs # Link skills/ into ~/.claude/skills and ~/.codex/skills
-cd web && npm run               # Lists every web task: dev, build, start, typecheck, test:smoke, test, e2e, check
+./scripts/check.sh
+./scripts/check.sh --e2e
+node --test scripts/review-regressions.test.mjs
+cd web && npm run test:workflow
 ```
 
-There is no root `package.json`: `web/package.json` owns every npm task, and root
-`scripts/` holds repository operations run with plain `node` (ADR-0006).
+See [ROADMAP.md](ROADMAP.md), [Architecture_Decision.md](Architecture_Decision.md),
+[docs/SECURITY.md](docs/SECURITY.md), and [docs/TAILSCALE.md](docs/TAILSCALE.md).
+The review-to-change map is in [docs/REVIEW-RESOLUTION.md](docs/REVIEW-RESOLUTION.md).
+Historical documents under `docs/history/` are records, not current capability claims.
 
-[docs/TESTING.md](docs/TESTING.md) walks through what each check proves, the mock
-console, a safe tmux dry run against a `cat` pane, and the first real relay.
-
-`web/package-lock.json` is committed from a local install and CI uses `npm ci`.
-The direct dependency versions are pinned to the inspected TimedGoal manifest.
-
-## Phone access and native iOS
-
-The first iPhone experience is this responsive web interface over private Tailscale
-Serve, not a native app. Use a production build, HTTPS, an exact origin allowlist,
-and tailnet access restrictions. Do not expose the controller publicly. See
-[docs/TAILSCALE.md](docs/TAILSCALE.md).
-
-`ios/` reserves a future client of the host API. It does not promise Swift code
-sharing, local coding-agent execution on iOS, or TimedGoal's standalone data model.
-
-## Documentation and license
-
-The original `ROADMAP.md` and ADR are archived under `docs/history/2026-09-13/`.
-The active roadmap reflects CoderCrew's name and the newly confirmed TypeScript
-backend. The uploaded handoff skill is preserved byte-for-byte at
-`skills/review-handoff/SKILL.md`.
-
-No TimedGoal application source was copied. Its stack and workspace conventions
-were used as a reference. This starter is marked private/`UNLICENSED`; no public
-license or trademark clearance is implied. Choose a license before publishing.
+The source remains private-package/`UNLICENSED`; no public license is selected by
+this change. No TimedGoal application source was copied. Its stack and directory
+conventions were the reference.
