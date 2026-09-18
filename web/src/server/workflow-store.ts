@@ -196,21 +196,32 @@ export class WorkflowStore {
       if (!turn.baselineWorktree || !worktree) { this.stop(run, 'The worktree could not be read before delivery or at completion, so no review was scheduled. Inspect the worker and take over.'); return done(run.reason, event); }
       if (turn.baselineWorktree === worktree) { this.stop(run, 'The worker finished without changing the worktree (it may have asked for more information); no review was scheduled.', true); return done(run.reason, event); }
     }
-    const shouldContinue = isInstruction ? turn.input.handoff === true : input.outcome === 'accept_and_improve' && run.autoContinue;
+    // Event validation refuses C0/C1 controls but not U+2028/U+2029, which promptText rejects; a reason that reached the
+    // scheduled instruction unsanitized would throw inside this transaction and leave the run running without a completion.
+    const objectionReason = !isInstruction && input.outcome === 'strong_objection' ? input.reason?.replace(/[\u2028\u2029]/gu, ' ').trim() : undefined;
+    const shouldContinue = isInstruction ? turn.input.handoff === true
+      : run.autoContinue && (input.outcome === 'accept_and_improve' || !!objectionReason);
     if (!shouldContinue) {
       const completed = isInstruction || input.outcome === 'accept_without_improvement' || input.outcome === 'no_incoming_handoff';
-      this.stop(run, completed ? 'Chain ended. Final task-level checks are still a human responsibility.' : input.outcome === 'strong_objection' ? `Reviewer objected: ${input.reason ?? 'inspect its output'}` : 'Review finished; automatic continuation is off or no outcome was reported.', completed);
+      this.stop(run, completed ? 'Chain ended. Final task-level checks are still a human responsibility.' : input.outcome === 'strong_objection' ? `Reviewer objected: ${objectionReason || 'inspect its output'}` : 'Review finished; automatic continuation is off or no outcome was reported.', completed);
       return done(run.reason, event);
     }
     if (run.automaticTurns >= run.turnLimit) { this.stop(run, 'Automatic turn budget reached.'); return done(run.reason, event); }
     const partner = run.participants.find((s) => s.id !== turn.agentId);
     if (!partner || !run.pairId) { this.stop(run, 'No explicit pair was bound to this run.'); return done(run.reason, event); }
     const nextId = randomUUID();
-    const nextInput: StartInput = { requestId: nextId, agentId: partner.id, kind: 'relay', confirmReady: true };
+    // Objection remediation is authoring work, not a review of the author's own diff. Send a normal instruction whose
+    // handoff returns a changed worktree to the reviewer; do not invoke the review-handoff skill on the author.
+    const nextInput: StartInput = objectionReason
+      ? { requestId: nextId, agentId: partner.id, kind: 'instruction',
+          text: `Address objection: ${objectionReason}\n\nMake the required changes, leave them unstaged, and then return the work for relay review.`,
+          handoff: true, confirmReady: true }
+      : { requestId: nextId, agentId: partner.id, kind: 'relay', confirmReady: true };
     const next: Execution = { commandId: nextId, runId: run.id, agentId: partner.id, input: nextInput, wireText: wireText(nextInput, partner),
       status: 'planned', sessionId: null, sourceTurnId: null, continuation: true, baselineProcesses: null, baselineWorktree: null };
     // Event receipt, new command, current-turn change, and budget are one SQLite transaction.
-    run.currentCommandId = nextId; run.automaticTurns++; run.reason = 'Next review scheduled by the server.';
+    run.currentCommandId = nextId; run.automaticTurns++;
+    run.reason = objectionReason ? `Reviewer objected; correction scheduled for ${partner.label}.` : 'Next review scheduled by the server.';
     this.saveExecution(next); this.saveRun(run);
     return done('Exactly one continuation scheduled.', event);
   }

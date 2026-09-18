@@ -115,5 +115,7 @@ End the message with exactly one final line, and nothing after it:
 
 where `<outcome>` is one of `no_incoming_handoff`, `strong_objection`,
 `accept_without_improvement`, or `accept_and_improve`, and the sentence names the
-blocking finding for an objection, or the improvement left unstaged otherwise.
+blocking finding for an objection, or the improvement left unstaged otherwise. A
+`strong_objection` sentence must be a standalone, actionable explanation suitable
+for sending directly to the author; never omit it.
 A controller may read this line from the final message; keep it literal and last.

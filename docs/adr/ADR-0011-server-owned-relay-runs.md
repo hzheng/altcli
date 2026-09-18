@@ -98,11 +98,16 @@ read-only worktree digest (HEAD, index entries, unstaged content, untracked file
 contents) taken just before delivery differs from the one taken at the correlated
 completion; an unchanged worktree, typically a worker that asked for more
 information or declined, completes the run without a review, and an unreadable
-digest pauses it. The agent's prose is never consulted. Further reviews depend
-on the run's continuation preference. Only `accept_and_improve` continues a review
-chain. Other outcomes pause or end the chain; a completed chain is not a completed
-task. The budget of automatic turns (default 20, chosen at start) is persisted on
-the server with the run.
+digest pauses it. Worker prose is never used to decide whether an instruction
+produced reviewable changes; the structured review outcome and reason govern
+review routing. Further reviews depend on the run's continuation preference.
+`accept_and_improve` continues to the partner's review. An actionable
+`strong_objection` continues to the partner as a
+normal correction instruction with handoff enabled; if that instruction changes
+the worktree, the server returns it to relay review. An objection without a reason
+or continuation permission pauses, and other outcomes end the chain. Every scheduled
+review or correction consumes the same persisted automatic-turn budget (default 20,
+chosen at start). A completed chain is not a completed task.
 
 Pause prevents subsequent scheduling; it does not interrupt an in-flight send or
 running agent. Explicit takeover requires inspecting and stopping all writers and

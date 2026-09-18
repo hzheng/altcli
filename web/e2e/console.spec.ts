@@ -12,11 +12,11 @@ async function post(request: APIRequestContext, path: string, data: unknown) {
 async function unlock(page: Page, token = TOKEN) {
   await page.goto('/'); await page.getByLabel('Host access token').fill(token); await page.getByRole('button', { name: 'Open console' }).click();
 }
-async function complete(request: APIRequestContext, commandId: string, outcome = 'accept_and_improve') {
+async function complete(request: APIRequestContext, commandId: string, outcome = 'accept_and_improve', reason?: string) {
   const current = await state(request); const execution = current.executions.find((e) => e.commandId === commandId)!;
   const session = current.sessions.find((s) => s.id === execution.agentId)!;
   const event = { source: session.agentType, paneId: session.identity.paneId, socketPath: session.identity.socketPath, identity: session.identity,
-    prompt: execution.wireText, sessionId: `test-${session.id}`, sourceTurnId: `turn-${commandId}`, commandId, settled: true, backgroundState: 'clear', outcome };
+    prompt: execution.wireText, sessionId: `test-${session.id}`, sourceTurnId: `turn-${commandId}`, commandId, settled: true, backgroundState: 'clear', outcome, ...(reason ? { reason } : {}) };
   if (session.agentType === 'claude') await post(request, 'events', { ...event, event: 'turn_started' });
   return post(request, 'events', { ...event, event: 'turn_complete' });
 }
@@ -142,8 +142,15 @@ test('an explicitly selected pair creates a persistent run without browser sched
   const after = (await state(request)).runs.find((r) => r.id === run.id)!;
   expect(after.automaticTurns).toBe(1); expect(after.currentCommandId).not.toBe(run.currentCommandId);
   await unlock(page); await expect(page.getByText('1/20 automatic turns', { exact: true })).toBeVisible();
-  await complete(request, after.currentCommandId, 'strong_objection'); await expect(page.getByRole('heading', { name: 'Run paused', exact: true })).toBeVisible();
-  await expect(page.getByText('Reviewer objected: inspect its output', { exact: true })).toBeVisible();
+  await complete(request, after.currentCommandId, 'strong_objection', 'The delete path can remove records outside the selected project.');
+  await expect(page.getByRole('heading', { name: 'Run active', exact: true })).toBeVisible();
+  await expect(page.getByText('Reviewer objected; correction scheduled for Codex.', { exact: true })).toBeVisible();
+  const correction = (await state(request)).executions.find((e) => e.runId === run.id)!;
+  expect(correction.agentId).toBe('codex'); expect(correction.input.kind).toBe('instruction'); expect(correction.input.handoff).toBe(true);
+  expect(correction.input.text).toContain('Address objection: The delete path can remove records outside the selected project.');
+  // The reviewer's turn is over: its objection stays labeled on its pane while the author's correction is in flight.
+  await page.getByRole('navigation', { name: 'Command target' }).getByRole('button', { name: /Claude Code/ }).click();
+  await expect(page.getByText('strong_objection: The delete path can remove records outside the selected project.', { exact: true })).toBeVisible();
 });
 test('two browser pages cannot create two continuations from the same event', async ({ page, context, request }) => {
   const pair = await post(request, 'pairs', { name: 'Two clients', sessions: ['codex', 'claude'] });
@@ -168,6 +175,27 @@ test('pause and takeover are distinct and uncertain transport is not retried', a
   await expect(page.getByText(/Pause does not interrupt any process/)).toBeVisible();
   await page.getByRole('button', { name: 'I checked every participant; release ownership', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Active run' })).toHaveCount(0); await expect(page.getByRole('status')).toContainText('Nothing was replayed');
+});
+test('a rejected completion does not label the active pane with an older accepted outcome', async ({ page, request }) => {
+  const previous = crypto.randomUUID();
+  await post(request, 'commands', { requestId: previous, agentId: 'codex', kind: 'relay', confirmReady: true });
+  await complete(request, previous, 'accept_without_improvement', 'Previous accepted review.');
+  await unlock(page);
+  await expect(page.getByText('accept_without_improvement: Previous accepted review.', { exact: true })).toBeVisible();
+
+  const currentId = crypto.randomUUID();
+  await post(request, 'commands', { requestId: currentId, agentId: 'codex', kind: 'relay', confirmReady: true });
+  const current = await state(request); const execution = current.executions.find((e) => e.commandId === currentId)!;
+  const session = current.sessions.find((s) => s.id === 'codex')!;
+  await post(request, 'events', { source: 'codex', event: 'turn_complete', commandId: currentId,
+    paneId: session.identity.paneId, socketPath: session.identity.socketPath, identity: session.identity,
+    sessionId: 'changed-codex-session', sourceTurnId: `turn-${currentId}`, prompt: execution.wireText,
+    settled: true, backgroundState: 'clear', outcome: 'accept_without_improvement', reason: 'Current rejected review.' });
+
+  const active = page.getByRole('region', { name: 'Active run' });
+  await expect(active.getByText('CLI session changed; explicitly re-register the worker.', { exact: true })).toBeVisible();
+  await expect(page.getByText('accept_without_improvement: Previous accepted review.', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('accept_without_improvement: Current rejected review.', { exact: true })).toHaveCount(0);
 });
 test('unknown Claude background status pauses instead of treating a response as idle', async ({ page, request }) => {
   await unlock(page); await page.getByRole('navigation', { name: 'Command target' }).getByRole('button', { name: /Claude Code/ }).click();

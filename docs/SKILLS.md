@@ -36,6 +36,9 @@ The final nonempty response line must be
 `no_incoming_handoff`, `strong_objection`, `accept_without_improvement`, or
 `accept_and_improve`. The skill also permits its existing dash format. The hook
 reads the current final message, never terminal screen text or a stale transcript.
+For `strong_objection`, the sentence is a required standalone, actionable reason;
+when the run permits continuation, the server sends that reason to the author as
+a normal correction instruction and returns changed work to relay review.
 
 The server additionally requires exact command, prompt, worker/session and turn
 correlation, plus clear background-work evidence, before advancing. An outcome

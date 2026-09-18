@@ -70,9 +70,11 @@ for more information or declined, ends the run without a review so you can answe
 it with a plain Send; an unreadable digest pauses. Partial edits followed by a
 question still relay, since the reviewer has something to look at. **Relay**
 starts a review, with optional context. The preference only determines whether a
-new explicitly started run continues after `accept_and_improve`; it is not an armed
-run by itself. An objection, missing evidence, exhausted budget, uncertain delivery,
-or changed instance pauses the run.
+new explicitly started run continues after `accept_and_improve` and whether an
+actionable `strong_objection` is sent back to the author as a correction instruction
+before returning changed work to review; it is not an armed run by itself. An
+objection without a reason or continuation permission, missing evidence, exhausted
+budget, uncertain delivery, or changed instance pauses the run.
 
 Commands carry a unique `[codercrew-command:<UUID>]` suffix. Hooks must echo the
 exact prompt and bind its source turn/session; identical `relay` strings cannot

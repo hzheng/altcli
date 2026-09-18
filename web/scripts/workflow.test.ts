@@ -63,6 +63,41 @@ test('two observers and a repeated completion schedule one server-owned continua
   assert.equal(plane.workflow.run(command.requestId)!.automaticTurns, 1);
   await plane.recordEvent(done); assert.equal(sent.length, 2);
 });
+test('an actionable objection automatically returns to the author for correction and then to the reviewer', async () => {
+  const command = start({ pairId: pair().id, autoContinue: true }); await plane.submit(command);
+  await complete(command.requestId);
+  const review = plane.workflow.run(command.requestId)!.currentCommandId;
+  await complete(review, { outcome: 'strong_objection', reason: 'The delete path can remove records outside the selected project.' });
+  const run = plane.workflow.run(command.requestId)!;
+  const correction = plane.workflow.execution(run.currentCommandId)!;
+  assert.deepEqual(sent.map((s) => s.agent), ['codex', 'claude', 'codex']);
+  assert.equal(run.status, 'running'); assert.equal(run.automaticTurns, 2);
+  assert.equal(correction.input.kind, 'instruction'); assert.equal(correction.input.handoff, true);
+  assert.equal(correction.input.text, 'Address objection: The delete path can remove records outside the selected project.\n\nMake the required changes, leave them unstaged, and then return the work for relay review.');
+  assert.match(correction.wireText, /\[codercrew-command:[0-9a-f-]+\]$/);
+  worktree = async () => 'corrected';
+  await complete(correction.commandId, { outcome: undefined });
+  assert.deepEqual(sent.map((s) => s.agent), ['codex', 'claude', 'codex', 'claude']);
+  assert.equal(plane.workflow.execution(plane.workflow.run(command.requestId)!.currentCommandId)!.input.kind, 'relay');
+});
+test('an objection reason with a line separator still schedules a deliverable correction', async () => {
+  const command = start({ pairId: pair().id, autoContinue: true }); await plane.submit(command);
+  await complete(command.requestId);
+  const review = plane.workflow.run(command.requestId)!.currentCommandId;
+  const receipt = await complete(review, { outcome: 'strong_objection', reason: 'The delete path is unscoped.\u2028Scope it to the project.' });
+  assert.equal(receipt.accepted, true); assert.equal(plane.workflow.execution(review)!.status, 'finished');
+  const run = plane.workflow.run(command.requestId)!; assert.equal(run.status, 'running');
+  assert.match(plane.workflow.execution(run.currentCommandId)!.input.text!, /^Address objection: The delete path is unscoped\. Scope it to the project\.\n/);
+});
+test('an objection without automatic continuation or an actionable reason remains paused', async () => {
+  for (const [autoContinue, reason] of [[false, 'The change drops required data.'], [true, undefined]] as const) {
+    const command = start({ pairId: store.pairs()[0]?.id ?? pair().id, autoContinue }); await plane.submit(command);
+    await complete(command.requestId, { outcome: 'strong_objection', reason });
+    const run = plane.workflow.run(command.requestId)!;
+    assert.equal(run.status, 'paused'); assert.match(run.reason, /Reviewer objected/); stopped(run.id);
+  }
+  assert.equal(sent.length, 2);
+});
 test('explicit pair wins when two pairs share a participant', async () => {
   pair(); const third = { ...(store.sessions()[1] as ManagedSession), id: 'claude-c', label: 'Claude C', registrationId: randomUUID(), identity: { ...store.sessions()[1]!.identity, paneId: '%9' } };
   store.saveSession(third); const second = plane.createPair({ name: 'Second', sessions: ['codex', 'claude-c'] });

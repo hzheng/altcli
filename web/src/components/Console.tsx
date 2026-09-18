@@ -191,10 +191,13 @@ export function Console() {
         const snapshot = state?.snapshots.find((p) => p.agentId === s.id);
         const execution = state?.executions.find((e) => e.agentId === s.id);
         const ended = state?.turns.find((t) => t.agentId === s.id && t.receivedAt >= s.registeredAt);
+        // While this pane has a command in flight, an older accepted outcome must not look like that command's result. A
+        // participant whose turn is over keeps its label (an objection reason stays readable while the partner corrects).
+        const visibleOutcome = !execution || ended?.commandId === execution.commandId ? ended : undefined;
         return <article key={s.id} className={`pane ${s.id === current?.id ? 'active' : ''}`}>
           <div className="pane-heading"><h2><Icon badge={statuses.get(s.id)?.badge ?? 'idle'} />{s.label}</h2><span className="mono muted">{s.agentType} · {s.identity.paneId}</span></div>
           <div className="pane-meta"><span>{s.repository}</span><span className="badge">{execution ? execution.status.toUpperCase() : 'NO ACTIVE CONTROLLER TURN'}</span></div>
-          {ended?.outcome && <div className={`outcome ${ended.outcome}`}>{ended.outcome}: {ended.reason}</div>}
+          {visibleOutcome?.outcome && <div className={`outcome ${visibleOutcome.outcome}`}>{visibleOutcome.outcome}: {visibleOutcome.reason}</div>}
           <Output label={`${s.label} output`} text={(snapshot?.status === 'unavailable' ? snapshot.error : snapshot?.text) || 'Waiting for a capture'} />
           <div className="pane-footer"><span>{snapshot ? `Captured ${new Date(snapshot.capturedAt).toLocaleTimeString()}` : ''}</span>
             {removeId === s.id ? <span>Forget this registration? <button disabled={busy} onClick={() => void remove(s)} aria-label={`Confirm remove ${s.label}`}>Confirm</button><button onClick={() => setRemoveId(null)}>Keep</button></span>

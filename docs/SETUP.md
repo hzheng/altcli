@@ -55,6 +55,12 @@ pair and policy are copied into a server run; later viewing changes cannot redir
 it. The maximum number of automatic turns (default 20, set in the composer) is
 frozen into the run and enforced on the server.
 
+With automatic continuation enabled, a reviewer's `strong_objection` reason is
+sent to the other participant as a normal correction instruction, not as a relay
+review. The author leaves the correction unstaged; a changed worktree is then
+returned to the reviewer automatically. A missing objection reason, disabled
+continuation, unchanged correction, or exhausted turn budget does not continue.
+
 A finished response with unknown or active background work pauses. Claude supplies
 that evidence in its current Stop payload. Codex notify does not, so the server
 compares the processes under or attached to the pane before delivery and at

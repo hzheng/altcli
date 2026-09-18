@@ -35,7 +35,9 @@ pauses without replay. Browser views never implement the scheduler.
 Current Stop payload replaces lagging transcript fallback. Missing/active background
 state pauses; legacy follow-up events cannot advance anything. Codex notify carries no
 quiescence evidence, so the server supplies differential process evidence for Codex
-turns (processes newly associated with the pane that survive completion).
+turns (processes newly associated with the pane that survive completion). With the
+run's continuation policy enabled, an actionable strong objection becomes a bounded
+instruction to the author and changed corrective work returns to review.
 
 Remaining acceptance: installed-version hook fixtures and supervised mixed-agent
 relay, complete fault-injection sequence, non-browser lifecycle intake, restart and
