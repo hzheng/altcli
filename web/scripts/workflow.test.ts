@@ -124,10 +124,28 @@ test('Claude must acknowledge the specific prompt before completion can advance'
   assert.equal(receipt.accepted, false); assert.match(plane.workflow.run(command.requestId)!.reason, /UserPromptSubmit/); assert.equal(sent.length, 1);
 });
 test('changed source turn or CLI session pauses instead of borrowing another completion', async () => {
-  const command = start({ agentId: 'claude', pairId: pair().id, autoContinue: true }); await plane.submit(command);
-  await plane.recordEvent(event(command.requestId, { event: 'turn_started' }));
-  await plane.recordEvent(event(command.requestId, { sourceTurnId: 'unrelated-turn' }));
-  assert.equal(plane.workflow.run(command.requestId)!.status, 'paused'); assert.equal(sent.length, 1);
+  const pairId = pair().id;
+  for (const mismatch of [{ sourceTurnId: 'unrelated-turn' }, { sessionId: 'unrelated-session' }]) {
+    const command = start({ agentId: 'claude', pairId, autoContinue: true }); await plane.submit(command);
+    await plane.recordEvent(event(command.requestId, { event: 'turn_started' }));
+    await plane.recordEvent(event(command.requestId, mismatch));
+    const run = plane.workflow.run(command.requestId)!;
+    assert.equal(run.status, 'paused'); assert.match(run.reason, /did not match the acknowledged source turn/); stopped(command.requestId);
+  }
+  assert.equal(sent.length, 2);
+});
+test('a new CLI chat between commands (Codex /new, Claude /clear) completes the next command without re-registration', async () => {
+  const command = start({ pairId: pair().id, autoContinue: true }); await plane.submit(command);
+  await complete(command.requestId); const review = plane.workflow.run(command.requestId)!.currentCommandId; await complete(review);
+  const second = plane.workflow.run(command.requestId)!.currentCommandId;
+  assert.equal((await complete(second, { sessionId: 'session-codex-after-new' })).accepted, true);
+  assert.equal(plane.workflow.execution(second)!.sessionId, 'session-codex-after-new');
+  const secondReview = plane.workflow.run(command.requestId)!.currentCommandId;
+  assert.equal((await complete(secondReview, { sessionId: 'session-claude-after-clear' })).accepted, true);
+  assert.equal(plane.workflow.execution(secondReview)!.sessionId, 'session-claude-after-clear');
+  const run = plane.workflow.run(command.requestId)!;
+  assert.equal(run.status, 'running'); assert.equal(run.automaticTurns, 4);
+  assert.deepEqual(sent.map((s) => s.agent), ['codex', 'claude', 'codex', 'claude', 'codex']);
 });
 test('unknown or active background work retains ownership', async () => {
   // Unknown from a Claude payload has no server-side substitute; see the Codex process-evidence tests for the one case that does.

@@ -29,8 +29,8 @@ correct Git staging. No terminal text is parsed as an authorization signal.
 
 Events carry exact command nonce and prompt echo, pane/server/socket identity,
 source session and turn. Claude requires a matching start acknowledgment; old
-follow-up events cannot complete a newer turn. Pinned session changes require
-reconciliation/rebinding. Event dedup and next-command creation are transactional.
+follow-up events cannot complete a newer turn. The session is pinned within a
+command, not across the registration. Event dedup and next-command creation are transactional.
 The owner token is the trust boundary; these event identities are correlation, not
 cryptographic attestation of a CLI.
 

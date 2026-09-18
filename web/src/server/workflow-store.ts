@@ -32,7 +32,7 @@ export class WorkflowStore {
       CREATE TABLE IF NOT EXISTS workflow_turns (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, value TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS workflow_turns_run ON workflow_turns(run_id);
       CREATE TABLE IF NOT EXISTS workflow_events (id TEXT PRIMARY KEY, command_id TEXT NOT NULL, digest TEXT NOT NULL, value TEXT NOT NULL, receipt TEXT);
-      CREATE TABLE IF NOT EXISTS workflow_bindings (registration_id TEXT PRIMARY KEY, session_id TEXT NOT NULL);
+      DROP TABLE IF EXISTS workflow_bindings; -- a CLI session was once pinned per registration; it is now recorded per execution
     `);
   }
   run(id: string): RelayRun | undefined {
@@ -170,13 +170,12 @@ export class WorkflowStore {
       }
       this.stop(run, 'The CLI prompt differs from the delivered command. Check for leftover or queued input.'); return done(run.reason);
     }
-    const bound = this.store.db.prepare('SELECT session_id FROM workflow_bindings WHERE registration_id=?').get(participant.registrationId) as {session_id:string} | undefined;
-    if (bound && bound.session_id !== input.sessionId) { this.stop(run, 'CLI session changed; explicitly re-register the worker.'); return done(run.reason); }
+    // The registration pins the physical worker (pane identity, CLI pid at dispatch); the CLI's logical session is pinned only
+    // within a command, so a chat reset between commands (Codex /new, Claude /clear) needs no re-registration.
     if (turn.sessionId && (turn.sessionId !== input.sessionId || turn.sourceTurnId !== input.sourceTurnId)) { this.stop(run, 'The completion did not match the acknowledged source turn.'); return done(run.reason); }
     if (input.source === 'claude' && input.event === 'turn_complete' && !turn.sourceTurnId) {
       this.stop(run, 'No matching UserPromptSubmit acknowledgment. Update hooks and reconcile.'); return done(run.reason);
     }
-    this.store.db.prepare('INSERT OR IGNORE INTO workflow_bindings(registration_id,session_id) VALUES (?,?)').run(participant.registrationId, input.sessionId);
     turn.sessionId = input.sessionId!; turn.sourceTurnId = input.sourceTurnId!; this.saveExecution(turn);
     if (input.event === 'turn_started') return done('Source turn acknowledged.', this.asTurnEvent(input, participant.id, null));
     const event = this.asTurnEvent(input, participant.id, input.commandId!);

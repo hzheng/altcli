@@ -187,13 +187,14 @@ test('a rejected completion does not label the active pane with an older accepte
   await post(request, 'commands', { requestId: currentId, agentId: 'codex', kind: 'relay', confirmReady: true });
   const current = await state(request); const execution = current.executions.find((e) => e.commandId === currentId)!;
   const session = current.sessions.find((s) => s.id === 'codex')!;
+  // A replaced pane process is a different physical worker; its completion is rejected. (A new chat in the same CLI is not.)
   await post(request, 'events', { source: 'codex', event: 'turn_complete', commandId: currentId,
-    paneId: session.identity.paneId, socketPath: session.identity.socketPath, identity: session.identity,
-    sessionId: 'changed-codex-session', sourceTurnId: `turn-${currentId}`, prompt: execution.wireText,
+    paneId: session.identity.paneId, socketPath: session.identity.socketPath, identity: { ...session.identity, panePid: '999999' },
+    sessionId: 'test-codex', sourceTurnId: `turn-${currentId}`, prompt: execution.wireText,
     settled: true, backgroundState: 'clear', outcome: 'accept_without_improvement', reason: 'Current rejected review.' });
 
   const active = page.getByRole('region', { name: 'Active run' });
-  await expect(active.getByText('CLI session changed; explicitly re-register the worker.', { exact: true })).toBeVisible();
+  await expect(active.getByText('Worker instance changed. Reconcile and re-register before continuing.', { exact: true })).toBeVisible();
   await expect(page.getByText('accept_without_improvement: Previous accepted review.', { exact: true })).toHaveCount(0);
   await expect(page.getByText('accept_without_improvement: Current rejected review.', { exact: true })).toHaveCount(0);
 });

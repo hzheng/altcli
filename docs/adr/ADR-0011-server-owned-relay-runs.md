@@ -70,10 +70,12 @@ Codex notify uses its current prompt, thread ID and turn ID when available, with
 command ID as the event key fallback. This is not a claim that a fabricated native
 turn ID exists.
 
-Full pane/server/socket identity, registered generation, CLI kind and pinned
-session ID must agree. Old follow-up outcomes, absent identities and ambiguous
-payloads remain nonauthoritative. A source session change requires human
-reconciliation and explicit rebinding.
+Full pane/server/socket identity, registered generation and CLI kind must agree.
+The registration pins the physical worker; the CLI's logical session is pinned
+only within a command (Claude from its start acknowledgment, Codex at completion),
+so a chat reset between commands (Codex `/new`, Claude `/clear`) needs no
+re-registration. Old follow-up outcomes, absent identities and ambiguous payloads
+remain nonauthoritative. A session or turn change inside a command pauses the run.
 
 A response can end while background work remains. Only explicit clear evidence
 can release execution ownership or schedule the next worker automatically. Missing
