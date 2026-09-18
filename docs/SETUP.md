@@ -46,8 +46,11 @@ Create and explicitly select a named pair. Check both workers have empty prompts
 no permission dialogs or background writers, and use the standard Git index. Tick
 readiness before starting. Keep desktop input out of that owned worktree.
 
-Send never relays. Send & relay requests one review; the continuation preference
-governs subsequent accept_and_improve handoffs. Relay starts a review. The selected
+Send never relays. Send & relay requests one review, but only when the worker
+changed the worktree (read-only Git digest before delivery versus at completion);
+a worker that only asked a question or changed nothing ends the run with no review,
+and an unreadable digest pauses it. The continuation preference governs subsequent
+accept_and_improve handoffs. Relay starts a review. The selected
 pair and policy are copied into a server run; later viewing changes cannot redirect
 it. The maximum number of automatic turns (default 20, set in the composer) is
 frozen into the run and enforced on the server.

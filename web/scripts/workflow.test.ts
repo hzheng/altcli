@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, test } from 'node:test';
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,18 +10,20 @@ import { Controller } from '../src/server/controller.ts';
 import { ControlPlane } from '../src/server/control-plane.ts';
 import { MockAdapter, mockSessions } from '../src/server/adapters/mock.ts';
 import { loadConfig } from '../src/server/config.ts';
-import { resolveWorktree, sameWorktree } from '../src/server/worktree.ts';
+import { resolveWorktree, sameWorktree, worktreeFingerprint } from '../src/server/worktree.ts';
 import { parseHook, parseStart, parseRunAction } from '../src/core/workflow-validation.ts';
 import type { HookEvent, ManagedSession, StartInput } from '../src/contracts/workflow.ts';
 
 let directory: string; let store: Store; let adapter: MockAdapter; let plane: ControlPlane;
 let sent: { agent: string; text: string }[];
+/** Simulated worktree digest; a test that models an agent editing files changes it between delivery and completion. */
+let worktree: () => Promise<string>;
 beforeEach(() => {
   directory = mkdtempSync(join(tmpdir(), 'codercrew-workflow-'));
   store = new Store(directory); for (const session of mockSessions()) store.saveSession(session);
-  adapter = new MockAdapter(); sent = [];
+  adapter = new MockAdapter(); sent = []; worktree = async () => 'unchanged';
   adapter.send = async (session, text) => { sent.push({ agent: session.id, text }); };
-  plane = new ControlPlane(new Controller(loadConfig({ CODERCREW_ADAPTER: 'mock', CODERCREW_TOKEN: 'a'.repeat(64), CODERCREW_DATA_DIR: directory }), store, adapter));
+  plane = new ControlPlane(new Controller(loadConfig({ CODERCREW_ADAPTER: 'mock', CODERCREW_TOKEN: 'a'.repeat(64), CODERCREW_DATA_DIR: directory }), store, adapter), () => worktree());
 });
 afterEach(() => { store.close(); rmSync(directory, { recursive: true, force: true }); });
 const start = (more: Partial<StartInput> = {}): StartInput => ({ requestId: randomUUID(), agentId: 'codex', kind: 'relay', confirmReady: true, ...more });
@@ -172,6 +174,7 @@ test('a multi-line instruction correlates with the flattened echo the hooks prod
   assert.equal(wire, `check these:\n- one\n- two [codercrew-command:${command.requestId}]`);
   assert.equal(sent[0]!.text, wire);
   // hooks/protocol.mjs `plain` turns every control character into a space; a CLI that stored CR instead of LF flattens the same way.
+  worktree = async () => 'edited';
   await complete(command.requestId, { prompt: wire.replace(/\n/g, '\r').replace(/[\u0000-\u001f]/g, ' ') });
   assert.deepEqual(sent.map((s) => s.agent), ['codex', 'claude']);
   await assert.rejects(plane.submit(start({ kind: 'instruction', text: 'a\tb' })), /control characters/);
@@ -278,9 +281,55 @@ test('a plain Send never relays; Send and relay requests one review with prefere
   const p = pair(); const plain = start({ kind: 'instruction', text: 'do work', pairId: p.id, autoContinue: true });
   await plane.submit(plain); await complete(plain.requestId, { outcome: undefined }); assert.equal(sent.length, 1);
   const handoff = start({ kind: 'instruction', text: 'do work', pairId: p.id, handoff: true, autoContinue: false });
-  await plane.submit(handoff); await complete(handoff.requestId, { outcome: undefined }); assert.equal(sent.length, 3);
+  await plane.submit(handoff); worktree = async () => 'edited';
+  await complete(handoff.requestId, { outcome: undefined }); assert.equal(sent.length, 3);
   const review = plane.workflow.run(handoff.requestId)!.currentCommandId; await complete(review); assert.equal(sent.length, 3);
   assert.equal(plane.workflow.run(handoff.requestId)!.status, 'paused');
+});
+test('Send and relay does not review a worker that changed nothing, such as one that asked a question instead', async () => {
+  const command = start({ kind: 'instruction', text: 'do work', pairId: pair().id, handoff: true, autoContinue: true }); await plane.submit(command);
+  assert.equal(plane.workflow.execution(command.requestId)!.baselineWorktree, 'unchanged');
+  await complete(command.requestId, { outcome: undefined });
+  assert.equal(sent.length, 1);
+  const run = plane.workflow.run(command.requestId)!;
+  assert.equal(run.status, 'completed'); assert.match(run.reason, /without changing the worktree/);
+  // The turn finished cleanly, so the human can answer the worker at once with a plain Send.
+  assert.equal(plane.workflow.owner('/demo/project/.git/index'), null);
+  assert.equal((await plane.submit(start({ kind: 'instruction', text: 'the answer' }))).status, 'delivered');
+  assert.equal(sent.length, 2);
+});
+test('an unreadable worktree before delivery or at completion pauses a Send and relay instead of reviewing', async () => {
+  const p = pair();
+  const before = start({ kind: 'instruction', text: 'do work', pairId: p.id, handoff: true }); worktree = async () => { throw new Error('git unavailable'); };
+  await plane.submit(before); assert.equal(plane.workflow.execution(before.requestId)!.baselineWorktree, null);
+  worktree = async () => 'edited'; await complete(before.requestId, { outcome: undefined });
+  assert.equal(plane.workflow.run(before.requestId)!.status, 'paused'); assert.match(plane.workflow.run(before.requestId)!.reason, /could not be read/);
+  assert.equal(plane.workflow.owner('/demo/project/.git/index'), before.requestId); stopped(before.requestId);
+  const after = start({ kind: 'instruction', text: 'do work', pairId: p.id, handoff: true }); await plane.submit(after);
+  worktree = async () => { throw new Error('git unavailable'); }; await complete(after.requestId, { outcome: undefined });
+  assert.equal(plane.workflow.run(after.requestId)!.status, 'paused'); assert.equal(sent.length, 2);
+  // Plain Send and Relay never read the worktree; only a handoff instruction is judged by it.
+  stopped(after.requestId); const relay = start({ pairId: p.id, autoContinue: true }); await plane.submit(relay);
+  assert.equal(plane.workflow.execution(relay.requestId)!.baselineWorktree, null);
+  await complete(relay.requestId); assert.equal(sent.length, 4);
+});
+test('the worktree digest changes on edits, staging, untracked files and commits, but not on a touch or an ignored file', async () => {
+  const repo = join(directory, 'repo'); mkdirSync(repo); execFileSync('git', ['init', '-q', repo]);
+  const git = (...args: string[]) => execFileSync('git', ['-C', repo, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', ...args]);
+  writeFileSync(join(repo, '.gitignore'), 'ignored\n'); writeFileSync(join(repo, 'example'), 'one\n'); git('add', '.'); git('commit', '-qm', 'fixture');
+  const digests = [await worktreeFingerprint(repo)];
+  const next = async () => { const digest = await worktreeFingerprint(repo); assert.ok(!digests.includes(digest)); digests.push(digest); return digest; };
+  const same = async () => assert.equal(await worktreeFingerprint(repo), digests.at(-1));
+  await same();
+  const later = new Date(Date.now() + 5000); utimesSync(join(repo, 'example'), later, later); await same();
+  writeFileSync(join(repo, 'ignored'), 'scratch'); await same();
+  writeFileSync(join(repo, 'example'), 'two\n'); await next();
+  git('add', 'example'); await next();
+  writeFileSync(join(repo, 'new-file'), 'x'); await next();
+  writeFileSync(join(repo, 'new-file'), 'y'); await next();
+  git('commit', '-qm', 'second'); await next();
+  rmSync(join(repo, 'new-file')); await next();
+  await assert.rejects(worktreeFingerprint(directory), /worktree state/);
 });
 test('a desktop start pauses a run; registration mutations cannot change its participants', async () => {
   const command = start({ pairId: pair().id, autoContinue: true }); await plane.submit(command);

@@ -8,7 +8,7 @@ import { singleLine, slugify } from '../core/validation.ts';
 import { assertAgentCommand, suggestAgentType } from '../core/policy.ts';
 import { Controller } from './controller.ts';
 import { WorkflowStore, wireText } from './workflow-store.ts';
-import { resolveWorktree, sameWorktree } from './worktree.ts';
+import { resolveWorktree, sameWorktree, worktreeFingerprint } from './worktree.ts';
 import { assertExternalDataDir } from './paths.ts';
 import { isCodexHelper } from './processes.ts';
 
@@ -19,8 +19,11 @@ export class ControlPlane {
   get config() { return this.transport.config; }
   get adapter() { return this.transport.adapter; }
   readonly transport: Controller;
-  constructor(transport: Controller) {
+  /** Read-only worktree digest. Mock mode has no repository, so its digest never changes unless a test supplies one. */
+  private readonly readWorktree: (root: string) => Promise<string>;
+  constructor(transport: Controller, readWorktree?: (root: string) => Promise<string>) {
     this.transport = transport;
+    this.readWorktree = readWorktree ?? (transport.config.mode === 'mock' ? async () => 'mock-worktree' : worktreeFingerprint);
     this.workflow = new WorkflowStore(this.store);
     // Mock fixtures have no real filesystem. Real registrations must be renewed explicitly after this upgrade.
     if (this.config.mode === 'mock') for (const raw of this.store.sessions()) {
@@ -117,9 +120,9 @@ export class ControlPlane {
     const turn = this.workflow.claim(run.currentCommandId); if (!turn) return;
     await this.deliver(turn);
     for (const pending of this.workflow.pendingEvents(turn.commandId)) {
-      const evidence = pending.event === 'turn_complete' && pending.backgroundState === 'unknown'
-        ? await this.evidence(this.workflow.execution(turn.commandId)!, pending.reporterPid) : null;
-      this.workflow.receive(pending, evidence);
+      const delivered = this.workflow.execution(turn.commandId)!;
+      const evidence = pending.event === 'turn_complete' && pending.backgroundState === 'unknown' ? await this.evidence(delivered, pending.reporterPid) : null;
+      this.workflow.receive(pending, evidence, pending.event === 'turn_complete' ? await this.worktreeDigest(delivered) : null);
     }
     const next = this.workflow.run(runId);
     if (next?.status === 'running' && next.currentCommandId !== turn.commandId) await this.pump(runId);
@@ -127,7 +130,7 @@ export class ControlPlane {
   private async deliver(turn: Execution): Promise<void> {
     const run = this.workflow.run(turn.runId)!;
     const participant = run.participants.find((s) => s.id === turn.agentId)!;
-    let baseline: ProcessRecord[] | null = null;
+    let baseline: ProcessRecord[] | null = null; let worktree: string | null = null;
     try {
       const record = await this.transport.submit(turn.input, { wireText: turn.wireText, beforeSend: async () => {
         const current = this.store.sessions().find((s) => s.id === participant.id) as ManagedSession | undefined;
@@ -141,8 +144,10 @@ export class ControlPlane {
         }
         // Codex notify carries no background-work fields, so the server keeps its own evidence: what ran under the pane before this turn.
         if (participant.agentType === 'codex') baseline = await this.adapter.processes(participant).catch(() => null);
+        // A handoff instruction is judged against the worktree as it was just before delivery.
+        if (this.handsOff(turn)) worktree = await this.readWorktree(participant.worktree!.root).catch(() => null);
       } });
-      this.workflow.delivered(record.id, record, baseline);
+      this.workflow.delivered(record.id, record, baseline, worktree);
     } catch { this.workflow.dispatchFailed(turn.commandId); }
   }
   /** Differential process evidence for a Codex completion: anything started under the pane during the turn that is still alive is background work.
@@ -158,6 +163,16 @@ export class ControlPlane {
     } catch { return null; }
   }
 
+  private handsOff(turn: Execution): boolean {
+    return turn.input.kind === 'instruction' && turn.input.handoff === true && !!this.workflow.run(turn.runId)?.participants.find((s) => s.id === turn.agentId)?.worktree;
+  }
+  /** The worktree digest at completion of a handoff instruction, so the store can tell a result from a question or a no-op. Null when unreadable. */
+  private async worktreeDigest(turn: Execution): Promise<string | null> {
+    if (!this.handsOff(turn)) return null;
+    const participant = this.workflow.run(turn.runId)!.participants.find((s) => s.id === turn.agentId)!;
+    return this.readWorktree(participant.worktree!.root).catch(() => null);
+  }
+
   async recordEvent(input: HookEvent): Promise<HookReceipt> {
     // Uncorrelated start events mean someone used a desktop terminal. Pause affected runs, never infer completion.
     if (input.event === 'turn_started' && !input.commandId && input.identity) {
@@ -169,7 +184,8 @@ export class ControlPlane {
     }
     const turn = input.commandId ? this.workflow.execution(input.commandId) : undefined;
     const evidence = turn && input.event === 'turn_complete' && input.backgroundState === 'unknown' ? await this.evidence(turn, input.reporterPid) : null;
-    const receipt = this.workflow.receive(input, evidence);
+    const worktree = turn && input.event === 'turn_complete' ? await this.worktreeDigest(turn) : null;
+    const receipt = this.workflow.receive(input, evidence, worktree);
     if (turn) await this.pump(turn.runId);
     return receipt;
   }

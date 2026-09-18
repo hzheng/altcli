@@ -93,7 +93,7 @@ export class WorkflowStore {
         autoContinue: input.autoContinue === true, pauseRequested: false, status: 'running', reason: 'Waiting for this command to finish.',
         currentCommandId: input.requestId, automaticTurns: 0, turnLimit: input.turnLimit ?? DEFAULT_TURN_LIMIT, createdAt: timestamp, updatedAt: timestamp };
       const turn: Execution = { commandId: input.requestId, runId: run.id, agentId: first.id, input, wireText: wire,
-        status: 'planned', sessionId: null, sourceTurnId: null, continuation: false, baselineProcesses: null };
+        status: 'planned', sessionId: null, sourceTurnId: null, continuation: false, baselineProcesses: null, baselineWorktree: null };
       this.saveRun(run); this.saveExecution(turn);
       this.store.db.prepare('INSERT INTO workflow_owners(lock_key,run_id) VALUES (?,?)').run(lockKey, run.id);
       return turn;
@@ -106,11 +106,11 @@ export class WorkflowStore {
       turn.status = 'dispatching'; this.saveExecution(turn); return turn;
     }).immediate();
   }
-  delivered(id: string, record: CommandRecord, baselineProcesses: ProcessRecord[] | null = null): void {
+  delivered(id: string, record: CommandRecord, baselineProcesses: ProcessRecord[] | null = null, baselineWorktree: string | null = null): void {
     this.store.db.transaction(() => {
       const turn = this.execution(id)!; const run = this.run(turn.runId)!;
       turn.status = record.status === 'delivered' ? 'delivered' : record.status === 'rejected' ? 'rejected' : 'uncertain';
-      turn.baselineProcesses = baselineProcesses; this.saveExecution(turn);
+      turn.baselineProcesses = baselineProcesses; turn.baselineWorktree = baselineWorktree; this.saveExecution(turn);
       if (turn.status !== 'delivered') this.stop(run, record.error ?? 'Delivery requires human reconciliation.');
     }).immediate();
   }
@@ -118,8 +118,9 @@ export class WorkflowStore {
     const turn = this.execution(id)!; turn.status = 'uncertain'; this.saveExecution(turn);
     this.stop(this.run(turn.runId)!, 'Delivery may have occurred. Inspect the terminal; it will not be replayed.');
   }
-  /** `evidence` is the server's own background-work reading for this completion; it is consulted only when the hook reports unknown. */
-  receive(input: HookEvent, evidence: BackgroundEvidence | null = null): HookReceipt {
+  /** `evidence` is the server's own background-work reading for this completion; it is consulted only when the hook reports unknown.
+   * `worktree` is the worktree digest read at this completion for a handoff instruction; null when not gathered or unreadable. */
+  receive(input: HookEvent, evidence: BackgroundEvidence | null = null, worktree: string | null = null): HookReceipt {
     if (!input.commandId || !input.sourceTurnId || !input.sessionId || !input.identity || input.event === 'outcome') {
       // Old hooks/follow-ups remain diagnostic only. They can never complete a newer command.
       return { accepted: false, reason: 'Uncorrelated lifecycle event; update hooks or reconcile manually.', event: null };
@@ -135,7 +136,7 @@ export class WorkflowStore {
       }
       if (row?.receipt) return JSON.parse(row.receipt) as HookReceipt;
       if (!row) this.store.db.prepare('INSERT INTO workflow_events(id,command_id,digest,value) VALUES (?,?,?,?)').run(key, input.commandId, digest, json(input));
-      return this.apply(key, input, evidence);
+      return this.apply(key, input, evidence, worktree);
     }).immediate();
   }
   /** Lifecycle events that arrived before the terminal transport returned. The caller gathers evidence per event. */
@@ -143,7 +144,7 @@ export class WorkflowStore {
     return (this.store.db.prepare('SELECT value FROM workflow_events WHERE command_id=? AND receipt IS NULL ORDER BY rowid').all(id) as {value:string}[])
       .map((row) => JSON.parse(row.value) as HookEvent);
   }
-  private apply(key: string, input: HookEvent, evidence: BackgroundEvidence | null): HookReceipt {
+  private apply(key: string, input: HookEvent, evidence: BackgroundEvidence | null, worktree: string | null): HookReceipt {
     const done = (reason: string, event: TurnEvent | null = null): HookReceipt => {
       const receipt = { accepted: event !== null, reason, event };
       this.store.db.prepare('UPDATE workflow_events SET receipt=? WHERE id=?').run(json(receipt), key);
@@ -189,6 +190,12 @@ export class WorkflowStore {
     turn.status = 'finished'; this.saveExecution(turn);
     if (run.pauseRequested || run.status === 'paused') { this.stop(run, 'Turn finished; run remains paused until human takeover.'); return done(run.reason, event); }
     const isInstruction = turn.input.kind === 'instruction';
+    if (isInstruction && turn.input.handoff === true) {
+      // A review needs something to review. Compare the worktree with its pre-delivery digest rather than reading the agent's
+      // prose: an agent that only asked a question, declined, or reported without editing leaves the digest unchanged.
+      if (!turn.baselineWorktree || !worktree) { this.stop(run, 'The worktree could not be read before delivery or at completion, so no review was scheduled. Inspect the worker and take over.'); return done(run.reason, event); }
+      if (turn.baselineWorktree === worktree) { this.stop(run, 'The worker finished without changing the worktree (it may have asked for more information); no review was scheduled.', true); return done(run.reason, event); }
+    }
     const shouldContinue = isInstruction ? turn.input.handoff === true : input.outcome === 'accept_and_improve' && run.autoContinue;
     if (!shouldContinue) {
       const completed = isInstruction || input.outcome === 'accept_without_improvement' || input.outcome === 'no_incoming_handoff';
@@ -201,7 +208,7 @@ export class WorkflowStore {
     const nextId = randomUUID();
     const nextInput: StartInput = { requestId: nextId, agentId: partner.id, kind: 'relay', confirmReady: true };
     const next: Execution = { commandId: nextId, runId: run.id, agentId: partner.id, input: nextInput, wireText: wireText(nextInput, partner),
-      status: 'planned', sessionId: null, sourceTurnId: null, continuation: true, baselineProcesses: null };
+      status: 'planned', sessionId: null, sourceTurnId: null, continuation: true, baselineProcesses: null, baselineWorktree: null };
     // Event receipt, new command, current-turn change, and budget are one SQLite transaction.
     run.currentCommandId = nextId; run.automaticTurns++; run.reason = 'Next review scheduled by the server.';
     this.saveExecution(next); this.saveRun(run);

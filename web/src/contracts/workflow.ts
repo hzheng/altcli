@@ -45,6 +45,8 @@ export interface Execution {
   continuation: boolean;
   /** Processes under the pane just before delivery; a completion is clear only when nothing newer survives. */
   baselineProcesses: ProcessRecord[] | null;
+  /** Read-only worktree digest just before delivery, for a handoff instruction; a review is scheduled only when the completion digest differs. */
+  baselineWorktree: string | null;
 }
 export interface HookEvent extends Omit<EventInput, 'event'> {
   event: 'turn_started' | 'turn_complete' | 'outcome';

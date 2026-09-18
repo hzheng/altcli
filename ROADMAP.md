@@ -39,10 +39,10 @@ turns (processes newly associated with the pane that survive completion).
 
 Remaining acceptance: installed-version hook fixtures and supervised mixed-agent
 relay, complete fault-injection sequence, non-browser lifecycle intake, restart and
-two-device verification. Remaining features: Git fingerprints covering index,
-worktree and relevant untracked data, handoff scope validation, final task-level
-review/test automation, and deliberate resume semantics. Do not make these automatic
-by trusting outcome prose alone.
+two-device verification. Remaining features: Git fingerprints for review outcomes
+(the worktree digest currently gates only Send & relay handoffs), handoff scope
+validation, final task-level review/test automation, and deliberate resume
+semantics. Do not make these automatic by trusting outcome prose alone.
 
 ## Optional later branches
 

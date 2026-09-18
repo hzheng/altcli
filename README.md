@@ -19,7 +19,7 @@ not stop a run. A backend restart pauses owned runs without replaying commands.
 | Reading and registration | Discover panes, preview output, register explicit instances, group canonical Git worktrees |
 | Command delivery | Bounded text (multi-line delivered as one bracketed paste), exact pane checks, durable delivery receipt and uncertainty |
 | Relay pairing | An explicitly selected pair is frozen into each run |
-| Automatic continuation | Server-only; exact correlated completion, clear background-work evidence, immutable participants, a per-run maximum of automatic turns (default 20) frozen at start |
+| Automatic continuation | Server-only; exact correlated completion, clear background-work evidence, immutable participants, a per-run maximum of automatic turns (default 20) frozen at start; a Send & relay hands off only when the worktree digest changed during the turn |
 | Unknown evidence | Pause and retain execution ownership; never guess from terminal text or recent history |
 | Human control | Explicit readiness on start; pause does not interrupt; takeover requires inspection of all participants |
 | Full terminal / native iOS / supervisor | Not implemented |
@@ -62,7 +62,13 @@ repositories is not one worktree; the backend discovers the actual root and inde
 Select the pair, inspect every participant, then confirm readiness explicitly.
 
 **Send** addresses one agent and never relays. **Send & relay** requests one review
-when the instruction finishes, even with the continuation preference off. **Relay**
+when the instruction finishes, even with the continuation preference off, provided
+the worker actually changed the worktree: the server takes a read-only Git digest
+(HEAD, index, unstaged content, untracked files) just before delivery and again at
+the correlated completion. An unchanged digest, for example when the worker asked
+for more information or declined, ends the run without a review so you can answer
+it with a plain Send; an unreadable digest pauses. Partial edits followed by a
+question still relay, since the reviewer has something to look at. **Relay**
 starts a review, with optional context. The preference only determines whether a
 new explicitly started run continues after `accept_and_improve`; it is not an armed
 run by itself. An objection, missing evidence, exhausted budget, uncertain delivery,

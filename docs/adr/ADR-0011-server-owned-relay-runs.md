@@ -93,7 +93,12 @@ readiness confirmation covering all participants. The chosen policy lives in the
 run thereafter. Changing views, opening another browser, locking a page, or closing
 it cannot alter routing or create a second advancement.
 
-Plain Send never relays. Send & relay requests one review; further reviews depend
+Plain Send never relays. Send & relay requests one review, scheduled only when a
+read-only worktree digest (HEAD, index entries, unstaged content, untracked file
+contents) taken just before delivery differs from the one taken at the correlated
+completion; an unchanged worktree, typically a worker that asked for more
+information or declined, completes the run without a review, and an unreadable
+digest pauses it. The agent's prose is never consulted. Further reviews depend
 on the run's continuation preference. Only `accept_and_improve` continues a review
 chain. Other outcomes pause or end the chain; a completed chain is not a completed
 task. The budget of automatic turns (default 20, chosen at start) is persisted on

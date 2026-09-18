@@ -117,6 +117,17 @@ test('history follows the selected pair by default, reads all while none is sele
   await expect(rows.filter({ hasText: 'loop command' })).toHaveCount(0);
   await filter.selectOption('all'); await expect(rows.filter({ hasText: 'loop command' })).toHaveCount(1);
 });
+test('a plain Send with a pair selected leaves the partner idle; only a handoff makes it wait', async ({ page, request }) => {
+  const main = await post(request, 'pairs', { name: 'Main', sessions: ['codex', 'claude'] });
+  await unlock(page);
+  const row = (label: string) => page.locator('details.status tbody tr').filter({ has: page.locator('td:first-child', { hasText: label }) });
+  await post(request, 'commands', { requestId: '44444444-4444-4444-8444-444444444444', agentId: 'codex', kind: 'instruction', text: 'plain work', confirmReady: true, pairId: main.id });
+  await expect(row('Codex')).toContainText('working'); await expect(row('Codex')).toContainText('Working on "plain work"');
+  await expect(row('Claude Code')).toContainText('idle'); await expect(row('Claude Code')).toContainText('Not part of this turn');
+  await complete(request, '44444444-4444-4444-8444-444444444444', 'accept_without_improvement');
+  await post(request, 'commands', { requestId: '55555555-5555-4555-8555-555555555555', agentId: 'codex', kind: 'instruction', text: 'reviewed work', handoff: true, confirmReady: true, pairId: main.id });
+  await expect(row('Claude Code')).toContainText('waiting'); await expect(row('Claude Code')).toContainText('Waiting for Codex to finish');
+});
 test('an explicitly selected pair creates a persistent run without browser scheduling', async ({ page, request }) => {
   await unlock(page); await page.getByRole('button', { name: '+ New pair' }).click();
   await page.getByLabel('Pair name').fill('Main review'); await page.getByRole('button', { name: 'Create pair' }).click();

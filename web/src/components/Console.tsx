@@ -30,6 +30,8 @@ function statusOf(agent: SessionRegistration, run: RelayRun | undefined, state: 
   if (active) {
     const current = state.executions.find((e) => e.commandId === run.currentCommandId);
     const busy = run.participants.find((p) => p.id === current?.agentId);
+    // A plain Send never routes to the partner; it is idle, not waiting for a turn that will not come.
+    if (current?.input.kind === 'instruction' && current.input.handoff !== true) return { badge: 'idle', detail: `Idle. Not part of this turn; ${busy?.label ?? 'the partner'} is on a plain Send.`, when: null };
     return { badge: 'waiting', detail: `Waiting for ${busy?.label ?? 'the partner'} to finish`, when: null };
   }
   // A turn recorded before this registration belongs to an earlier CLI instance and says nothing about this one.
@@ -236,7 +238,7 @@ export function Console() {
             I checked that all participants are at empty prompts, have no background writers, use their standard Git index, and will remain under controller ownership for this run.</label>
         </form>
         {pair && <label className="readiness auto"><input type="checkbox" aria-label="Auto-relay" checked={autoContinue} disabled={busy || owned.length > 0} onChange={(e) => { setAutoContinue(e.target.checked); try { localStorage.setItem(PREFERENCE, String(e.target.checked)); } catch { /* preference only */ } }} />
-          Prefer automatic continuation for the next explicitly started run of pair "{pair.name}". Plain Send never relays; Send &amp; relay requests one review even when this preference is off.</label>}
+          Prefer automatic continuation for the next explicitly started run of pair "{pair.name}". Plain Send never relays; Send &amp; relay requests one review even when this preference is off, and only if the worker changed the worktree.</label>}
         {pair && <label className="readiness turn-limit">Maximum automatic turns per run
           <input type="number" inputMode="numeric" aria-label="Maximum automatic turns" min={1} max={200} step={1} value={turnLimit} disabled={busy || owned.length > 0} aria-invalid={!limitValid}
             onChange={(e) => { setTurnLimit(e.target.value); try { localStorage.setItem(TURN_LIMIT, e.target.value); } catch { /* preference only */ } }} />
