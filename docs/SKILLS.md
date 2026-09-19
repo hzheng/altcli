@@ -1,5 +1,7 @@
 # The review-handoff skill
 
+**Current contract:** the skill below remains the operating staging protocol at `46f228b`. Its deprecation direction is recorded in [ADR-0014](adr/ADR-0014-commit-relay-and-deprecation.md#deprecate-the-uncommitted-relay-mode); no new skill is installed by this documentation-only change.
+
 `skills/review-handoff/SKILL.md` is the single canonical skill. This PR does not edit
 its content. ADR-0010 had already added the final RELAY-OUTCOME line before the
 hardening review; the original baseline and staging rules remain intact.
@@ -49,3 +51,13 @@ commit, reset or cleanup operations.
 
 See [SETUP.md](SETUP.md) for installing lifecycle hooks and
 [ADR-0011](adr/ADR-0011-server-owned-relay-runs.md) for execution ownership.
+
+## Separate future skill contracts
+
+Do not combine incompatible instructions behind a guessed mode. [ADR-0016](adr/ADR-0016-plan-phase-and-approval.md) defines ignored planning documents: assigned draft or unified plan only, no staging/commits, exact-version completion, cooperative draft withholding, and an independent approval checkpoint. Native plan mode is adapter-specific; never broaden edit permissions merely to save a draft.
+
+[ADR-0014](adr/ADR-0014-commit-relay-and-deprecation.md) defines a separate commit-relay skill: clean entry, exact assigned revisions, one direct handoff commit with one appended tracked log entry, permitted project changes, and no unpublished leftovers. The agent/authorized helper commits; the server validates read-only. A review-only or objection turn changes only the log. Work is a proposal, not self-approval; optional self-review is visibly non-independent.
+
+[ADR-0015](adr/ADR-0015-collaboration-policies-and-solo.md) supplies phase/group roles and action permissions. Group terminology does not rename the legacy skill or change CLI start/Stop pairing. All concrete skill names, parsers, helper APIs, and adapter integrations remain implementation work, with open choices in [OPEN-DECISIONS](OPEN-DECISIONS.md).
+
+The planned [branch-setup exception](adr/ADR-0013-confirmed-branch-setup.md) requires explicit scoped consent at a settled boundary; it is not staging authority, a planning-turn operation, or blanket permission to switch existing branches. Ordinary code review still does not authorize Git mutation.

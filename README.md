@@ -7,6 +7,14 @@ start a manual instruction or a bounded, server-owned relay. The same responsive
 web console is intended for desktop and private iPhone access through Tailscale.
 Native iOS and a third AI supervisor remain deferred.
 
+## Accepted next direction
+
+The maintained [ADR index](Architecture_Decision.md#accepted-collaboration-direction-not-yet-implemented) and [workflow guide](docs/WORKFLOWS.md) now describe workspace-first **groups**, solo/two-member collaboration, optional Plan, commit-based Implementation, and narrowly confirmed branch setup. These are **accepted design direction, not implemented features**. The current operating instructions below remain pair-based until the versioned migration is delivered.
+
+The staging-based relay is deprecated as a development direction, but remains supported under its [frozen compatibility contract](docs/adr/ADR-0014-commit-relay-and-deprecation.md#deprecate-the-uncommitted-relay-mode). No skill or runtime behavior changes in this documentation update. The new paths will initially select one or two members; N-capable planning including Gemini has a separate later acceptance gate.
+
+Use [ROADMAP](ROADMAP.md#migration-and-implementation-sequence) for rollout, [OPEN-DECISIONS](docs/OPEN-DECISIONS.md) for unresolved choices, and [DESIGN-MIGRATION](docs/DESIGN-MIGRATION.md) to locate the content formerly held in the standalone collaboration draft. The draft is no longer a required document.
+
 ## Status and boundaries
 
 This is an experimental implementation, not a production release or a security
