@@ -1,5 +1,7 @@
 # CoderCrew: coding-agent instructions
 
+**Documentation authority:** [ADR-0012 through ADR-0018](Architecture_Decision.md#accepted-collaboration-direction-not-yet-implemented) and the linked guides now own the accepted collaboration design. Do not require an external `Collaboration-Design.md` draft. These are target decisions, not claims that new runtime features or skills exist; [OPEN-DECISIONS](docs/OPEN-DECISIONS.md) remains unresolved.
+
 Read README.md, ROADMAP.md, Architecture_Decision.md and VALIDATION.md before
 changing behavior or claiming acceptance. ADR-0011 is the current relay boundary.
 
@@ -43,3 +45,11 @@ faults, duplicate events, overlapping pairs, multiple clients, history truncatio
 restart, and unknown background work. Preserve fake-vs-real test distinctions.
 Restart the development backend after server-code changes: the process singleton
 must not be replaced while a delivery is active. No unobserved test is 'passed'.
+
+## Implementing the next collaboration increments
+
+Follow [ROADMAP](ROADMAP.md#migration-and-implementation-sequence), [WORKFLOWS](docs/WORKFLOWS.md), and the applicable ADR. Preserve the legacy skill and verified staging behavior. Use **group** for the new product/API design while preserving historical pair IDs through an explicit migration; do not rename vendor event pairing or invalidate active runs incidentally.
+
+Users prepare worktrees, environments, and agent directories. Discovery is read-only; Start binds exact eligible instances. The only target controller Git-write exception is scoped, confirmed creation/check-out of a new branch as defined by ADR-0013, after its guarded implementation and tests exist. This does not authorize an ordinary agent review to mutate Git, or allow controller staging, commits, worktree provisioning, cleanup, or history rewriting.
+
+Planning uses ignored documents and captured results; implementation uses the selected handoff contract. Do not silently turn proposed schemas, provider capabilities, N-agent rollout, automatic peer-objection routing, or other open choices into accepted behavior. Update the canonical ADR/guide instead of reintroducing a monolithic design draft. All acceptance claims must name what actually ran.

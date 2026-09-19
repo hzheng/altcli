@@ -1,5 +1,7 @@
 # Security and operational boundary
 
+**Current versus target:** the existing operational boundary below describes `46f228b`. The [validation and permission contract](#validation-and-permissions) is the accepted future design. [ADR-0013](adr/ADR-0013-confirmed-branch-setup.md) records the only proposed controller Git-write exception; this documentation change does not enable it.
+
 CoderCrew controls coding agents with their existing host privileges. It is not a
 sandbox, process attestation system or lock against external filesystem writers.
 A malicious agent running as the same Unix user can access the token or tmux socket.
@@ -71,6 +73,54 @@ the supported subset require manual reconciliation.
 SQLite version 4 prevents old runtimes from silently opening the new store. Delivery
 history, lifecycle inbox, run/turn records and prompt text are plaintext outside
 managed worktrees. Workflow/audit retention is not yet pruned. Raw screen snapshots
-are not stored. Hook correlation context is private local data. No log or database
-should be committed. The original review skill remains responsible for staging;
+are not stored. Hook correlation context is private local data. No runtime log or database
+should be committed. The future tracked implementation relay log is a distinct
+protocol artifact defined by ADR-0014, not permission to commit runtime data. The original review skill remains responsible for staging;
 the controller issues no Git mutations and does not independently prove its outcome.
+
+---
+
+## Validation and permissions
+
+### Workspace and group readiness before any new run
+
+Validate the selected workspace against current pane discovery, not a cached display label: exact instance identities/generations; eligible adapters; distinct members; enabled member-count limit; common canonical cwd; common local worktree/index; clean-entry requirements; and no conflicting owner. Unknown/non-agent panes are not automatically selected. Surface relevant unselected agents sharing the checkout and reconcile potential writers.
+
+Validate one-member groups as solo, not two references to one instance. Worker + reviewer requires distinct identities; Peer relay also needs two. Enforce these server-side. The later N-agent Plan policy is enabled only after its complete-roster, adapter, and recovery checks are accepted; discovering three panes alone does not enable it.
+
+Branch setup uses [ADR-0013](adr/ADR-0013-confirmed-branch-setup.md)'s separate confirmed operation. Publication validation remains read-only, and run inspection does not implicitly authorize creating a branch or fixing the environment.
+
+### Validate implementation publication, not just its existence
+
+| Area | Intended validation |
+| --- | --- |
+| Identity | Expected run, bound workspace and group/membership revision, turn, exact participant generation, action, and policy revision. |
+| Branch lineage | Recorded checked-out implementation branch, expected publication parent and task history; no silent branch following, divergence, or rewritten turns, including when main was explicitly chosen. |
+| Review scope | Recorded baseline/head match the proposal actually assigned. |
+| Log | Exactly one valid new entry; previous entries preserved; required fields and judgment valid. |
+| Project diff | This turn's changes outside the exact log path. |
+| Permission | Reviewer-only and objection turns do not alter project content. |
+| Pre-existing work | Clean entry and pre-dispatch checks prevent earlier user work from being swept into a handoff. |
+| Task scope | Enforce a controller-assigned path allowlist when an implementation action defines one. Planning file assignments use the separate phase-specific checks below. Otherwise show the complete project diff for review rather than claiming semantic scope can be inferred automatically. |
+| Duplication | Not already consumed; competing publications for one turn are a conflict. |
+| Evidence | Reported checks and limitations attributable to the revision evaluated. |
+| Leftovers | Post-publication leftover digest is empty ([Publication, hooks, and completion evidence](adr/ADR-0017-phase-orchestration-and-evidence.md#publication-hooks-and-completion-evidence)). |
+| Consistency | An explicitly supplied structured summary agrees semantically with decision plus derived diff; no duplicate result line is required ([What the log records and what Git supplies](adr/ADR-0014-commit-relay-and-deprecation.md#what-the-log-records-and-what-git-supplies)). |
+
+Fast-forward publication is the starting policy; divergence pauses for reconciliation rather than force-push, reset, or rebase. A protocol violation is never "repaired" by rewriting user changes or laundering reviewer edits into a report-only result.
+
+### Trust and human authority
+
+A structured acceptance is a judgment, not proof of correctness, and a log entry does not cryptographically prove which model authored the work. Keep the narrow terminal interface, explicit targets, authentication/origin controls, read-only option, and no automatic retry of uncertain delivery; never add a generic shell endpoint. Permission escalation, destructive actions, scope expansion, and unresolved product choices require explicit human authority. Same-user agents already have the filesystem, credentials, and tmux socket: scheduling checks and skill instructions are not operating-system boundaries.
+
+### Plan validation and permissions
+
+Before Plan entry: validate the clean project, common brief/baseline, selected group size under the enabled limit, N distinct eligible registrations in the same canonical cwd/worktree/index, complete required roster, safe distinct filenames, and narrow ignore/untracked state. Native output constraints are adapter-specific and cannot be bypassed by broadly enabling edits.
+
+During drafting: allow disjoint active output grants only. At a completion, verify the completing artifact and protected project state while permitting other active owners to change their own assigned drafts. Frozen/idle/unassigned artifacts remain protected; unexpected files are not silently included. Before synthesis, verify the complete finalized manifest and that no draft writers remain active. Underlying snapshots do not prove who wrote an active peer's file or prevent reads.
+
+During refinement: one writer, exact input/output versions, and an endorsement set for the required roster. On every change, invalidate stale approvals. Agreement from two agents cannot complete a later N-agent plan unless those two are the explicitly chosen required set under a new human-authorized roster revision. N=1 produces a version-bound solo recommendation and uses the approval gate without claiming an independent endorsement.
+
+Before implementation: consume an exact-version human approval or a valid preauthorized agreement once, with all planning activity settled. Preserve final text, membership, findings, and authority. An ignored draft accidentally committed during implementation is a protocol violation, not a reason to exclude more paths from project review.
+
+Validate the actual file schema as well as hashes: expected regular file, bounded size, acceptable text encoding, no unexpected path indirection, and supported result fields. File content is untrusted display data; a plan instruction cannot grant itself runtime permissions or approve a phase transition.

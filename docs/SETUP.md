@@ -1,5 +1,7 @@
 # Local setup and upgrade
 
+**Current console:** these steps describe the existing `46f228b` runtime, not the future workspace/group UI. The accepted target flow is in [WORKFLOWS](WORKFLOWS.md); it is not enabled by this documentation update.
+
 Use Node 24 and tmux on the same awake host as the coding CLIs. Run one backend per
 store, as the same user who owns the tmux socket. Start with read-only captures.
 
@@ -86,3 +88,13 @@ repository and record versions, commit and results in VALIDATION.md.
 
 Use [TESTING.md](TESTING.md) before [TAILSCALE.md](TAILSCALE.md). Never expose a
 development server publicly or treat mock completion fixtures as CLI compatibility.
+
+## Planned workspace-first setup (not yet available)
+
+The user prepares the Git workspace/worktree, dependencies, and existing agent sessions. All selected group members must operate in the same canonical cwd and worktree/index. CoderCrew will discover workspace cards and suggest solo for one eligible agent or both for exactly two; three or more requires an explicit two-member or solo selection initially. It will not create worktrees, relocate/restart agents, clone repositories, or configure environments. See [ADR-0012](adr/ADR-0012-workspace-discovery-and-groups.md).
+
+Dirty or unavailable workspaces remain readable, but new Plan and commit-relay work requires clean entry. Missing setup is reported with paths and Recheck; no automatic stash/reset/staging/cleanup is allowed. The user establishes the narrow planning exclusion before Plan; the app checks every assigned path is ignored and untracked. The tracked implementation relay log is separate from ignored planning drafts.
+
+Branch selection follows [ADR-0013](adr/ADR-0013-confirmed-branch-setup.md): reuse a non-primary checked-out branch by default; explicitly choose a new named branch or stay on the primary; detached HEAD needs named-branch setup before commit implementation. Only creation/check-out of a **new** branch at a validated current commit is a planned controller write, with scoped consent and settled/clean checks. This is separate from Plan approval, and does not authorize controller commits or workspace management.
+
+Do not follow future skill or API names as installed commands. [SKILLS](SKILLS.md#separate-future-skill-contracts) describes the three distinct contracts and [ROADMAP](../ROADMAP.md#migration-and-implementation-sequence) defines their delivery gates. Existing skill installation and legacy run behavior above remain the operating path until those gates pass.
