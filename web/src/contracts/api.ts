@@ -54,6 +54,8 @@ export interface RegistrationResult {
   /** True when an existing registration with the same id was re-pointed at this pane. */
   replaced: boolean;
 }
+/** A label-only edit; instance identity and historical attribution do not change. */
+export interface RenameSession { label: string; expectedRegistrationId: string; expectedLabel: string }
 /** Bounded read-only capture of any live pane, so the human can identify it before registering. */
 export interface PanePreview {
   paneId: string;

@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import type { ProcessRecord } from "../contracts/workflow.ts";
 import { AppError } from "../core/errors.ts";
-export interface ProcessTableRow { pid: string; ppid: string; tty: string; command: string }
+export interface ProcessTableRow { pid: string; ppid: string; tty: string; command: string; args?: string }
 /** One `ps` read of the host process table: pid, parent pid, controlling terminal and executable. */
 function processTable(): Promise<ProcessTableRow[]> {
   return new Promise((resolve, reject) => {
@@ -11,6 +11,17 @@ function processTable(): Promise<ProcessTableRow[]> {
         const match = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.*\S)\s*$/.exec(line);
         return match ? [{ pid: match[1]!, ppid: match[2]!, tty: match[3]!, command: match[4]! }] : [];
       }));
+    });
+  });
+}
+/** Arguments are used transiently to identify CLI infrastructure, never returned or persisted. */
+function processArguments(): Promise<Map<string, string>> {
+  return new Promise((resolve, reject) => {
+    execFile('ps', ['-axo', 'pid=,args='], { encoding: 'utf8', timeout: 5000, maxBuffer: 8 * 1024 * 1024, shell: false }, (error, stdout) => {
+      if (error) return reject(new AppError('PS_FAILED', 'Could not identify CLI infrastructure.', 409));
+      resolve(new Map(stdout.split('\n').flatMap((line) => {
+        const match = /^\s*(\d+)\s+(.*)$/.exec(line); return match ? [[match[1]!, match[2]!]] : [];
+      })));
     });
   });
 }
@@ -27,6 +38,23 @@ export function foregroundPid(panePid: string): Promise<string | null> {
  * They are part of Codex, not work it left running. Anything else that appears during a turn is judged as work. */
 const CODEX_HELPERS = [/(^|\/)(codex-code-mode-host|codex-app-server)$/, /\/(ChatGPT|Codex Computer Use)\.app\/.*\/node_repl$/];
 export const isCodexHelper = (command: string): boolean => CODEX_HELPERS.some((pattern) => pattern.test(command));
+/** The browser tool's persistent REPL uses two sandboxed kernels and an app-server. Keep
+ * real shell workers and other Codex turns visible, even when they descend from that REPL. */
+function isReplInfrastructure(row: ProcessTableRow, rows: ProcessTableRow[]): boolean {
+  const parent = rows.find((p) => p.pid === row.ppid);
+  if (!parent) return false;
+  const repl = /\/(ChatGPT|Codex Computer Use)\.app\/.*\/node_repl$/;
+  const codex = /\/(ChatGPT|Codex Computer Use)\.app\/Contents\/Resources\/codex$/;
+  const kernel = / -- \/.*\/(ChatGPT|Codex Computer Use)\.app\/Contents\/Resources\/cua_node\/bin\/node --experimental-vm-modules \/[^\n]+\/(kernel|trusted-worker)\.js(?: |$)/;
+  if (codex.test(row.command) && repl.test(parent.command)) {
+    return row.args === `${row.command} app-server --listen stdio://` ||
+      (row.args?.startsWith(`${row.command} sandbox `) === true && kernel.test(row.args));
+  }
+  return /\/(ChatGPT|Codex Computer Use)\.app\/Contents\/Resources\/cua_node\/bin\/node$/.test(row.command) &&
+    codex.test(parent.command) && parent.args?.startsWith(`${parent.command} sandbox `) === true && kernel.test(parent.args) &&
+    rows.some((p) => p.pid === parent.ppid && repl.test(p.command)) &&
+    row.args?.startsWith(`${row.command} --experimental-vm-modules `) === true && /\/(kernel|trusted-worker)\.js(?: |$)/.test(row.args);
+}
 /** Select the pane's descendants plus processes still attached to its tty. The tty union retains ordinary
  * background children after their short-lived parent exits and the OS reparents them. */
 export function processesForPane(rows: ProcessTableRow[], rootPid: string): ProcessRecord[] {
@@ -39,9 +67,10 @@ export function processesForPane(rows: ProcessTableRow[], rootPid: string): Proc
   }
   // ps prints "??" (macOS) or "?" (Linux) for no controlling terminal; a root without one must not sweep in every daemon.
   if (!["??", "?", "-", ""].includes(root.tty)) for (const row of rows) if (row.pid !== rootPid && row.tty === root.tty) ids.add(row.pid);
-  return rows.filter((row) => ids.has(row.pid)).map(({ pid, command }) => ({ pid, command }));
+  return rows.filter((row) => ids.has(row.pid) && !isReplInfrastructure(row, rows)).map(({ pid, command }) => ({ pid, command }));
 }
-/** Every live process belonging to the pane. The pane process itself is not included. */
+/** Live task processes belonging to the pane, excluding the pane itself and verified REPL infrastructure. */
 export async function paneProcesses(rootPid: string): Promise<ProcessRecord[]> {
-  return processesForPane(await processTable(), rootPid);
+  const [rows, args] = await Promise.all([processTable(), processArguments()]);
+  return processesForPane(rows.map((row) => ({ ...row, args: args.get(row.pid) })), rootPid);
 }

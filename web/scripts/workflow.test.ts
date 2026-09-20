@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, test } from 'node:test';
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,8 +10,12 @@ import { Controller } from '../src/server/controller.ts';
 import { ControlPlane } from '../src/server/control-plane.ts';
 import { MockAdapter, mockSessions } from '../src/server/adapters/mock.ts';
 import { loadConfig } from '../src/server/config.ts';
-import { resolveWorktree, sameWorktree, worktreeFingerprint } from '../src/server/worktree.ts';
-import { parseHook, parseStart, parseRunAction } from '../src/core/workflow-validation.ts';
+import { currentBranch, resolveWorktree, sameWorktree, worktreeFingerprint } from '../src/server/worktree.ts';
+import { discoverWorkspaces } from '../src/server/workspaces.ts';
+import type { ListedPane } from '../src/server/adapters/terminal.ts';
+import { parseHook, parseStart, parseRunAction, parseWorkspaceReset } from '../src/core/workflow-validation.ts';
+import { parseRenameSession } from '../src/core/validation.ts';
+import { parseGroupSelection } from '../src/core/implementation-validation.ts';
 import type { HookEvent, ManagedSession, StartInput } from '../src/contracts/workflow.ts';
 
 let directory: string; let store: Store; let adapter: MockAdapter; let plane: ControlPlane;
@@ -23,7 +27,7 @@ beforeEach(() => {
   store = new Store(directory); for (const session of mockSessions()) store.saveSession(session);
   adapter = new MockAdapter(); sent = []; worktree = async () => 'unchanged';
   adapter.send = async (session, text) => { sent.push({ agent: session.id, text }); };
-  plane = new ControlPlane(new Controller(loadConfig({ CODERCREW_ADAPTER: 'mock', CODERCREW_TOKEN: 'a'.repeat(64), CODERCREW_DATA_DIR: directory }), store, adapter), () => worktree());
+  plane = new ControlPlane(new Controller(loadConfig({ CODERCREW_ADAPTER: 'mock', CODERCREW_ENABLE_LEGACY_RELAY: 'true', CODERCREW_TOKEN: 'a'.repeat(64), CODERCREW_DATA_DIR: directory }), store, adapter), () => worktree());
 });
 afterEach(() => { store.close(); rmSync(directory, { recursive: true, force: true }); });
 const start = (more: Partial<StartInput> = {}): StartInput => ({ requestId: randomUUID(), agentId: 'codex', kind: 'relay', confirmReady: true, ...more });
@@ -41,6 +45,109 @@ async function complete(commandId: string, more: Partial<HookEvent> = {}) {
   return plane.recordEvent(value);
 }
 function stopped(runId: string) { plane.action(parseRunAction({ runId, action: 'takeover', confirmReady: true })); }
+
+test('workspace groups and unbound agents are automatic, stable and read-only', async () => {
+  const before = store.db.prepare('SELECT total_changes() AS count').get();
+  const first = await plane.state(); const second = await plane.state();
+  assert.deepEqual(store.db.prepare('SELECT total_changes() AS count').get(), before);
+  assert.deepEqual(first.groups, second.groups); assert.equal(first.groups.length, 2);
+  assert.deepEqual(first.groups.find((group) => group.cwd === '/demo/project')!.members, ['codex', 'claude']);
+  const solo = first.sessions.find((session) => session.identity.paneId === '%3')!;
+  assert.ok(solo.registrationId); assert.deepEqual(second.sessions.find((session) => session.id === solo.id), solo);
+  assert.deepEqual(first.groups.find((group) => group.cwd === '/demo/other')!.members, [solo.id]);
+  assert.equal(store.sessions().length, 2);
+  assert.deepEqual(store.groups(), []); assert.deepEqual(sent, []);
+  await plane.register({ paneId: '%3', label: 'Solo' });
+  assert.deepEqual((await plane.state()).groups.find((group) => group.cwd === '/demo/other')!.members, ['solo']);
+  assert.deepEqual(store.groups(), []);
+});
+test('rename changes only the label, rejects stale edits and preserves historical run attribution', async () => {
+  const original = store.sessions()[0] as ManagedSession;
+  const input = parseRenameSession({ label: 'Primary Codex', expectedLabel: original.label, expectedRegistrationId: original.registrationId });
+  const command = start(); await plane.submit(command);
+  await assert.rejects(plane.rename(original.id, input), /run owns/);
+  await complete(command.requestId, { outcome: 'accept_without_improvement' });
+  const renamed = await plane.rename(original.id, input);
+  assert.deepEqual(renamed, { ...original, label: 'Primary Codex' });
+  assert.equal(plane.workflow.run(command.requestId)!.participants[0]!.label, original.label);
+  await assert.rejects(plane.rename(original.id, input), /registration changed/);
+  await assert.rejects(plane.rename(original.id, { ...input, expectedLabel: renamed.label, expectedRegistrationId: randomUUID() }), /registration changed/);
+  await assert.rejects(plane.rename(original.id, { ...input, expectedLabel: renamed.label, label: 'Claude Code' }), /already uses/);
+  assert.throws(() => parseRenameSession({ ...input, id: 'changed' }), /Unknown field/);
+  assert.throws(() => parseRenameSession({ ...input, label: '\n' }), /label/);
+});
+test('inline naming binds an unregistered discovery identity without sending; stale process generations fail closed', async () => {
+  const initial = (await plane.state()).sessions.find((session) => session.identity.paneId === '%3')!;
+  adapter.foregrounds.set(initial.id, '500');
+  const current = (await plane.state()).sessions.find((session) => session.id === initial.id)!;
+  assert.notEqual(current.registrationId, initial.registrationId);
+  await assert.rejects(plane.rename(initial.id, { label: 'Stale', expectedLabel: initial.label, expectedRegistrationId: initial.registrationId }), /registration changed/);
+  assert.equal(store.sessions().length, 2);
+  const renamed = await plane.rename(current.id, { label: 'Side worker', expectedLabel: current.label, expectedRegistrationId: current.registrationId });
+  assert.deepEqual(renamed, { ...current, label: 'Side worker' });
+  assert.equal((await plane.workspaces()).workspaces.find((workspace) => workspace.cwd === '/demo/other')!.agents.find((agent) => agent.eligible)!.label, 'Side worker');
+  assert.deepEqual(sent, []); assert.deepEqual(plane.workflow.runs(), []);
+});
+test('three eligible agents are all selected by default; concurrent edits cannot create two groups', async () => {
+  const inspect = adapter.inspect.bind(adapter); const list = adapter.listPanes.bind(adapter);
+  adapter.inspect = async (id) => ({ ...await inspect(id), ...(id === '%3' ? { cwd: '/demo/project' } : {}) });
+  adapter.listPanes = async () => Promise.all((await list()).map(async (pane) => ({ ...pane, ...await adapter.inspect(pane.identity.paneId) })));
+  await plane.register({ paneId: '%3', label: 'Third' });
+  const group = (await plane.state()).groups.find((candidate) => candidate.cwd === '/demo/project')!;
+  assert.deepEqual(group.members, ['codex', 'claude', 'third']);
+  const selection = parseGroupSelection({ members: ['codex', 'third'], expectedRevision: group.revision,
+    registrations: Object.fromEntries((store.sessions() as ManagedSession[]).filter((session) => ['codex', 'third'].includes(session.id)).map((session) => [session.id, session.registrationId])) });
+  const results = await Promise.allSettled([plane.selectGroup(group.id, selection), plane.selectGroup(group.id, selection)]);
+  assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+  assert.equal(store.groups().length, 1); assert.deepEqual(store.groups()[0]!.members, selection.members);
+  await assert.rejects(plane.selectGroup(group.id, selection), /group changed|client changed/);
+  await assert.rejects(plane.createGroup({ name: 'Another', members: ['codex', 'claude'] }), /already has a group/);
+  const three = { members: ['codex', 'claude', 'third'], expectedRevision: store.groups()[0]!.revision, registrations: Object.fromEntries((store.sessions() as ManagedSession[]).map((session) => [session.id, session.registrationId])) };
+  assert.deepEqual(parseGroupSelection(three), three);
+  const larger = await plane.selectGroup(group.id, three);
+  assert.deepEqual((await plane.state()).groups.find((candidate) => candidate.id === group.id)!.members, three.members);
+  await assert.rejects(plane.submit(start({ pairId: group.id })), /exactly two selected agents/);
+  await plane.selectGroup(group.id, { ...selection, expectedRevision: larger.revision });
+  assert.deepEqual(sent, []);
+  const command = start({ pairId: group.id }); await plane.submit(command);
+  await assert.rejects(plane.selectGroup(group.id, { ...selection, expectedRevision: store.groups()[0]!.revision }), /run owns/);
+  assert.throws(() => plane.remove('third'), /run owns/);
+  assert.deepEqual(plane.workflow.run(command.requestId)!.participants.map((member) => member.id), ['codex', 'third']);
+});
+test('checkbox selection can reduce two eligible agents to solo or no members', async () => {
+  const group = (await plane.state()).groups.find((candidate) => candidate.cwd === '/demo/project')!;
+  const codex = store.sessions()[0] as ManagedSession;
+  const solo = await plane.selectGroup(group.id, { members: ['codex'], expectedRevision: group.revision, registrations: { codex: codex.registrationId } });
+  assert.deepEqual((await plane.state()).groups.find((candidate) => candidate.id === group.id)!.members, ['codex']);
+  await plane.selectGroup(group.id, parseGroupSelection({ members: [], expectedRevision: solo.revision, registrations: {} }));
+  assert.deepEqual((await plane.state()).groups.find((candidate) => candidate.id === group.id)!.members, []);
+});
+test('idle removal updates group references without deleting history or stopping a pane', async () => {
+  const group = pair(); const command = start({ pairId: group.id }); await plane.submit(command); await complete(command.requestId, { outcome: 'accept_without_improvement' });
+  const run = plane.workflow.run(command.requestId);
+  plane.remove('claude');
+  assert.deepEqual(store.groups()[0]!.members, ['codex']); assert.deepEqual(store.pairs(), []);
+  assert.deepEqual(plane.workflow.run(command.requestId), run); assert.ok(store.get(command.requestId));
+  assert.ok((await adapter.listPanes()).some((pane) => pane.identity.paneId === '%1'));
+});
+test('older overlapping associations remain stored but only one workspace group is offered', async () => {
+  const first = pair(); plane.createPair({ name: 'Older alternate', sessions: ['codex', 'claude'] });
+  const before = store.groups(); const state = await plane.state();
+  assert.equal(state.groups.filter((group) => group.cwd === '/demo/project').length, 1);
+  assert.equal(state.groups.find((group) => group.cwd === '/demo/project')!.id, first.id);
+  assert.deepEqual(store.groups(), before); assert.equal(store.pairs().length, 2);
+});
+test('staging fallback cannot resurrect an older pair when its displayed group is now solo', async () => {
+  const original = pair(); const inspect = adapter.inspect.bind(adapter); const list = adapter.listPanes.bind(adapter);
+  adapter.inspect = async (id) => ({ ...await inspect(id), cwd: id === '%1' ? '/demo/other' : '/demo/project' });
+  adapter.listPanes = async () => Promise.all((await list()).map(async (pane) => ({ ...pane, ...await adapter.inspect(pane.identity.paneId) })));
+  await plane.register({ paneId: '%3', label: 'Third' });
+  const displayed = (await plane.state()).groups.find((group) => group.cwd === '/demo/project')!;
+  assert.equal(displayed.id, original.id); assert.deepEqual(displayed.members, ['codex']);
+  const command = start({ pairId: displayed.id }); await assert.rejects(plane.submit(command), /exactly two selected agents/);
+  assert.deepEqual(sent, []);
+  assert.deepEqual(store.pairs()[0]!.sessions, ['codex', 'claude']);
+});
 
 test('a clean transport delivery does not release execution ownership', async () => {
   const command = start(); assert.equal((await plane.submit(command)).status, 'delivered');
@@ -235,7 +342,7 @@ test('a multi-line instruction correlates with the flattened echo the hooks prod
 test('a CLI that exited or restarted in its pane is reported and refused delivery until re-registered', async () => {
   const codex = store.sessions().find((s) => s.id === 'codex') as ManagedSession;
   store.saveSession({ ...codex, cliPid: '500' } as ManagedSession); adapter.foregrounds.set('codex', '500');
-  assert.deepEqual((await plane.state()).instances, [{ agentId: 'codex', status: 'current' }, { agentId: 'claude', status: 'unknown' }]);
+  assert.deepEqual((await plane.state()).instances.filter((instance) => ['codex', 'claude'].includes(instance.agentId)), [{ agentId: 'codex', status: 'current' }, { agentId: 'claude', status: 'unknown' }]);
   const first = start(); assert.equal((await plane.submit(first)).status, 'delivered'); stopped(first.requestId);
   adapter.foregrounds.set('codex', '501'); // the shell spawned a new CLI, or is itself in the foreground again
   assert.equal((await plane.state()).instances[0]!.status, 'replaced');
@@ -306,7 +413,7 @@ test('pausing is durable and human takeover is explicit', async () => {
 test('restart pauses durable runs and never replays a delivery', async () => {
   const command = start({ pairId: pair().id, autoContinue: true }); await plane.submit(command);
   store.close(); store = new Store(directory);
-  plane = new ControlPlane(new Controller(loadConfig({ CODERCREW_ADAPTER: 'mock', CODERCREW_TOKEN: 'a'.repeat(64), CODERCREW_DATA_DIR: directory }), store, adapter));
+  plane = new ControlPlane(new Controller(loadConfig({ CODERCREW_ADAPTER: 'mock', CODERCREW_ENABLE_LEGACY_RELAY: 'true', CODERCREW_TOKEN: 'a'.repeat(64), CODERCREW_DATA_DIR: directory }), store, adapter));
   await complete(command.requestId); assert.equal(sent.length, 1); assert.equal(plane.workflow.run(command.requestId)!.status, 'paused');
   assert.match(plane.workflow.run(command.requestId)!.reason, /paused/);
 });
@@ -426,4 +533,83 @@ test('a copied nonce cannot credit a prompt altered by leftover terminal text', 
   const run = plane.workflow.run(command.requestId)!;
   assert.equal(run.status, 'running'); assert.match(run.reason, /leftover input/);
   assert.equal(plane.workflow.owner('/demo/project/.git/index'), command.requestId);
+});
+test('mock discovery groups the simulated panes by directory and suggests exactly the two-agent group', async () => {
+  const discovery = await plane.workspaces();
+  assert.equal(discovery.error, null); assert.deepEqual(discovery.skipped, []);
+  assert.deepEqual(discovery.workspaces.map((w) => [w.cwd, w.branch, w.group, w.agents.map((a) => [a.label, a.kind, a.eligible, a.registeredAs])]), [
+    ['/demo/other', 'task/other', ['%3'], [['zsh %2', 'shell', false, null], ['demo', 'codex', true, null]]],
+    ['/demo/project', 'main', ['%0', '%1'], [['Codex', 'codex', true, 'codex'], ['Claude Code', 'claude', true, 'claude']]]]);
+  // Discovery is read-only: nothing registered, started or reserved.
+  assert.equal(store.sessions().length, 2); assert.deepEqual(plane.workflow.runs(), []); assert.deepEqual(store.reservations(), []);
+});
+test('real discovery canonicalizes spellings, separates subdirectories and linked worktrees, reads the branch, and reports non-Git directories', async () => {
+  const repo = join(directory, 'repo'); mkdirSync(repo); execFileSync('git', ['-c', 'init.defaultBranch=main', 'init', '-q', repo]);
+  assert.equal(await currentBranch(repo), 'main'); // unborn branch still has a name
+  writeFileSync(join(repo, 'example'), 'test'); execFileSync('git', ['-C', repo, 'add', 'example']);
+  execFileSync('git', ['-C', repo, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'fixture']);
+  execFileSync('git', ['-C', repo, 'checkout', '-q', '-b', 'feature/x']);
+  mkdirSync(join(repo, 'web')); symlinkSync(repo, join(directory, 'alias'));
+  const linked = join(directory, 'linked'); execFileSync('git', ['-C', repo, 'worktree', 'add', '--detach', '-q', linked]);
+  assert.equal(await currentBranch(linked), null);
+  const plain = join(directory, 'plain'); mkdirSync(plain);
+  let n = 0;
+  const pane = (command: string, cwd: string): ListedPane => ({ identity: { paneId: `%${n}`, panePid: `${100 + n}`, serverPid: '20', serverStarted: '100', socketPath: '/tmp/tmux-test' },
+    command, cwd, dead: false, inMode: false, synchronized: false, location: `w:0.${n++}` });
+  const panes = [pane('codex', repo), pane('2.1.272', join(directory, 'alias')), pane('zsh', repo), pane('codex', join(repo, 'web')), pane('codex', linked), pane('codex', plain), pane('codex', join(directory, 'missing'))];
+  const listing = new MockAdapter(); listing.listPanes = async () => panes;
+  const discovery = await discoverWorkspaces(listing, 'tmux', []);
+  const root = (await resolveWorktree(repo))!.root;
+  assert.equal(discovery.error, null);
+  assert.deepEqual(discovery.workspaces.map((w) => [w.cwd, w.branch, w.agents.map((a) => a.identity.paneId), w.group, w.sharesIndexWith]), [
+    [join(root, 'web'), 'feature/x', ['%3'], ['%3'], [root]],
+    [root, 'feature/x', ['%0', '%1', '%2'], ['%0', '%1'], [join(root, 'web')]],
+    [(await resolveWorktree(linked))!.root, null, ['%4'], ['%4'], []]].sort((a, b) => (a[0] as string).localeCompare(b[0] as string)));
+  assert.deepEqual(discovery.skipped.map((s) => [s.cwd, s.panes, s.reason]), [[plain, 1, 'Not inside a Git worktree.'], [join(directory, 'missing'), 1, discovery.skipped[1]!.reason]]);
+  assert.match(discovery.skipped[1]!.reason, /ENOENT/);
+  listing.listPanes = async () => { throw new Error('no server running'); };
+  const failed = await discoverWorkspaces(listing, 'tmux', []);
+  assert.deepEqual([failed.workspaces, failed.skipped, failed.error], [[], [], 'no server running']);
+});
+test('resetting a workspace forgets its groups and registrations at once, keeps history and other checkouts, and refuses while a run owns it', async () => {
+  await plane.register({ paneId: '%3', label: 'Other Codex' });
+  const main = pair();
+  const command = start({ pairId: main.id, agentId: 'codex', kind: 'instruction', text: 'work' }); await plane.submit(command);
+  await complete(command.requestId, { outcome: 'accept_without_improvement' });
+  // A run that still owns the worktree blocks the reset; nothing is forgotten by a refused attempt.
+  const owned = start({ pairId: main.id, autoContinue: true }); await plane.submit(owned);
+  assert.throws(() => plane.resetWorkspace({ repository: '/demo/project', confirmReady: true }), /A run owns this worktree/);
+  assert.equal(store.pairs().length, 1); assert.equal(store.sessions().length, 3);
+  stopped(owned.requestId);
+  assert.deepEqual(plane.resetWorkspace({ repository: '/demo/project', confirmReady: true }), { sessions: ['codex', 'claude'], pairs: [main.id], groups: [main.id] });
+  assert.deepEqual(store.pairs(), []); assert.deepEqual(store.sessions().map((s) => s.id), ['other-codex']);
+  assert.ok(store.get(command.requestId)); assert.equal(plane.workflow.runsOf([command.requestId]).get(command.requestId)?.pairId, main.id);
+  // A second reset of an empty workspace is a harmless no-op; an unknown path forgets nothing.
+  assert.deepEqual(plane.resetWorkspace({ repository: '/demo/project', confirmReady: true }), { sessions: [], pairs: [], groups: [] });
+  assert.deepEqual(plane.resetWorkspace({ repository: '/nowhere', confirmReady: true }), { sessions: [], pairs: [], groups: [] });
+  assert.equal(store.sessions().length, 1);
+});
+test('an uncertain delivery holds a workspace against reset until it is acknowledged', async () => {
+  adapter.send = async () => { throw new Error('transport interrupted'); };
+  const command = start({ kind: 'instruction', text: 'mock:uncertain' }); await plane.submit(command);
+  assert.throws(() => plane.resetWorkspace({ repository: '/demo/project', confirmReady: true }), /uncertain delivery|A run owns/);
+  assert.equal(store.sessions().length, 2);
+});
+test('workspace reset input requires an absolute path and explicit confirmation', () => {
+  assert.deepEqual(parseWorkspaceReset({ repository: '/demo/project', confirmReady: true }), { repository: '/demo/project', confirmReady: true });
+  assert.throws(() => parseWorkspaceReset({ repository: 'demo', confirmReady: true }), /absolute/);
+  assert.throws(() => parseWorkspaceReset({ repository: '/demo/project' }), /Confirm/);
+  assert.throws(() => parseWorkspaceReset({ repository: '/demo/project', confirmReady: true, force: true }), /Unknown field/);
+});
+
+test('unsaved agent names follow tmux session names without changing registration identity or writing configuration', async () => {
+  let location = 'codercrew-cc:1.1'; const list = adapter.listPanes.bind(adapter);
+  adapter.listPanes = async () => (await list()).map((pane) => pane.identity.paneId === '%3' ? { ...pane, location } : pane);
+  const before = store.db.prepare('SELECT total_changes() AS count').get();
+  const first = (await plane.state()).sessions.find((session) => session.identity.paneId === '%3')!;
+  assert.equal(first.label, 'codercrew-cc');
+  location = 'renamed-session:2.3';
+  const next = (await plane.state()).sessions.find((session) => session.id === first.id)!;
+  assert.equal(next.label, 'renamed-session'); assert.equal(next.registrationId, first.registrationId);
+  assert.deepEqual(store.db.prepare('SELECT total_changes() AS count').get(), before);
 });

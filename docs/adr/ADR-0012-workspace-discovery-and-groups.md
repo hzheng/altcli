@@ -1,30 +1,40 @@
-# ADR-0012: Workspace-first discovery and explicit groups
+# ADR-0012: Project-centered discovery, worktrees and explicit groups
 
 Date: September 19, 2026
 
-Status: Accepted design direction; implementation and host acceptance pending.
+Status: Accepted design direction; local workspace grouping implemented, host acceptance pending.
 Items explicitly labeled working specification, recommendation, or open choice retain that status.
-This documentation-only change does not enable the described features.
+See VALIDATION.md for executed checks; broader adapter capabilities remain future work.
 
 Relationship: ADR-0004 and ADR-0005 for future onboarding and participant terminology; runtime pair compatibility remains until migration.
 
 ## Context
 
-Users should open a workspace rather than register panes and construct a named pair one at a time. The user prepares the environment and places agents; the app discovers and validates that existing arrangement.
+Users should choose a project and task worktree rather than register panes and construct a named pair one at a time. One repository can support independent tasks in separate linked worktrees. The user prepares environments and places agents; the app discovers and validates that arrangement and can explicitly create a task worktree.
 
 ## Decision
 
-Use **group** for one or more distinct registered instances. For a fresh workspace, select one eligible agent as Solo, preselect both when exactly two exist, and require choosing two or deliberate solo when three or more exist. Initial selected membership is capped at two; inventory and planning state remain N-shaped. A group snapshot, not live discovery, controls an active run.
+Navigation is **project → worktree → task/agent group**. A local project is keyed by its canonical shared Git metadata directory (`git rev-parse --git-common-dir`), within the configured host. Linked worktrees share that identity. Separate clones never merge merely because their origin URLs match; repositories without remotes work normally. Remotes are not needed for discovery and are not read or displayed by this increment.
 
-Keep current and target behavior distinct: the current UI/API still uses pairs until a versioned implementation migration. The [workflow guide](../WORKFLOWS.md) owns detailed vocabulary, selection defaults, phase controls, and action labels.
+Git's worktree inventory supplies main and linked checkouts, including those with no agents. Each worktree has a branch-independent identity derived from its canonical Git directory/index, with its directory, current branch or detached HEAD, and availability displayed separately. Missing/inaccessible worktrees remain diagnostic entries; bare Git directories are not runnable checkouts. tmux supplies the live agent inventory, not the whole project catalog.
+
+Discovery caches observed project identities without writing configuration. Explicit name/membership edits, Start, and task-worktree creation remember the project in SQLite; these known projects survive restart with no panes. Existing stored session roots also seed discovery. Merely observed, unused projects remain known for the process lifetime but are not silently persisted by a GET. Opening projects/worktrees does not write Git or start a task.
+
+Use **group** for distinct agent instances. A workspace has at most one current group, derived read-only from eligible live panes. All are selected initially, and every session has a checkbox; unsupported processes are disabled. One selected member is Solo, two a Pair, and three or more a larger Group. Checkbox edits persist immediately without Create/Use/Save group steps. Selection has no two-member cap; current Plan/Implementation execution still requires one or two and explicitly blocks larger groups. A group snapshot, not live discovery, controls an active run.
+
+Registration is internal, not an onboarding action. Read-only discovery proposes stable instance identities and captures their output without writing configuration. Start revalidates the exact generation, process, cwd and worktree before binding it. Explicit name/membership edits may also persist a validated identity. The Name column defaults to the agent label and supports inline editing (Enter/blur saves, Escape cancels). Rename changes only the display label, with generation and previous-label checks; IDs, tmux identities and past snapshots stay unchanged. Name/membership edits require an unowned checkout; concurrent edits check current revisions and exact generations.
+
+Project cards select the project view. Worktree cards are clickable and keyboard accessible: a single agent directory opens Console directly; multiple directories require choosing the task group directory first. An empty worktree opens setup guidance without Start. Border/background indicates selection; there is no Selected badge/button. No view action starts work or persists default membership.
+
+The current UI shares this workspace group across Plan and Implementation; larger future planning rosters may need a separate implementation subset. Earlier overlapping stored associations and pair IDs are preserved for historical/frozen runs and staging compatibility, but only one current group is exposed per workspace. Discovery never rewrites those records. The [workflow guide](../WORKFLOWS.md) owns detailed vocabulary and phase controls.
 
 ### Responsibility boundary
 
-**The user prepares the workspace; CoderCrew discovers, validates, and coordinates it.** The normal flow assumes an existing Git working tree, including a linked worktree when the user chooses one, and existing coding-agent sessions already placed there. A separate linked worktree is not mandatory when a normal checkout meets the same requirements.
+**The user owns environments and agent placement; CoderCrew discovers projects, validates task boundaries and coordinates work.** Existing checkouts remain usable. An explicit **Create task worktree** action offers a clean linked checkout and new branch under `~/.codercrew/<repo-name>/<branch-name>`, with separate-clone name collisions disambiguated. Preview and confirmation bind the source identity, branch, full commit and destination; [ADR-0013](ADR-0013-confirmed-branch-setup.md) owns that setup authority.
 
-The app does not create/remove worktrees, clone repositories, relocate or restart CLI sessions, install dependencies, copy environment secrets, allocate development databases, clean directories, or manage workspace retention in this version. A mismatch is explained with per-agent paths and a Recheck action. Finishing a run does not delete a branch/worktree or merge it into main.
+The app does not remove worktrees, clone repositories, relocate or restart CLI sessions, install dependencies, copy environment secrets, allocate development databases, clean directories, or automatically manage retention. A new worktree initially has no agents; users start coding CLIs there and Recheck. Finishing a run does not delete a branch/worktree or merge it into main.
 
-This explicitly supersedes the earlier recommendation to auto-provision one implementation worktree per task. It does not undo the ability of the user to prepare separate worktrees for independent tasks. The same prepared directory is used through Plan and Implementation; no planner-to-implementation workspace migration is required.
+This supersedes the previous no-worktree-creation boundary, not the prohibition on automatic provisioning. Creation is a deliberate setup action separate from Start. The same chosen directory is used through Plan and Implementation; no planner-to-implementation migration is required.
 
 ### Discover panes and workspace candidates
 
@@ -38,24 +48,26 @@ List panes
     -> canonicalize the cwd
     -> inspect actual Git worktree/root/gitdir/index and current branch
     -> classify eligible CLI instances and show unknowns separately
-    -> group by canonical cwd within the host
-    -> display workspace cards and candidate agents
+    -> group repositories by canonical shared Git metadata directory
+    -> enumerate every project's Git worktrees, even without panes
+    -> group agents by canonical cwd beneath each worktree
+    -> display projects, worktrees, and task groups
 ```
 
 Possible inspection primitives include `tmux list-panes -a -F ...`, `realpath`, and read-only Git worktree/status queries. Their parsing and installed-version behavior must be tested; this document does not provide a verified implementation. Use argument arrays and exact targets, not shell-concatenated prompts. Empty/inaccessible paths or failed Git checks are diagnostic states, not guessed repositories.
 
 Count coding agents, not every pane in the directory. Shells, servers, pagers, and unidentified generic interpreters do not automatically become runnable group members. An unknown runtime can be identified through an explicit adapter/instance confirmation rather than silently weakening existing process checks. Discovery of a Gemini-looking process is not proof of verified planning/automation support. Stable controller instance labels/IDs can be generated or remembered during workspace selection and finalized at Start; no per-pane registration wizard is required for known eligible cases.
 
-Inspect directories used by observed panes rather than recursively scanning the user's disk for repositories. A workspace is available because there is current tmux evidence for it. Pins may remain visibly unavailable after panes disappear; do not treat a stale card as a live session.
+Inspect observed pane directories, stored session roots and remembered projects rather than recursively scanning the disk. Enumerate worktrees through Git. An available worktree is not proof of a live agent or task readiness; empty and unavailable entries remain visible without inventing sessions.
 
 ### Directory grouping versus Git execution identity
 
 For the first local version, selected members must satisfy **both** rules:
 
-1. The same canonical current working directory on the same host. Resolve equivalent path spellings; `/repo` and `/repo/web` are still distinct groups/cards, even when they belong to one checkout. The user aligns agents manually when necessary.
+1. The same canonical current working directory on the same host. Resolve equivalent path spellings; `/repo` and `/repo/web` are distinct task groups under one worktree. The user aligns collaborating agents manually when necessary.
 2. The same actual Git worktree and index. A similar repository name or common directory ancestor is not sufficient, and linked worktrees sharing a repository are not the same index.
 
-The workspace card uses the canonical cwd as its grouping location, with worktree root and checked-out branch available as metadata. The execution lock uses the canonical worktree/index identity. Therefore `/repo` and `/repo/web` may appear separately but must be identified as sharing a checkout and may not start conflicting runs. Distinct user-created worktrees can host independent tasks, subject to the user's environment constraints.
+Project identity is not an execution lock. The canonical cwd groups agents; the canonical worktree/index excludes competing runs. Therefore `/repo` and `/repo/web` share one checkout card and execution boundary even with different task groups. Separate linked worktrees can host independent tasks, subject to shared environment resources and the user's setup constraints. Do not rename historical `repository` fields (which hold worktree roots) into project identities or invalidate active run snapshots.
 
 The selected phase group, not every agent in the entire app, must satisfy the local placement contract. However, unselected panes sharing the underlying worktree are still potentially affected writers. Show them. Before Plan, implementation, or branch setup, verify no conflicting controller assignment exists and require explicit reconciliation of relevant active/unknown external work. Exclusion from scheduling is not isolation. tmux cwd/process snapshots cannot establish semantic readiness or prevent subsequent desktop writes; state these limits rather than claim a process sandbox.
 
@@ -63,7 +75,7 @@ Revalidate group identity, cwd, worktree/index, and branch at dispatch/handoff/p
 
 ### Clean-entry contract
 
-Workspace visibility and task readiness are different. Dirty workspaces remain visible and readable. New Plan and commit-relay execution require a clean project: no staged changes, unstaged tracked changes, or nonignored untracked files, with an explicit baseline and no conflicting writer. Verify planning outputs separately as narrowly ignored and untracked. Do not stash, reset, stage, commit, discard, or force-add work to satisfy the gate.
+Workspace visibility and task readiness are different. Dirty workspaces remain visible and readable. New Plan, existing-candidate review and later commit-relay turns require a clean project: no staged changes, unstaged tracked changes, or nonignored untracked files. Commit may snapshot captured uncommitted work on its first work turn, as defined in ADR-0014. Every start binds an explicit baseline and requires no conflicting writer. Verify planning outputs separately as narrowly ignored and untracked. Do not stash, reset, stage, commit, discard, or force-add work to satisfy the gate.
 
 Direct-start implementation enforces the same rule. Users with intentional unfinished work either resolve it or use the deprecated mode only within its existing contract. The app does not move that work into a new worktree automatically. A valid initial commit/baseline is required by this first commit-relay design; an unborn/no-commit repository needs user preparation, not invented history.
 

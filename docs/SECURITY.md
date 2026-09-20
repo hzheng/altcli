@@ -1,6 +1,6 @@
 # Security and operational boundary
 
-**Current versus target:** the existing operational boundary below describes `46f228b`. The [validation and permission contract](#validation-and-permissions) is the accepted future design. [ADR-0013](adr/ADR-0013-confirmed-branch-setup.md) records the only proposed controller Git-write exception; this documentation change does not enable it.
+**Current versus target:** the lifecycle boundary below originated at `46f228b`; later local Plan/Implementation and setup support is recorded in [VALIDATION](../VALIDATION.md). [ADR-0013](adr/ADR-0013-confirmed-branch-setup.md) owns the two narrow controller Git-write exceptions: confirmed new-branch checkout and separately confirmed task-worktree creation. No general Git-write API exists.
 
 CoderCrew controls coding agents with their existing host privileges. It is not a
 sandbox, process attestation system or lock against external filesystem writers.
@@ -70,13 +70,13 @@ replaces each file. Two files are not a single transaction; retain backups until
 validation succeeds. Concurrent external edits and configuration formats outside
 the supported subset require manual reconciliation.
 
-SQLite version 4 prevents old runtimes from silently opening the new store. Delivery
+SQLite version 7 prevents old runtimes from ignoring phase-aware runs or uncertain worktree-creation ownership. Delivery
 history, lifecycle inbox, run/turn records and prompt text are plaintext outside
 managed worktrees. Workflow/audit retention is not yet pruned. Raw screen snapshots
 are not stored. Hook correlation context is private local data. No runtime log or database
 should be committed. The future tracked implementation relay log is a distinct
 protocol artifact defined by ADR-0014, not permission to commit runtime data. The original review skill remains responsible for staging;
-the controller issues no Git mutations and does not independently prove its outcome.
+the staging controller issues no Git mutations and does not independently prove its outcome.
 
 ---
 
@@ -89,6 +89,28 @@ Validate the selected workspace against current pane discovery, not a cached dis
 Validate one-member groups as solo, not two references to one instance. Worker + reviewer requires distinct identities; Peer relay also needs two. Enforce these server-side. The later N-agent Plan policy is enabled only after its complete-roster, adapter, and recovery checks are accepted; discovering three panes alone does not enable it.
 
 Branch setup uses [ADR-0013](adr/ADR-0013-confirmed-branch-setup.md)'s separate confirmed operation. Publication validation remains read-only, and run inspection does not implicitly authorize creating a branch or fixing the environment.
+
+### Project identity and task-worktree creation
+
+Projects use canonical local Git common directories, not remote URLs. Worktree/index
+identities still own execution; never replace that lock with the shared project key.
+Git worktree inventory can show empty or unavailable checkouts without claiming any
+agent is ready. Discovery and navigation do not mutate Git or save registrations.
+
+Confirmed creation is constrained to a known project, revalidated source identity,
+exact committed baseline, new branch and unused destination under the task-worktree
+root. Normal bearer/origin checks and host input enablement apply. Use argument
+arrays, disable hooks for setup, and reject branch/path collisions, destination
+symlinks and overlap with known checkouts or controller metadata. The source may
+be dirty because no source file/index is copied or changed. Do not copy ignored
+secrets, install dependencies, launch/move agents or edit ignore rules.
+
+Persist the operation and a project-scoped setup owner before Git. Identical requests
+return their recorded result, and restart never replays creation. A failure after
+attempting Git retains uncertain ownership until explicit read-only reconciliation.
+No automatic rollback, branch deletion, worktree removal or cleanup is permitted.
+These checks do not prevent a malicious same-user path race or configured Git
+filters from running during an ordinary checkout; use trusted repository settings.
 
 ### Validate implementation publication, not just its existence
 

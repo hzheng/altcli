@@ -194,7 +194,7 @@ test("the bounded informational events table survives reopen", () => {
   expect(store.db.prepare("SELECT COUNT(*) AS n FROM events").get()).toEqual({ n: 500 });
   store.close(); store = new Store(directory);
   expect(store.latestTurns()).toHaveLength(1);
-  expect(store.db.pragma("user_version", { simple: true })).toBe(4);
+  expect(store.db.pragma("user_version", { simple: true })).toBe(7);
 });
 test("a listing failure leaves sessions readable and reports the error", async () => {
   adapter.listPanes = async () => { throw new Error("no server running"); };
@@ -222,7 +222,7 @@ test("a version 1 store migrates its global reservation and untyped sessions", (
   db.prepare("INSERT INTO control VALUES (1, ?)").run(id);
   db.close();
   store = new Store(directory);
-  expect(store.db.pragma("user_version", { simple: true })).toBe(4);
+  expect(store.db.pragma("user_version", { simple: true })).toBe(7);
   expect(store.sessions().map((s) => [s.id, s.agentType])).toEqual([["codex", "codex"], ["claude", "claude"]]);
   expect(store.reservations()).toEqual([{ repository: PROJECT, activeCommandId: id }]);
   store.recoverInterrupted();

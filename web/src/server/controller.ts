@@ -33,9 +33,8 @@ export class Controller {
       return { panes: [], panesError: messageOf(error) };
     }
   }
-  async state(): Promise<ConsoleState> {
-    const sessions = this.store.sessions();
-    const [snapshots, panes] = await Promise.all([Promise.all(sessions.map((s) => this.snapshot(s))), this.panes(sessions)]);
+  async state(sessions = this.store.sessions()): Promise<ConsoleState> {
+    const [snapshots, panes] = await Promise.all([Promise.all(sessions.map((s) => this.snapshot(s))), this.panes(this.store.sessions())]);
     const registered = new Set(sessions.map((s) => s.id));
     return { mode: this.config.mode, inputEnabled: this.config.inputEnabled, sessions, pairs: this.store.pairs(), ...panes, snapshots,
       commands: this.store.recent(), reservations: this.store.reservations(),

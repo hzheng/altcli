@@ -87,7 +87,9 @@ export class TmuxAdapter implements TerminalAdapter {
     await this.run(["send-keys", "-t", session.identity.paneId, "Enter"]);
   }
   async processes(session: SessionRegistration): Promise<ProcessRecord[]> {
-    await this.preflight(session);
+    const pane = await inspectPane(this.run, session.identity.paneId);
+    // Reading process evidence cannot type into the pane; delivery-only mode gates must not lose completions.
+    assertIdentity(session, { ...pane, inMode: false, synchronized: false });
     return paneProcesses(session.identity.panePid);
   }
   foreground(session: SessionRegistration): Promise<string | null> { return foregroundPid(session.identity.panePid); }

@@ -6,6 +6,19 @@ Status: Accepted design direction; implementation and host acceptance pending.
 Items explicitly labeled working specification, recommendation, or open choice retain that status.
 This documentation-only change does not enable the described features.
 
+Implementation update: local solo, peer, and fixed worker/reviewer policies now
+use committed handoffs. Normal manual progression uses persisted `waiting` plus
+Next turn, checked against the exact completed command. Policy/role changes are
+supported only at this settled boundary, with an expected policy revision;
+changing settings does not dispatch or reset the budget. Candidate authors cannot
+be made their own independent reviewer. An actionable objection routes back to
+the author as the next automatic turn under both policies unless the run's
+agreement says objections pause (`pauseOnObjection`, default off); `needsHuman`
+always escalates. The agreement is frozen at start beside automatic collaboration
+and the turn budget, and may change at a settled boundary.
+Plan, mid-turn policy queueing, participant replacement, and self-review remain
+deferred. Installed-host acceptance remains pending.
+
 Relationship: The participant/action scope of ADR-0011 when the new policies are implemented.
 
 ## Context
@@ -69,7 +82,7 @@ With automatic continuation enabled:
 | --- | --- |
 | Accept with project improvements | Send the new proposal to the other peer as `review_and_improve`. |
 | Accept with only a log entry | Finish this review chain; final task-level verification remains. |
-| Object with only a log entry | Provide the findings to the author without layering reviewer edits onto rejected work; whether the correction is dispatched automatically follows the continuation policy, below. |
+| Object with only a log entry | Provide the findings to the author without layering reviewer edits onto rejected work. The correction is dispatched automatically within the turn budget unless the agreement's `pauseOnObjection` holds it for a deliberate Next turn. |
 | Invalid or uncertain result | Pause; do not infer success or publish a successor. |
 
 At `46f228b` the shipped uncommitted mode returns an actionable objection to the author as a bounded correction instruction (verified in [Product purpose, retained architecture, and comparison with the reference implementation](../SOURCES.md#product-purpose-retained-architecture-and-comparison-with-the-reference-implementation)). Under that behavior, an objection returns to the author as a bounded correction instruction when continuation is on, and returns changed work to the reviewer (ADR-0011; the deprecated mode keeps this). Whether commit-mode peer relay adopts the same rule was not finalized. The recommended default is to adopt it, so that peer relay and worker/reviewer differ only in who may edit project content and whether roles alternate, and an objection is not the one outcome that always needs a click. An objection without an actionable reason, or with findings outside the delegated scope, pauses for the human in either policy.

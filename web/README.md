@@ -6,8 +6,8 @@ Playwright. Node 24 is suggested.
 Repository operations run from the root with plain `node`; every npm task runs here:
 
 ```bash
-node scripts/setup.mjs        # from the repository root
-npm ci
+node scripts/setup.mjs        # from the repository root; dependencies, hooks, skills and local config
+cd web
 npm run dev                   # npm run (no task) lists dev, build, start, typecheck, test:smoke, test, e2e, check
 ```
 

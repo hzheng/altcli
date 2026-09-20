@@ -1,9 +1,11 @@
 import Database from "better-sqlite3";
 import { chmodSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import type { CommandRecord, RelayPair, Reservation, SessionRegistration, TurnEvent } from "../contracts/api.ts";
+import type { AgentId, CommandRecord, RelayPair, Reservation, SessionRegistration, TurnEvent } from "../contracts/api.ts";
 import { AppError } from "../core/errors.ts";
 import { sameRequest, suggestAgentType } from "../core/policy.ts";
+import type { Group } from "../contracts/implementation.ts";
+import type { ProjectRecord, WorktreeCreation } from '../contracts/projects.ts';
 export class Store {
   readonly db: Database.Database;
   constructor(directory: string) {
@@ -15,17 +17,23 @@ export class Store {
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("busy_timeout = 5000");
     const version = this.db.pragma("user_version", { simple: true }) as number;
-    if (version > 4) throw new Error("Unsupported database version. Do not downgrade this store.");
+    if (version > 7) throw new Error("Unsupported database version. Do not downgrade this store.");
     this.db.transaction(() => {
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS commands (id TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS pairs (id TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS groups (id TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS reservations (repository TEXT PRIMARY KEY, active_id TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS worktree_creations (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, status TEXT NOT NULL, value TEXT NOT NULL);
+        CREATE UNIQUE INDEX IF NOT EXISTS worktree_creation_owner ON worktree_creations(project_id) WHERE status IN ('applying', 'uncertain');
       `);
       if (version === 1) this.migrateFromV1();
-      this.db.exec("PRAGMA user_version = 4"); // v4 reserves the durable workflow schema; older runtimes must refuse it
+      if (version < 5) for (const pair of this.pairs()) this.saveGroup({ id: pair.id, name: pair.name, repository: pair.repository,
+        cwd: null, members: pair.sessions, revision: 1, createdAt: pair.createdAt, legacyPairId: pair.id });
+      this.db.exec("PRAGMA user_version = 7"); // older servers must not ignore an uncertain worktree-creation owner
     })();
   }
   /** v1 had one global reservation in `control` and sessions without agentType. */
@@ -42,6 +50,19 @@ export class Store {
     this.db.exec("DROP TABLE control");
   }
   close(): void { this.db.close(); }
+  projects(): ProjectRecord[] {
+    return (this.db.prepare('SELECT value FROM projects ORDER BY rowid').all() as { value: string }[]).map((row) => JSON.parse(row.value));
+  }
+  saveProject(project: ProjectRecord): void {
+    this.db.prepare('INSERT INTO projects(id,value) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(project.id, JSON.stringify(project));
+  }
+  worktreeCreations(): WorktreeCreation[] {
+    return (this.db.prepare('SELECT value FROM worktree_creations ORDER BY rowid').all() as { value: string }[]).map((row) => JSON.parse(row.value));
+  }
+  saveWorktreeCreation(operation: WorktreeCreation): void {
+    this.db.prepare('INSERT INTO worktree_creations(id,project_id,status,value) VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,value=excluded.value')
+      .run(operation.input.requestId, operation.input.projectId, operation.status, JSON.stringify(operation));
+  }
   sessions(): SessionRegistration[] {
     // Registration order; an upsert keeps its row, so re-registering a worker does not move it.
     return (this.db.prepare("SELECT value FROM sessions ORDER BY rowid").all() as { value: string }[]).map((r) => JSON.parse(r.value) as SessionRegistration);
@@ -49,6 +70,13 @@ export class Store {
   pairs(): RelayPair[] {
     return (this.db.prepare("SELECT value FROM pairs ORDER BY rowid").all() as { value: string }[]).map((r) => JSON.parse(r.value) as RelayPair);
   }
+  groups(): Group[] {
+    return (this.db.prepare('SELECT value FROM groups ORDER BY rowid').all() as { value: string }[]).map((r) => JSON.parse(r.value));
+  }
+  saveGroup(group: Group): void {
+    this.db.prepare('INSERT INTO groups(id,value) VALUES (?,?)').run(group.id, JSON.stringify(group));
+  }
+  removeGroup(id: string): void { this.db.prepare('DELETE FROM groups WHERE id=?').run(id); }
   reservations(): Reservation[] {
     return (this.db.prepare("SELECT repository, active_id FROM reservations ORDER BY rowid").all() as { repository: string; active_id: string }[])
       .map((r) => ({ repository: r.repository, activeCommandId: r.active_id }));
@@ -68,6 +96,7 @@ export class Store {
       const duplicate = this.sessions().find((s) => s.id !== session.id && s.identity.socketPath === session.identity.socketPath && s.identity.paneId === session.identity.paneId);
       if (duplicate) throw new AppError("DUPLICATE_PANE", `This pane is already registered as "${duplicate.label}".`, 409);
       const pair = previous && previous.repository !== session.repository ? this.pairs().find((p) => p.sessions.includes(session.id)) : undefined;
+      if (previous && previous.repository !== session.repository && this.groups().some((g) => g.members.includes(session.id))) throw new AppError('IN_GROUP', 'Remove this agent from its group before moving repositories.', 409);
       if (pair) throw new AppError("IN_PAIR", `"${previous!.label}" belongs to the pair "${pair.name}" in ${previous!.repository}. Remove the pair before moving it to another repository.`, 409);
       this.db.prepare("INSERT INTO sessions(id,value) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value").run(session.id, JSON.stringify(session));
       return Boolean(previous);
@@ -79,6 +108,7 @@ export class Store {
       if (!session) throw new AppError("NOT_REGISTERED", "No registration with this id.", 404);
       this.assertNoTurn(session.repository, "removing a registration");
       const pair = this.pairs().find((p) => p.sessions.includes(id));
+      if (this.groups().some((g) => g.members.includes(id) && !g.legacyPairId)) throw new AppError('IN_GROUP', 'Remove the group before removing this agent.', 409);
       if (pair) throw new AppError("IN_PAIR", `"${session.label}" belongs to the pair "${pair.name}". Remove the pair first.`, 409);
       this.db.prepare("DELETE FROM sessions WHERE id=?").run(id);
     }).immediate();
@@ -88,6 +118,20 @@ export class Store {
       this.assertNoTurn(pair.repository, "changing pairs");
       if (this.pairs().some((p) => p.id === pair.id)) throw new AppError("PAIR_EXISTS", `A pair named "${pair.name}" already exists. Remove it first.`, 409);
       this.db.prepare("INSERT INTO pairs(id,value) VALUES (?,?)").run(pair.id, JSON.stringify(pair));
+    }).immediate();
+  }
+  /** Forget every pair and registration on one worktree in one transaction. Refuses while a command is in flight or an
+   * uncertain delivery holds it. Command history and hook events are kept; no process is touched. */
+  clearRepository(repository: string): { sessions: AgentId[]; pairs: string[]; groups: string[] } {
+    return this.db.transaction(() => {
+      this.assertNoTurn(repository, "resetting a workspace");
+      const pairs = this.pairs().filter((p) => p.repository === repository).map((p) => p.id);
+      const groups = this.groups().filter((g) => g.repository === repository).map((g) => g.id);
+      for (const id of groups) this.removeGroup(id);
+      const sessions = this.sessions().filter((s) => s.repository === repository).map((s) => s.id);
+      for (const id of pairs) this.db.prepare("DELETE FROM pairs WHERE id=?").run(id);
+      for (const id of sessions) this.db.prepare("DELETE FROM sessions WHERE id=?").run(id);
+      return { sessions, pairs, groups };
     }).immediate();
   }
   removePair(id: string): void {

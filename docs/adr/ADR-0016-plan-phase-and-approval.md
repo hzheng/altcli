@@ -8,6 +8,35 @@ This documentation-only change does not enable the described features.
 
 Relationship: The implementation-only task model; this is additive and does not rewrite the legacy skill.
 
+## Local implementation update — September 19, 2026
+
+Source now supports one/two required planners with concurrency one, N-shaped
+assignments, a full-roster draft barrier, sequential synthesis/review, and exact
+text-version endorsements. Solo promotes its captured draft in storage without a
+fake peer or a second model call; `plan.md` is created only if refinement needs it.
+API starts use POST `/api/v1/planning`; checkpoint decisions use
+`/api/v1/planning/decision`. The JSON-only planning contracts and OpenAPI define
+schema 1. A strict external result file is published before lifecycle completion;
+the existing correlated hooks and activity checks remain mandatory. No native
+CLI plan-mode switch, provider capability fabrication, or sandbox isolation claim
+is introduced.
+
+All four approval/automation combinations are supported. Missing branch consent
+waits independently. Human approval/override freezes full text, brief, identities,
+endorsements, unresolved risks and selected implementation settings before an
+atomic transition under the same workspace owner. Automatic-turn usage is shared
+with Implementation (default 20, explicitly configurable 1–200); each draft has
+one assigned attempt, and unknown/restart state is never retried. Request changes
+at a captured settled boundary updates the shared brief, invalidates endorsements,
+and assigns a specific planner. Initial drafts are preserved and labeled as
+belonging to an earlier brief when applicable.
+
+Mid-turn guidance, membership replacement/retry reconciliation, native plan-mode
+adapter integration, larger enabled groups, parallel drafts and cleanup remain
+deferred. Frozen artifacts are protected throughout Implementation. Tests use
+real disposable Git/files/SQLite and simulated terminals; installed-host
+acceptance is separate. The broader target decision below retains those limits.
+
 ## Context
 
 The user may ask agents to develop independent plans before coding. Keep drafting lightweight in one clean workspace, preserve initial independence cooperatively, and make the plan-to-code gate explicit.
@@ -227,7 +256,7 @@ These are working data concepts. A path or a hash alone is insufficient once ign
 
 #### Implementation policy and scope
 
-Select an eligible implementation group before automatic transition: one member means solo work; two distinct members use Peer relay or Worker + reviewer with explicit roles/first actor. A later larger planning group does not force every planner into implementation. For example, Codex + Claude + Gemini can plan, then Codex/Claude can implement while Gemini remains unscheduled and settled. All selected implementation members must already operate in the same canonical workspace; the app neither relocates nor restarts them. A planner without verified implementation capability does not acquire edit authority merely by endorsing a plan.
+The current UI uses the workspace's sole selected group in both phases: one member means solo work; two distinct members use Peer relay or Worker + reviewer with explicit roles/first actor. A separate implementation subset remains a later larger-roster capability, not a second workspace group today. For example, future Codex + Claude + Gemini planning could be followed by Codex/Claude implementation while Gemini remains unscheduled and settled. All selected implementation members must already operate in the same canonical workspace; the app neither relocates nor restarts them. A planner without verified implementation capability does not acquire edit authority merely by endorsing a plan.
 
 Resolve the branch choice independently. Existing suitable branches are reused; main/the primary branch requires explicit continuation or confirmation of a new task branch; detached HEAD needs a named branch before commit-based implementation. The app may collect this choice in advance but performs any create-and-switch only after all affected activity settles and the exact baseline/consent still matches. Waiving plan approval does not waive branch consent. Unresolved branch setup leads to a visible setup-wait state, not a failed plan or an automatic branch change. Full rules are in [ADR-0013](ADR-0013-confirmed-branch-setup.md).
 

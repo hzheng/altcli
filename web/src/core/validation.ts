@@ -1,4 +1,4 @@
-import type { AgentId, AgentType, CommandInput, EventInput, HandoffOutcome, PairInput, RegistrationInput } from "../contracts/api.ts";
+import type { AgentId, AgentType, CommandInput, EventInput, HandoffOutcome, PairInput, RegistrationInput, RenameSession } from "../contracts/api.ts";
 const OUTCOMES: HandoffOutcome[] = ["no_incoming_handoff", "strong_objection", "accept_without_improvement", "accept_and_improve"];
 import { AppError } from "./errors.ts";
 const SLUG = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/;
@@ -73,6 +73,11 @@ export function parseRegistration(value: unknown): RegistrationInput {
     ...(body.agentType !== undefined ? { agentType: agentType(body.agentType) } : {}),
     ...(body.repository !== undefined ? { repository: body.repository } : {}),
     ...(body.relayPrompt !== undefined ? { relayPrompt: singleLine(body.relayPrompt) } : {}) };
+}
+export function parseRenameSession(value: unknown): RenameSession {
+  const body = object(value);
+  onlyFields(body, ['label', 'expectedRegistrationId', 'expectedLabel']);
+  return { label: label(body.label), expectedRegistrationId: requestId(body.expectedRegistrationId), expectedLabel: label(body.expectedLabel) };
 }
 export function parsePair(value: unknown): PairInput {
   const body = object(value);

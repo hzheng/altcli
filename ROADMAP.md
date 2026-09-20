@@ -1,6 +1,24 @@
 # CoderCrew roadmap
 
-**Documentation update: September 19, 2026.** The existing milestones below describe the `46f228b` source baseline. The [migration sequence](#migration-and-implementation-sequence) is planned work, not completion evidence. Task phases Plan/Implementation are distinct from the older milestone headings.
+**Implementation update: September 19, 2026.** The local commit path now implements
+the entry-layer group migration, Steps 1–2, and settled-boundary role/policy changes
+from Step 3. Recovery pauses without replay and uses explicit takeover; automated
+restart reconciliation remains deferred. Eligible agents need no registration UI;
+each has a membership checkbox and inline display name. Workspace cards open the
+console directly. Project navigation now uses shared Git metadata and lists all
+linked worktrees, including empty checkouts. Explicit task-worktree creation has
+preview/consent, durable setup ownership and read-only uncertain-result inspection;
+no environments or agents are moved. Each agent directory has one group, with all eligible agents selected
+by default, including 3+; execution still requires one or two. The same group spans both phases.
+The local Plan increment implements the sequential one/two-member path
+of Steps 4–6: N-shaped assignments, captured results, exact-version endorsements,
+human checkpoint/overrides, and one branch-gated transition. Native adapter
+plan-mode integration, in-flight guidance queues, membership/retry reconciliation,
+larger enabled rosters, concurrent drafting and Step 8 remain future work.
+See VALIDATION for executed checks;
+installed-agent host acceptance is not claimed. The older milestones below
+describe the `46f228b` staging baseline. Task phases Plan/Implementation are distinct
+from those older milestone headings.
 
 Updated September 16, 2026. Source implementation and acceptance are separate.
 Current architecture: [ADR-0011](docs/adr/ADR-0011-server-owned-relay-runs.md).
@@ -66,7 +84,7 @@ supports its intended use. No timetable or autonomous milestone is implied.
 
 ## Migration and implementation sequence
 
-This section owns D27 and D28 in the [decision ledger](Architecture_Decision.md#decision-ledger). It retains the source protocol ordering: commit relay before Plan, and sequential planning before concurrent drafting. V4 adds a workspace/group entry-layer increment and narrow branch-consent setup; these do not require a new orchestrator or auto-worktree manager. Initial phase groups are solo or two members, while the registry and assignment model remain N-shaped. Larger planning groups and concurrent drafting have separate release gates. No implementation or CI status is claimed. The reference baseline is pinned in [Product purpose, retained architecture, and comparison with the reference implementation](docs/SOURCES.md#product-purpose-retained-architecture-and-comparison-with-the-reference-implementation); re-pin before compatibility work against a later revision.
+This section owns D27 and D28 in the [decision ledger](Architecture_Decision.md#decision-ledger). It retains the source protocol ordering: commit relay before Plan, and sequential planning before concurrent drafting. V4 adds a workspace/group entry-layer increment and narrow branch-consent setup; these do not require a new orchestrator or auto-worktree manager. Initial phase execution supports solo or two members; group selection and the assignment model remain N-shaped. Larger planning groups and concurrent drafting have separate release gates. No implementation or CI status is claimed. The reference baseline is pinned in [Product purpose, retained architecture, and comparison with the reference implementation](docs/SOURCES.md#product-purpose-retained-architecture-and-comparison-with-the-reference-implementation); re-pin before compatibility work against a later revision.
 
 ### Mapping from the reference run model
 
@@ -83,21 +101,44 @@ This section owns D27 and D28 in the [decision ledger](Architecture_Decision.md#
 | `relay`/`instruction` plus initial-handoff intent | Phase-qualified assignments; shared user intentions and mode-aware labels remain. |
 | Actionable-objection correction path, present at `46f228b` | Preserve the legacy contract; automatic peer correction remains a recommendation for the new path ([Peer relay behavior](docs/adr/ADR-0015-collaboration-policies-and-solo.md#peer-relay-behavior)). |
 | Restart pauses and never blindly replays | Extend recovery to N assignments, frozen snapshots, endorsements, and unique phase transitions. |
-| No controller Git mutation | V4 explicitly amends this only for confirmed new-branch creation/check-out at a clean settled boundary. Publication stays read-only; agent/helper commits stay separate; worktree/environment management stays with the user. |
+| No controller Git mutation | Confirmed new-branch checkout and separately confirmed task-worktree creation are narrow setup exceptions. Publication stays read-only; agent/helper commits, environment setup, agent placement and cleanup stay separate. |
 
 ### Entry-layer increment: workspace discovery, groups, and consent
 
-Replace per-pane/named-association onboarding with read-only tmux workspace discovery and a group picker. The primitives exist at `46f228b`: the adapter lists every pane on the configured socket with `list-panes -a` (detached sessions included) and reports each pane's command and cwd; `resolveWorktree` returns the canonical root, git directory, and index for a cwd; and the process policy identifies known Codex and Claude commands, refuses a denylist of shells and generic interpreters, and otherwise reports `other`. The increment adds adapter-backed eligibility checks for `other` processes, grouping by canonical cwd, checked-out branch inspection, and the picker itself. Use canonical cwd for cards, canonical worktree/index for locks, and stable instance IDs for membership. Show all candidate agents without permitting unknown processes or unsupported cardinalities to run. Initial defaults: one becomes solo; two are preselected; three or more require a deliberate choice of two or solo. Group validation is server-side.
+Replace per-pane/named-association onboarding with read-only tmux workspace discovery and a group picker. The primitives exist at `46f228b`: the adapter lists every pane on the configured socket with `list-panes -a` (detached sessions included) and reports each pane's command and cwd; `resolveWorktree` returns the canonical root, git directory, and index for a cwd; and the process policy identifies known Codex and Claude commands, refuses a denylist of shells and generic interpreters, and otherwise reports `other`. The increment adds adapter-backed eligibility checks for `other` processes, grouping by canonical cwd, checked-out branch inspection, and the picker itself. Use canonical cwd for cards, canonical worktree/index for locks, and stable instance IDs for membership. Show all candidate agents without permitting unknown processes or unsupported cardinalities to run. All eligible agents are initially selected; every session has a checkbox and inline Name field. Larger selections are saved, while Start explicitly enforces the current one/two-member execution limit. Cards open Console directly without persisting defaults.
 
 Preserve historical data and live-run identities through a versioned migration from any earlier pair-based storage/API. The current target UI, new schema, and documentation use `Group`/`groupId` (working names). Exact table/endpoint names and temporary backward-compatible aliases are implementation choices. Do not rewrite the meaning of historical events, collapse real members, or modify vendor prompt/turn correlation merely because its English term is also "pairing." Removing the setup wizard does not remove exact registration or lifecycle binding. Legacy behavior can be reached through a compatibility mapping rather than being silently generalized to solo.
 
 Add branch status display and explicit primary-branch/detached handling. Implement the new-branch operation under [ADR-0013](docs/adr/ADR-0013-confirmed-branch-setup.md)'s narrow authority: one consent and one settled transition, no force/reset or auto-provisioning. Missing directories or mismatched agents yield Recheck diagnostics.
 
-**Exit:** workspace cards reflect eligible panes and actual cwd/branch; selection defaults work for 0/1/2/3+; selected groups freeze at Start; different-directory cards sharing an index cannot start conflicting runs; no Git write occurs on discovery or workspace opening. Existing-worktree and environment setup remains the user's responsibility. This increment can precede or accompany Step 1 without adding new behavior to the legacy staging protocol.
+**Exit:** workspace cards reflect eligible panes and actual cwd/branch; selection defaults work for 0/1/2/3+; selected groups freeze at Start; different directories sharing an index cannot start conflicting runs; no Git write occurs on discovery or opening. Environment setup and agent placement remain the user's responsibility. This increment can precede or accompany Step 1 without adding new behavior to the legacy staging protocol.
+
+### Project-centered entry and explicit task-worktree creation
+
+Group local repositories by canonical Git common directory, not origin. Enumerate
+each project's worktrees independently of branch and live panes, then expose the
+same-cwd task groups underneath. Keep historical worktree-root fields, group IDs,
+run snapshots and index locks unchanged. Persist projects only at explicit edits,
+Start or creation; read-only discovery caches unused projects for the process.
+
+Offer preview/confirmation of a new task branch and worktree under
+`~/.codercrew/<repo-name>/<branch-name>`, using a verified committed baseline.
+Do not switch the source or copy dirty/ignored files. Serialize creation through
+durable project setup ownership without replacing per-index task ownership.
+Restart and uncertain results retain setup ownership; explicit inspection verifies
+success or absence, never retries or deletes partial results.
+
+**Exit:** linked worktrees form one project while separate same-origin clones do
+not; empty worktrees survive restart after creation/use; branch changes do not
+change worktree identity; dirty source changes survive creation untouched; stale
+consent, conflicts, symlinks, duplicate/concurrent requests and partial results are
+tested. Browser tests cover navigation and confirmed setup. No agent launch,
+environment bootstrap, cleanup, larger-group execution or real-agent acceptance
+is implied.
 
 ### Step 1: local commit relay
 
-Specify log path/schema, clean entry/pre-dispatch, exact parent and review ranges, one direct handoff commit, permitted diff, leftovers, and publication. Use the user-prepared workspace and recorded implementation branch with existing tmux agents. Implement plain solo work and two-member peer relay, normal manual waiting, bounded continuation, and unique result consumption. Solo never schedules a duplicate instance as its peer. Write a separate commit-relay skill; do not modify the legacy staging contract.
+Specify log path/schema, captured unfinished input for initial work and clean entry for reviews/later turns, exact parent and review ranges, one direct handoff commit, permitted diff, leftovers, and publication. Use the user-prepared workspace and recorded implementation branch with existing tmux agents. Implement plain solo work and two-member peer relay, normal manual waiting, bounded continuation, and unique result consumption. Solo never schedules a duplicate instance as its peer. Write a separate commit-relay skill; do not modify the legacy staging contract.
 
 **Exit:** proposals and report-only reviews behave correctly; wrong parents, hidden intermediate commits, leftovers, contradictory structured results, and duplicates are handled explicitly. No user work is adopted automatically; routine manual progression needs no takeover.
 
@@ -115,7 +156,7 @@ Apply role, policy, and gate changes at safe boundaries, preserve budgets/findin
 
 ### Step 4: N-capable phase, assignment, and adapter model
 
-Represent Plan/Implementation, group snapshots, an N-shaped required planning roster/assignment map, epoch and brief versions, safe paths, capabilities, and a separate one- or two-member implementation selection. Start with selectable N=1 or N=2 and draft concurrency=1, not hard-coded vendor/participant fields. Define provider-specific result/lifecycle normalization and output capture, with Gemini retained as an ordinary eligible-adapter target rather than a supervisor.
+Represent Plan/Implementation, group snapshots, an N-shaped required planning roster/assignment map, epoch and brief versions, safe paths, capabilities, and a separate one- or two-member implementation selection. Start with executable N=1 or N=2 and draft concurrency=1, not hard-coded vendor/participant fields. Define provider-specific result/lifecycle normalization and output capture, with Gemini retained as an ordinary eligible-adapter target rather than a supervisor.
 
 **Exit:** the registry/model can represent three or more available instances without a new mode, while initial run validation still rejects selected groups above the release cap. Duplicate aliases are rejected; ignore/capability checks and solo semantics work; Plan grants no code/staging/branch permission. Provider data is not fabricated.
 
@@ -133,7 +174,7 @@ Implement independent approval/automation settings, exact-version approval, over
 
 ### Step 7: controlled enablement of 3+ planning and concurrent drafts
 
-Enable 3+ user-selectable planning members only after the N-shaped state model, required-roster barrier, same-version endorsements, group UI, and recovery pass acceptance. Test N=3 and N>3, including a verified Gemini-capable runtime. This is separate from enabling more concurrent executions. Raise draft concurrency only after per-assignment ownership, lifecycle handling, and aggregate validation pass. Deliveries may remain serialized while distinct draft executions overlap; project/Git writers remain sequential. N-agent implementation is not enabled by either switch.
+Enable execution for 3+ selected planning members only after the N-shaped state model, required-roster barrier, same-version endorsements, group UI, and recovery pass acceptance. Test N=3 and N>3, including a verified Gemini-capable runtime. This is separate from enabling more concurrent executions. Raise draft concurrency only after per-assignment ownership, lifecycle handling, and aggregate validation pass. Deliveries may remain serialized while distinct draft executions overlap; project/Git writers remain sequential. N-agent implementation is not enabled by either switch.
 
 **Correct Step 5's sequential validation for concurrent execution:** active owners can change their own files; frozen/unassigned paths and project content remain protected. Do not keep the "every nonassigned draft unchanged" assertion across overlapping executions.
 

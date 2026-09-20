@@ -1,18 +1,34 @@
-# The review-handoff skill
+# Phase-specific handoff skills
 
-**Current contract:** the skill below remains the operating staging protocol at `46f228b`. Its deprecation direction is recorded in [ADR-0014](adr/ADR-0014-commit-relay-and-deprecation.md#deprecate-the-uncommitted-relay-mode); no new skill is installed by this documentation-only change.
+`skills/commit-handoff/SKILL.md` is the separate committed implementation contract.
+The controller prompt names its exact repository path and a per-command assignment
+file under the external data directory. No global alias or skill installation is
+required for this path. Optional installed links are still checked if present.
+The assignment includes the exact branch, parent, accepted baseline, review range,
+action, registration, policy revision, original task, and outstanding findings.
+It authorizes one scoped local publication; the controller never commits it.
 
-`skills/review-handoff/SKILL.md` is the single canonical skill. This PR does not edit
-its content. ADR-0010 had already added the final RELAY-OUTCOME line before the
-hardening review; the original baseline and staging rules remain intact.
+The relay log defaults to `RELAY-LOG.jsonl`; every turn appends one schema-1 JSON
+object followed by a newline. The object copies every `identity` field in the
+assignment and adds `model`, `decision`, `reason`, `needsHuman`, `summary`, and
+`checks`. Work has null decision/reason; reviews report accept/object. Objection
+and review-only turns cannot change project files. `needsHuman` explicitly stops
+automatic remediation for out-of-scope questions. See the skill for limits.
+
+The `review-handoff` skill below is used only by the staging fallback, enabled with
+`CODERCREW_ENABLE_LEGACY_RELAY=true`.
+
+`skills/review-handoff/SKILL.md` defines that flow's baseline, staging rules and
+final `RELAY-OUTCOME` line. Its contract remains unchanged.
+
+Install dependencies, hooks and all skill links together from the repository root:
 
 ```bash
-node scripts/install-skills.mjs
-node scripts/install-skills.mjs --check
+node scripts/setup.mjs
 ```
 
-The installer links skills into the CLI user directories and refuses to replace a
-real directory. It needs only this clone. Links point into this worktree, so edits
+The skill installer links into the CLI user directories and refuses to replace a
+real directory. Links point into this worktree, so edits
 or branch switches can change the live skill. Do not alter the skill or global
 instructions during a relay without an explicit workflow-change request.
 
@@ -52,12 +68,30 @@ commit, reset or cleanup operations.
 See [SETUP.md](SETUP.md) for installing lifecycle hooks and
 [ADR-0011](adr/ADR-0011-server-owned-relay-runs.md) for execution ownership.
 
-## Separate future skill contracts
+## Planning handoff
+
+`skills/plan-handoff/SKILL.md` is loaded from its exact repository path, separately
+from the committed and staging protocols. Its immutable assignment is stored under
+the external data directory. The assigned planner writes only its ignored draft
+or shared plan and the exact `<commandId>.result.json` beside its assignment.
+`PlanResult` defines the strict schema: copied identity, outcome, output SHA-256,
+model, summary and optional blocking reason. This is a local file-result protocol,
+not an HTTP token passed to an agent or a screen/outcome parser.
+
+Publish the result **before** the correlated lifecycle completion. The controller
+captures bounded, stable UTF-8 bytes only with unchanged code/branch/index,
+protected peer artifacts, matching identity/hash and clear activity evidence.
+Duplicate events are consumed once; a missing/invalid/late result remains paused
+and is never polled into success. Only draft/synthesis/revision turns report
+`complete`; review reports `accept` or `object`; `blocked` never advances.
+Existing lifecycle hooks stay unchanged. The controller does not invoke a native
+plan mode or infer permissions from provider names; output restrictions and draft
+withholding are cooperative and still require installed-host acceptance.
 
 Do not combine incompatible instructions behind a guessed mode. [ADR-0016](adr/ADR-0016-plan-phase-and-approval.md) defines ignored planning documents: assigned draft or unified plan only, no staging/commits, exact-version completion, cooperative draft withholding, and an independent approval checkpoint. Native plan mode is adapter-specific; never broaden edit permissions merely to save a draft.
 
-[ADR-0014](adr/ADR-0014-commit-relay-and-deprecation.md) defines a separate commit-relay skill: clean entry, exact assigned revisions, one direct handoff commit with one appended tracked log entry, permitted project changes, and no unpublished leftovers. The agent/authorized helper commits; the server validates read-only. A review-only or objection turn changes only the log. Work is a proposal, not self-approval; optional self-review is visibly non-independent.
+[ADR-0014](adr/ADR-0014-commit-relay-and-deprecation.md) defines a separate commit-relay skill: captured unfinished input for initial work, clean entry for reviews and later turns, exact assigned revisions, one direct handoff commit with one appended tracked log entry, permitted project changes, and no unpublished leftovers. The agent/authorized helper commits; the server validates read-only. A review-only or objection turn changes only the log. Work is a proposal, not self-approval; optional self-review is visibly non-independent.
 
-[ADR-0015](adr/ADR-0015-collaboration-policies-and-solo.md) supplies phase/group roles and action permissions. Group terminology does not rename the legacy skill or change CLI start/Stop pairing. All concrete skill names, parsers, helper APIs, and adapter integrations remain implementation work, with open choices in [OPEN-DECISIONS](OPEN-DECISIONS.md).
+[ADR-0015](adr/ADR-0015-collaboration-policies-and-solo.md) supplies phase/group roles and action permissions. Each phase has its own skill contract while sharing CLI lifecycle checks. Native plan-mode and additional adapter integrations remain future work, with open choices in [OPEN-DECISIONS](OPEN-DECISIONS.md).
 
-The planned [branch-setup exception](adr/ADR-0013-confirmed-branch-setup.md) requires explicit scoped consent at a settled boundary; it is not staging authority, a planning-turn operation, or blanket permission to switch existing branches. Ordinary code review still does not authorize Git mutation.
+The implemented local [branch-setup exception](adr/ADR-0013-confirmed-branch-setup.md) requires explicit scoped consent at a settled boundary; it is not staging authority, a planning-turn operation, or blanket permission to switch existing branches. Ordinary code review still does not authorize Git mutation.

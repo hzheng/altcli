@@ -4,6 +4,10 @@ import type { BackgroundEvidence, Execution, HookEvent, HookReceipt, ManagedSess
 import { AppError } from '../core/errors.ts';
 import { promptText } from '../core/validation.ts';
 import type { Store } from './store.ts';
+import { join, resolve } from 'node:path';
+import type { ImplementationAction, ImplementationRun, PolicyChange, PublicationResult, StandaloneStart } from '../contracts/implementation.ts';
+import type { FrozenPlan, PlanCapture, PlanDecision, PlanningRun } from '../contracts/planning.ts';
+import { consumePlan, planAgreed } from './planning-state.ts';
 
 const json = JSON.stringify;
 export const DEFAULT_TURN_LIMIT = 20;
@@ -24,8 +28,10 @@ export function wireText(input: StartInput, session: ManagedSession): string {
 /** A durable execution ledger, separate from transport receipts and the bounded history view. */
 export class WorkflowStore {
   readonly store: Store;
-  constructor(store: Store) {
+  readonly assignmentDirectory: string;
+  constructor(store: Store, assignmentDirectory = '/tmp/codercrew-test-assignments') {
     this.store = store;
+    this.assignmentDirectory = assignmentDirectory;
     store.db.exec(`
       CREATE TABLE IF NOT EXISTS workflow_runs (id TEXT PRIMARY KEY, lock_key TEXT NOT NULL, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS workflow_owners (lock_key TEXT PRIMARY KEY, run_id TEXT NOT NULL UNIQUE);
@@ -49,14 +55,15 @@ export class WorkflowStore {
       OR id IN (SELECT id FROM workflow_runs ORDER BY rowid DESC LIMIT 30) ORDER BY rowid DESC`).all() as {value:string}[]).map((r) => JSON.parse(r.value));
   }
   /** Run and pair for each listed command id, from the durable ledger, in one query. */
-  runsOf(commandIds: string[]): Map<string, { runId: string; pairId: string | null }> {
+  runsOf(commandIds: string[]): Map<string, { runId: string; pairId: string | null; groupId: string | null }> {
     if (!commandIds.length) return new Map();
-    const rows = this.store.db.prepare(`SELECT t.id AS id, t.run_id AS runId, json_extract(r.value, '$.pairId') AS pairId
-      FROM workflow_turns t JOIN workflow_runs r ON r.id = t.run_id WHERE t.id IN (${commandIds.map(() => '?').join(',')})`).all(...commandIds) as {id:string;runId:string;pairId:string|null}[];
-    return new Map(rows.map((row) => [row.id, { runId: row.runId, pairId: row.pairId }]));
+    const rows = this.store.db.prepare(`SELECT t.id AS id, t.run_id AS runId, json_extract(r.value, '$.pairId') AS pairId,
+      COALESCE(json_extract(r.value, '$.implementation.group.id'), json_extract(r.value, '$.planning.group.id'), json_extract(r.value, '$.standalone.groupId'), json_extract(r.value, '$.pairId')) AS groupId
+      FROM workflow_turns t JOIN workflow_runs r ON r.id = t.run_id WHERE t.id IN (${commandIds.map(() => '?').join(',')})`).all(...commandIds) as {id:string;runId:string;pairId:string|null;groupId:string|null}[];
+    return new Map(rows.map((row) => [row.id, { runId: row.runId, pairId: row.pairId, groupId: row.groupId }]));
   }
   activeExecutions(): Execution[] {
-    return this.runs().filter((r) => r.status === 'running' || r.status === 'paused').map((r) => this.execution(r.currentCommandId)!).filter(Boolean);
+    return this.runs().filter((r) => ['running','waiting','paused'].includes(r.status)).map((r) => this.execution(r.currentCommandId)!).filter(Boolean);
   }
   owner(lockKey: string): string | null {
     return (this.store.db.prepare('SELECT run_id FROM workflow_owners WHERE lock_key=?').get(lockKey) as {run_id:string} | undefined)?.run_id ?? null;
@@ -72,15 +79,24 @@ export class WorkflowStore {
     run.status = complete ? 'completed' : 'paused'; run.reason = reason; this.saveRun(run);
     if (complete) this.store.db.prepare('DELETE FROM workflow_owners WHERE run_id=?').run(run.id);
   }
-  start(input: StartInput, participants: ManagedSession[], pairId: string | null): Execution {
+  start(input: StartInput, participants: ManagedSession[], pairId: string | null, implementation?: ImplementationRun, planning?: PlanningRun, standalone?: StandaloneStart): Execution {
     const first = participants.find((s) => s.id === input.agentId)!;
-    const wire = wireText(input, first); // Validation before any durable write.
+    const wire = implementation || planning ? '' : wireText(input, first); // Validation before any durable write.
     return this.store.db.transaction(() => {
       const existing = this.execution(input.requestId);
       if (existing) {
         const existingRun = this.run(existing.runId)!;
+        if (hash(existingRun.standalone ?? null) !== hash(standalone ?? null)) throw new AppError('ID_CONFLICT', 'This request ID is bound to another instruction.', 409);
+        if (planning && existingRun.planning) {
+          if (hash(existingRun.planning.request) !== hash(planning.request)) throw new AppError('ID_CONFLICT', 'This request ID is bound to another planning request.', 409);
+          return existing;
+        }
+        if (implementation && existingRun.implementation) {
+          if (hash(existingRun.implementation.request) !== hash(implementation.request)) throw new AppError('ID_CONFLICT', 'This request ID is bound to another implementation request.', 409);
+          return existing;
+        }
         if (existing.runId !== input.requestId || existing.input.kind !== input.kind || existing.agentId !== input.agentId || existing.wireText !== wire || existingRun.pairId !== pairId ||
-          existingRun.autoContinue !== (input.autoContinue === true) || existingRun.turnLimit !== (input.turnLimit ?? DEFAULT_TURN_LIMIT) || (existing.input.handoff === true) !== (input.handoff === true)) {
+          existingRun.autoContinue !== (input.autoContinue === true) || existingRun.turnLimit !== (input.turnLimit ?? DEFAULT_TURN_LIMIT) || (existingRun.pauseOnObjection === true) !== (input.pauseOnObjection === true) || (existing.input.handoff === true) !== (input.handoff === true)) {
           throw new AppError('ID_CONFLICT', 'This request ID is already bound to different work or policy.', 409);
         }
         return existing;
@@ -90,9 +106,10 @@ export class WorkflowStore {
       if (this.store.activeFor(first.repository)) throw new AppError('TURN_ACTIVE', 'Reconcile the older uncertain delivery before starting a run.', 409);
       const timestamp = now();
       const run: RelayRun = { id: input.requestId, repository: first.repository, lockKey, pairId, participants,
-        autoContinue: input.autoContinue === true, pauseRequested: false, status: 'running', reason: 'Waiting for this command to finish.',
-        currentCommandId: input.requestId, automaticTurns: 0, turnLimit: input.turnLimit ?? DEFAULT_TURN_LIMIT, createdAt: timestamp, updatedAt: timestamp };
-      const turn: Execution = { commandId: input.requestId, runId: run.id, agentId: first.id, input, wireText: wire,
+        autoContinue: input.autoContinue === true, pauseOnObjection: input.pauseOnObjection === true, pauseRequested: false, status: 'running', reason: 'Waiting for this command to finish.',
+        currentCommandId: input.requestId, automaticTurns: 0, turnLimit: input.turnLimit ?? DEFAULT_TURN_LIMIT, createdAt: timestamp, updatedAt: timestamp,
+        ...(implementation ? { implementation } : {}), ...(planning ? { planning } : {}), ...(standalone ? { standalone } : {}) };
+      const turn: Execution = planning ? this.planTurn(run) : implementation ? this.commitTurn(run, first.id, implementation.request.kind !== 'review' ? 'work' : implementation.policy === 'peer' ? 'review_and_improve' : 'review', input.text ?? '', input.handoff === true, input.requestId) : { commandId: input.requestId, runId: run.id, agentId: first.id, input, wireText: wire,
         status: 'planned', sessionId: null, sourceTurnId: null, continuation: false, baselineProcesses: null, baselineWorktree: null };
       this.saveRun(run); this.saveExecution(turn);
       this.store.db.prepare('INSERT INTO workflow_owners(lock_key,run_id) VALUES (?,?)').run(lockKey, run.id);
@@ -102,7 +119,7 @@ export class WorkflowStore {
   claim(id: string): Execution | null {
     return this.store.db.transaction(() => {
       const turn = this.execution(id); const run = turn && this.run(turn.runId);
-      if (!turn || !run || run.status !== 'running' || run.currentCommandId !== id || turn.status !== 'planned') return null;
+      if (!turn || !run || run.status !== 'running' || run.currentCommandId !== id || turn.status !== 'planned' || (run.implementation && run.implementation.setup !== 'ready')) return null;
       turn.status = 'dispatching'; this.saveExecution(turn); return turn;
     }).immediate();
   }
@@ -120,7 +137,8 @@ export class WorkflowStore {
   }
   /** `evidence` is the server's own background-work reading for this completion; it is consulted only when the hook reports unknown.
    * `worktree` is the worktree digest read at this completion for a handoff instruction; null when not gathered or unreadable. */
-  receive(input: HookEvent, evidence: BackgroundEvidence | null = null, worktree: string | null = null): HookReceipt {
+  receive(input: HookEvent, evidence: BackgroundEvidence | null = null, worktree: string | null = null, publication: PublicationResult | null = null, planCapture: PlanCapture | null = null): HookReceipt {
+    if (input.event === 'session_started') return { accepted: false, reason: 'Session startup is display evidence only.', event: null };
     if (!input.commandId || !input.sourceTurnId || !input.sessionId || !input.identity || input.event === 'outcome') {
       // Old hooks/follow-ups remain diagnostic only. They can never complete a newer command.
       return { accepted: false, reason: 'Uncorrelated lifecycle event; update hooks or reconcile manually.', event: null };
@@ -136,7 +154,7 @@ export class WorkflowStore {
       }
       if (row?.receipt) return JSON.parse(row.receipt) as HookReceipt;
       if (!row) this.store.db.prepare('INSERT INTO workflow_events(id,command_id,digest,value) VALUES (?,?,?,?)').run(key, input.commandId, digest, json(input));
-      return this.apply(key, input, evidence, worktree);
+      return this.apply(key, input, evidence, worktree, publication, planCapture);
     }).immediate();
   }
   /** Lifecycle events that arrived before the terminal transport returned. The caller gathers evidence per event. */
@@ -144,7 +162,7 @@ export class WorkflowStore {
     return (this.store.db.prepare('SELECT value FROM workflow_events WHERE command_id=? AND receipt IS NULL ORDER BY rowid').all(id) as {value:string}[])
       .map((row) => JSON.parse(row.value) as HookEvent);
   }
-  private apply(key: string, input: HookEvent, evidence: BackgroundEvidence | null, worktree: string | null): HookReceipt {
+  private apply(key: string, input: HookEvent, evidence: BackgroundEvidence | null, worktree: string | null, publication: PublicationResult | null, planCapture: PlanCapture | null): HookReceipt {
     const done = (reason: string, event: TurnEvent | null = null): HookReceipt => {
       const receipt = { accepted: event !== null, reason, event };
       this.store.db.prepare('UPDATE workflow_events SET receipt=? WHERE id=?').run(json(receipt), key);
@@ -154,12 +172,18 @@ export class WorkflowStore {
     if (!turn || !run || run.currentCommandId !== turn.commandId || !['running','paused'].includes(run.status)) return done('Late or unknown command; no workflow transition.');
     const participant = run.participants.find((s) => s.id === turn.agentId)!;
     const current = this.store.sessions().find((s) => s.id === participant.id) as ManagedSession | undefined;
+    if (input.event === 'turn_interrupted' && (input.source !== 'codex' || input.source !== participant.agentType || !input.cliPid || input.cliPid !== participant.cliPid || !input.startedAt ||
+      current?.registrationId !== participant.registrationId || !identityMatches(participant.identity, input.identity) ||
+      flat(input.prompt) !== flat(turn.wireText) || (turn.sessionId && (turn.sessionId !== input.sessionId || turn.sourceTurnId !== input.sourceTurnId)))) {
+      return done('Stale or mismatched interruption; no workflow transition.');
+    }
     if (current?.registrationId !== participant.registrationId || input.source !== participant.agentType || !identityMatches(participant.identity, input.identity)) {
       this.stop(run, 'Worker instance changed. Reconcile and re-register before continuing.'); return done(run.reason);
     }
     if (turn.status === 'planned' || turn.status === 'uncertain' || turn.status === 'rejected') return done('Command was not confirmed delivered; manual reconciliation required.');
     if (turn.status === 'dispatching') return { accepted: false, reason: 'Buffered until delivery is established.', event: null };
     if (turn.status === 'finished') return done('This command already has a completion.');
+    if (turn.status === 'interrupted') return done('This command was interrupted; completion cannot resume it.');
     if (flat(input.prompt) !== flat(turn.wireText)) {
       if (flat(input.prompt).includes(flat(turn.wireText))) {
         // Codex also notifies for auxiliary turns (thread-title generation) whose prompt quotes the user prompt, marker
@@ -178,6 +202,12 @@ export class WorkflowStore {
     }
     turn.sessionId = input.sessionId!; turn.sourceTurnId = input.sourceTurnId!; this.saveExecution(turn);
     if (input.event === 'turn_started') return done('Source turn acknowledged.', this.asTurnEvent(input, participant.id, null));
+    if (input.event === 'turn_interrupted') {
+      turn.status = 'interrupted'; this.saveExecution(turn);
+      run.pauseRequested = true;
+      this.stop(run, 'The assigned CLI turn was interrupted. Inspect unfinished work and background writers before taking over; no handoff was accepted.');
+      return done(run.reason);
+    }
     const event = this.asTurnEvent(input, participant.id, input.commandId!);
     this.store.addEvent(event);
     const background = input.backgroundState === 'unknown' && evidence ? evidence : { state: input.backgroundState, detail: null };
@@ -187,6 +217,28 @@ export class WorkflowStore {
       return done(run.reason, event);
     }
     turn.status = 'finished'; this.saveExecution(turn);
+    if (run.implementation) {
+      if (!publication?.publication) { this.stop(run, publication?.error ?? 'No validated committed handoff was found.'); return done(run.reason, event); }
+      this.consumePublication(run, turn, publication.publication);
+      return done(run.reason, event);
+    }
+    if (run.planning && turn.planning) {
+      if (!planCapture?.captured) { this.stop(run, planCapture?.error ?? 'No validated planning result.'); return done(run.reason, event); }
+      turn.planning.captured = planCapture.captured; this.saveExecution(turn);
+      consumePlan(run.planning, planCapture.captured);
+      if (run.pauseRequested || run.status === 'paused') this.stop(run, 'Planning result recorded; the run remains paused until reconciliation.');
+      else if (planCapture.captured.result.outcome === 'blocked') this.stop(run, `Planner blocked: ${planCapture.captured.result.reason}`);
+      else if (run.planning.next && run.autoContinue) {
+        if (run.automaticTurns >= run.turnLimit) this.stop(run, 'Automatic turn budget reached during planning.');
+        else this.schedulePlan(run, true);
+      } else {
+        run.status = 'waiting';
+        run.reason = run.planning.next ? 'Plan: ready for the next manual assignment.' : !planAgreed(run.planning) ? 'Plan objection: request changes or explicitly override the recorded disagreement.'
+          : `${run.planning.required.length === 1 ? 'Plan ready (solo; not independent consensus)' : 'Plan agreed by every required member'}. ${run.planning.request.requireApproval ? 'Awaiting your approval before Implementation.' : run.autoContinue ? 'Checking the authorized Implementation transition.' : 'Awaiting manual continuation into Implementation.'}`;
+        this.saveRun(run);
+      }
+      return done(run.reason, event);
+    }
     if (run.pauseRequested || run.status === 'paused') { this.stop(run, 'Turn finished; run remains paused until human takeover.'); return done(run.reason, event); }
     const isInstruction = turn.input.kind === 'instruction';
     if (isInstruction && turn.input.handoff === true) {
@@ -224,6 +276,153 @@ export class WorkflowStore {
     this.saveExecution(next); this.saveRun(run);
     return done('Exactly one continuation scheduled.', event);
   }
+  private commitTurn(run: RelayRun, agentId: string, action: ImplementationAction, text: string, handoff: boolean, commandId: string = randomUUID()): Execution {
+    const impl = run.implementation!;
+    const participant = run.participants.find((p) => p.id === agentId)!;
+    // Like runtime.ts, the host starts from web/. Keep a filesystem path: bundlers must not import this agent document.
+    const skill = resolve(process.cwd(), '../skills/commit-handoff/SKILL.md');
+    const wire = promptText(`Use the commit-handoff skill at ${JSON.stringify(skill)}. Read your assignment at ${JSON.stringify(join(this.assignmentDirectory, `${commandId}.json`))} and carry it out. [codercrew-command:${commandId}]`);
+    return { commandId, runId: run.id, agentId, input: { requestId: commandId, agentId, kind: 'instruction', text: text || 'Review the assigned committed candidate.', handoff, confirmReady: true },
+      wireText: wire, status: 'planned', sessionId: null, sourceTurnId: null, continuation: commandId !== run.id, baselineProcesses: null, baselineWorktree: null,
+      implementation: { identity: { schema: 1, phase: 'implementation', runId: run.id, commandId, turn: impl.turn, policyRevision: impl.revision, action, agentId,
+        registrationId: participant.registrationId, parent: impl.expectedParentSha, base: impl.acceptedSha,
+        reviewBase: action === 'work' ? null : impl.acceptedSha, reviewHead: action === 'work' ? null : impl.candidateSha } } };
+  }
+  private planTurn(run: RelayRun): Execution {
+    const plan = run.planning!; const next = plan.next!; const participant = plan.participants.find((p) => p.id === next.agentId)!;
+    const commandId = next.action === 'draft' ? plan.drafts[next.agentId]!.commandId : randomUUID();
+    const outputPath = next.action === 'draft' ? plan.drafts[next.agentId]!.path : plan.planPath;
+    if (next.action === 'draft') plan.drafts[next.agentId]!.status = 'running';
+    const skill = resolve(process.cwd(), '../skills/plan-handoff/SKILL.md');
+    const wire = promptText(`Use the plan-handoff skill at ${JSON.stringify(skill)}. Read your assignment at ${JSON.stringify(join(this.assignmentDirectory, `${commandId}.json`))}. Plan only; do not implement. [codercrew-command:${commandId}]`);
+    plan.next = null;
+    return { commandId, runId: run.id, agentId: next.agentId, input: { requestId: commandId, agentId: next.agentId, kind: 'instruction', text: 'Perform the assigned planning action only.', confirmReady: true },
+      wireText: wire, status: 'planned', sessionId: null, sourceTurnId: null, continuation: commandId !== run.id, baselineProcesses: null, baselineWorktree: null,
+      planning: { resultPath: join(this.assignmentDirectory, `${commandId}.result.json`), identity: { schema: 1, phase: 'plan', runId: run.id, commandId, epoch: plan.epoch, briefRevision: plan.briefRevision,
+        rosterRevision: plan.group.revision, policyRevision: plan.policyRevision, agentId: next.agentId, registrationId: participant.registrationId, action: next.action,
+        baseline: plan.request.baseline.head, outputPath, inputRevision: next.action === 'draft' ? null : plan.current?.revision ?? null, inputHash: next.action === 'draft' ? null : plan.current?.hash ?? null } } };
+  }
+  private schedulePlan(run: RelayRun, automatic: boolean): void {
+    const turn = this.planTurn(run); run.currentCommandId = turn.commandId; run.status = 'running'; run.reason = `Plan: ${turn.planning!.identity.action} assigned.`;
+    if (automatic) run.automaticTurns++;
+    this.saveExecution(turn); this.saveRun(run);
+  }
+  private planBoundary(input: PlanDecision): RelayRun {
+    const run = this.run(input.runId); const plan = run?.planning;
+    if (!run || !plan?.current || run.implementation || run.status !== 'waiting' || run.currentCommandId !== input.expectedCommandId || plan.current.revision !== input.expectedRevision || plan.current.hash !== input.expectedHash || plan.briefRevision !== input.expectedBriefRevision || plan.policyRevision !== input.expectedPolicyRevision) throw new AppError('PLAN_CHANGED', 'This plan or its approval boundary changed. Review the current captured version.', 409);
+    return run;
+  }
+  requestPlanChanges(input: PlanDecision): void {
+    this.store.db.transaction(() => {
+      const run = this.planBoundary(input); const plan = run.planning!;
+      if (!input.text?.trim() || !input.agentId || !plan.required.includes(input.agentId)) throw new AppError('INVALID_GUIDANCE', 'Choose a required planner and describe the requested changes.', 409);
+      if (plan.brief.length + input.text.length > 32000) throw new AppError('BRIEF_LIMIT', 'The accumulated brief is full. Stop and begin a new scoped planning task.', 409);
+      plan.brief += `\n\nHuman changes (brief revision ${plan.briefRevision + 1}):\n${input.text}`;
+      plan.briefRevision++; plan.endorsements = {}; plan.step = 'refinement'; plan.next = { agentId: input.agentId, action: 'revise' };
+      this.schedulePlan(run, false);
+    }).immediate();
+  }
+  /** Atomic phase transition: ownership/budgets survive and a frozen plan precedes any branch write. */
+  beginImplementation(input: PlanDecision, implementation: ImplementationRun, authority: FrozenPlan['authority']): Execution {
+    return this.store.db.transaction(() => {
+      const run = this.planBoundary(input); const plan = run.planning!;
+      if (authority === 'automatic' && (!run.autoContinue || plan.request.requireApproval || !planAgreed(plan))) throw new AppError('APPROVAL_REQUIRED', 'This transition is not preauthorized.', 409);
+      if (!planAgreed(plan) && !input.overrideReason?.trim()) throw new AppError('PLAN_DISAGREEMENT', 'Explicitly acknowledge the missing endorsements or objections before overriding plan judgment.', 409);
+      if (authority === 'automatic' && run.automaticTurns >= run.turnLimit) throw new AppError('TURN_LIMIT', 'Automatic turn budget reached before Implementation.', 409);
+      plan.frozen = { transitionId: implementation.request.requestId, authorizedAt: now(), authority, overrideReason: input.overrideReason ?? null,
+        epoch: plan.epoch, briefRevision: plan.briefRevision, policyRevision: plan.policyRevision, rosterRevision: plan.group.revision, baseline: plan.request.baseline.head,
+        brief: plan.brief, planningGroup: plan.group, planners: plan.participants,
+        automaticPolicy: { autoContinue: run.autoContinue, requireApproval: plan.request.requireApproval, turnLimit: run.turnLimit, pauseOnObjection: run.pauseOnObjection === true, automaticTurnsBeforeTransition: run.automaticTurns },
+        plan: plan.current!, endorsements: { ...plan.endorsements }, objections: { ...plan.objections }, implementation: { ...plan.request.implementation, branch: implementation.consent } };
+      plan.step = 'implemented'; plan.next = null;
+      run.implementation = implementation; run.participants = plan.implementationParticipants; run.autoContinue = implementation.request.autoContinue;
+      const turn = this.commitTurn(run, implementation.request.agentId, 'work', 'Implement the frozen plan within the recorded task scope.', implementation.request.handoff, implementation.request.requestId);
+      run.currentCommandId = turn.commandId; run.status = 'running'; run.reason = 'Plan frozen and authorized; Implementation branch setup pending.';
+      if (authority === 'automatic') run.automaticTurns++;
+      this.saveExecution(turn); this.saveRun(run); return turn;
+    }).immediate();
+  }
+  setupResult(id: string, ready: boolean, reason?: string): void {
+    const run = this.run(id)!; run.implementation!.setup = ready ? 'ready' : 'uncertain';
+    if (ready) this.saveRun(run); else this.stop(run, reason ?? 'Branch setup is uncertain. Inspect the checkout; nothing will be replayed.');
+  }
+  claimSetup(id: string): boolean {
+    return this.store.db.transaction(() => {
+      const run = this.run(id)!;
+      if (run.status !== 'running' || run.implementation?.setup !== 'pending') return false;
+      run.implementation.setup = 'applying'; this.saveRun(run); return true;
+    }).immediate();
+  }
+  private consumePublication(run: RelayRun, turn: Execution, publication: NonNullable<PublicationResult['publication']>): void {
+    const impl = run.implementation!;
+    turn.implementation!.published = publication; this.saveExecution(turn);
+    impl.latestPublication = publication;
+    impl.expectedParentSha = publication.sha;
+    const { entry, projectChanged } = publication;
+    const peer = run.participants.find((p) => p.id !== turn.agentId);
+    impl.next = null;
+    if (entry.action === 'work') {
+      if (projectChanged) {
+        impl.candidateSha = publication.sha; impl.candidateAuthor = turn.agentId;
+        if (turn.input.handoff && peer) impl.next = { agentId: peer.id, action: impl.policy === 'peer' ? 'review_and_improve' : 'review', text: 'Review the complete candidate against the accepted baseline.', handoff: true };
+      }
+      run.reason = projectChanged ? 'Proposal published. Final task-level verification remains required.' : `Worker report: ${entry.summary}`;
+    } else if (entry.decision === 'accept') {
+      impl.acceptedSha = entry.reviewHead!; impl.findings = null;
+      if (projectChanged) {
+        impl.candidateSha = publication.sha; impl.candidateAuthor = turn.agentId;
+        if (peer) impl.next = { agentId: peer.id, action: 'review_and_improve', text: 'Review the new improvements against the accepted candidate.', handoff: true };
+      } else impl.candidateSha = null;
+      run.reason = 'Review chain completed. Final task-level verification remains required.';
+    } else {
+      impl.findings = entry.reason;
+      const author = impl.policy === 'worker_reviewer' ? impl.workerId : impl.candidateAuthor;
+      if (author && author !== turn.agentId) impl.next = { agentId: author, action: 'work', text: 'Address the outstanding reviewer findings within the original task scope. Publish a revised proposal or a log-only report explaining what needs human direction.', handoff: true };
+      run.reason = `Reviewer objected: ${entry.reason}`;
+    }
+    if (run.pauseRequested || run.status === 'paused') { this.stop(run, `Turn publication recorded; run remains paused. ${run.reason}`); return; }
+    if (entry.needsHuman) { impl.next = null; this.stop(run, `Human direction required: ${entry.reason ?? entry.summary}`); return; }
+    if (!impl.next) { this.stop(run, run.reason, true); return; }
+    // An explicit handoff requests its initial review even with subsequent automatic collaboration off.
+    const automatic = entry.action === 'work' ? turn.input.handoff === true && (turn.implementation!.identity.turn === 1 || run.autoContinue) : run.autoContinue;
+    // An objection routes back to the author like any other turn unless the agreement says it pauses for the human.
+    if (!automatic || (entry.decision === 'object' && run.pauseOnObjection === true)) {
+      run.status = 'waiting'; run.reason = entry.decision === 'object' ? `${run.reason} Next turn sends these findings to the author.` : 'Publication validated. Ready for the next manual handoff.';
+      this.saveRun(run); return;
+    }
+    if (run.automaticTurns >= run.turnLimit) { this.stop(run, 'Automatic turn budget reached.'); return; }
+    this.scheduleCommit(run, true);
+  }
+  private scheduleCommit(run: RelayRun, automatic: boolean): void {
+    const impl = run.implementation!; const next = impl.next!;
+    impl.turn++; impl.next = null;
+    const turn = this.commitTurn(run, next.agentId, next.action, next.text, next.handoff);
+    run.currentCommandId = turn.commandId; run.status = 'running'; run.reason = 'Next implementation turn scheduled.';
+    if (automatic) run.automaticTurns++;
+    this.saveExecution(turn); this.saveRun(run);
+  }
+  continue(id: string, expectedCommandId: string): void {
+    this.store.db.transaction(() => {
+      const run = this.run(id);
+      if (run?.planning && !run.implementation && run.status === 'waiting' && run.currentCommandId === expectedCommandId && run.planning.next) { this.schedulePlan(run, false); return; }
+      if (!run?.implementation || run.status !== 'waiting' || run.currentCommandId !== expectedCommandId || !run.implementation.next) throw new AppError('HANDOFF_CHANGED', 'This manual handoff is no longer current. Refresh the run.', 409);
+      this.scheduleCommit(run, false);
+    }).immediate();
+  }
+  changePolicy(input: PolicyChange): void {
+    this.store.db.transaction(() => {
+      const run = this.run(input.runId); const impl = run?.implementation;
+      if (!run || !impl || run.status !== 'waiting' || run.currentCommandId !== input.expectedCommandId || impl.revision !== input.expectedRevision || !impl.next || run.participants.length !== 2) throw new AppError('POLICY_BOUNDARY', 'Policy changes require the current settled manual handoff. Refresh the run.', 409);
+      if (input.policy === 'worker_reviewer' && !run.participants.some((p) => p.id === input.workerId)) throw new AppError('INVALID_ROLE', 'Choose one group member as the worker.', 409);
+      const reviewer = input.policy === 'worker_reviewer' ? run.participants.find((p) => p.id !== input.workerId)!.id : run.participants.find((p) => p.id !== impl.candidateAuthor)!.id;
+      if (impl.next.action !== 'work' && reviewer === impl.candidateAuthor) throw new AppError('SELF_REVIEW', 'The candidate author cannot become its independent reviewer. Keep that member as worker until this candidate is reviewed.', 409);
+      impl.policy = input.policy; impl.workerId = input.policy === 'worker_reviewer' ? input.workerId! : null; impl.revision++;
+      impl.next.agentId = impl.next.action === 'work' ? impl.workerId ?? impl.candidateAuthor! : reviewer;
+      if (impl.next.action !== 'work') impl.next.action = input.policy === 'peer' ? 'review_and_improve' : 'review';
+      run.autoContinue = input.autoContinue; if (input.pauseOnObjection !== undefined) run.pauseOnObjection = input.pauseOnObjection;
+      run.reason = 'Collaboration policy updated at the settled boundary. Confirm readiness for Next turn.'; this.saveRun(run);
+    }).immediate();
+  }
   private asTurnEvent(input: HookEvent, agentId: string, commandId: string | null): TurnEvent {
     return { agentId, paneId: input.paneId, source: input.source, sessionId: input.sessionId ?? null, commandId,
       prompt: input.prompt ?? null, outcome: input.outcome ?? null, reason: input.reason ?? null,
@@ -231,15 +430,16 @@ export class WorkflowStore {
   }
   pause(id: string, reason = 'Paused by the user. This does not interrupt an agent or release ownership.'): void {
     this.store.db.transaction(() => { const run = this.run(id); if (!run) throw new AppError('NOT_FOUND', 'Run not found.', 404);
-      if (!['running','paused'].includes(run.status)) return;
+      if (!['running','waiting','paused'].includes(run.status)) return;
       run.pauseRequested = true; this.stop(run, reason);
     }).immediate();
   }
   takeover(id: string): void {
     this.store.db.transaction(() => {
       const run = this.run(id); if (!run) throw new AppError('NOT_FOUND', 'Run not found.', 404);
-      if (!['running','paused'].includes(run.status)) return;
+      if (!['running','waiting','paused'].includes(run.status)) return;
       const turn = this.execution(run.currentCommandId)!;
+      if (run.implementation?.setup === 'applying') throw new AppError('SETUP_PENDING', 'Wait for the in-flight branch setup before taking over.', 409);
       if (turn.status === 'dispatching') throw new AppError('DELIVERY_PENDING', 'Wait for the in-flight terminal delivery before taking over.', 409);
       const delivery = this.store.activeFor(run.repository);
       if (delivery) this.store.release(delivery);
@@ -248,8 +448,9 @@ export class WorkflowStore {
     }).immediate();
   }
   recover(): void {
-    for (const run of this.runs().filter((r) => r.status === 'running' || r.status === 'paused')) {
+    for (const run of this.runs().filter((r) => ['running','waiting','paused'].includes(r.status))) {
       const turn = this.execution(run.currentCommandId)!;
+      if (run.implementation?.setup === 'applying') run.implementation.setup = 'uncertain';
       if (turn.status === 'dispatching') { turn.status = 'uncertain'; this.saveExecution(turn); }
       this.stop(run, 'Backend restarted. Reconcile this run before starting another; nothing was replayed.');
     }

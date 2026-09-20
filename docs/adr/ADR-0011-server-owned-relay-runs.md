@@ -66,16 +66,98 @@ outstanding run through the existing pause/takeover flow before the next command
 Native prompt pairing fixes the interrupted hook-slot problem; it does not prove
 that interrupted/background writers stopped or release server execution ownership.
 
-Codex notify uses its current prompt, thread ID and turn ID when available, with the unique
-command ID as the event key fallback. This is not a claim that a fabricated native
-turn ID exists.
+Codex binds the exact command echo at native `UserPromptSubmit`, keyed by pane,
+session and native turn ID. Its later `notify` completion must match that binding.
+Unmarked steering within the same native turn preserves the binding; a different
+marked command makes it ambiguous. A new unmarked turn cannot reuse the previous
+command. Missing, changed or ambiguous bindings never advance execution.
+
+This corrects the earlier assumption about `notify.input-messages`: Codex 0.155.1
+builds it from sampling history, not just the current turn. It is ignored for
+correlation; neither its final message nor a unique historical marker proves the
+current command. See the versioned [turn implementation](https://github.com/openai/codex/blob/rust-v0.155.1/codex-rs/core/src/session/turn.rs)
+and [hook implementation](https://github.com/openai/codex/blob/rust-v0.155.1/codex-rs/core/src/hook_runtime.rs).
+The native start hook is installed in Codex's `hooks.json`; legacy notify remains
+the completion signal because a native Stop hook may still block or continue work.
 
 Full pane/server/socket identity, registered generation and CLI kind must agree.
 The registration pins the physical worker; the CLI's logical session is pinned
-only within a command (Claude from its start acknowledgment, Codex at completion),
+only within a command through its start acknowledgment,
 so a chat reset between commands (Codex `/new`, Claude `/clear`) needs no
 re-registration. Old follow-up outcomes, absent identities and ambiguous payloads
 remain nonauthoritative. A session or turn change inside a command pauses the run.
+
+After ownership and delivery reservations are released, read-only discovery may
+offer a fresh registration generation for a restarted supported CLI in the same
+exact pane, canonical directory and worktree. Saved names and group membership
+remain intact. The next explicit Plan/Implementation/Send action validates the
+displayed generation and binds it; viewing or reconciliation alone never writes
+the replacement or replays a command. Concurrent registration changes invalidate
+the candidate. Owned runs retain their frozen instances, and uncertain processes
+or changed pane/directory identities require inspection. The deprecated staging
+transport retains its existing registration contract.
+
+Display activity is independent of execution ownership. Native hooks attach the
+foreground CLI pid and start timestamp to their exact session/turn binding and
+retain them in the matching completion, including manual terminal turns without
+a command marker. The server verifies the current pane/process and records live
+activity separately from the workflow ledger. Older/duplicate starts, mismatched
+completions and replaced processes cannot overwrite newer activity. Working may
+survive pause/takeover; Idle requires a matching settled native completion.
+Codex notify runs after Stop hooks finish: background servers, watchers and
+tasks are not evidence that Codex is still answering after that completion.
+Claude keeps its source-specific Stop/background guards, since [Stop hooks can
+continue the agent](https://code.claude.com/docs/en/hooks#stop-decision-control).
+Controller safety checks remain separate: Idle does not certify checkout readiness
+or clear background work. Missing turn evidence,
+including after backend restart, remains Unknown. These observations never
+release ownership, replay commands or advance a run; lifecycle authority for
+those actions remains unchanged.
+
+Codex's [native Interrupt hook](https://learn.chatgpt.com/docs/hooks#interrupt)
+provides an exact session/turn cancellation signal. The hook verifies the current
+pane and CLI against its saved binding, marks that binding interrupted, and sends
+`turn_interrupted` without claiming completion. Display activity becomes Interrupted;
+an owned, correlated assignment is durably interrupted and its run paused, retaining
+ownership. This is not a successful TurnEvent or a handoff. Late completion cannot
+consume a publication, release ownership or schedule a peer. Duplicate/stale
+interruptions cannot overwrite a newer native turn. Events during terminal delivery
+are buffered until delivery is established. A fresh interruption can recover display
+after backend restart only against the exact interrupted binding; historical records
+are never replayed. An owned interrupted execution remains visible after restart.
+Web Pause remains a scheduler operation, not a native process interrupt.
+
+An explicit status reset provides human recovery for a quiet CLI whose activity
+was lost on restart. The user confirms an empty prompt with no background writers;
+the server checks the displayed registration, live pane/CLI identity, activity
+timestamp and absence of workflow/transport ownership. Only Unknown may become
+Ready, labeled as human-confirmed rather than a native completion. Configuration
+is preserved; no terminal input, Git operation, history replay or run transition
+occurs. Delayed callbacks from before this observation boundary cannot overwrite
+it; a new native turn resumes normal tracking. The confirmation remains ephemeral,
+so a subsequent backend restart still requires fresh evidence or another reset.
+
+A new completion received after backend restart may recover display activity by
+matching the hook's current native binding file: exact session, turn, pane, CLI
+pid and start time. No transcript or historical event is consulted. A different
+binding, unreadable file or unverifiable current CLI identity cannot certify
+Idle. A missing pre-turn process baseline does not invalidate an exact native
+completion for display; background-process evidence still gates workflow
+continuation independently. Workflow recovery remains paused and retains ownership.
+
+Codex browser-tool infrastructure is identified by its installed executable,
+specific REPL kernel/app-server arguments and native node_repl ancestry. Those
+persistent services do not count as unfinished task workers; arbitrary commands
+and workers beneath them still do. Arguments are inspected transiently and are
+never returned in API process records or persisted in workflow evidence.
+
+Native SessionStart for startup/resume can report Ready before the first prompt;
+this only means the current CLI initialized, not that a task completed or that
+background work is clear. Compaction is excluded, and late startup cannot replace
+an observed turn. Lifecycle observation works before browser discovery and while
+the terminal is in copy mode or synchronized-input mode. Those input restrictions
+still prohibit delivery. Hook delivery diagnostics retain bounded metadata only
+(event, pairing presence, process id, HTTP status and time), never raw payloads.
 
 A response can end while background work remains. Only explicit clear evidence
 can release execution ownership or schedule the next worker automatically. Missing
@@ -143,3 +225,13 @@ final test automation remain follow-up work. A same-user agent can access the
 controller's token or socket. Unsupported lifecycle evidence pauses rather than
 being treated as safe. The private iPhone milestone requires physical-device and
 Tailscale testing, not just a mobile Chromium viewport.
+
+
+### Publication observation and terminal input gates
+
+A correlated completion validates the frozen participants, CLI process, canonical
+working directory, and published artifact without requiring terminal input to be
+enabled. Copy mode and synchronized input do not invalidate a committed handoff
+or captured plan document. Delivery still checks the destination pane with the
+full input gates, including immediately before submission. A peer whose input is
+blocked must not receive a command, but that does not erase the validated artifact.

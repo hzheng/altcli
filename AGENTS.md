@@ -40,6 +40,12 @@ changes lifecycle handling, not this skill's staging/baseline rules.
 
 ## Validation
 
+Project tests, builds, lint and type checks are already authorized, including npm,
+Node test scripts and scripts/check.sh; do not ask for conversational confirmation.
+Reuse applicable saved command approvals. Prefer direct commands; avoid changing
+environment wrappers or log redirections that turn an approved test into a new
+approval request. CLI-enforced permission rules still apply.
+
 Run ./scripts/check.sh and ./scripts/check.sh --e2e for UI changes. Test lifecycle
 faults, duplicate events, overlapping pairs, multiple clients, history truncation,
 restart, and unknown background work. Preserve fake-vs-real test distinctions.
@@ -50,6 +56,6 @@ must not be replaced while a delivery is active. No unobserved test is 'passed'.
 
 Follow [ROADMAP](ROADMAP.md#migration-and-implementation-sequence), [WORKFLOWS](docs/WORKFLOWS.md), and the applicable ADR. Preserve the legacy skill and verified staging behavior. Use **group** for the new product/API design while preserving historical pair IDs through an explicit migration; do not rename vendor event pairing or invalidate active runs incidentally.
 
-Users prepare worktrees, environments, and agent directories. Discovery is read-only; Start binds exact eligible instances. The only target controller Git-write exception is scoped, confirmed creation/check-out of a new branch as defined by ADR-0013, after its guarded implementation and tests exist. This does not authorize an ordinary agent review to mutate Git, or allow controller staging, commits, worktree provisioning, cleanup, or history rewriting.
+Projects are identified by canonical Git common directory; worktrees and their standard indexes remain independent execution boundaries. Discovery is read-only; Start binds exact eligible instances. Users prepare environments and agent directories. ADR-0013 permits two scoped, confirmed setup operations: creation/check-out of a new branch at a settled boundary (clean entry or captured unfinished input for the first work turn), and creation of a new task branch with a linked worktree at an exact committed baseline. Task worktrees default to ~/.codercrew/<repo-name>/<branch-name>; no existing checkout is switched and dirty source files are not copied. The default branch and configured integration branches are starting points only, never implementation branches; an existing task branch keeps a confirmed baseline, and integration happens outside the app (squash recommended). This does not authorize an ordinary agent review to mutate Git, or allow controller staging, commits, worktree removal, environment bootstrap, cleanup, or history rewriting. Uncertain creation retains its durable setup owner until explicit inspection; never retry or roll it back automatically.
 
 Planning uses ignored documents and captured results; implementation uses the selected handoff contract. Do not silently turn proposed schemas, provider capabilities, N-agent rollout, automatic peer-objection routing, or other open choices into accepted behavior. Update the canonical ADR/guide instead of reintroducing a monolithic design draft. All acceptance claims must name what actually ran.

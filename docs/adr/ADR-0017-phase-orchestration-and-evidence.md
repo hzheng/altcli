@@ -8,6 +8,21 @@ This documentation-only change does not enable the described features.
 
 Relationship: Extends ADR-0011 for new phase-aware workflows; retains its identity, ownership, and no-blind-replay guarantees.
 
+## Local implementation update — September 19, 2026
+
+Plan and Implementation now share the durable run owner, lifecycle correlation,
+event deduplication and automatic-turn budget. Plan adds persisted ordered draft
+assignments (concurrency one), epoch/brief/roster identities, captured versions,
+endorsement history and a frozen authorization record. Result files are external
+metadata, published before lifecycle completion; their existence alone never
+advances the run. Missing or invalid results pause; late files are not retried.
+Approval checks exact plan/hash/brief/policy and current-command identities, and
+the first Implementation turn is created in the same transaction as the freeze.
+Confirmed branch setup retains its separate once-only persisted claim. Restart
+restores evidence and pauses without replay, including at a manual checkpoint.
+This is local sequential source support, not native runtime/host acceptance or
+the future concurrent/remote recovery machinery described below.
+
 ## Context
 
 Workspace inventory, role assignment, artifact publication, and execution evidence have different meanings. One server must combine them durably without deriving authority from browser selection or uncorrelated output.
@@ -68,7 +83,7 @@ Transport reservations and execution ownership are separate. Terminal text deliv
 
 13. **Inventory is not authorization.** Auto-selection is a convenience before Start, never a live membership rule.
 14. **Workspace grouping is not the lock boundary.** Cards for different subdirectories of the same checkout share its canonical worktree/index execution exclusion.
-15. **The app does not manage environments.** The user prepares worktrees, branch placement outside the narrow helper, dependencies, and agent cwd.
+15. **The app does not manage environments.** The user prepares dependencies and agent cwd. Existing-worktree branch setup and new task-worktree creation are separate scoped confirmations under ADR-0013; neither relocates agents or bootstraps an environment.
 16. **Branch writes need scoped consent.** Creation at a settled boundary requires the recorded workspace/current-commit consent and fresh checks; ambiguity is not an invitation to force or retry blindly.
 17. **Solo is explicit.** One identity is stored once; self-review does not count as independent peer approval, and no virtual second vote or self-relay is created.
 18. **Capability limits are server rules.** The registry may contain many agents while initial phase groups permit at most two. A larger payload cannot bypass the staged rollout.

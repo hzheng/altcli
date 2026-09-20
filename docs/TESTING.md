@@ -10,7 +10,7 @@ npm --prefix web ci
 ./scripts/check.sh --e2e
 ```
 
-The gate checks skill installation (read-only), dependency-free hook/config
+The gate checks skill installation (read-only), dependency-free setup/hook/config
 regressions, transport smoke tests, workflow tests against better-sqlite3, full
 TypeScript, Vitest and production build. The e2e gate adds Playwright against mock
 servers. Each viewport has a separate store. Mobile Chromium emulation is not
@@ -20,6 +20,7 @@ physical Safari/Tailscale validation.
 
 ```bash
 node --test scripts/review-regressions.test.mjs
+node --test scripts/setup.test.mjs
 cd web
 npm run test:smoke
 npm run test:workflow
@@ -29,7 +30,9 @@ npm run build
 npm run e2e
 ```
 
-Hook/config tests use temporary homes only. The HTTP hook smoke test invokes the
+Setup/hook/config tests use temporary homes only. Setup tests run the real hook
+and skill installers in a copied fixture, but stub npm rather than install or
+download dependencies. The HTTP hook smoke test invokes the
 real hook with a fake tmux metadata executable and a loopback test server; it does
 not launch a coding CLI. It proves current-message preference, start/stop binding,
 overlapping-start refusal and no lagging-transcript reuse.
@@ -73,16 +76,26 @@ Use behavior-based tests and label capability stage. N=3/N>3 model tests preserv
 | --- | --- |
 | Multiple panes in attached or detached tmux sessions | Discovery inspects panes on the configured socket, not only visible terminal clients. |
 | Same cwd contains Codex, Claude, a shell, and a dev server | Only the two eligible coding agents count toward the suggested group; others are visible diagnostics as appropriate. |
-| Workspace contains 0, 1, exactly 2, or 3+ eligible instances | No runnable group; solo; both preselected; explicit choice of two/solo respectively. No arbitrary first-two choice. |
-| Discovery lists many agents before N-agent dispatch is enabled | Inventory is complete within configured scope; API enforces the selectable member cap. |
+| Workspace contains 0, 1, exactly 2, or 3+ eligible instances | No runnable group; solo; both preselected; all selected respectively. Every session has a checkbox; larger selections persist without first-two truncation. |
+| Discovery lists many agents before N-agent dispatch is enabled | Inventory/selection are complete within configured scope; Start enforces the execution cap. |
 | Two registrations refer to one actual execution | Cannot form a two-member group or provide two planning endorsements. |
 | User deliberately deselects one of two suggested agents | Solo is allowed on the new workflow; polling does not restore the second selection. |
 | One-member implementation group | One worker identity, no automatic self-relay or fabricated peer approval. |
 | User requests self-review | Labeled non-independent and bounded; no automatic endless correction cycle. |
 | Start/phase selects a worker and reviewer with the same instance ID | Refused server-side, not converted into a virtual pair. |
 | Equivalent path spellings resolve to one cwd | One workspace grouping; exact underlying worktree/index still checked. |
-| `/repo` and `/repo/web` are separate cards for the same index | Selected local group cannot mix them under the same-directory rule; concurrent conflicting runs share a lock and are refused. |
-| Same repository but distinct linked worktrees | Distinct workspace/index identities; not automatically combined into a local group. |
+| `/repo` and `/repo/web` are task groups beneath one worktree | Selected local group cannot mix them under the same-directory rule; concurrent conflicting runs share a lock and are refused. |
+| Same repository but distinct linked worktrees | One project with distinct worktree/index identities and independent task ownership; not combined into a local group. |
+| Separate clones have the same origin, or no remote exists | Group by canonical common Git directory, not URL or display name; separate clones have disambiguated task-path namespaces. |
+| Worktree switches branch or detaches HEAD | Identity remains branch-independent; current path and branch/detached state are displayed. |
+| Worktree has no panes, or its directory becomes unavailable | Git inventory keeps it visible with setup guidance or a diagnostic; no agent readiness is invented. |
+| Newly created/explicitly used project has no agents after restart | Remembered project identity and Git worktree inventory restore visibility without a disk scan. |
+| Worktree creation is previewed or a project opened | No Git/configuration mutation, directory creation, dispatch or run change. |
+| Confirmed new task-worktree creation from a dirty checkout | Create only at the confirmed commit; source branch, staged/unstaged/untracked files and index remain unchanged. |
+| Creation has stale source identity, branch, commit, path, invalid name, symlink or existing destination | Refuse/reconfirm before Git; no overwrite or environment copying. |
+| Duplicate/concurrent creation confirmations | One durable operation owns project setup; identical IDs return existing state, changed inputs conflict. |
+| Creation fails after Git starts, or backend restarts while applying | Retain uncertain owner; no automatic retry, cleanup or rollback. |
+| Human inspects uncertain creation | Read-only verification of exact clean success or complete absence; partial/changed/unreadable results remain owned. |
 | Dirty, unknown-runtime, or blocked workspace | Remains visible/readable; Start shows a precise precondition failure. Recheck performs no repair. |
 | A new pane appears during a run | Available inventory changes; frozen group/roles/next actor do not. |
 | Selected pane disappears, restarts, or changes cwd | Mark unavailable/pause; no automatic substitute, following, restart, or reduction to solo. |

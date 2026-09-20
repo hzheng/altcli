@@ -6,6 +6,48 @@ Status: Accepted design direction; implementation and host acceptance pending.
 Items explicitly labeled working specification, recommendation, or open choice retain that status.
 This documentation-only change does not enable the described features.
 
+### Local implementation update (September 19, 2026)
+
+The new implementation path now realizes the one-direct-commit contract below;
+installed-agent acceptance remains pending. It defaults to `RELAY-LOG.jsonl`,
+with a validated user-selectable relative path, so the existing `.codercrew/`
+ignore rule needs no mutation. The proposed Markdown metadata representation
+below is retained as design provenance; the implemented encoding is UTF-8 JSON
+Lines, schema 1, exactly one appended line per completed turn. Existing bytes
+must remain unchanged, and log files/symlinked parents/ignored paths are checked.
+
+The exact schema is `HandoffEntry` in `web/src/contracts/implementation.ts` and
+`shared/openapi.yaml`: the controller supplies the immutable `identity` object
+(schema/run/command/turn/policy/registration/action/phase and exact revisions).
+The agent copies those fields and adds model, decision, reason, needsHuman,
+summary, and checks. Work uses null decision/reason. `needsHuman` is the explicit
+escalation encoding: it pauses automation and retains ownership; an acceptance
+cannot also require a blocking human decision. Project changes are derived from
+Git, excluding only the reserved log. Any supplied legacy outcome must agree.
+
+New staging starts are disabled unless the host opts in with
+`CODERCREW_ENABLE_LEGACY_RELAY=true`. Existing staging runs, hooks, and the legacy
+skill retain their protocol. No automatic migration adopts their uncommitted work.
+
+**Plain Send clarification (September 19, 2026).** Plain Send is outside the
+committed-handoff contract: it delivers the user's instruction with correlation,
+exact group/instance confirmation, fixed-worker targeting where selected, and the
+same canonical execution lock. It has no automatic successor, branch setup, or
+handoff assignment and does not automatically authorize a commit. It may operate
+with uncommitted files. The September 20 clarification below also permits
+unfinished input for the first committed work turn.
+The existing committed solo/API work path and Plan-to-Implementation transition
+retain their one-commit contract. This does not enable the deprecated staging
+relay or change its skill.
+
+For local relay handoffs, the agent uses `git -c core.hooksPath=/dev/null commit`.
+This per-command override prevents repository hooks, including commit-msg, from
+blocking or rewriting intermediate handoffs. It changes neither hook files nor
+persistent Git configuration. Required validation still runs before publication;
+normal hooks apply to final integration. An explicit conflicting repository rule
+must be reported, not silently overridden. Both initial work and reviews, including
+log-only reviews, still publish exactly one direct handoff commit.
+
 Relationship: ADR-0010 and ADR-0011 only for the new handoff path. The existing review-handoff skill and pinned compatibility behavior remain intact.
 
 ## Context
@@ -42,7 +84,7 @@ Every behavior listed below was verified present at the pinned baseline `46f228b
 | No new capabilities | Do not add worker/reviewer, solo self-relay, N-agent dispatch, explicit review ranges, remote publication, or PR features to the staging protocol. Workspace-first discovery, group terminology, compatibility/migration notices, and registration adapters may wrap the existing behavior without changing its meaning. Do not route an unsupported one-member/new-phase group into it. Bug fixes preserving the staging contract remain allowed. |
 | Labeled in the UI | The handoff selector shows it as deprecated and states what it lacks; it is not the default for a new task. |
 | One mode per run | A run records its implementation handoff mode before implementation dispatch and does not change it mid-execution. Plan always uses document handoff, so its authorized phase transition is not an accidental implementation-mode switch. The existing ownership lock on the worktree's canonical index prevents an uncommitted run and a commit-relay run from coexisting on one worktree. |
-| Migration on one worktree | Before the first commit-relay run: reconcile or take over any uncommitted run, then have the human commit or discard the leftovers. Commit relay requires a clean index and non-ignored worktree at the expected branch tip ([Commit-based handoff contract](ADR-0014-commit-relay-and-deprecation.md#commit-based-handoff-contract), [User-prepared workspaces, branch consent, and remote operation](ADR-0012-workspace-discovery-and-groups.md#decision)); it never adopts a deprecated run's index/worktree state as an implicit first candidate. |
+| Migration on one worktree | Before the first commit-relay run: reconcile or take over any uncommitted run. The human may explicitly use Commit to snapshot current changes; it captures the unfinished input. Existing-candidate review requires a clean index and non-ignored worktree at the expected branch tip ([Commit-based handoff contract](ADR-0014-commit-relay-and-deprecation.md#commit-based-handoff-contract), [User-prepared workspaces, branch consent, and remote operation](ADR-0012-workspace-discovery-and-groups.md#decision)); it never adopts a deprecated run's index/worktree state as an implicit first candidate. |
 | Removal criteria | Remove the mode from the app only after commit relay has passed the host-acceptance items of [Acceptance scenarios](../TESTING.md#acceptance-scenarios) for peer relay and worker/reviewer on the supported installed implementation adapters (initially the configured Codex/Claude group), and after a deliberate decision that no remaining use case needs an uncommitted checkpoint. Removal from the app does not delete the skill from this repository. |
 | Documentation | README, SETUP and SKILLS keep describing it while it exists, with the deprecation stated in the same place. |
 
@@ -54,11 +96,64 @@ Planning is not this fallback: ignored plan-file refinement is a phase-specific 
 
 A task contains many turns and commits on one recorded implementation branch, normally a dedicated task branch, and at most one PR for the whole task. A user may explicitly continue on main/the configured primary branch instead; the same lineage and ownership checks still apply, and no automatic merge is implied. "Every completed turn" does not mean every tool action or partial attempt; an interrupted execution must not fabricate an acceptance to produce a commit. **First-release lineage rule:** each handoff is exactly one direct, single-parent commit on the expected task-branch tip. Do not create unreported intermediate commits on that active branch during the turn. Arbitrary new commits are not publications. The supplied text permitted local checkpoints while also requiring the handoff commit's parent to equal the turn's original parent; these cannot both hold when checkpoints advance the same branch. Multi-commit turns need a separate starting-base-to-final-head contract and remain deferred. No controller reset or history rewriting is introduced to hide extra commits.
 
-A helper may validate and publish the result under the agent's authorized context. The agent following the commit-relay skill stages and commits its own handoff; the controller validates that publication read-only. Whichever component commits must preserve unrelated user work. The controller does not stage or commit on the agent's behalf, create worktrees, or prepare the tracked log by silently editing source files.
+A helper may validate and publish the result under the agent's authorized context. The agent following the commit-relay skill stages and commits its own handoff; the controller validates that publication read-only. Whichever component commits must preserve unrelated user work. The controller does not stage or commit on the agent's behalf or prepare the tracked log by silently editing source files. Task-worktree creation is separately confirmed setup under ADR-0013, never a turn-publication side effect.
 
-**V4 authority amendment:** the prior blanket prohibition on controller Git mutation is narrowed only for explicitly confirmed **creation and checkout of a new branch at the validated current commit** at a settled setup boundary. [ADR-0013](ADR-0013-confirmed-branch-setup.md) records this exception; implementation remains pending. Preparing the tracked log remains an authorized human/agent/helper setup step. The exception does not grant existing-branch switching/reset, stash/reset/clean, force-push, commits, merge, rebase, deletion, or worktree lifecycle authority. No turn changes its branch underneath active workers.
+**Setup authority:** [ADR-0013](ADR-0013-confirmed-branch-setup.md) permits confirmed new-branch checkout at a settled boundary with clean or explicitly captured initial work and separately confirmed task-worktree creation at an exact committed baseline. Preparing the tracked log remains an authorized human/agent/helper step. Neither exception grants existing-branch switching/reset, stash/reset/clean, force-push, commits, merge, rebase, deletion or automatic worktree lifecycle. No turn changes its branch underneath active workers.
 
-The first release starts and dispatches every commit-relay turn only when the index and non-ignored worktree are clean at the expected branch tip. That precondition is what prevents an agent's handoff commit from sweeping pre-existing user hunks into publication; a post-commit digest cannot retroactively provide that ownership boundary. Users with intentional uncommitted work either reconcile it themselves before commit relay or keep using the deprecated local mode. The controller never stashes, resets, discards, or commits it.
+**Initial snapshot clarification (September 20, 2026).** Separate Send, Commit and
+Relay actions remain distinct in committed Implementation. The Relay button adapts
+to checkout state as described below. Commit snapshots all current staged, unstaged
+and nonignored untracked project changes as they stand and stops without peer review.
+It does not finish pending requests; optional text is handoff context. The first
+`work` assignment carries `commitOnly: true`, preserving the existing handoff-log
+schema. The agent may append the log but must not edit project content. Incomplete
+work is described in the summary and is not itself a human-decision blocker.
+The controller still never stages or commits on the agent's behalf.
+
+Commit sets `handoff: false` and `autoContinue: false`, including solo mode. Each
+button names its recipient: selected agent/fixed worker for Send and Commit,
+other member/fixed reviewer for Relay. Relay offers a baseline selector whose
+earliest, default candidate is derived from the tracked relay log committed at
+HEAD: the newest first-parent commit after the task baseline whose entry the
+recipient published, or the task baseline itself when the recipient has none on
+this branch. Every later commit through HEAD's parent is a further candidate, the
+last one being the last commit only. Git author and date are never consulted. A
+typed baseline requires a read-only commit-list preview before it can be sent.
+The baseline is excluded. A changed HEAD or baseline invalidates the preview and
+readiness. Relay requires a clean checkout and project changes in the range;
+changing or previewing a baseline creates no run and sends nothing. Existing API
+`work` requests and Plan transitions keep their previous contracts.
+
+**Adaptive Relay (September 20, 2026).** On a dirty checkout, the button reads
+**Commit current changes & relay [peer]** and submits `kind: commit` with
+`handoff: true`. The selected agent/fixed worker snapshots the captured changes
+without implementing pending requests, using the same `commitOnly` assignment.
+The controller validates publication and settled lifecycle evidence before
+dispatching the peer/fixed reviewer for the exact selected-baseline..snapshot
+range. The initial review is authorized even when later automatic collaboration
+is off. The baseline selector stays available, including current HEAD for reviewing
+only the current changes. Read-only previews with `commitPending: true` include
+HEAD as a candidate and allow an empty committed portion; the pending snapshot
+may supply the project proposal. `reviewBase` on a commit with handoff preserves
+the selected baseline, bounded by the task baseline and pre-snapshot HEAD. The
+completed full range must contain a project proposal before a peer is dispatched. Plain Commit keeps `handoff: false` and
+`autoContinue: false`. Solo mode has no relay action. Dirty input alone no longer
+disables the relay button; readiness, branch, ownership, identity and publication
+gates remain, and clean/dirty transitions revoke prior readiness.
+
+Readiness authorizes the full current snapshot. The controller captures its
+worktree fingerprint, persists it with the run, and rechecks it at setup and
+immediately before dispatch. The agent verifies the captured input. A changed
+snapshot blocks delivery and retains ownership; it never silently refreshes the
+input. An already modified relay log must be reconciled or another log path
+selected. Secret screening and unresolved conflicts can block publication rather
+than force a commit. Clean checkouts use either explicit Relay action.
+
+Plan-to-Implementation and existing API `work` requests retain their ordinary
+implementation assignment semantics. Existing-candidate review and every later
+turn require a clean checkout. Every publication still requires exactly one
+direct commit and no uncommitted leftovers; completion does not certify task success.
+
 
 ### One tracked append-only relay log
 
@@ -166,7 +261,7 @@ A commit means **recorded**, not **accepted**; a pushed commit is not accepted e
 
 | Reference | Meaning |
 | --- | --- |
-| `taskBaseSha` | Starting baseline for the whole task. |
+| `taskBaseSha` | Permanent starting baseline for the whole task: the confirmed or inferred task baseline, distinct from each round's review range. |
 | `acceptedSha` | Latest project state accepted under the protocol. |
 | `candidateSha` | Proposed project state awaiting review. |
 | `reviewBaseSha` / `reviewHeadSha` | Explicit endpoints for the review being requested. |

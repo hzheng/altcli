@@ -6,17 +6,34 @@ export function claudeSettings(text, hook) {
   if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('Claude settings must be an object.');
   if (settings.hooks !== undefined && (!settings.hooks || typeof settings.hooks !== 'object' || Array.isArray(settings.hooks))) throw new Error('Unsupported Claude hooks object.');
   const hooks = { ...(settings.hooks ?? {}) };
-  for (const name of ['UserPromptSubmit', 'Stop']) {
+  for (const name of ['UserPromptSubmit', 'Stop', 'SessionStart']) {
     const groups = hooks[name] ?? [];
     if (!Array.isArray(groups)) throw new Error(`Unsupported Claude ${name} hooks.`);
     const kept = groups.map((group) => {
       if (!group || !Array.isArray(group.hooks)) throw new Error('Unsupported Claude hook group.');
       return { ...group, hooks: group.hooks.filter((entry) => !ours(entry.command)) };
     }).filter((group) => group.hooks.length);
-    hooks[name] = [...kept, { hooks: [{ type: 'command', command: `${quote(hook)} claude`, timeout: 10 }] }];
+    hooks[name] = [...kept, { ...(name === 'SessionStart' ? { matcher: 'startup|resume' } : {}), hooks: [{ type: 'command', command: `${quote(hook)} claude`, timeout: 10 }] }];
   }
   const result = JSON.stringify({ ...settings, hooks }, null, 2) + '\n';
   JSON.parse(result); return result;
+}
+export function codexHooks(text, hook) {
+  const settings = text === null ? {} : JSON.parse(text);
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('Codex hooks must be an object.');
+  if (settings.hooks !== undefined && (!settings.hooks || typeof settings.hooks !== 'object' || Array.isArray(settings.hooks))) throw new Error('Unsupported Codex hooks object.');
+  const hooks = { ...settings.hooks };
+  for (const name of ['UserPromptSubmit', 'SessionStart', 'Interrupt']) {
+    const groups = hooks[name] ?? [];
+    if (!Array.isArray(groups)) throw new Error(`Unsupported Codex ${name} hooks.`);
+    const kept = groups.map((group) => {
+      if (!group || !Array.isArray(group.hooks)) throw new Error('Unsupported Codex hook group.');
+      return { ...group, hooks: group.hooks.filter((entry) => !ours(entry.command)) };
+    }).filter((group) => group.hooks.length);
+    hooks[name] = [...kept, { ...(name === 'SessionStart' ? { matcher: 'startup|resume' } : {}),
+      hooks: [{ type: 'command', command: `exec ${quote(hook)} codex-start`, timeout: name === 'Interrupt' ? 3 : 10 }] }];
+  }
+  return JSON.stringify({ ...settings, hooks }, null, 2) + '\n';
 }
 function stringArray(text, start) {
   let i = start;

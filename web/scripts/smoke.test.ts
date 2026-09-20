@@ -119,6 +119,26 @@ test("pane process evidence retains tty-attached work after its parent exits", (
     assert.deepEqual(processesForPane(detached, "10"), [{ pid: "20", command: "codex" }]);
   }
 });
+test('persistent browser REPL infrastructure is excluded but its task workers remain visible', () => {
+  const app = '/Applications/ChatGPT.app/Contents/Resources';
+  const codex = `${app}/codex`; const node = `${app}/cua_node/bin/node`;
+  const rows = [
+    { pid: '1', ppid: '0', tty: 'ttys001', command: '-zsh' },
+    { pid: '2', ppid: '1', tty: 'ttys001', command: 'codex' },
+    { pid: '3', ppid: '2', tty: 'ttys001', command: `${app}/cua_node/bin/node_repl` },
+    { pid: '4', ppid: '3', tty: 'ttys001', command: codex, args: `${codex} app-server --listen stdio://` },
+    { pid: '5', ppid: '3', tty: 'ttys001', command: codex, args: `${codex} sandbox -c fixture=true -- ${node} --experimental-vm-modules /tmp/fixture/kernel.js` },
+    { pid: '6', ppid: '5', tty: 'ttys001', command: node, args: `${node} --experimental-vm-modules /tmp/fixture/kernel.js` },
+    { pid: '7', ppid: '6', tty: 'ttys001', command: 'sleep', args: 'sleep 100' },
+    { pid: '8', ppid: '3', tty: 'ttys001', command: codex, args: `${codex} exec actual-work` },
+    { pid: '9', ppid: '3', tty: 'ttys001', command: node, args: `${node} worker.js` },
+  ];
+  const selected = processesForPane(rows, '1');
+  assert.deepEqual(selected.map(p => p.pid), ['2', '3', '7', '8', '9']);
+  assert.ok(selected.every(p => !('args' in p))); // Arguments never leave process inspection.
+  assert.ok(processesForPane(rows.map(p => ({ ...p, args: undefined })), '1').some(p => p.pid === '4'));
+  assert.ok(processesForPane(rows.map(p => p.pid === '3' ? { ...p, command: 'node' } : p), '1').some(p => p.pid === '4'));
+});
 test("prompt text keeps line breaks, normalizes CRLF, and refuses other controls", () => {
   assert.equal(promptText("first\r\nsecond\rthird"), "first\nsecond\nthird");
   for (const value of ["a\tb", "a\u001bb", "a\u0085b", "", "  ", null]) assert.throws(() => promptText(value));

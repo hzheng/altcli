@@ -2,18 +2,73 @@ openapi: 3.1.0
 info:
   title: CoderCrew host API
   version: 0.1.0
-  description: Web-first manual tmux console for any number of registered panes, grouped by worktree into projects with
-    named relay pairs. Native iOS is reserved. This contract and the TypeScript types are manually maintained in the starter.
+  description: Host-resident tmux console with explicit Plan and Implementation phases, captured ignored plans, committed handoffs, and an opt-in deprecated staging relay.
+    Native iOS remains deferred. This contract and the JSON-only TypeScript types are maintained together.
 servers:
 - url: http://127.0.0.1:8787
   description: Local host; use the configured HTTPS Tailscale origin for remote access.
 security:
 - ownerToken: []
 paths:
+  /api/v1/planning:
+    post: {"operationId":"startPlan","requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/PlanStart"}}}},"responses":{"200":{"description":"Planning delivery recorded; not plan completion","content":{"application/json":{"schema":{"$ref":"#/components/schemas/CommandRecord"}}}},"409":{"description":"Planning readiness, ignore, ownership or identity conflict","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}}}
+  /api/v1/planning/decision:
+    post: {"operationId":"decidePlan","requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/PlanDecision"}}}},"responses":{"200":{"description":"Exact-version decision recorded; no duplicate transition","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Ok"}}}},"409":{"description":"Stale version, missing consent, unsafe state or unauthorized override","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}}}
+  /api/v1/instructions:
+    post:
+      operationId: sendStandaloneInstruction
+      description: Send one instruction with exact group/instance confirmation and worktree ownership. No branch setup, handoff commit, or automatic successor. Available without legacy staging enabled.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/StandaloneStart'}
+      responses:
+        '200':
+          description: Delivery receipt, not task acceptance
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CommandRecord'}
+        '409':
+          description: Identity, ownership, or policy conflict
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ApiError'}
+  /api/v1/implementation:
+    post: {"operationId":"startImplementation","description":"INTEGRATION_BRANCH refuses the default or a configured integration branch as the implementation branch, or as a new branch name. BASELINE_REQUIRED asks for a confirmed taskBase on an existing task branch whose start cannot be inferred; INVALID_BASELINE rejects one outside the branch or a review range before it.","requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ImplementationStart"}}}},"responses":{"200":{"description":"Recorded result; not proof of task acceptance","content":{"application/json":{"schema":{"$ref":"#/components/schemas/CommandRecord"}}}},"409":{"description":"State, ownership, validation, or policy conflict","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}}}
+  /api/v1/implementation/preview:
+    post:
+      operationId: previewCommittedReview
+      description: Read-only preview of an explicit ancestor..HEAD range, or of the commits after the recipient's newest relay-log handoff commit (falling back to the task baseline). Does not create a run, bind agents, send input or mutate Git. Refuses stale HEAD and ranges exceeding 100 commits. With commitPending=true, allows an empty or log-only committed portion and offers HEAD as a baseline for a future snapshot; otherwise requires a project proposal.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ReviewPreviewInput'}
+      responses:
+        '200':
+          description: Exact range and included commits, newest first
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewPreview'}
+        '409':
+          description: Stale HEAD, unavailable group or invalid range
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ApiError'}
+  /api/v1/implementation/policy:
+    post: {"operationId":"changeImplementationPolicy","requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/PolicyChange"}}}},"responses":{"200":{"description":"Recorded result; not proof of task acceptance","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Ok"}}}},"409":{"description":"State, ownership, validation, or policy conflict","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}}}
+  /api/v1/groups:
+    post: {"operationId":"createGroup","requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/GroupInput"}}}},"responses":{"200":{"description":"Recorded result; not proof of task acceptance","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Group"}}}},"409":{"description":"State, ownership, validation, or policy conflict","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}}}
+  /api/v1/groups/{id}:
+    patch: {operationId: selectWorkspaceGroup, parameters: [{name: id, in: path, required: true, schema: {$ref: '#/components/schemas/AgentId'}}], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/GroupSelection'}}}}, responses: {'200': {description: Saved the workspace's sole group selection without dispatch, content: {application/json: {schema: {$ref: '#/components/schemas/Group'}}}}, '409': {description: Stale selection or occupied checkout, content: {application/json: {schema: {$ref: '#/components/schemas/ApiError'}}}}}}
+    delete: {"operationId":"removeGroup","parameters":[{"name":"id","in":"path","required":true,"schema":{"$ref":"#/components/schemas/AgentId"}}],"responses":{"200":{"description":"Recorded result; not proof of task acceptance","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Ok"}}}},"409":{"description":"State, ownership, validation, or policy conflict","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}}}
+  /api/v1/runs:
+    post: {"operationId":"actOnRun","requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/RunAction"}}}},"responses":{"200":{"description":"Recorded result; not proof of task acceptance","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Ok"}}}},"409":{"description":"State, ownership, validation, or policy conflict","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}}}
   /api/v1/state:
     get:
       operationId: getConsoleState
-      summary: Read registered sessions, current snapshots, recent commands and manual ownership
+      summary: Read discovered and bound agents, current snapshots, recent commands and ownership
       responses:
         '200':
           description: Fresh server state; individual panes may be unavailable
@@ -48,11 +103,9 @@ paths:
   /api/v1/commands:
     post:
       operationId: submitCommand
-      summary: Attempt a human-selected command in one worktree
-      description: No automatic relay or task-completion inference. Holds the target's worktree while the command is
-        in flight; other worktrees are unaffected. A delivered record settles the hold at once. Rejected preflight
-        means no send attempt. A failure after sending began is recorded as uncertain and keeps the worktree held
-        until a human acknowledges it through /control/release. Every POST requires an explicit bearer token.
+      summary: Start an opt-in deprecated staging run
+      description: New starts require CODERCREW_ENABLE_LEGACY_RELAY=true. Preserves the frozen staging protocol.
+        Workflow ownership survives transport delivery until completion or explicit takeover. Uncertain commands are never replayed.
       requestBody:
         required: true
         content:
@@ -259,11 +312,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ApiError'
   /api/v1/sessions/{id}:
+    patch: {operationId: renameSession, parameters: [{name: id, in: path, required: true, schema: {$ref: '#/components/schemas/AgentId'}}], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RenameSession'}}}}, responses: {'200': {description: Display name changed; registration identity and historical snapshots unchanged, content: {application/json: {schema: {$ref: '#/components/schemas/SessionRegistration'}}}}, '409': {description: Stale registration, duplicate label or occupied checkout, content: {application/json: {schema: {$ref: '#/components/schemas/ApiError'}}}}}}
     delete:
       operationId: removeSession
       summary: Forget one registration
       description: The tmux pane and its agent keep running; only CoderCrew forgets the pane. Refused while the worktree's
-        worktree is held or while the session belongs to a pair. Command history keeps the agent id.
+        worktree is held. Idle group references are updated; command history and frozen runs keep the agent id.
       parameters:
       - name: id
         in: path
@@ -360,6 +414,208 @@ paths:
                 $ref: '#/components/schemas/ApiError'
         '409':
           description: tmux failure, e.g. no such pane or no server
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '503':
+          description: Host configuration incomplete
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/v1/workspaces:
+    get:
+      operationId: discoverWorkspaces
+      summary: Discover local projects, their Git worktrees, and exact-directory agent groups
+      description: Read-only. Lists all panes, detached sessions included, canonicalizes each pane's directory, inspects
+        the actual Git worktree, index and checked-out branch, and groups panes by canonical directory. Known coding CLIs
+        in safe panes are eligible; shells, unidentified processes and dead, copy-mode or synchronized panes are shown
+        with a reason. All eligible agents are selected initially; execution currently supports one or two. Projects
+        are identified by canonical Git common directory, never origin or branch. Git worktree inventory includes
+        checkouts without panes. Projects remembered by explicit edits, Start or creation remain discoverable after
+        restart. Nothing is registered, started, persisted or written to Git by this GET.
+      responses:
+        '200':
+          description: Workspace cards, skipped directories and a listing error when tmux itself failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceDiscovery'
+        '401':
+          description: Token missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Host/origin denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '503':
+          description: Host configuration incomplete
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/v1/projects/worktrees/preview:
+    post:
+      operationId: previewTaskWorktree
+      summary: Read-only preview of a new branch and linked worktree
+      description: Validates a known project, accessible source with a commit, new branch, and unused destination under ~/.codercrew. Does not create directories or reserve setup. Dirty source files are not copied.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorktreePreviewInput'
+      responses:
+        '200':
+          description: Exact source identity, branch, commit, destination and request ID to confirm
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorktreePreview'
+        default:
+          description: Invalid input, authentication/origin refusal, unavailable source or branch/path conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/v1/projects/worktrees:
+    post:
+      operationId: createTaskWorktree
+      summary: Create one explicitly confirmed task branch and linked worktree
+      description: Requires input enabled. Revalidates the preview and durably claims project setup before one non-force git worktree add. Exact duplicate request IDs return the recorded operation, never repeat Git. Existing checkouts, dirty changes and agents are untouched. Errors after a Git attempt retain uncertain ownership; no automatic retry, rollback or cleanup.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorktreeCreateInput'
+      responses:
+        '200':
+          description: Durable operation state; ready, applying, uncertain or failed is explicit
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorktreeCreation'
+        default:
+          description: Invalid input, authentication/origin or read-only refusal, stale consent, conflict or setup already owned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/v1/projects/worktrees/reconcile:
+    post:
+      operationId: reconcileTaskWorktree
+      summary: Inspect an uncertain creation without any Git mutation
+      description: Exact clean destination, branch and baseline verify success. Verified absence of destination, worktree entry and branch releases a failed operation. Partial, changed or unreadable results remain uncertain and owned. Applying operations are not reconciled while their caller is active.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [requestId]
+              properties:
+                requestId: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Current or reconciled operation, without replay
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorktreeCreation'
+        default:
+          description: Invalid input, authentication/origin refusal or unknown operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/v1/activities/reset:
+    post:
+      operationId: resetActivity
+      summary: Restore Unknown activity to human-confirmed Ready
+      description: Requires an inspected empty prompt with no background writers. Checks the exact current
+        registration, CLI identity and activity timestamp. Refuses known activity, owned runs and pending
+        deliveries. Preserves configuration; never sends input or changes workflow ownership. Ephemeral
+        confirmation is lost on backend restart and superseded by new native turn evidence.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActivityReset'
+      responses:
+        '200':
+          description: Human-confirmed activity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentActivity'
+        default:
+          description: Invalid confirmation, stale activity or identity, owned execution, or authentication/origin refusal
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/v1/workspaces/reset:
+    post:
+      operationId: resetWorkspace
+      summary: Forget every registration and group on one checkout
+      description: Lets the user start a workspace from scratch. Removes, in one transaction, all pairs and session
+        registrations whose repository is the given worktree root. Refused while a run owns that worktree or an
+        uncertain delivery holds it. Command history, run records and hook events are kept; no process is touched
+        and nothing is written to Git.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceReset'
+      responses:
+        '200':
+          description: What was forgotten; empty lists when nothing was registered there
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceResetResult'
+        '400':
+          description: Invalid body or missing confirmation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Token missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Host/origin denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: A run owns the worktree or a delivery there is in flight or uncertain
           content:
             application/json:
               schema:
@@ -624,7 +880,17 @@ components:
       - socketPath
     SessionRegistration:
       type: object
+      description: Exact instance binding or read-only proposal. Discovery can return unsaved proposals; Start and explicit name/membership edits validate and persist them.
       properties:
+        registrationId:
+          type: string
+          format: uuid
+        cwd:
+          type: string
+        worktree:
+          oneOf:
+          - $ref: '#/components/schemas/WorktreeIdentity'
+          - type: 'null'
         id:
           $ref: '#/components/schemas/AgentId'
         label:
@@ -736,7 +1002,28 @@ components:
           $ref: '#/components/schemas/AgentType'
         event:
           type: string
-          const: turn_complete
+          enum: [session_started, turn_started, turn_complete, turn_interrupted, outcome]
+          description: turn_interrupted requires exact Codex session/turn, pane, CLI PID and start evidence; it cannot report settled completion or an outcome. It pauses an owned assignment without accepting a handoff.
+        commandId:
+          type: string
+          format: uuid
+        sourceTurnId:
+          type: string
+          maxLength: 200
+        identity:
+          $ref: '#/components/schemas/PaneIdentity'
+        backgroundState:
+          enum: [clear, active, unknown]
+        prompt:
+          type: string
+          maxLength: 2000
+        settled:
+          type: boolean
+        outcome:
+          enum: [no_incoming_handoff, strong_objection, accept_without_improvement, accept_and_improve]
+        reason:
+          type: string
+          maxLength: 500
         paneId:
           type: string
           pattern: ^%\d+$
@@ -753,7 +1040,15 @@ components:
         reporterPid:
           type: string
           pattern: ^\d{1,10}$
-          description: Transient Codex hook process id, excluded from process evidence.
+          description: Transient hook process id, excluded from process evidence.
+        cliPid:
+          type: string
+          pattern: ^\d{1,10}$
+          description: CLI foreground process captured at the native turn start.
+        startedAt:
+          type: string
+          format: date-time
+          description: Native start timestamp, retained unchanged by its completion for independent activity tracking.
       required:
       - source
       - event
@@ -762,6 +1057,14 @@ components:
     TurnEvent:
       type: object
       properties:
+        prompt:
+          type: [string, 'null']
+        outcome:
+          enum: [no_incoming_handoff, strong_objection, accept_without_improvement, accept_and_improve, null]
+        reason:
+          type: [string, 'null']
+        outcomeState:
+          enum: [reported, pending, none]
         agentId:
           oneOf:
           - $ref: '#/components/schemas/AgentId'
@@ -791,6 +1094,10 @@ components:
       - sessionId
       - commandId
       - receivedAt
+      - prompt
+      - outcome
+      - reason
+      - outcomeState
     AvailablePane:
       type: object
       description: One live pane on the configured tmux server, for the human to choose. Not a readiness or lifecycle signal.
@@ -823,6 +1130,269 @@ components:
       - synchronized
       - location
       - registeredAs
+    WorktreeIdentity:
+      type: object
+      description: Canonical Git worktree root, git directory and index path. Linked worktrees of one repository have distinct identities.
+      properties:
+        root:
+          type: string
+        gitDir:
+          type: string
+        indexPath:
+          type: string
+      required:
+      - root
+      - gitDir
+      - indexPath
+    WorkspaceAgent:
+      type: object
+      description: One live pane inside a discovered workspace. Read-only inventory, not a registration, lifecycle or readiness signal.
+      properties:
+        identity:
+          $ref: '#/components/schemas/PaneIdentity'
+        location:
+          type: string
+          description: Current session:window.pane; informational and may change.
+        command:
+          type: string
+        kind:
+          type: string
+          enum:
+          - codex
+          - claude
+          - other
+          - shell
+          description: How the foreground process was classified. Only codex and claude can be group members.
+        eligible:
+          type: boolean
+          description: A known coding CLI in a safe pane. Shells, unidentified processes and dead, copy-mode or synchronized panes are not.
+        reason:
+          type:
+          - string
+          - 'null'
+        label:
+          type: string
+          description: The saved label when registered; coding CLIs otherwise default to the tmux session name, with pane identity kept separate.
+        session:
+          $ref: '#/components/schemas/SessionRegistration'
+          description: Read-only identity proposal for an eligible pane; persisted only by an explicit name/membership edit or Start. Discovery never registers or dispatches.
+        registeredAs:
+          oneOf:
+          - $ref: '#/components/schemas/AgentId'
+          - type: 'null'
+      required:
+      - identity
+      - location
+      - command
+      - kind
+      - eligible
+      - reason
+      - label
+      - registeredAs
+    Workspace:
+      type: object
+      description: A canonical current working directory inside a Git worktree with the live panes found there on one tmux server.
+      properties:
+        cwd:
+          type: string
+        socketPath:
+          type: string
+        worktree:
+          $ref: '#/components/schemas/WorktreeIdentity'
+        branch:
+          type:
+          - string
+          - 'null'
+          description: The checked-out branch, or null on a detached HEAD.
+        agents:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkspaceAgent'
+        group:
+          description: All eligible pane IDs included by default. Users may exclude any member; saved selection and execution support are separate.
+          oneOf:
+          - type: array
+            items:
+              type: string
+            minItems: 1
+          - type: 'null'
+        git:
+          $ref: '#/components/schemas/WorkspaceGit'
+        gitError:
+          type: string
+        sharesIndexWith:
+          type: array
+          items:
+            type: string
+          description: Other workspace directories that resolve to this worktree and index; they cannot run conflicting work.
+      required:
+      - cwd
+      - socketPath
+      - worktree
+      - branch
+      - agents
+      - group
+      - sharesIndexWith
+    SkippedDirectory:
+      type: object
+      properties:
+        cwd:
+          type: string
+        panes:
+          type: integer
+        reason:
+          type: string
+      required:
+      - cwd
+      - panes
+      - reason
+    WorkspaceDiscovery:
+      type: object
+      properties:
+        projects:
+          type: array
+          description: Project-centered inventory. Optional for older clients; always returned by the project-aware server.
+          items:
+            $ref: '#/components/schemas/Project'
+        workspaces:
+          type: array
+          items:
+            $ref: '#/components/schemas/Workspace'
+        skipped:
+          type: array
+          items:
+            $ref: '#/components/schemas/SkippedDirectory'
+          description: Directories with live panes that are not inside a Git worktree or could not be inspected.
+        error:
+          type:
+          - string
+          - 'null'
+          description: Set when the pane listing itself failed, e.g. no tmux server.
+        discoveredAt:
+          type: string
+          format: date-time
+      required:
+      - workspaces
+      - skipped
+      - error
+      - discoveredAt
+    Project:
+      type: object
+      required: [id, name, commonDir, directoryName, worktrees, error, creations]
+      properties:
+        id: { type: string, description: Host-local identity derived from the canonical Git common directory. }
+        name: { type: string }
+        commonDir: { type: string }
+        directoryName: { type: string, description: Safe task-root namespace; same-named separate clones get disambiguated names. }
+        worktrees:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProjectWorktree'
+        error: { type: [string, 'null'] }
+        creations:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorktreeCreation'
+    ProjectWorktree:
+      type: object
+      required: [id, path, branch, head, main, identity, error]
+      properties:
+        id: { type: string, description: Independent of branch; derived from canonical worktree metadata and index. }
+        path: { type: string }
+        branch: { type: [string, 'null'] }
+        head: { type: [string, 'null'] }
+        main: { type: boolean }
+        identity:
+          oneOf:
+          - $ref: '#/components/schemas/WorktreeIdentity'
+          - type: 'null'
+        error: { type: [string, 'null'], description: Missing or inaccessible worktrees stay visible but cannot be used as setup sources. }
+    WorktreePreviewInput:
+      type: object
+      additionalProperties: false
+      required: [projectId, sourceWorktreeId, branch]
+      properties:
+        projectId: { type: string }
+        sourceWorktreeId: { type: string }
+        branch: { type: string, maxLength: 150, pattern: '^[A-Za-z0-9][A-Za-z0-9/_.-]*$' }
+    WorktreePreview:
+      type: object
+      required: [projectId, sourceWorktreeId, branch, requestId, source, sourceBranch, sourceHead, path]
+      properties:
+        projectId: { type: string }
+        sourceWorktreeId: { type: string }
+        branch: { type: string }
+        requestId: { type: string, format: uuid }
+        source:
+          $ref: '#/components/schemas/WorktreeIdentity'
+        sourceBranch: { type: [string, 'null'] }
+        sourceHead: { type: string, pattern: '^(?:[0-9a-f]{40}|[0-9a-f]{64})$' }
+        path: { type: string, description: Canonical proposed path under the host task-worktree root. }
+    WorktreeCreateInput:
+      allOf:
+      - $ref: '#/components/schemas/WorktreePreview'
+      - type: object
+        required: [confirm]
+        properties:
+          confirm: { type: boolean, const: true }
+      unevaluatedProperties: false
+    WorktreeCreation:
+      type: object
+      required: [input, status, message, updatedAt]
+      properties:
+        input:
+          $ref: '#/components/schemas/WorktreeCreateInput'
+        status: { type: string, enum: [applying, ready, uncertain, failed] }
+        message: { type: string }
+        updatedAt: { type: string, format: date-time }
+    ActivityReset:
+      type: object
+      required: [agentId, registrationId, expectedUpdatedAt, confirmReady]
+      additionalProperties: false
+      properties:
+        agentId: {type: string}
+        registrationId: {type: string, format: uuid}
+        expectedUpdatedAt: {type: [string, 'null'], format: date-time}
+        confirmReady: {const: true}
+    WorkspaceReset:
+      type: object
+      properties:
+        repository:
+          type: string
+          description: Absolute canonical worktree root, as shown on the workspace card.
+        confirmReady:
+          type: boolean
+          const: true
+      required:
+      - repository
+      - confirmReady
+    WorkspaceResetResult:
+      type: object
+      properties:
+        groups:
+          type: array
+          items:
+            type: string
+        sessions:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentId'
+        pairs:
+          type: array
+          items:
+            type: string
+      required:
+      - sessions
+      - pairs
+      - groups
+    RenameSession:
+      type: object
+      properties:
+        label: {type: string, minLength: 1, maxLength: 40}
+        expectedLabel: {type: string, minLength: 1, maxLength: 40}
+        expectedRegistrationId: {type: string, format: uuid}
+      required: [label, expectedLabel, expectedRegistrationId]
+      additionalProperties: false
     RegistrationInput:
       type: object
       properties:
@@ -952,12 +1522,31 @@ components:
             - string
             - 'null'
             description: The pair frozen into that run, for history filtering; null for a single-agent turn.
+          groupId:
+            type: [string, 'null']
+            description: Implementation group identity, or the preserved legacy pair identity.
         required:
         - runId
         - pairId
+        - groupId
     ConsoleState:
       type: object
       properties:
+        groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/Group'
+        legacyEnabled:
+          type: boolean
+          description: Host opt-in for new deprecated staging runs; false by default. Existing runs retain their protocol.
+        runs:
+          type: array
+          items:
+            $ref: '#/components/schemas/RelayRun'
+        executions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Execution'
         mode:
           $ref: '#/components/schemas/AdapterMode'
         inputEnabled:
@@ -970,6 +1559,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/InstanceState'
+        activities:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentActivity'
         pairs:
           type: array
           items:
@@ -1016,6 +1609,10 @@ components:
       - reservations
       - turns
       - serverTime
+      - groups
+      - legacyEnabled
+      - runs
+      - executions
     ApiError:
       type: object
       properties:
@@ -1131,6 +1728,518 @@ components:
         additionalProperties: false
       description: A unique client UUID v4 is required. Same ID and payload returns the stored result without redelivery.
         Reuse with a different payload conflicts. Never retry automatically after an uncertain response.
+    GitSha:
+      type: "string"
+      pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    GitChange:
+      type: object
+      properties:
+        status: {type: string, minLength: 2, maxLength: 2, description: 'Git porcelain columns: index then worktree; ?? means untracked.'}
+        path: {type: string, description: Path relative to the worktree root.}
+        originalPath: {type: [string, "null"], description: Rename or copy source path.}
+      required: [status, path, originalPath]
+      additionalProperties: false
+    BranchState:
+      type: "object"
+      properties:
+        branch: {"type":["string","null"]}
+        head: {"$ref":"#/components/schemas/GitSha"}
+        primary: {"type":["string","null"]}
+        clean: {"type":"boolean"}
+        changes: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/GitChange'}}
+        changeCount: {type: integer, minimum: 0, description: Total changed paths before truncating the displayed list to 100.}
+      required: ["branch","head","primary","clean","changes","changeCount"]
+      additionalProperties: false
+    WorkspaceGit:
+      description: The workspace branch reading plus the host's integration-branch policy. The default branch (origin/HEAD) and CODERCREW_INTEGRATION_BRANCHES are starting points, never implementation branches.
+      type: object
+      properties:
+        branch: {type: [string, 'null']}
+        head: {$ref: '#/components/schemas/GitSha'}
+        primary: {type: [string, 'null']}
+        clean: {type: boolean}
+        changes: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/GitChange'}}
+        changeCount: {type: integer, minimum: 0, description: Total changed paths before truncating the displayed list to 100.}
+        integration: {type: boolean, description: The checked-out branch is an integration branch. Implementation must create a task branch or task worktree from it.}
+        taskBase:
+          oneOf: [{$ref: '#/components/schemas/GitSha'}, {type: 'null'}]
+          description: Where task work on this branch begins. The head when no commit lies beyond an integration tip, the single nearest merge base when known, null when the user must confirm it or the branch is an integration branch.
+      required: [branch, head, primary, clean, changes, changeCount, integration, taskBase]
+      additionalProperties: false
+    BranchConsent:
+      description: Staying on an existing task branch keeps its permanent task baseline; a new branch begins at head. An integration branch is refused as the implementation branch, and taskBase cannot accompany newBranch.
+      type: "object"
+      properties:
+        branch: {"type":["string","null"]}
+        head: {"$ref":"#/components/schemas/GitSha"}
+        newBranch: {"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9/_.-]{0,150}$"}
+        taskBase: {"$ref":"#/components/schemas/GitSha","description":"Confirmed task baseline, an ancestor of head. When absent on an existing branch, the server infers it from integration tips or refuses ambiguous history. A new branch always begins at head."}
+      required: ["branch","head"]
+      additionalProperties: false
+    Group:
+      type: "object"
+      properties:
+        id: {"$ref":"#/components/schemas/AgentId"}
+        name: {"type":"string"}
+        repository: {"type":"string"}
+        cwd: {"type":["string","null"]}
+        members: {"type":"array","items":{"$ref":"#/components/schemas/AgentId"},"minItems":0,"uniqueItems":true, "description":"Selected eligible instances, including larger groups. Empty selection disables Start. Plan and Implementation execution currently require one or two members."}
+        revision: {"type":"integer"}
+        createdAt: {"type":"string","format":"date-time"}
+        legacyPairId: {"type":["string","null"]}
+      required: ["id","name","repository","cwd","members","revision","createdAt","legacyPairId"]
+      additionalProperties: false
+    GroupSelection:
+      type: object
+      properties:
+        members: {type: array, minItems: 0, uniqueItems: true, items: {$ref: '#/components/schemas/AgentId'}}
+        expectedRevision: {type: integer, minimum: 1}
+        registrations: {type: object, additionalProperties: {type: string, format: uuid}}
+      required: [members, expectedRevision, registrations]
+      additionalProperties: false
+    GroupInput:
+      type: "object"
+      properties:
+        name: {"type":"string","minLength":1,"maxLength":40}
+        members: {"type":"array","items":{"$ref":"#/components/schemas/AgentId"},"minItems":1,"uniqueItems":true}
+      required: ["name","members"]
+      additionalProperties: false
+    StandaloneStart:
+      type: object
+      description: Plain Send; no commit or branch authorization is implied.
+      properties:
+        groupRevision: {"type":"integer","minimum":1}
+        registrations: {"type":"object","minProperties":1,"maxProperties":2,"additionalProperties":{"type":"string","format":"uuid"}}
+        requestId: {"type":"string","format":"uuid"}
+        groupId: {"$ref":"#/components/schemas/AgentId"}
+        agentId: {"$ref":"#/components/schemas/AgentId"}
+        text: {"type":"string","maxLength":2000}
+        policy: {"enum":["solo","peer","worker_reviewer"]}
+        workerId: {"$ref":"#/components/schemas/AgentId"}
+        confirmReady: {"const":true}
+      required: [requestId, groupId, groupRevision, registrations, agentId, text, policy, confirmReady]
+      additionalProperties: false
+    ReviewPreviewInput:
+      type: object
+      properties:
+        groupId: {$ref: '#/components/schemas/AgentId'}
+        head: {$ref: '#/components/schemas/GitSha'}
+        logPath: {type: string, maxLength: 200}
+        base: {$ref: '#/components/schemas/GitSha', description: 'Excluded ancestor. Omit to derive it from recipient and taskBase, which are then required.'}
+        recipient: {$ref: '#/components/schemas/AgentId', description: 'Group member who will review; the baseline is the newest first-parent commit whose relay-log entry they published.'}
+        taskBase: {$ref: '#/components/schemas/GitSha', description: 'Fallback baseline when the recipient has no handoff commit on this branch.'}
+        commitPending: {type: boolean, default: false, description: 'Preview the committed portion before a pending snapshot; permits HEAD and empty committed ranges.'}
+      required: [groupId, head, logPath]
+      additionalProperties: false
+    ReviewPreview:
+      type: object
+      properties:
+        base: {$ref: '#/components/schemas/GitSha'}
+        baseSubject: {type: string, description: 'Subject of the baseline commit.'}
+        head: {$ref: '#/components/schemas/GitSha'}
+        since: {enum: [explicit, recipient, task], description: 'Origin of the baseline.'}
+        commits:
+          type: array
+          maxItems: 100
+          description: Every commit in base..head, newest first.
+          items:
+            type: object
+            properties:
+              sha: {$ref: '#/components/schemas/GitSha'}
+              subject: {type: string}
+            required: [sha, subject]
+            additionalProperties: false
+        candidates:
+          type: array
+          maxItems: 101
+          description: Baselines a human may choose, earliest first — base, then HEAD's first-parent ancestors after it through HEAD's parent, or HEAD when commitPending is true.
+          items:
+            type: object
+            properties:
+              sha: {$ref: '#/components/schemas/GitSha'}
+              subject: {type: string}
+            required: [sha, subject]
+            additionalProperties: false
+      required: [base, baseSubject, head, since, commits, candidates]
+      additionalProperties: false
+    ImplementationStart:
+      type: "object"
+      properties:
+        groupRevision: {"type":"integer","minimum":1}
+        registrations: {"type":"object","minProperties":1,"maxProperties":2,"additionalProperties":{"type":"string","format":"uuid"}}
+        requestId: {"type":"string","format":"uuid"}
+        groupId: {"$ref":"#/components/schemas/AgentId"}
+        agentId: {"$ref":"#/components/schemas/AgentId"}
+        kind: {"enum":["work","commit","review"],"description":"commit snapshots all current changes without implementing pending requests; optional text is handoff context. With handoff=true, two participants review from reviewBase through the new snapshot after validated publication. Without handoff, autoContinue must be false; solo commits never relay. reviewBase is required for review and optional for commit with handoff (defaults to the pre-snapshot HEAD)."}
+        text: {"type":"string","maxLength":2000}
+        handoff: {"type":"boolean"}
+        policy: {"enum":["solo","peer","worker_reviewer"]}
+        workerId: {"$ref":"#/components/schemas/AgentId"}
+        autoContinue: {"type":"boolean"}
+        turnLimit: {"type":"integer","minimum":1,"maximum":200}
+        pauseOnObjection: {"type":"boolean","description":"Agreement: a reviewer objection pauses for the human instead of routing to the author. Default false."}
+        logPath: {"type":"string","maxLength":200}
+        branch: {"$ref":"#/components/schemas/BranchConsent"}
+        reviewBase: {"$ref":"#/components/schemas/GitSha"}
+        confirmReady: {"const":true}
+      required: ["requestId","groupId","groupRevision","registrations","agentId","kind","handoff","policy","autoContinue","turnLimit","logPath","branch","confirmReady"]
+      additionalProperties: false
+    PolicyChange:
+      type: "object"
+      properties:
+        runId: {"type":"string","format":"uuid"}
+        expectedCommandId: {"type":"string","format":"uuid"}
+        expectedRevision: {"type":"integer","minimum":1}
+        policy: {"enum":["peer","worker_reviewer"]}
+        workerId: {"$ref":"#/components/schemas/AgentId"}
+        autoContinue: {"type":"boolean"}
+        pauseOnObjection: {"type":"boolean","description":"Omitted keeps the run's current objection agreement."}
+      required: ["runId","expectedCommandId","expectedRevision","policy","autoContinue"]
+      additionalProperties: false
+    HandoffIdentity:
+      type: "object"
+      properties:
+        schema: {"const":1}
+        runId: {"type":"string","format":"uuid"}
+        commandId: {"type":"string","format":"uuid"}
+        turn: {"type":"integer"}
+        policyRevision: {"type":"integer"}
+        phase: {"const":"implementation"}
+        action: {"enum":["work","review","review_and_improve"]}
+        agentId: {"$ref":"#/components/schemas/AgentId"}
+        registrationId: {"type":"string","format":"uuid"}
+        parent: {"$ref":"#/components/schemas/GitSha"}
+        base: {"$ref":"#/components/schemas/GitSha"}
+        reviewBase: {"type":["string","null"]}
+        reviewHead: {"type":["string","null"]}
+      required: ["schema","runId","commandId","turn","policyRevision","phase","action","agentId","registrationId","parent","base","reviewBase","reviewHead"]
+      additionalProperties: false
+    HandoffEntry:
+      type: "object"
+      properties:
+        schema: {"const":1}
+        runId: {"type":"string","format":"uuid"}
+        commandId: {"type":"string","format":"uuid"}
+        turn: {"type":"integer"}
+        policyRevision: {"type":"integer"}
+        phase: {"const":"implementation"}
+        action: {"enum":["work","review","review_and_improve"]}
+        agentId: {"$ref":"#/components/schemas/AgentId"}
+        registrationId: {"type":"string","format":"uuid"}
+        parent: {"$ref":"#/components/schemas/GitSha"}
+        base: {"$ref":"#/components/schemas/GitSha"}
+        reviewBase: {"type":["string","null"]}
+        reviewHead: {"type":["string","null"]}
+        model: {"type":"string","maxLength":200}
+        decision: {"enum":["accept","object",null]}
+        reason: {"type":["string","null"],"maxLength":16000}
+        needsHuman: {"type":"boolean"}
+        summary: {"type":"string","minLength":1,"maxLength":16000}
+        checks: {"type":"array","items":{"type":"string","maxLength":2000},"maxItems":100}
+      required: ["schema","runId","commandId","turn","policyRevision","phase","action","agentId","registrationId","parent","base","reviewBase","reviewHead","model","decision","reason","needsHuman","summary","checks"]
+      additionalProperties: false
+    Publication:
+      type: "object"
+      properties:
+        sha: {"$ref":"#/components/schemas/GitSha"}
+        projectChanged: {"type":"boolean"}
+        entry: {"$ref":"#/components/schemas/HandoffEntry"}
+      required: ["sha","projectChanged","entry"]
+      additionalProperties: false
+    ImplementationTurn:
+      type: "object"
+      properties:
+        identity: {"$ref":"#/components/schemas/HandoffIdentity"}
+        published: {"$ref":"#/components/schemas/Publication"}
+      required: ["identity"]
+      additionalProperties: false
+    ImplementationRun:
+      type: "object"
+      properties:
+        phase: {"const":"implementation"}
+        handoff: {"const":"commit"}
+        group: {"$ref":"#/components/schemas/Group"}
+        cwd: {"type":"string"}
+        worktree: {"$ref":"#/components/schemas/WorktreeIdentity"}
+        branch: {"type":"string"}
+        consent: {"$ref":"#/components/schemas/BranchConsent"}
+        setup: {"enum":["pending","applying","ready","uncertain"]}
+        logPath: {"type":"string"}
+        taskBaseSha: {"$ref":"#/components/schemas/GitSha"}
+        acceptedSha: {"$ref":"#/components/schemas/GitSha"}
+        candidateSha: {"type":["string","null"]}
+        candidateAuthor: {"type":["string","null"]}
+        expectedParentSha: {"$ref":"#/components/schemas/GitSha"}
+        turn: {"type":"integer"}
+        findings: {"type":["string","null"]}
+        latestPublication: {"oneOf":[{"$ref":"#/components/schemas/Publication"},{"type":"null"}]}
+        next: {"oneOf":[{"type":"null"},{"type":"object","properties":{"agentId":{"type":"string"},"action":{"enum":["work","review","review_and_improve"]},"text":{"type":"string"},"handoff":{"type":"boolean"}},"required":["agentId","action","text","handoff"],"additionalProperties":false}]}
+        request: {"$ref":"#/components/schemas/ImplementationStart"}
+        initialWorktreeFingerprint: {"type":"string","pattern":"^[0-9a-f]{64}$","description":"Captured unfinished work for the first work turn only; absent for clean starts."}
+        policy: {"enum":["solo","peer","worker_reviewer"]}
+        workerId: {"type":["string","null"]}
+        revision: {"type":"integer"}
+      required: ["phase","handoff","group","cwd","worktree","branch","consent","setup","logPath","taskBaseSha","acceptedSha","candidateSha","candidateAuthor","expectedParentSha","turn","findings","latestPublication","next","request","policy","workerId","revision"]
+      additionalProperties: false
+    RelayRun:
+      type: "object"
+      properties:
+        id: {"type":"string","format":"uuid"}
+        repository: {"type":"string"}
+        lockKey: {"type":"string"}
+        pairId: {"type":["string","null"]}
+        participants: {"type":"array","items":{"$ref":"#/components/schemas/SessionRegistration"}}
+        autoContinue: {"type":"boolean"}
+        pauseOnObjection: {"type":"boolean","description":"Agreement: objections pause for the human instead of routing to the author."}
+        pauseRequested: {"type":"boolean"}
+        status: {"enum":["running","waiting","paused","completed","stopped"]}
+        reason: {"type":"string"}
+        currentCommandId: {"type":"string","format":"uuid"}
+        automaticTurns: {"type":"integer"}
+        turnLimit: {"type":"integer"}
+        createdAt: {"type":"string"}
+        updatedAt: {"type":"string"}
+        implementation: {"$ref":"#/components/schemas/ImplementationRun"}
+        planning: {"$ref":"#/components/schemas/PlanningRun"}
+        standalone: {"$ref":"#/components/schemas/StandaloneStart"}
+      required: ["id","repository","lockKey","pairId","participants","autoContinue","pauseRequested","status","reason","currentCommandId","automaticTurns","turnLimit","createdAt","updatedAt"]
+      additionalProperties: false
+    Execution:
+      type: "object"
+      properties:
+        commandId: {"type":"string","format":"uuid"}
+        runId: {"type":"string","format":"uuid"}
+        agentId: {"type":"string"}
+        input: {"$ref":"#/components/schemas/CommandInput"}
+        wireText: {"type":"string"}
+        status: {"enum":["planned","dispatching","delivered","finished","interrupted","uncertain","rejected"]}
+        sessionId: {"type":["string","null"]}
+        sourceTurnId: {"type":["string","null"]}
+        continuation: {"type":"boolean"}
+        baselineProcesses: {"oneOf":[{"type":"null"},{"type":"array","items":{"type":"object","properties":{"pid":{"type":"string"},"command":{"type":"string"}},"required":["pid","command"],"additionalProperties":false}}]}
+        baselineWorktree: {"type":["string","null"]}
+        implementation: {"$ref":"#/components/schemas/ImplementationTurn"}
+        planning: {"$ref":"#/components/schemas/PlanTurn"}
+      required: ["commandId","runId","agentId","input","wireText","status","sessionId","sourceTurnId","continuation","baselineProcesses","baselineWorktree"]
+      additionalProperties: false
+    RunAction:
+      type: "object"
+      properties:
+        runId: {"type":"string","format":"uuid"}
+        action: {"enum":["pause","takeover","continue"]}
+        confirmReady: {"const":true}
+        expectedCommandId: {"type":"string","format":"uuid"}
+      required: ["runId","action"]
+      additionalProperties: false
+    Ok:
+      type: object
+      properties:
+        ok: { const: true }
+      required: [ok]
+    PlanBaseline:
+      type: object
+      properties:
+        branch: {"type":["string","null"]}
+        head: {"$ref":"#/components/schemas/GitSha"}
+      required: ["branch","head"]
+      additionalProperties: false
+    PlannedImplementation:
+      type: object
+      properties:
+        groupId: {"$ref":"#/components/schemas/AgentId"}
+        groupRevision: {"type":"integer","minimum":1}
+        registrations: {"type":"object","additionalProperties":{"type":"string","format":"uuid"}}
+        agentId: {"$ref":"#/components/schemas/AgentId"}
+        handoff: {"type":"boolean"}
+        policy: {"enum":["solo","peer","worker_reviewer"]}
+        workerId: {"$ref":"#/components/schemas/AgentId"}
+        logPath: {"type":"string"}
+        branch: {"oneOf":[{"$ref":"#/components/schemas/BranchConsent"},{"type":"null"}]}
+      required: ["groupId","groupRevision","registrations","agentId","handoff","policy","logPath","branch"]
+      additionalProperties: false
+    PlanStart:
+      type: object
+      properties:
+        requestId: {"type":"string","format":"uuid"}
+        groupId: {"$ref":"#/components/schemas/AgentId"}
+        groupRevision: {"type":"integer","minimum":1}
+        registrations: {"type":"object","additionalProperties":{"type":"string","format":"uuid"}}
+        text: {"type":"string","minLength":1,"maxLength":2000}
+        baseline: {"$ref":"#/components/schemas/PlanBaseline"}
+        autoContinue: {"type":"boolean"}
+        requireApproval: {"type":"boolean"}
+        turnLimit: {"type":"integer","minimum":1,"maximum":200}
+        pauseOnObjection: {"type":"boolean","description":"Agreement carried into Implementation. Default false."}
+        implementation: {"$ref":"#/components/schemas/PlannedImplementation"}
+        confirmReady: {"const":true}
+      required: ["requestId","groupId","groupRevision","registrations","text","baseline","autoContinue","requireApproval","turnLimit","implementation","confirmReady"]
+      additionalProperties: false
+    PlanDecision:
+      type: object
+      properties:
+        runId: {"type":"string","format":"uuid"}
+        expectedCommandId: {"type":"string","format":"uuid"}
+        expectedRevision: {"type":"integer","minimum":1}
+        expectedHash: {"type":"string","pattern":"^[a-f0-9]{64}$"}
+        expectedBriefRevision: {"type":"integer","minimum":1}
+        expectedPolicyRevision: {"type":"integer","minimum":1}
+        action: {"enum":["approve","changes"]}
+        text: {"type":"string"}
+        agentId: {"$ref":"#/components/schemas/AgentId"}
+        overrideReason: {"type":"string"}
+        branch: {"$ref":"#/components/schemas/BranchConsent"}
+        confirmReady: {"const":true}
+      required: ["runId","expectedCommandId","expectedRevision","expectedHash","expectedBriefRevision","expectedPolicyRevision","action","confirmReady"]
+      additionalProperties: false
+    PlanIdentity:
+      type: object
+      properties:
+        schema: {"const":1}
+        phase: {"const":"plan"}
+        runId: {"type":"string","format":"uuid"}
+        commandId: {"type":"string","format":"uuid"}
+        epoch: {"type":"integer","minimum":1}
+        briefRevision: {"type":"integer","minimum":1}
+        rosterRevision: {"type":"integer","minimum":1}
+        policyRevision: {"type":"integer","minimum":1}
+        agentId: {"$ref":"#/components/schemas/AgentId"}
+        registrationId: {"type":"string","format":"uuid"}
+        action: {"enum":["draft","synthesize","review","revise"]}
+        baseline: {"$ref":"#/components/schemas/GitSha"}
+        outputPath: {"type":"string"}
+        inputRevision: {"oneOf":[{"type":"integer","minimum":1},{"type":"null"}]}
+        inputHash: {"oneOf":[{"type":"string","pattern":"^[a-f0-9]{64}$"},{"type":"null"}]}
+      required: ["schema","phase","runId","commandId","epoch","briefRevision","rosterRevision","policyRevision","agentId","registrationId","action","baseline","outputPath","inputRevision","inputHash"]
+      additionalProperties: false
+    PlanResult:
+      type: object
+      properties:
+        identity: {"$ref":"#/components/schemas/PlanIdentity"}
+        outcome: {"enum":["complete","accept","object","blocked"]}
+        outputHash: {"oneOf":[{"type":"string","pattern":"^[a-f0-9]{64}$"},{"type":"null"}]}
+        model: {"type":"string","minLength":1,"maxLength":200}
+        summary: {"type":"string","minLength":1,"maxLength":8000}
+        reason: {"type":["string","null"],"maxLength":8000}
+      required: ["identity","outcome","outputHash","model","summary","reason"]
+      additionalProperties: false
+    PlanDocument:
+      type: object
+      properties:
+        text: {"type":"string","description":"Bounded to 128 KiB of UTF-8."}
+        hash: {"type":"string","pattern":"^[a-f0-9]{64}$"}
+      required: ["text","hash"]
+      additionalProperties: false
+    PlanVersion:
+      type: object
+      properties:
+        text: {"type":"string"}
+        hash: {"type":"string","pattern":"^[a-f0-9]{64}$"}
+        path: {"type":"string"}
+        revision: {"type":"integer","minimum":1}
+        briefRevision: {"type":"integer","minimum":1}
+        author: {"$ref":"#/components/schemas/AgentId"}
+        commandId: {"type":"string","format":"uuid"}
+      required: ["text","hash","path","revision","briefRevision","author","commandId"]
+      additionalProperties: false
+    DraftAssignment:
+      type: object
+      properties:
+        agentId: {"$ref":"#/components/schemas/AgentId"}
+        commandId: {"type":"string","format":"uuid"}
+        path: {"type":"string"}
+        status: {"enum":["queued","running","finalized"]}
+        document: {"oneOf":[{"$ref":"#/components/schemas/PlanDocument"},{"type":"null"}]}
+        briefRevision: {"type":"integer","minimum":1}
+      required: ["agentId","commandId","path","status","document","briefRevision"]
+      additionalProperties: false
+    CapturedPlanResult:
+      type: object
+      properties:
+        result: {"$ref":"#/components/schemas/PlanResult"}
+        document: {"oneOf":[{"$ref":"#/components/schemas/PlanDocument"},{"type":"null"}]}
+      required: ["result","document"]
+      additionalProperties: false
+    PlanTurn:
+      type: object
+      properties:
+        identity: {"$ref":"#/components/schemas/PlanIdentity"}
+        resultPath: {"type":"string"}
+        captured: {"$ref":"#/components/schemas/CapturedPlanResult"}
+      required: ["identity","resultPath"]
+      additionalProperties: false
+    FrozenPlan:
+      type: object
+      properties:
+        transitionId: {"type":"string","format":"uuid"}
+        authorizedAt: {"type":"string","format":"date-time"}
+        authority: {"enum":["human","automatic"]}
+        overrideReason: {"type":["string","null"]}
+        epoch: {"type":"integer","minimum":1}
+        briefRevision: {"type":"integer","minimum":1}
+        policyRevision: {"type":"integer","minimum":1}
+        rosterRevision: {"type":"integer","minimum":1}
+        baseline: {"$ref":"#/components/schemas/GitSha"}
+        brief: {"type":"string"}
+        planningGroup: {"$ref":"#/components/schemas/Group"}
+        planners: {"type":"array","items":{"$ref":"#/components/schemas/SessionRegistration"}}
+        automaticPolicy: {"type":"object","properties":{"autoContinue":{"type":"boolean"},"requireApproval":{"type":"boolean"},"turnLimit":{"type":"integer"},"pauseOnObjection":{"type":"boolean"},"automaticTurnsBeforeTransition":{"type":"integer"}},"required":["autoContinue","requireApproval","turnLimit","pauseOnObjection","automaticTurnsBeforeTransition"],"additionalProperties":false}
+        plan: {"$ref":"#/components/schemas/PlanVersion"}
+        endorsements: {"type":"object","additionalProperties":{"type":"integer","minimum":1}}
+        objections: {"type":"object","additionalProperties":{"type":"string"}}
+        implementation: {"$ref":"#/components/schemas/PlannedImplementation"}
+      required: ["transitionId","authorizedAt","authority","overrideReason","epoch","briefRevision","policyRevision","rosterRevision","baseline","brief","planningGroup","planners","automaticPolicy","plan","endorsements","objections","implementation"]
+      additionalProperties: false
+    PlanningRun:
+      type: object
+      properties:
+        phase: {"const":"plan"}
+        group: {"$ref":"#/components/schemas/Group"}
+        participants: {"type":"array","items":{"$ref":"#/components/schemas/SessionRegistration"}}
+        implementationParticipants: {"type":"array","items":{"$ref":"#/components/schemas/SessionRegistration"}}
+        cwd: {"type":"string"}
+        worktree: {"$ref":"#/components/schemas/WorktreeIdentity"}
+        epoch: {"type":"integer","minimum":1}
+        brief: {"type":"string"}
+        briefRevision: {"type":"integer","minimum":1}
+        policyRevision: {"type":"integer","minimum":1}
+        directory: {"type":"string"}
+        planPath: {"type":"string"}
+        required: {"type":"array","items":{"$ref":"#/components/schemas/AgentId"},"minItems":1,"uniqueItems":true}
+        drafts: {"type":"object","additionalProperties":{"$ref":"#/components/schemas/DraftAssignment"}}
+        step: {"enum":["drafts","synthesis","refinement","checkpoint","implemented"]}
+        current: {"oneOf":[{"$ref":"#/components/schemas/PlanVersion"},{"type":"null"}]}
+        endorsements: {"type":"object","additionalProperties":{"type":"integer","minimum":1}}
+        endorsementHistory: {"type":"array","items":{"type":"object","properties":{"agentId":{"$ref":"#/components/schemas/AgentId"},"revision":{"type":"integer","minimum":1},"briefRevision":{"type":"integer","minimum":1}},"required":["agentId","revision","briefRevision"],"additionalProperties":false}}
+        objections: {"type":"object","additionalProperties":{"type":"string"}}
+        next: {"oneOf":[{"type":"object","properties":{"agentId":{"$ref":"#/components/schemas/AgentId"},"action":{"enum":["draft","synthesize","review","revise"]}},"required":["agentId","action"],"additionalProperties":false},{"type":"null"}]}
+        frozen: {"oneOf":[{"$ref":"#/components/schemas/FrozenPlan"},{"type":"null"}]}
+        request: {"$ref":"#/components/schemas/PlanStart"}
+      required: ["phase","group","participants","implementationParticipants","cwd","worktree","epoch","brief","briefRevision","policyRevision","directory","planPath","required","drafts","step","current","endorsements","endorsementHistory","objections","next","frozen","request"]
+      additionalProperties: false
+    PlanningAssignment:
+      type: object
+      properties:
+        identity: {"$ref":"#/components/schemas/PlanIdentity"}
+        root: {"type":"string"}
+        cwd: {"type":"string"}
+        branch: {"type":["string","null"]}
+        brief: {"type":"string"}
+        resultPath: {"type":"string"}
+        drafts: {"type":"array","items":{"type":"object","properties":{"agentId":{"$ref":"#/components/schemas/AgentId"},"document":{"$ref":"#/components/schemas/PlanDocument"}},"required":["agentId","document"],"additionalProperties":false}}
+        plan: {"$ref":"#/components/schemas/PlanVersion"}
+        findings: {"type":"object","additionalProperties":{"type":"string"}}
+      required: ["identity","root","cwd","branch","brief","resultPath"]
+      additionalProperties: false
+    AgentActivity:
+      description: CLI activity. Ready comes from native startup or explicit human confirmation, distinguished by detail. Idle requires a matching settled completion. Activity never certifies background-process quiescence, releases workflow ownership, or authorizes continuation.
+      type: object
+      properties:
+        agentId: {"$ref":"#/components/schemas/AgentId"}
+        state: {"type":"string","enum":["ready","working","idle","interrupted","unknown"]}
+        updatedAt: {"type":["string","null"],"format":"date-time"}
+        detail: {"type":"string"}
+      required: ["agentId","state","updatedAt","detail"]
+      additionalProperties: false
     InstanceState:
       type: object
       properties:

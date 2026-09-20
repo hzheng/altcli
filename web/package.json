@@ -16,7 +16,7 @@
     "e2e": "playwright test",
     "check": "npm run test:smoke && npm run test:workflow && npm run typecheck && npm test && npm run build",
     "check:e2e": "npm run check && npm run e2e",
-    "test:workflow": "node --experimental-strip-types --test scripts/workflow.test.ts"
+    "test:workflow": "node --experimental-strip-types --test scripts/workflow.test.ts scripts/implementation.test.ts scripts/planning.test.ts scripts/projects.test.ts"
   },
   "dependencies": {
     "better-sqlite3": "12.11.1",

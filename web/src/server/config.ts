@@ -10,6 +10,11 @@ export interface Config {
   dataDir: string;
   tmuxBin: string;
   tmuxSocket?: string;
+  legacyEnabled?: boolean;
+  /** Branch names that are creation bases, never implementation branches; the detected default branch is always added. */
+  integrationBranches: string[];
+  /** Host-local task checkouts, separate from controller metadata. Tests use an isolated root. */
+  worktreeDir?: string;
 }
 // Not NodeJS.ProcessEnv: Next's global types make NODE_ENV required there, which breaks the partial env objects tests pass.
 export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
@@ -31,7 +36,12 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     if (url.origin !== origin || !["https:", "http:"].includes(url.protocol)) throw new AppError("CONFIG", "Allowed origins must be exact HTTP(S) origins without paths or wildcards.", 503);
     if (url.protocol !== "https:" && !["127.0.0.1", "localhost"].includes(url.hostname)) throw new AppError("CONFIG", "Non-loopback origins must use HTTPS.", 503);
   }
-  return { mode, token, allowedOrigins, inputEnabled: input === "true",
+  const legacy = env.CODERCREW_ENABLE_LEGACY_RELAY ?? 'false';
+  if (!['true', 'false'].includes(legacy)) throw new AppError('CONFIG', 'CODERCREW_ENABLE_LEGACY_RELAY must be true or false.', 503);
+  const integrationBranches = (env.CODERCREW_INTEGRATION_BRANCHES ?? 'main,master').split(',').map((s) => s.trim()).filter(Boolean);
+  if (integrationBranches.some((name) => !/^[A-Za-z0-9][A-Za-z0-9/_.-]{0,150}$/.test(name))) throw new AppError('CONFIG', 'CODERCREW_INTEGRATION_BRANCHES must be a comma-separated list of branch names.', 503);
+  return { mode, token, allowedOrigins, inputEnabled: input === "true", legacyEnabled: legacy === 'true', integrationBranches,
+    worktreeDir: join(homedir(), '.codercrew'),
     dataDir: resolve(base, mode), tmuxBin: env.CODERCREW_TMUX_BIN ?? "tmux",
     ...(env.CODERCREW_TMUX_SOCKET ? { tmuxSocket: env.CODERCREW_TMUX_SOCKET } : {}) };
 }

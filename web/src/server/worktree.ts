@@ -6,7 +6,7 @@ import { dirname, join, isAbsolute } from 'node:path';
 import { AppError } from '../core/errors.ts';
 import type { WorktreeIdentity } from '../contracts/workflow.ts';
 
-const gitEnvironment = (): NodeJS.ProcessEnv => {
+export const gitEnvironment = (): NodeJS.ProcessEnv => {
   // Retain Next's required NODE_ENV typing as well as the inherited environment.
   const env: NodeJS.ProcessEnv = { ...process.env, GIT_OPTIONAL_LOCKS: '0' };
   for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES']) delete env[key];
@@ -33,6 +33,17 @@ export async function resolveWorktree(cwd: string): Promise<WorktreeIdentity | n
     return join(await realpath(dirname(paths[2]!)), paths[2]!.split('/').pop()!);
   });
   return { root, gitDir, indexPath };
+}
+/** The checked-out branch, or null on a detached HEAD. Read-only; an unborn branch still reports its name. */
+export function currentBranch(root: string): Promise<string | null> {
+  return new Promise((resolve, reject) => {
+    execFile('git', ['-C', root, 'symbolic-ref', '--short', '-q', 'HEAD'], { encoding: 'utf8', timeout: 5000, maxBuffer: 65536, shell: false, env: gitEnvironment() }, (error, stdout) => {
+      const branch = stdout.trimEnd();
+      if (!error && branch && !/[\u0000-\u001f]/.test(branch)) return resolve(branch);
+      if (error?.code === 1 && !branch) return resolve(null); // -q exits 1 without output when HEAD is not a symbolic ref
+      reject(new AppError('GIT_STATE', 'Could not read the checked-out branch.', 409));
+    });
+  });
 }
 export function sameWorktree(a: WorktreeIdentity | null, b: WorktreeIdentity | null): boolean {
   return !!a && !!b && a.root === b.root && a.gitDir === b.gitDir && a.indexPath === b.indexPath;

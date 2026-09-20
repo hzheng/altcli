@@ -7,7 +7,7 @@ process.env.CODERCREW_TOKEN = TOKEN;
 // Each viewport project gets its own server and store: hook events and history must not leak between them.
 const server = (port: number, name: string) => ({
   command: `npx next dev --hostname 127.0.0.1 --port ${port}`, url: `http://127.0.0.1:${port}`, reuseExistingServer: false,
-  env: { CODERCREW_TOKEN: TOKEN, CODERCREW_ADAPTER: "mock", CODERCREW_ENABLE_INPUT: "true",
+  env: { CODERCREW_TOKEN: TOKEN, CODERCREW_ADAPTER: "mock", CODERCREW_ENABLE_INPUT: "true", CODERCREW_ENABLE_LEGACY_RELAY: "true",
     CODERCREW_DATA_DIR: join(tmpdir(), `codercrew-e2e-${process.pid}-${port}`), CODERCREW_ALLOWED_ORIGINS: `http://127.0.0.1:${port}`,
     CODERCREW_DIST_DIR: `.next-e2e-${name}` },
 });

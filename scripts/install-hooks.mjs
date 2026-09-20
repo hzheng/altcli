@@ -1,10 +1,10 @@
-// Read and validate BOTH plans first. Unsupported input is never rewritten heuristically.
+// Read and validate every plan first. Unsupported input is never rewritten heuristically.
 import { lstat, mkdir, readFile, writeFile, rename, open, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { claudeSettings, codexConfig } from './lib/hook-config.mjs';
+import { claudeSettings, codexConfig, codexHooks } from './lib/hook-config.mjs';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const hook = join(root, 'hooks', 'codercrew-turn-complete.sh');
 const check = process.argv.includes('--check');
@@ -15,7 +15,7 @@ async function read(path) {
 const claudePath = join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'settings.json');
 const codexPath = join(process.env.CODEX_HOME ?? join(homedir(), '.codex'), 'config.toml');
 const plans = [];
-for (const [path, transform] of [[claudePath, claudeSettings], [codexPath, (text, target) => codexConfig(text ?? '', target)]]) {
+for (const [path, transform] of [[claudePath, claudeSettings], [codexPath, (text, target) => codexConfig(text ?? '', target)], [join(dirname(codexPath), 'hooks.json'), codexHooks]]) {
   const before = await read(path); const after = transform(before, hook);
   plans.push({ path, before, after });
 }
@@ -38,4 +38,5 @@ if (check) {
     } finally { await unlink(temporary).catch((error) => { if (error.code !== 'ENOENT') throw error; }); }
   }
   console.log('Restart both coding CLIs to load the hooks. Backups are private; keep them until verification succeeds.');
+  console.log('In Codex, use /hooks to review and trust the CoderCrew UserPromptSubmit, SessionStart and Interrupt hooks before sending work.');
 }
