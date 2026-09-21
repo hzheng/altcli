@@ -589,6 +589,116 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/WorktreeRemoval'}
         '404': {description: Unknown removal request}
+  /api/v1/projects/worktrees/integration/preview:
+    post:
+      operationId: previewWorktreeIntegration
+      summary: Read-only preview of one squash commit into the integration branch
+      description: Requires a linked task worktree on a named non-integration branch, a clean checkout that has the integration branch (main, else the recorded default) checked out with a committer identity, an unambiguous merge base, and a conflict-free `git merge-tree` result that changes the target tree. Neither checkout is modified. Uncommitted task-worktree changes are reported, not squashed. Run or delivery ownership of either checkout refuses the preview.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WorktreeIntegrationInput'}
+      responses:
+        '200':
+          description: Exact operation, commits, merged tree and an editable default commit message
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorktreeIntegrationPreview'}
+        '409': {description: Conflict, dirty or missing integration checkout, nothing to integrate, ambiguous baseline, occupied checkout or inaccessible worktree}
+  /api/v1/projects/worktrees/integration:
+    post:
+      operationId: integrateWorktree
+      summary: Confirmed squash integration
+      description: The compact confirmation repeats the preview's consent digest and the (edited) message; the server re-derives the preview and refuses a changed digest. The message budget (8 KiB JSON-encoded) plus bounded identifiers keeps every accepted request within the 16 KiB body limit, and the generated default already fits it. It then revalidates ownership and runs `git merge --squash <head>` and `git commit -m <message>` in the integration checkout under the repository's normal hook policy. Exactly one new single-parent commit whose tree equals the previewed merge tree is verified; anything else is uncertain and never retried. The task branch and worktree are unchanged.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WorktreeIntegrateRequest'}
+      responses:
+        '200':
+          description: Durable integration result; uncertain results retain ownership and are never retried
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorktreeIntegration'}
+        '403': {description: Host input disabled}
+        '409': {description: Changed consent, conflicting request or project setup owner}
+  /api/v1/projects/worktrees/integration/reconcile:
+    post:
+      operationId: inspectWorktreeIntegration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [requestId]
+              properties:
+                requestId: {type: string, format: uuid}
+      responses:
+        '200':
+          description: Read-only inspection; the exact expected commit completes integration, an unchanged clean checkout releases the hold as failed, a staged squash without a commit stays uncertain for the human
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorktreeIntegration'}
+        '404': {description: Unknown integration request}
+  /api/v1/projects/worktrees/discard/preview:
+    post:
+      operationId: previewWorktreeDiscard
+      summary: Read-only preview of what a forced discard would lose
+      description: Requires a linked task worktree on a named non-integration branch with no pane, run owner or unresolved delivery. Modified files and commits absent from the integration branch are counted and reported, not refused.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WorktreeDiscardInput'}
+      responses:
+        '200':
+          description: Worktree, branch and the work that would be lost
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorktreeDiscardPreview'}
+        '409': {description: Occupied or inaccessible worktree, or an integration-branch worktree}
+  /api/v1/projects/worktrees/discard:
+    post:
+      operationId: discardWorktree
+      summary: Confirmed forced removal of a worktree and deletion of its branch
+      description: The branch name must be repeated in confirmBranch. After revalidating the preview and occupancy and archiving unarchived handoff commits in the journal, runs `git worktree remove --force` and `git branch -D`. Run history is retained; the commits become unreachable.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WorktreeDiscardConfirm'}
+      responses:
+        '200':
+          description: Durable discard result; uncertain results retain ownership and are never retried
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorktreeDiscard'}
+        '403': {description: Host input disabled}
+        '409': {description: Conflicting request or project setup owner}
+  /api/v1/projects/worktrees/discard/reconcile:
+    post:
+      operationId: inspectWorktreeDiscard
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [requestId]
+              properties:
+                requestId: {type: string, format: uuid}
+      responses:
+        '200':
+          description: Read-only inspection; verified absence of directory, worktree entry and branch completes the discard, the unchanged original releases the hold as failed, otherwise uncertainty remains
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorktreeDiscard'}
+        '404': {description: Unknown discard request}
   /api/v1/projects/worktrees/reconcile:
     post:
       operationId: reconcileTaskWorktree
@@ -1366,6 +1476,14 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/WorktreeRemoval'
+        integrations:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorktreeIntegration'
+        discards:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorktreeDiscard'
     ProjectWorktree:
       type: object
       required: [id, path, branch, head, main, identity, error]
@@ -1453,6 +1571,114 @@ components:
       properties:
         input: {$ref: '#/components/schemas/WorktreeRemoveInput'}
         status: {type: string, enum: [applying, removed, uncertain, failed]}
+        message: {type: string}
+        updatedAt: {type: string, format: date-time}
+    WorktreeIntegrationInput:
+      type: object
+      additionalProperties: false
+      required: [projectId, worktreeId]
+      properties:
+        projectId: {type: string}
+        worktreeId: {type: string}
+    WorktreeIntegrationPreview:
+      type: object
+      required: [projectId, worktreeId, requestId, worktree, branch, head, dirty, targetRef, targetHead, target, mergeBase, commitCount, commits, tree, message, commands, consent]
+      properties:
+        projectId: {type: string}
+        worktreeId: {type: string}
+        requestId: {type: string, format: uuid}
+        worktree: {$ref: '#/components/schemas/WorktreeIdentity', description: The task worktree; it is not modified.}
+        branch: {type: string}
+        head: {$ref: '#/components/schemas/GitSha'}
+        dirty: {type: boolean, description: Uncommitted task-worktree changes exist and are not part of the squash.}
+        targetRef: {type: string}
+        targetHead: {$ref: '#/components/schemas/GitSha'}
+        target: {$ref: '#/components/schemas/WorktreeIdentity', description: The clean checkout with the integration branch checked out, where the squash commit is made.}
+        mergeBase: {$ref: '#/components/schemas/GitSha'}
+        commitCount: {type: integer, minimum: 1}
+        commits:
+          type: array
+          maxItems: 100
+          description: Up to 100 of the commits being squashed, newest first.
+          items:
+            type: object
+            additionalProperties: false
+            required: [sha, subject]
+            properties:
+              sha: {$ref: '#/components/schemas/GitSha'}
+              subject: {type: string}
+        tree: {$ref: '#/components/schemas/GitSha', description: The conflict-free merged tree; the squash commit must have exactly this tree.}
+        message: {type: string, description: Editable default commit message, generated within the confirmation budget (at most 8 KiB once JSON-encoded, subjects shortened and the list cut with a count of omitted commits).}
+        commands: {type: array, maxItems: 4, items: {type: string}, description: The exact Git operations confirmation authorizes, for display.}
+        consent: {type: string, pattern: '^[0-9a-f]{64}$', description: Server digest of every pinned field except requestId and message.}
+    WorktreeIntegrateRequest:
+      type: object
+      additionalProperties: false
+      required: [projectId, worktreeId, requestId, consent, message, confirm]
+      description: Compact confirmation; the server re-derives the preview and requires its consent digest to match.
+      properties:
+        projectId: {type: string}
+        worktreeId: {type: string}
+        requestId: {type: string, format: uuid}
+        consent: {type: string, pattern: '^[0-9a-f]{64}$'}
+        message: {type: string, description: Printable, newlines allowed, at most 8192 bytes once JSON-encoded (escapes count), so every accepted request stays within the 16 KiB body limit together with the bounded identifiers.}
+        confirm: {type: boolean, const: true}
+    WorktreeIntegrateInput:
+      description: The durable consent record, the re-derived preview with the confirmed message.
+      allOf:
+      - $ref: '#/components/schemas/WorktreeIntegrationPreview'
+      - type: object
+        required: [confirm]
+        properties:
+          confirm: {type: boolean, const: true}
+      unevaluatedProperties: false
+    WorktreeIntegration:
+      type: object
+      required: [input, status, message, updatedAt, commit]
+      properties:
+        input: {$ref: '#/components/schemas/WorktreeIntegrateInput'}
+        status: {type: string, enum: [applying, integrated, uncertain, failed]}
+        message: {type: string}
+        updatedAt: {type: string, format: date-time}
+        commit: {type: [string, 'null'], description: The verified squash commit on the integration branch.}
+    WorktreeDiscardInput:
+      type: object
+      additionalProperties: false
+      required: [projectId, worktreeId]
+      properties:
+        projectId: {type: string}
+        worktreeId: {type: string}
+    WorktreeDiscardPreview:
+      type: object
+      required: [projectId, worktreeId, requestId, worktree, branch, head, targetRef, targetHead, dirty, changeCount, fingerprint, unmergedCommits]
+      properties:
+        projectId: {type: string}
+        worktreeId: {type: string}
+        requestId: {type: string, format: uuid}
+        worktree: {$ref: '#/components/schemas/WorktreeIdentity'}
+        branch: {type: string}
+        head: {$ref: '#/components/schemas/GitSha'}
+        targetRef: {type: string}
+        targetHead: {$ref: '#/components/schemas/GitSha'}
+        dirty: {type: boolean}
+        changeCount: {type: integer, minimum: 0, description: Modified or nonignored untracked files that would be lost.}
+        fingerprint: {type: string, pattern: '^[0-9a-f]{64}$', description: Digest of HEAD, index entries, unstaged content and untracked file contents; consent binds to this exact content.}
+        unmergedCommits: {type: integer, minimum: 0, description: Commits the integration branch does not contain; unreachable once the branch is deleted.}
+    WorktreeDiscardConfirm:
+      allOf:
+      - $ref: '#/components/schemas/WorktreeDiscardPreview'
+      - type: object
+        required: [confirmBranch, confirm]
+        properties:
+          confirmBranch: {type: string, description: Must equal branch exactly.}
+          confirm: {type: boolean, const: true}
+      unevaluatedProperties: false
+    WorktreeDiscard:
+      type: object
+      required: [input, status, message, updatedAt]
+      properties:
+        input: {$ref: '#/components/schemas/WorktreeDiscardConfirm'}
+        status: {type: string, enum: [applying, discarded, uncertain, failed]}
         message: {type: string}
         updatedAt: {type: string, format: date-time}
     ActivityReset:

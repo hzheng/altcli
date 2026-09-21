@@ -136,6 +136,65 @@ test('squash removal requires preview and confirmation, removes the card and ret
   await expect(page.getByRole('button', { name: 'Open finished', exact: true })).toHaveCount(0);
   await expect(page.getByRole('status')).toContainText('history are retained'); expect(removals).toBe(1);
 });
+test('squash into main previews the exact operation and message, requires confirmation, and posts the edited message once', async ({ page, request }, info) => {
+  const inventory = await fixture(page, request); const project = inventory.projects![0]!;
+  const target = tree('/home/fixture/tasks/finished', 'feature/finished'); project.worktrees.push(target);
+  const shown = { projectId: project.id, worktreeId: target.id, requestId: crypto.randomUUID(), worktree: target.identity, branch: 'feature/finished', head: target.head, dirty: true,
+    targetRef: 'refs/heads/main', targetHead: 'b'.repeat(40), target: project.worktrees[0]!.identity, mergeBase: 'b'.repeat(40), commitCount: 2,
+    commits: [{ sha: 'd'.repeat(40), subject: 'second' }, { sha: 'c'.repeat(40), subject: 'first' }], tree: 'e'.repeat(40),
+    message: 'Squash feature/finished\n\nSquash of feature/finished (bbbbbbb..aaaaaaa, 2 commits).\n\n- first\n- second\n',
+    commands: ['git -C /demo/project merge --squash ' + target.head, 'git -C /demo/project commit -m <message>'], consent: 'f'.repeat(64) };
+  const posted: unknown[] = [];
+  await page.route('**/api/v1/projects/worktrees/integration/preview', (route) => route.fulfill({ json: shown }));
+  await page.route('**/api/v1/projects/worktrees/integration', (route) => {
+    posted.push(route.request().postDataJSON());
+    return route.fulfill({ json: { input: route.request().postDataJSON(), status: 'integrated', message: 'Squashed feature/finished into main as 0123456789ab. Use Check removal when you are done.', updatedAt: new Date().toISOString(), commit: '0123456789ab' + 'f'.repeat(28) } });
+  });
+  await page.getByRole('button', { name: 'Recheck', exact: true }).click();
+  // The three lifecycle actions read top to bottom: squash, removal check, discard; the branch is not repeated in the visible labels.
+  const card = page.getByRole('list', { name: 'Available worktrees' }).getByRole('listitem').filter({ hasText: 'finished' });
+  await expect(card.getByRole('button')).toHaveText(['finished0 AGENTS/home/fixture/tasks/finishedBranch: feature/finishedNo agents · start coding CLIs here, then Recheck', 'Squash into main', 'Check removal', 'Discard…']);
+  await page.getByRole('button', { name: 'Squash feature/finished into main', exact: true }).click();
+  const region = page.getByRole('region', { name: 'Squash feature/finished', exact: true });
+  await expect(region).toContainText('Squash 2 commits from feature/finished (bbbbbbb..aaaaaaa) into main');
+  await expect(region).toContainText('git -C /demo/project merge --squash'); await expect(region).toContainText('uncommitted changes; they are not part of this squash');
+  const message = page.getByLabel('Squash commit message'); await expect(message).toHaveValue(shown.message);
+  // The budget shown is the JSON-encoded size the server enforces; an oversized message disables confirmation instead of failing later.
+  const confirm = page.getByRole('button', { name: 'Confirm squash', exact: true }); await expect(confirm).toBeEnabled();
+  await message.fill('"'.repeat(4096)); await expect(region).toContainText('8,194 of 8,192 bytes (JSON-encoded, as sent) — shorten the message to confirm.'); await expect(confirm).toBeDisabled();
+  await message.fill('feat: finished\n\nSquash of feature/finished.\n'); await expect(region).toContainText('49 of 8,192 bytes'); await expect(confirm).toBeEnabled(); expect(posted).toEqual([]);
+  await page.screenshot({ path: info.outputPath('squash-worktree.png'), fullPage: true });
+  await page.getByRole('button', { name: 'Confirm squash', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Squashed feature/finished into main');
+  // The confirmation is compact: consent digest plus the edited message, never the (possibly large) preview echoed back.
+  expect(posted).toEqual([{ projectId: project.id, worktreeId: target.id, requestId: shown.requestId, consent: shown.consent, message: 'feat: finished\n\nSquash of feature/finished.\n', confirm: true }]);
+  await expect(page.getByRole('button', { name: 'Squash feature/finished into main', exact: true })).toBeVisible();
+});
+test('discard warns about the work that would be lost and requires the exact branch name', async ({ page, request }, info) => {
+  const inventory = await fixture(page, request); const project = inventory.projects![0]!;
+  const target = tree('/home/fixture/tasks/finished', 'feature/finished'); project.worktrees.push(target);
+  const shown = { projectId: project.id, worktreeId: target.id, requestId: crypto.randomUUID(), worktree: target.identity, branch: 'feature/finished', head: target.head,
+    targetRef: 'refs/heads/main', targetHead: 'b'.repeat(40), dirty: true, changeCount: 2, fingerprint: 'e'.repeat(64), unmergedCommits: 3 };
+  const posted: unknown[] = [];
+  await page.route('**/api/v1/projects/worktrees/discard/preview', (route) => route.fulfill({ json: shown }));
+  await page.route('**/api/v1/projects/worktrees/discard', (route) => {
+    posted.push(route.request().postDataJSON()); project.worktrees = project.worktrees.filter((w) => w.id !== target.id);
+    return route.fulfill({ json: { input: route.request().postDataJSON(), status: 'discarded', message: 'Discarded feature/finished: its worktree and branch are deleted. Run history is retained.', updatedAt: new Date().toISOString() } });
+  });
+  await page.getByRole('button', { name: 'Recheck', exact: true }).click();
+  await page.getByRole('button', { name: 'Discard feature/finished', exact: true }).click();
+  const region = page.getByRole('region', { name: 'Discard feature/finished', exact: true });
+  await expect(region).toContainText('Lost: 3 commits not in main and 2 uncommitted changes');
+  await expect(region).toContainText('does not check that anything was integrated');
+  const confirm = page.getByRole('button', { name: 'Confirm discard', exact: true }); await expect(confirm).toBeDisabled();
+  await page.getByLabel('Branch name to discard').fill('feature/finish'); await expect(confirm).toBeDisabled();
+  await page.getByLabel('Branch name to discard').fill('feature/finished'); await expect(confirm).toBeEnabled(); expect(posted).toEqual([]);
+  await page.screenshot({ path: info.outputPath('discard-worktree.png'), fullPage: true });
+  await confirm.click();
+  await expect(page.getByRole('button', { name: 'Open finished', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('status')).toContainText('worktree and branch are deleted');
+  expect(posted).toEqual([{ ...shown, confirmBranch: 'feature/finished', confirm: true }]);
+});
 test('removal rejection is shown and stale worktree preview disables confirmation', async ({ page, request }) => {
   const inventory = await fixture(page, request); const project = inventory.projects![0]!;
   const target = tree('/home/fixture/tasks/finished', 'feature/finished'); project.worktrees.push(target);

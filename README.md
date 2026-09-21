@@ -152,11 +152,20 @@ names are not project or worktree identities. Git's worktree inventory includes
 empty checkouts, and explicitly used/created projects are remembered after restart.
 New worktrees have no agents: prepare dependencies/environment and launch coding
 CLIs in the new directory yourself, then Recheck. No automatic cleanup or merge
-follows completion. Projects offers **Check removal** for unused linked task
-worktrees: preview and confirm after ancestry or an exact squash patch verifies
-integration into local main/default. Modified and nonignored untracked files, panes,
-and unresolved runs block removal. Ignored files are allowed; confirmation warns
-that they will also be deleted. The branch and history remain. Uncertain creation offers inspection, never automatic retry.
+follows completion; each linked task worktree instead offers three confirmed
+end-of-task actions in Projects. **Squash into main** previews one squash commit
+of the task branch into local main/default (the exact `git merge --squash` and
+`git commit` in the checkout that has that branch checked out, the commits
+involved, a conflict-free merged tree and an editable message) and performs it
+on confirmation; the target checkout must be clean and unowned, and the task
+branch and worktree are left as they are. **Check removal** previews and confirms
+non-force removal after ancestry or an exact squash patch verifies integration;
+modified and nonignored untracked files, panes and unresolved runs block it,
+ignored files are allowed with a warning, and the branch and history remain.
+**Discard…** force-removes the worktree and deletes its branch without
+integration evidence after you type the branch name; it reports the commits and
+uncommitted changes that will be lost and archives the handoff journal first.
+Uncertain results of any of them offer inspection, never automatic retry.
 
 Each assigned agent reads the repository's separate `commit-handoff` skill and
 an immutable assignment file outside the managed checkout. The agent publishes

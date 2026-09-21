@@ -42,7 +42,7 @@ One implementation branch is recorded per run segment, and it is always a task b
 
 ### Integration branches are starting points
 
-The task flow is: select a project and a base branch or commit, usually the default branch; create a task branch and worktree (or a task branch at the same HEAD in the existing checkout); record that exact starting commit as the task's permanent baseline; run implementation and review rounds there; integrate the accepted result through a separate, explicit merge or pull request. Because an ordinary merge carries every review-round commit across, **squash integration is the recommended completion path** when a clean integration history is the goal. The app performs no integration step.
+The task flow is: select a project and a base branch or commit, usually the default branch; create a task branch and worktree (or a task branch at the same HEAD in the existing checkout); record that exact starting commit as the task's permanent baseline; run implementation and review rounds there; integrate the accepted result through a separate, explicit merge or pull request. Because an ordinary merge carries every review-round commit across, **squash integration is the recommended completion path** when a clean integration history is the goal. Since September 20, 2026 the app offers that one step as a separate confirmed operation ([Confirmed squash integration](#confirmed-squash-integration)); it never runs as a consequence of task completion.
 
 The restriction applies to the repository's default branch and every configured integration branch, not just the literal name `main`, and is enforced on the server (`INTEGRATION_BRANCH`) as well as in the picker. An integration branch still appears in the project view for inspection and as a creation base; selecting it for implementation leads to the new-task-branch or task-worktree path. A new branch may not take an integration name either.
 
@@ -63,7 +63,7 @@ Before mutation, establish that:
 
 Afterward verify the actual named branch, unchanged starting commit, and unchanged captured input (or clean state) before implementation dispatch. If the operation's result is uncertain, record the uncertainty and inspect/reconcile; do not blindly repeat it or issue a destructive rollback. Concurrent confirmations must produce one authorized setup transition. A fresh live state, not a reused stale UI card, is the basis for the check.
 
-The create-and-checkout permission does **not** authorize existing-branch switching, unconfirmed worktree removal, stash, reset, clean, add/commit, merge, rebase, force-push, branch deletion, editing `.gitignore`, or changing global/local Git configuration. Agents or their authorized commit helper still publish implementation turns. Worktree creation requires its own consent below.
+The create-and-checkout permission does **not** authorize existing-branch switching, unconfirmed worktree removal, stash, reset, clean, add/commit, merge, rebase, force-push, branch deletion, editing `.gitignore`, or changing global/local Git configuration. Agents or their authorized commit helper still publish implementation turns. Worktree creation, removal, squash integration and discard each require their own consent below.
 
 ### Explicit task-worktree creation
 
@@ -116,6 +116,80 @@ the exact original clean state is still present; all other results stay uncertai
 Successful removal clears only that checkout's saved configuration, retaining its
 branch, commits and workflow history. SQLite v8 prevents older servers from
 ignoring a removal owner. Installed-host deletion acceptance remains separate.
+
+### Confirmed squash integration
+
+User requirement, September 20, 2026: each linked task worktree in Projects
+offers **Squash into main**, so the recommended completion path can be taken from
+the app instead of a hand-typed merge. This is a third narrow Git-write
+exception, scoped to one commit on the integration branch. It never runs as a
+consequence of discovery, task completion, review acceptance or removal.
+
+A read-only preview requires a named non-integration task branch in an accessible
+linked worktree; the integration branch (local `main`, else the recorded default)
+checked out in a different accessible worktree that is clean, at the branch's
+tip, with a Git committer identity; a single merge base; and a conflict-free
+`git merge-tree --write-tree` result whose tree differs from the target tree. It
+reports the merge base, the commits being squashed (newest first, at most 100
+listed), the merged tree, a default commit message and the exact commands. Dirty
+task-worktree changes are reported, not squashed. An already-integrated branch is
+pointed at Check removal. Run or delivery ownership of either checkout refuses the
+preview; panes in the integration checkout are permitted, so confirmation states
+that its agents must be idle because the merge changes its files and index.
+
+The preview carries a consent digest of every pinned field (project/worktree
+identities, branch, HEAD, target ref and HEAD, merge base, commit list, merged
+tree, commands). The confirmation is compact: request ID, that digest and the
+final editable commit message. One sizing policy governs the message: at most
+8 KiB once JSON-encoded (escapes count), which together with the bounded
+identifiers keeps every accepted request inside the 16 KiB limit however many
+commits the preview listed, and the generated default message is built to that
+same budget (oldest listed subjects first, over-long subjects shortened, the
+list cut with a count of omitted commits) so a long history confirms unedited.
+The server re-derives the preview and refuses a changed digest before claiming
+anything. The durable record is the
+re-derived preview with the confirmed message. Persist a project setup owner,
+revalidate the digest and ownership, then execute only `git merge --squash <head>` followed by
+`git commit -m <message>` in the integration checkout, under the repository's
+normal hook policy: only handoff commits bypass hooks, final integration does
+not. Success is exactly one new single-parent commit on the previous tip whose
+tree equals the previewed merged tree, with the checkout clean. The task branch
+and worktree are unchanged; Check removal then verifies the squash. Duplicate
+requests return the recorded result; a different message under the same request
+ID conflicts.
+
+Restart or any failure after Git started retains an uncertain owner. A rejecting
+hook is the typical case: the squash is staged but not committed, and inspection
+keeps the operation uncertain until the human commits or resets that checkout;
+an unchanged clean checkout at the previous tip releases it as failed, and the
+exact expected commit completes it. No reset, abort, retry or history rewrite is
+performed by the app. Remote publication remains outside the app.
+
+### Confirmed discard
+
+User requirement, September 20, 2026: each linked task worktree also offers
+**Discard…** for abandoned work. This is the fourth exception and the only one
+that uses force: it removes the worktree and deletes its branch without
+integration evidence. A read-only preview requires a named non-integration
+branch in an accessible linked worktree with no tmux pane, run owner, unresolved
+delivery or uncertain setup, and reports the commits absent from the integration
+branch and the modified or nonignored untracked files that would be lost; neither
+refuses the operation. Confirmation requires the branch name to be typed exactly
+and warns that ignored files are deleted too and that the app cannot undo it.
+
+The preview pins a fingerprint of the exact nonignored content (HEAD, index
+entries, unstaged content, untracked file contents), so editing an already dirty
+file after the preview is a change even when the file count is not. Persist a
+project setup owner and the exact consent, revalidate the preview and occupancy,
+archive every unarchived handoff commit of that worktree in the journal, recheck
+the fingerprint once more after that archive step, then execute
+`git worktree remove --force -- <path>` followed by
+`git branch -D -- <branch>`. Verified absence of the directory, the Git worktree
+entry and the branch records success and clears that checkout's saved
+configuration; run history and the journal are retained. Restart or an ambiguous
+result retains ownership as uncertain; inspection recognises complete absence or
+the unchanged original and never retries. SQLite v10 prevents older servers from
+ignoring an uncertain integration or discard owner.
 
 ### Branch consent and Plan approval are separate gates
 

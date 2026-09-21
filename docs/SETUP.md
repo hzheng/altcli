@@ -103,7 +103,18 @@ If creation is uncertain, inspect the destination and branch, then use **Inspect
 creation result**. It verifies an exact clean result or verified absence; partial
 results retain the project setup hold for human reconciliation. No Git command is
 retried and nothing is rolled back or deleted automatically. A failed operation
-may leave empty parent directories. Worktree removal is not exposed by this UI.
+may leave empty parent directories.
+
+When a task is finished, each linked task worktree offers three confirmed
+actions. **Squash into main** shows the exact squash commit that would land on
+local main/default (in the checkout that has it checked out, which must be clean
+and free of runs), with the commits involved and an editable message; confirm to
+perform it under the repository's normal hook policy. **Check removal** verifies
+integration and removes the clean, unused directory while keeping the branch.
+**Discard…** deletes the directory and the branch without integration evidence:
+it lists the commits and uncommitted changes that would be lost, archives the
+handoff journal first, and requires typing the branch name. All three record a
+durable result; an uncertain one is inspected, never retried.
 
 Dirty or unavailable workspaces remain readable, but Plan and Implementation
 starts are disabled until the index and nonignored worktree are clean. The console

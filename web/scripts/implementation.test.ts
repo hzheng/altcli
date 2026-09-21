@@ -392,7 +392,7 @@ test('v4 migration preserves historical pair IDs and creates versioned groups', 
   store.db.prepare('DELETE FROM groups').run(); store.db.pragma('user_version = 4'); store.close();
   store = new Store(join(directory, 'metadata'));
   assert.equal(store.groups()[0]!.id, group.id); assert.equal(store.groups()[0]!.legacyPairId, group.id);
-  assert.deepEqual(store.groups()[0]!.members, ['codex', 'claude']); assert.equal(store.db.pragma('user_version', { simple: true }), 9);
+  assert.deepEqual(store.groups()[0]!.members, ['codex', 'claude']); assert.equal(store.db.pragma('user_version', { simple: true }), 10);
 });
 test('committed work without handoff and log-only initial work never create a peer review', async () => {
   const first = request({ handoff: false }); await plane.submitImplementation(first); publish(first.requestId, true); await complete(first.requestId);

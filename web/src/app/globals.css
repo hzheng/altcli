@@ -149,6 +149,15 @@ details.advanced[open] summary { margin-bottom:12px; }
 .workspace-card .workspace-title { width:100%; }
 .workspace-card:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
 .create-worktree { margin-top:20px; }
+.worktree-actions { display:grid; gap:6px; padding:0 16px 14px; }
+.worktree-actions .create-worktree { margin-top:0; }
+.worktree-actions .quiet { justify-self:start; }
+.worktree-actions .notice { margin-bottom:4px; }
+.worktree-actions .notice label { display:grid; gap:6px; margin:10px 0; }
+.worktree-actions textarea, .worktree-actions input { width:100%; font:inherit; line-height:1.5; background:#101a1d; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:9px 11px; }
+.worktree-actions textarea { min-height:110px; resize:vertical; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+.commands { white-space:pre-wrap; overflow-wrap:anywhere; }
+button.danger { border-color:#64453e; color:#f1bbb0; }
 .worktree-form { display:grid; gap:12px; max-width:780px; }
 .worktree-form label { display:grid; gap:6px; }
 .worktree-form .readiness { display:flex; }

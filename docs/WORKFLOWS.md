@@ -149,7 +149,7 @@ Keep implementation handoff mode fixed for the execution segment. Plan-to-Implem
 
 The engine uses a common normalized lifecycle contract across the columns. Each CLI adapter obtains that evidence from its own supported mechanism. The artifact/result channel differs by phase, and the frozen legacy mode can retain its existing adapter implementation. Never require Gemini to invent Claude `prompt_id` or `background_tasks` fields merely to fit a shared interface.
 
-The setup exceptions to controller read-only Git inspection are **confirmed new-branch checkout** and separately **confirmed task-worktree creation**, as specified in [ADR-0013](adr/ADR-0013-confirmed-branch-setup.md). Neither is a planning turn or a change to the frozen staging protocol. Separately confirmed removal of a clean, unused, integrated task worktree is permitted under ADR-0013. No automatic removal, file cleanup, staging, commits, existing-branch resets or history rewrites are permitted.
+The setup exceptions to controller read-only Git inspection are **confirmed new-branch checkout** and separately **confirmed task-worktree creation**, as specified in [ADR-0013](adr/ADR-0013-confirmed-branch-setup.md). Neither is a planning turn or a change to the frozen staging protocol. Separately confirmed removal of a clean, unused, integrated task worktree, one confirmed squash commit into the integration branch's own clean checkout, and confirmed forced discard of a task worktree and branch are permitted under ADR-0013. No automatic removal, file cleanup, staging, handoff commits, existing-branch resets or history rewrites are permitted.
 
 ## Project-centered UI, groups, phases, and actions
 

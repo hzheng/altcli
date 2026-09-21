@@ -1,8 +1,68 @@
 # Starter validation record
 
 **Packaged:** September 14, 2026  
-**Last local validation:** September 20, 2026
+**Last local validation:** September 21, 2026
 **Scope:** Source scaffold, not a completed release or security certification
+
+## Confirmed squash integration and discard on September 21, 2026
+
+Projects now offers three confirmed end-of-task actions per linked task worktree,
+top to bottom: **Squash into main**, **Check removal** (visible label shortened;
+the accessible name still names the branch) and **Discard…**. Squash previews one
+squash commit into local main/default computed with `git merge-tree` (merge base,
+commits, conflict-free merged tree, exact commands, editable message) and, on
+confirmation, runs `git merge --squash` plus `git commit` in the checkout that
+has that branch checked out, under the repository's normal hook policy; the task
+branch and worktree are untouched. Discard force-removes the worktree and deletes
+the branch after the branch name is typed, reporting the unmerged commits and
+uncommitted changes that will be lost and archiving the journal first. Both use
+the removal pattern: durable operation records, project setup ownership,
+uncertain results inspected read-only and never retried. ADR-0013, AGENTS.md,
+README, SETUP, WORKFLOWS, TESTING, OPEN-DECISIONS, the decision ledger and the
+OpenAPI contract describe the new authorities.
+
+Review follow-up (September 21, 2026): discard consent now pins a fingerprint of
+the exact nonignored content and rechecks it after the archive step, so an edited
+dirty file with an unchanged file count refuses the old consent; the store
+version is 10 so older servers refuse databases holding integration or discard
+owners; and the squash confirmation is compact (consent digest plus a message of
+at most 8 KiB) so a 100-commit preview confirms within the 16 KiB request limit.
+Three regression tests cover these through real Git, a reopened store and the
+HTTP body parser. Second follow-up: the message budget is now one policy shared
+by the preview generator, validation and the browser (`core/squash-message.ts`:
+at most 8 KiB once JSON-encoded, identifiers bounded to 200 characters), the
+generated default is built within it (oldest listed subjects first, subjects
+over 120 characters shortened, the list cut with a count of omitted commits),
+and the browser shows the encoded size and disables confirmation instead of
+failing later; a 101-commit preview confirms unedited and a worst-case message
+of 4,095 double quotes round-trips through the body parser and commits, verified
+by real-Git, unit and browser tests. `./scripts/check.sh` and both Playwright
+projects were rerun (counts below are from that rerun).
+
+Executed checks on this task's final source:
+
+- `./scripts/check.sh` exited 0 on Node 26.0.0: installed skill links verified,
+  28 hook/setup tests, 41 smoke tests, 251 workflow tests (real Git and SQLite in
+  disposable repositories; ten new project tests cover the previewed merge
+  result and default message, one verified squash commit with tree equality and
+  the edited message, idempotent and conflicting repeats, refusal of conflicts,
+  dirty or missing integration checkouts, the main worktree, stale consent, busy
+  guards and read-only hosts, a rejecting `commit-msg` hook leaving a staged
+  squash uncertain until the checkout is restored, restart and failed
+  verification reconciled read-only, discard previews with typed-branch
+  validation, guard-then-archive ordering, worktree and branch deletion, stale
+  or busy discards, uncertain discards verified after restart, and the HTTP
+  control-plane ownership/pane guards), type checking, 53 unit tests and the
+  production build with the six new routes.
+- `env CODERCREW_E2E_PORT=9787 npx playwright test --project=desktop` and
+  `--project=iphone` (run separately beside the live console on 8787) each
+  passed all 68 cases, 136 in total, including the new squash-preview and
+  discard browser cases; both screenshots were inspected.
+- `git diff --check` passed; the diff was screened for credentials (none).
+
+Not executed: no real squash or discard was performed on a live repository, and
+no installed-host deletion acceptance is claimed. The development backend was not
+restarted during this turn; restart it before using the new Projects actions.
 
 ## Handoff journal as app data on September 20, 2026
 
