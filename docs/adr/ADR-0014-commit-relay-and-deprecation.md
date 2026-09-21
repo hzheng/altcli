@@ -220,7 +220,7 @@ The next worker fetches the commit, including the log.
 
 The original argument was that the log must not be kept only in CoderCrew's database, because a tracked log travels with the code. The September 20, 2026 update reverses that default: the journal is app history with export and pre-cleanup archiving, enduring knowledge is promoted into repository documents, and a tracked mirror is an explicit preference for projects that need the audit trail in Git. Runtime metadata (databases, tokens, sockets, diagnostics) stays outside managed worktrees regardless.
 
-Each completed commit-mode turn appends exactly one structured entry; earlier entries are never rewritten, and corrections are new entries. Sequential turn ownership is what makes one growing file appropriate: competing publications are a coordination conflict, not an invitation to merge fragments. `.codercrew/plans/` is excluded narrowly while the log stays tracked; a one-time implementation-start record may carry the approved plan when that transfer format is selected.
+Each completed commit-mode turn appends exactly one structured entry; earlier entries are never rewritten, and corrections are new entries. Sequential turn ownership is what makes one growing file appropriate: competing publications are a coordination conflict, not an invitation to merge fragments. Plan documents live in CoderCrew's data directory, so no exclusion can hide the log; a one-time implementation-start record may carry the approved plan when that transfer format is selected.
 
 ### What the log records and what Git supplies
 

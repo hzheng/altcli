@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, test } from 'node:test';
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -11,7 +11,7 @@ import { ControlPlane } from '../src/server/control-plane.ts';
 import { MockAdapter, mockSessions } from '../src/server/adapters/mock.ts';
 import { loadConfig } from '../src/server/config.ts';
 import { resolveWorktree } from '../src/server/worktree.ts';
-import { planHash } from '../src/server/planning-documents.ts';
+import { planHash, validatePlanPaths } from '../src/server/planning-documents.ts';
 import { assertIdentity } from '../src/core/policy.ts';
 import type { SessionRegistration } from '../src/contracts/api.ts';
 import { consumePlan, newPlanning, planAgreed } from '../src/server/planning-state.ts';
@@ -28,7 +28,7 @@ function git(...args: string[]): string {
 }
 beforeEach(async () => {
   directory = realpathSync(mkdtempSync(join(tmpdir(), 'codercrew-planning-'))); root = join(directory, 'repo'); mkdirSync(root);
-  git('init', '-b', 'main'); writeFileSync(join(root, 'app.txt'), 'baseline\n'); writeFileSync(join(root, '.gitignore'), '.codercrew/plans/\n'); git('add', 'app.txt', '.gitignore'); git('commit', '-m', 'baseline');
+  git('init', '-b', 'main'); writeFileSync(join(root, 'app.txt'), 'baseline\n'); git('add', 'app.txt'); git('commit', '-m', 'baseline'); // no ignore rule: plans stay out of the checkout
   git('switch', '-c', 'task/fixture'); // main is the integration branch: a starting point, never the implementation branch
   store = new Store(join(directory, 'metadata')); adapter = new MockAdapter(); sent = [];
   const inspect = adapter.inspect.bind(adapter); adapter.inspect = async (id) => ({ ...await inspect(id), cwd: root });
@@ -54,7 +54,7 @@ function request(more: Partial<PlanStart> = {}): PlanStart {
 function assignment(commandId: string): PlanningAssignment { return JSON.parse(readFileSync(join(plane.workflow.assignmentDirectory, `${commandId}.json`), 'utf8')); }
 function publish(commandId: string, text = '# Plan\nImplement and verify the task.\n', fields: Partial<PlanResult> = {}) {
   const turn = plane.workflow.execution(commandId)!.planning!;
-  const path = join(root, turn.identity.outputPath); mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text);
+  const path = turn.identity.outputPath; mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text);
   const result: PlanResult = { identity: turn.identity, outcome: turn.identity.action === 'review' ? 'accept' : 'complete', outputHash: planHash(text), model: 'unknown', summary: 'Fixture planning result', reason: null, ...fields };
   writeFileSync(turn.resultPath, JSON.stringify(result)); return result;
 }
@@ -220,24 +220,38 @@ for (const fault of ['missing result','wrong identity','wrong hash','project edi
   if (fault === 'staged file') { appendFileSync(join(root, 'app.txt'), 'unauthorized'); git('add', 'app.txt'); }
   if (fault === 'commit') { appendFileSync(join(root, 'app.txt'), 'unauthorized'); git('add', 'app.txt'); git('commit', '-m', 'not a plan'); }
   if (fault === 'new file') writeFileSync(join(root, 'unexpected.txt'), 'not planning');
-  if (fault === 'peer draft') writeFileSync(join(root, run(input.requestId).planning!.drafts.claude!.path), 'stolen slot');
-  if (fault === 'extra document') writeFileSync(join(root, run(input.requestId).planning!.directory, 'report.md'), 'unexpected');
-  if (fault === 'symlink') { rmSync(join(root, turn.identity.outputPath)); symlinkSync(join(root, 'app.txt'), join(root, turn.identity.outputPath)); }
-  if (fault === 'oversize') writeFileSync(join(root, turn.identity.outputPath), 'x'.repeat(128 * 1024 + 1));
+  if (fault === 'peer draft') writeFileSync(run(input.requestId).planning!.drafts.claude!.path, 'stolen slot');
+  if (fault === 'extra document') writeFileSync(join(run(input.requestId).planning!.directory, 'report.md'), 'unexpected');
+  if (fault === 'symlink') { rmSync(turn.identity.outputPath); symlinkSync(join(root, 'app.txt'), turn.identity.outputPath); }
+  if (fault === 'oversize') writeFileSync(turn.identity.outputPath, 'x'.repeat(128 * 1024 + 1));
   await complete(input.requestId, fault === 'legacy outcome' ? { outcome: 'accept_without_improvement' } : {});
   assert.equal(run(input.requestId).status, 'paused'); assert.equal(sent.length, 1); assert.equal(run(input.requestId).planning!.drafts.codex!.status, 'running');
   assert.equal(plane.workflow.owner(`${root}/.git/index`), input.requestId);
 });
-test('missing/nonnarrow exclusion, tracked drafts and collisions are refused before any terminal delivery', async () => {
-  writeFileSync(join(root, '.gitignore'), '.codercrew/\n'); git('add', '.gitignore'); git('commit', '-m', 'broad exclusion');
-  await assert.rejects(plane.submitPlan(request()), /Narrow the ignore/);
-  writeFileSync(join(root, '.gitignore'), ''); git('add', '.gitignore'); git('commit', '-m', 'no exclusion');
-  await assert.rejects(plane.submitPlan(request()), /ignored and untracked/);
-  writeFileSync(join(root, '.gitignore'), '.codercrew/plans/\n'); git('add', '.gitignore'); git('commit', '-m', 'narrow exclusion');
-  const input = request(); const path = `.codercrew/plans/${input.requestId}/draft-codex.md`; mkdirSync(dirname(join(root, path)), { recursive: true }); writeFileSync(join(root, path), 'existing');
-  await assert.rejects(plane.submitPlan(input), /Protected planning artifact/);
-  git('add', '-f', path); git('commit', '-m', 'tracked plan');
-  await assert.rejects(plane.submitPlan({ ...input, baseline: { branch: 'task/fixture', head: git('rev-parse', 'HEAD') } }), /ignored and untracked/); assert.equal(sent.length, 0);
+test('plan documents live in the data directory, not the checkout; collisions and the old in-checkout layout are refused', async () => {
+  const input = request(); const path = join(config().dataDir, 'plans', input.requestId, 'draft-codex.md'); mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, 'existing');
+  await assert.rejects(plane.submitPlan(input), /Protected planning artifact/); assert.equal(sent.length, 0);
+  const fresh = request(); await plane.submitPlan(fresh); const plan = run(fresh.requestId).planning!;
+  assert.equal(plan.directory, join(config().dataDir, 'plans', fresh.requestId)); assert.equal(plan.drafts.codex!.path, join(plan.directory, 'draft-codex.md'));
+  publish(fresh.requestId); assert.equal(git('status', '--porcelain=v1', '--untracked-files=all', '--ignored'), ''); // nothing, not even an ignored file
+  await complete(fresh.requestId); assert.equal(run(fresh.requestId).planning!.drafts.codex!.status, 'finalized');
+  // A run stored before the move kept checkout-relative paths; it is refused instead of being resolved against a guess.
+  const legacy = `.codercrew/plans/${fresh.requestId}`;
+  await assert.rejects(validatePlanPaths({ ...plan, directory: legacy, planPath: `${legacy}/plan.md` }), /earlier layout/);
+});
+test('a plans root that is a link or lies inside the checkout is refused before delivery and at capture', async () => {
+  // An ignored in-checkout directory keeps the clean-baseline check passing, so only the plan-root check can stop it.
+  const plans = join(config().dataDir, 'plans'); const inside = join(root, '.plans');
+  appendFileSync(join(root, '.git', 'info', 'exclude'), '.plans/\n'); mkdirSync(inside); mkdirSync(config().dataDir, { recursive: true }); symlinkSync(inside, plans);
+  await assert.rejects(plane.submitPlan(request()), /Unsafe plan directory/); assert.equal(sent.length, 0); assert.equal(plane.workflow.runs().length, 0);
+  // A link swapped in after Start redirects the draft into the checkout; capture refuses it and keeps ownership.
+  rmSync(plans); const input = request(); await plane.submitPlan(input); assert.equal(sent.length, 1);
+  const planning = run(input.requestId).planning!; renameSync(plans, join(directory, 'moved-plans')); symlinkSync(inside, plans);
+  publish(input.requestId); await complete(input.requestId);
+  assert.equal(run(input.requestId).status, 'paused'); assert.match(run(input.requestId).reason, /Unsafe plan directory/); assert.equal(run(input.requestId).planning!.drafts.codex!.status, 'running');
+  // An ordinary directory inside the checkout is refused too, whatever its path.
+  const nested = join(inside, 'real'); mkdirSync(nested);
+  await assert.rejects(validatePlanPaths({ ...planning, directory: join(nested, input.requestId) }), /inside the checkout/);
 });
 test('unknown background and restart never fill a draft slot or replay assignments', async () => {
   const input = request(); await plane.submitPlan(input); publish(input.requestId); await complete(input.requestId, { backgroundState: 'unknown', settled: false });
@@ -251,7 +265,7 @@ test('automatic budget spans both phases and cannot be reset at agreement', asyn
 });
 test('manual checkpoint rechecks plan text and code baseline before granting Implementation writes', async () => {
   const input = request(); await plane.submitPlan(input); await finishPlan(input.requestId); const approval = decision(input.requestId);
-  appendFileSync(join(root, run(input.requestId).planning!.planPath), 'external changes');
+  appendFileSync(run(input.requestId).planning!.planPath, 'external changes');
   await assert.rejects(plane.decidePlan(approval), /Protected planning artifact/); assert.equal(sent.length, 4); assert.equal(run(input.requestId).implementation, undefined);
 });
 test('planning locks exclude overlapping groups and standalone implementation runs', async () => {
@@ -309,7 +323,7 @@ test('a changed code baseline or branch never inherits approval of a clean plan'
 test('finalized peer drafts and unassigned plan.md are protected before the draft barrier', async () => {
   const input = request(); await plane.submitPlan(input); publish(input.requestId); await complete(input.requestId);
   const next = run(input.requestId).currentCommandId; publish(next);
-  appendFileSync(join(root, run(input.requestId).planning!.drafts.codex!.path), 'external interference'); await complete(next);
+  appendFileSync(run(input.requestId).planning!.drafts.codex!.path, 'external interference'); await complete(next);
   assert.equal(run(input.requestId).status, 'paused'); assert.equal(run(input.requestId).planning!.drafts.claude!.status, 'running'); assert.equal(sent.length, 2);
 });
 test('checkpoint restart preserves captured text, roster, endorsements and ownership without dispatch', async () => {
@@ -336,13 +350,13 @@ test('manual plan-to-code transition retains initial review intent and protects 
   writeFileSync(resultPath, JSON.stringify({ ...identity, model: 'unknown', decision: null, reason: null, needsHuman: false, summary: 'Code proposal', checks: [] }));
   git('add', 'app.txt'); git('commit', '-m', 'implementation proposal'); await complete(worker);
   assert.equal(sent.length, 6); assert.equal(plane.workflow.execution(run(input.requestId).currentCommandId)!.implementation!.identity.action, 'review_and_improve');
-  const frozen = run(input.requestId).planning!.frozen!; appendFileSync(join(root, run(input.requestId).planning!.planPath), 'attempted approval bypass');
+  const frozen = run(input.requestId).planning!.frozen!; appendFileSync(run(input.requestId).planning!.planPath, 'attempted approval bypass');
   await complete(run(input.requestId).currentCommandId); assert.equal(run(input.requestId).status, 'paused'); assert.match(run(input.requestId).reason, /Protected planning artifact/);
   assert.deepEqual(run(input.requestId).planning!.frozen, frozen);
 });
 for (const count of [3, 5]) test(`N-shaped model requires all ${count} drafts and current-version endorsements without enabling larger UI groups`, () => {
   const members = Array.from({ length: count }, (_, i) => `agent-${i}`); const base = store.sessions()[0] as ManagedSession;
-  const participants = members.map((id) => ({ ...base, id, registrationId: randomUUID() })); const p = newPlanning(request(), { ...group, members }, participants, participants.slice(0, 2), root);
+  const participants = members.map((id) => ({ ...base, id, registrationId: randomUUID() })); const p = newPlanning(request(), { ...group, members }, participants, participants.slice(0, 2), root, join(directory, 'plans'));
   function result(id: string, action: 'draft' | 'synthesize' | 'review', text = 'version one') {
     const identity = { schema: 1 as const, phase: 'plan' as const, runId: p.request.requestId, commandId: p.drafts[id]!.commandId, epoch: 1, briefRevision: 1, rosterRevision: 1, policyRevision: 1,
       agentId: id, registrationId: participants.find((m) => m.id === id)!.registrationId, action, baseline: p.request.baseline.head, outputPath: action === 'draft' ? p.drafts[id]!.path : p.planPath, inputRevision: p.current?.revision ?? null, inputHash: p.current?.hash ?? null };

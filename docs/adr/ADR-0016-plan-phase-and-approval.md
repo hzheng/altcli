@@ -37,6 +37,18 @@ deferred. Frozen artifacts are protected throughout Implementation. Tests use
 real disposable Git/files/SQLite and simulated terminals; installed-host
 acceptance is separate. The broader target decision below retains those limits.
 
+## Plan documents leave the checkout — September 21, 2026
+
+Drafts and `plan.md` are CoderCrew working data, not project content. Each run now
+writes them to `<data directory>/plans/<run-ID>/`, beside the assignment and
+result files, never inside the checkout. Plan therefore needs no ignore rule in any
+project, and the controller no longer inspects ignore rules for planning. Paths are
+absolute and canonical; the link, special-file, collision and protected-artifact
+checks are unchanged, and the checkout must still match its clean baseline
+throughout Plan. A run stored with the earlier checkout-relative `.codercrew/plans/`
+layout is refused rather than resolved, so it must be taken over and restarted.
+The sections below describe this layout.
+
 ## Context
 
 The user may ask agents to develop independent plans before coding. Keep drafting lightweight in one clean workspace, preserve initial independence cooperatively, and make the plan-to-code gate explicit.
@@ -57,31 +69,31 @@ Initially every selected planner is a required participant. Optional advisors or
 
 Require a clean project state, eligible selected group, common canonical current directory/worktree/index, and no conflicting project writer: no staged changes, unstaged tracked changes, or nonignored untracked project files. Record the current branch or detached state, starting code, and brief revisions. The workspace stays visible when dirty, but Plan dispatch is refused with useful paths. Unselected agents sharing the underlying checkout must not be running conflicting work. Recheck rather than moving them automatically. Never stage, stash, reset, discard, commit, or switch branches around user work.
 
-Set up the planning exclusion before the clean-state test. The controller verifies each exact output path read-only (working specification: `git check-ignore -q -- <path>` once per path, because a multi-path call exits 0 when any one path is ignored, plus `git ls-files -- <path>` to confirm it is not already tracked) and refuses if any path is unignored or already tracked. The human establishes a narrow `.gitignore` rule outside the run, or a repository-local exclude entry that dirties nothing and travels nowhere. The controller does not write Git configuration or ignore rules. The separate confirmed branch-setup exception in [ADR-0013](ADR-0013-confirmed-branch-setup.md) does not authorize ignore-rule edits or Git mutation during planning.
+Plan documents live in CoderCrew's data directory, outside the checkout, so no ignore rule is prepared or inspected and the clean-state test covers project content only. The controller creates the canonical `<data directory>/plans/` directory and assigns absolute output paths under `<run-ID>/`. A plans root that is a link, or that resolves inside the bound checkout, is refused before it is followed, both at Start and at every capture, since it would redirect plan writes into the project where an ignored target escapes the clean-baseline check. It does not write Git configuration or ignore rules. The separate confirmed branch-setup exception in [ADR-0013](ADR-0013-confirmed-branch-setup.md) does not authorize ignore-rule edits or Git mutation during planning.
 
-Reject symlinks, special files, or parent paths that escape the canonical worktree. Validate safe registry/task IDs, canonical parents, and collisions before dispatch and before any controller capture or permitted output write. Do not turn a user-supplied label into a filesystem path. Rechecks narrow path races; ordinary same-user filesystem access is not hostile-agent isolation.
+Reject symlinks, special files, or parent paths that escape the canonical plan directory. Validate safe registry/task IDs, canonical parents, and collisions before dispatch and before any controller capture or permitted output write. Do not turn a user-supplied label into a filesystem path. Rechecks narrow path races; ordinary same-user filesystem access is not hostile-agent isolation.
 
 A clean check is a point-in-time observation. Recheck project content and HEAD before refinement and implementation; interference triggers reconciliation rather than being blamed automatically on the last completing agent.
 
 #### File layout and ownership
 
 ```text
-.codercrew/
-├── plans/                           # Narrowly ignored, untracked drafts
-│   └── <task-id>/
-│       ├── draft-<agent-a-id>.md
-│       ├── draft-<agent-b-id>.md
-│       ├── draft-<agent-c-id>.md      # Present when a third planner is selected
-│       ├── ...                       # One initial draft per selected planner
-│       └── plan.md                   # Unified plan, after the draft barrier
-└── relay-log.md                      # Optional tracked mirror of the implementation journal (ADR-0014, September 20, 2026)
+<data directory>/                     # CODERCREW_DATA_DIR/<mode>, outside every checkout
+├── assignments/                      # Assignment and result JSON per command
+└── plans/
+    └── <run-id>/
+        ├── draft-<agent-a-id>.md
+        ├── draft-<agent-b-id>.md
+        ├── draft-<agent-c-id>.md     # Present when a third planner is selected
+        ├── ...                       # One initial draft per selected planner
+        └── plan.md                   # Unified plan, after the draft barrier
 ```
 
 There are at most **N initial drafts plus one unified working plan**, regardless of refinement-turn count. N=2 uses up to three files; later N=3 uses up to four. Solo uses its one draft and, when promoted to the common editing surface, `plan.md`; it needs no fake second draft or peer report. A controller copy/promotion of already captured text can avoid a needless synthesis model call. File count follows selected membership, not every available agent in the directory. Historical snapshots and result records live in the controller store, not new per-turn files.
 
 The `draft-` prefix reserves `plan.md` safely even when an agent is registered as `plan`. Safe IDs must be unique under the host's filename comparison rules. Display labels may change without renaming an active assignment. The captured completion also carries registration generation, source session, assignment ID, and planning epoch; a reused filename does not make an old result current.
 
-Ignore only `.codercrew/plans/`, not all of `.codercrew/`. An ignore rule is neither a read restriction nor protection against force-adding a file. Plan turns must not run staging, commit, merge, or branch-switch operations. The agent's own native scratch files are not additional CoderCrew report files; provider-native output locations must be declared and mediated by its adapter, not treated as broad project-write permission.
+Keeping documents outside the checkout is not a read restriction; withholding peer drafts stays cooperative. Plan turns must not run staging, commit, merge, or branch-switch operations. The agent's own native scratch files are not additional CoderCrew report files; provider-native output locations must be declared and mediated by its adapter, not treated as broad project-write permission.
 
 #### Step A: independent drafts with a complete-roster barrier
 
@@ -252,7 +264,7 @@ Bound workspace/instance identities, selected branch, and branch-consent record 
 Transition identity and timestamp
 ```
 
-These are working data concepts. A path or a hash alone is insufficient once ignored drafts may be cleaned up; the frozen text is the implementation input, not another mutable plan file. Record the transition once, then dispatch the first implementation action. Concurrent approval clicks, repeated agreement events, reconnects, or a restart must not create a second implementation start.
+These are working data concepts. A path or a hash alone is insufficient once working drafts may be cleaned up; the frozen text is the implementation input, not another mutable plan file. Record the transition once, then dispatch the first implementation action. Concurrent approval clicks, repeated agreement events, reconnects, or a restart must not create a second implementation start.
 
 #### Implementation policy and scope
 
@@ -264,7 +276,7 @@ The implementation prompt names the frozen plan, task requirements, current code
 
 #### Draft retention versus implementation input
 
-The N drafts and the editable unified plan remain ignored during implementation. The planning roster is quiescent before the implementation group gains project-write authority. The ignored files are not incoming code changes, and implementation turns must not modify them to bypass approval. Preserve the frozen plan and authorization record before deleting any working draft; retention depth for intermediate snapshots is an open detail. For remote implementation, the controller delivers the frozen plan with the task or records it once in a tracked implementation-start entry; neither is yet mandatory ([ADR-0018](ADR-0018-remote-publication-and-history.md)).
+The N drafts and the editable unified plan stay in CoderCrew's data directory during implementation, outside the checkout. The planning roster is quiescent before the implementation group gains project-write authority. The documents are not incoming code changes, and implementation turns must not modify them to bypass approval. Preserve the frozen plan and authorization record before deleting any working draft; retention depth for intermediate snapshots is an open detail. For remote implementation, the controller delivers the frozen plan with the task or records it once in a tracked implementation-start entry; neither is yet mandatory ([ADR-0018](ADR-0018-remote-publication-and-history.md)).
 
 ## Consequences and acceptance
 

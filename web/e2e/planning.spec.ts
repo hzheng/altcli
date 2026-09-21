@@ -66,6 +66,18 @@ test('Start Plan explains why it is disabled, including a confirmation cleared b
   await page.getByLabel('Maximum automatic turns across both phases').fill('20'); await ready.check(); await expect(reason).toHaveCount(0);
   await start.click(); await expect.poll(() => starts).toBe(1);
 });
+test('a refused Start Plan shows the server reason beside its button and Recheck clears it', async ({ page, request }) => {
+  const group = await post(request, 'groups', { name: 'Planners', members: ['codex','claude'] }); let starts = 0;
+  await page.route('**/api/v1/planning', async (route) => { starts++; await route.fulfill({ status: 409, json: { error: { message: 'Planning must preserve its clean branch and code baseline.' } } }); });
+  await openGroup(page, group); await page.getByRole('button', { name: '1 · Plan', exact: true }).click();
+  const setup = page.getByRole('region', { name: 'Plan setup' });
+  await page.getByLabel('Shared task brief').fill('Plan a scoped feature.'); await page.getByLabel('Ready for planning').check();
+  await page.getByRole('button', { name: 'Start Plan', exact: true }).click(); await expect.poll(() => starts).toBe(1);
+  // The refusal appears beside Start Plan, not only in the console message below the history.
+  await expect(setup.getByRole('alert')).toHaveText('Planning must preserve its clean branch and code baseline.');
+  await expect(page.getByRole('status').filter({ hasText: 'Planning must preserve' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Recheck', exact: true }).click(); await expect(setup.getByRole('alert')).toHaveCount(0);
+});
 test('solo Plan can preauthorize automatic Implementation without creating a second planner', async ({ page, request }) => {
   await post(request, 'sessions', { paneId: '%3', label: 'Solo worker' });
   const group = await post(request, 'groups', { name: 'Solo plan', members: ['solo-worker'] }); let start: PlanStart | null = null;
@@ -86,7 +98,7 @@ async function checkpoint(page: Page, request: APIRequestContext, consent: 'upfr
   const input: PlanStart = { requestId: id, groupId: group.id, groupRevision: 1, registrations, text: 'Plan the feature.', baseline, autoContinue: true, requireApproval: true, turnLimit: 20,
     // main is an integration branch, so recorded consent is always a new task branch; deferred consent is collected at the checkpoint.
     implementation: { groupId: group.id, groupRevision: 1, registrations, agentId: 'codex', policy: 'peer', handoff: true, branch: consent === 'upfront' ? { ...baseline, newBranch: 'task/planned' } : null }, confirmReady: true };
-  const plan = newPlanning(input, group, participants, participants, '/demo/project');
+  const plan = newPlanning(input, group, participants, participants, '/demo/project', '/demo/data/plans');
   plan.current = { text: '# Shared plan\nImplement the scoped feature and test recovery.\n', hash: 'b'.repeat(64), path: plan.planPath, revision: 1, briefRevision: 1, author: 'codex', commandId: id };
   for (const member of group.members) { plan.drafts[member]!.status = 'finalized'; plan.drafts[member]!.document = { text: `Initial ${member} approach`, hash: 'c'.repeat(64) }; }
   plan.endorsements = { codex: 1, claude: 1 }; plan.step = 'checkpoint'; plan.next = null;

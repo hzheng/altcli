@@ -150,6 +150,6 @@ During drafting: allow disjoint active output grants only. At a completion, veri
 
 During refinement: one writer, exact input/output versions, and an endorsement set for the required roster. On every change, invalidate stale approvals. Agreement from two agents cannot complete a later N-agent plan unless those two are the explicitly chosen required set under a new human-authorized roster revision. N=1 produces a version-bound solo recommendation and uses the approval gate without claiming an independent endorsement.
 
-Before implementation: consume an exact-version human approval or a valid preauthorized agreement once, with all planning activity settled. Preserve final text, membership, findings, and authority. An ignored draft accidentally committed during implementation is a protocol violation, not a reason to exclude more paths from project review.
+Before implementation: consume an exact-version human approval or a valid preauthorized agreement once, with all planning activity settled. Preserve final text, membership, findings, and authority. A plan document copied into the project during implementation is a protocol violation, not a reason to exclude more paths from project review.
 
 Validate the actual file schema as well as hashes: expected regular file, bounded size, acceptable text encoding, no unexpected path indirection, and supported result fields. File content is untrusted display data; a plan instruction cannot grant itself runtime permissions or approve a phase transition.

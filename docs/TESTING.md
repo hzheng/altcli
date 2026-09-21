@@ -166,7 +166,8 @@ Planning and transition scenarios:
 | Dirty project at Plan entry | Paths explained; refused until resolved; no automatic stash/reset/commit. |
 | A project writer is already active | None of the selected planning roster is launched into that owned workspace. |
 | Draft path not ignored, or already tracked, at Plan entry | Refuse to dispatch and report the setup mismatch; the controller writes no ignore rule. |
-| Draft path or an existing parent is a symlink, special file, or resolves outside the worktree | Refuse before dispatch or capture; an ignored path is not authority to write through it. |
+| Draft path or an existing parent is a symlink, special file, or resolves outside the run's plan directory | Refuse before dispatch or capture; an assigned path is not authority to write through it. |
+| The data directory's `plans` root is a link, or resolves inside the bound checkout (for example to an ignored directory) | Refuse at Start before any terminal delivery, and at capture if swapped in mid-run, keeping ownership. |
 | Agent labels similar or containing path characters | Registry-derived safe IDs map to distinct controller-assigned files. |
 | Draft file appears but no completed result exists | Incomplete; no premature cross-review. |
 | Draft file exists but the turn ended without `PLAN-OUTCOME: complete` | Assignment incomplete; barrier closed. |

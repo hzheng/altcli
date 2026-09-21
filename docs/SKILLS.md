@@ -77,8 +77,9 @@ See [SETUP.md](SETUP.md) for installing lifecycle hooks and
 
 `skills/plan-handoff/SKILL.md` is loaded from its exact repository path, separately
 from the committed and staging protocols. Its immutable assignment is stored under
-the external data directory. The assigned planner writes only its ignored draft
-or shared plan and the exact `<commandId>.result.json` beside its assignment.
+the external data directory. The assigned planner writes only its draft or shared
+plan under `<data directory>/plans/<run-ID>/` and the exact `<commandId>.result.json`
+beside its assignment; nothing is written into the checkout.
 `PlanResult` defines the strict schema: copied identity, outcome, output SHA-256,
 model, summary and optional blocking reason. This is a local file-result protocol,
 not an HTTP token passed to an agent or a screen/outcome parser.
@@ -93,7 +94,7 @@ Existing lifecycle hooks stay unchanged. The controller does not invoke a native
 plan mode or infer permissions from provider names; output restrictions and draft
 withholding are cooperative and still require installed-host acceptance.
 
-Do not combine incompatible instructions behind a guessed mode. [ADR-0016](adr/ADR-0016-plan-phase-and-approval.md) defines ignored planning documents: assigned draft or unified plan only, no staging/commits, exact-version completion, cooperative draft withholding, and an independent approval checkpoint. Native plan mode is adapter-specific; never broaden edit permissions merely to save a draft.
+Do not combine incompatible instructions behind a guessed mode. [ADR-0016](adr/ADR-0016-plan-phase-and-approval.md) defines planning documents kept in CoderCrew's data directory: assigned draft or unified plan only, no staging/commits, exact-version completion, cooperative draft withholding, and an independent approval checkpoint. Native plan mode is adapter-specific; never broaden edit permissions merely to save a draft.
 
 [ADR-0014](adr/ADR-0014-commit-relay-and-deprecation.md) defines a separate commit-relay skill: captured unfinished input for initial work, clean entry for reviews and later turns, exact assigned revisions, one published result recorded in the handoff journal, at most one direct handoff commit with permitted project changes (optionally mirroring the entry into a tracked log), and no unpublished leftovers. The agent/authorized helper commits; the server validates read-only. A review-only or objection turn changes no project content and, without a tracked log, commits nothing. Work is a proposal, not self-approval; optional self-review is visibly non-independent.
 

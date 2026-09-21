@@ -75,7 +75,7 @@ Revalidate group identity, cwd, worktree/index, and branch at dispatch/handoff/p
 
 ### Clean-entry contract
 
-Workspace visibility and task readiness are different. Dirty workspaces remain visible and readable. New Plan, existing-candidate review and later commit-relay turns require a clean project: no staged changes, unstaged tracked changes, or nonignored untracked files. Commit may snapshot captured uncommitted work on its first work turn, as defined in ADR-0014. Every start binds an explicit baseline and requires no conflicting writer. Verify planning outputs separately as narrowly ignored and untracked. Do not stash, reset, stage, commit, discard, or force-add work to satisfy the gate.
+Workspace visibility and task readiness are different. Dirty workspaces remain visible and readable. New Plan, existing-candidate review and later commit-relay turns require a clean project: no staged changes, unstaged tracked changes, or nonignored untracked files. Commit may snapshot captured uncommitted work on its first work turn, as defined in ADR-0014. Every start binds an explicit baseline and requires no conflicting writer. Planning outputs live in CoderCrew's data directory and are verified there. Do not stash, reset, stage, commit, discard, or force-add work to satisfy the gate.
 
 Direct-start implementation enforces the same rule. Users with intentional unfinished work either resolve it or use the deprecated mode only within its existing contract. The app does not move that work into a new worktree automatically. A valid initial commit/baseline is required by this first commit-relay design; an unborn/no-commit repository needs user preparation, not invented history.
 

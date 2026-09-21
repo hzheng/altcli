@@ -45,7 +45,7 @@ Retain the supplied architecture: registered coding CLIs operate in tmux; one ho
 
 Codex, Claude Code, and Gemini CLI are examples of adapter kinds, not fixed agent identities. Multiple instances of the same CLI may be registered. Support for a Gemini model through some other runtime uses that runtime's adapter. Adding a third planning participant does not require a third supervisory AI or a replacement web stack.
 
-The scope remains **plans first, not competing implementations**. A group of N separately assigned ignored draft writers uses one existing, user-prepared clean workspace. Initial selection is capped at one or two members; larger planning rosters remain a planned capability. Only distinct initial draft assignments may execute concurrently; the unified plan and implementation remain single-writer. CoderCrew discovers and validates agent placement; it does not create task worktrees, relocate CLI sessions, or provision their environments.
+The scope remains **plans first, not competing implementations**. A group of N separately assigned draft writers uses one existing, user-prepared clean workspace; their documents live in CoderCrew's data directory. Initial selection is capped at one or two members; larger planning rosters remain a planned capability. Only distinct initial draft assignments may execute concurrently; the unified plan and implementation remain single-writer. CoderCrew discovers and validates agent placement; it does not create task worktrees, relocate CLI sessions, or provision their environments.
 
 ### Evidence boundary for the comparison
 
@@ -140,7 +140,7 @@ Their integration discussion is retained as context from V3, **not newly fetched
 | A task must always leave main. | Dedicated task branch recommended; explicit continuation on main/the configured primary branch is allowed with all other checks intact. |
 | Waiving plan approval permits the app to create a branch automatically. | Branch consent is independent. Missing consent waits; no switch beneath active planners. |
 | Independent planning requires separate code branches/worktrees and a merge. | Plan writes isolated named drafts in one existing workspace, then refines a unified document. |
-| Planning drafts must be tracked/committed or use force-add staging. | Drafts remain ignored and untracked; no Git mutation during Plan. |
+| Planning drafts must be tracked/committed or use force-add staging. | Drafts live in CoderCrew's data directory, outside the checkout; no Git mutation during Plan. |
 | Every nonassigned draft must be unchanged at every completion. | During concurrency, other active owners may update their own assigned drafts; frozen/idle/unassigned artifacts remain protected. |
 | The author and next reviewer always establish plan agreement. | Only if they cover the whole required group for the current revision. Solo is plan-ready, not independent consensus. |
 | More planning agents require a third supervisor. | They are ordinary participants with provider adapters; no supervisor is required. |
@@ -150,7 +150,7 @@ Their integration discussion is retained as context from V3, **not newly fetched
 | File existence, unchanged content, or a native plan-ready prompt authorizes implementation. | Valid identified results, version-specific readiness/agreement, settled activity, Plan gate, branch consent, and workspace checks are required. |
 | Human plan approval is always mandatory. | Optional per run, independent of automatic collaboration; default-on remains the recommendation. |
 | Human override can clear unknown active writers or grant arbitrary permissions. | Override concerns plan judgment; unsafe execution and permission requirements still need explicit reconciliation. |
-| Ignored drafts can be discarded without preserving the final plan. | Preserve full frozen text and authority first; ignored files do not travel automatically with Git. |
+| Working drafts can be discarded without preserving the final plan. | Preserve full frozen text and authority first; data-directory documents do not travel with Git. |
 | One current command describes all execution. | Bounded assignment set during enabled parallel drafts; one current editor afterward. |
 | The deprecated staging path should gain every new capability. | Freeze its verified behavior; only discovery/terminology/compatibility wrapping changes without altering the staging contract. |
 | A PR is needed for cross-machine Git exchange. | Shared publication transports commits; PR remains optional. Local same-directory group rules apply until remote-worker support is explicitly built. |

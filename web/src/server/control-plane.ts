@@ -19,7 +19,7 @@ import { classifyAgent } from '../core/workspaces.ts';
 import { messageOf } from '../core/errors.ts';
 import type { PlanCapture, PlanDecision, PlanningAssignment, PlanStart } from '../contracts/planning.ts';
 import { newPlanning, planAgreed } from './planning-state.ts';
-import { assertPlanArtifacts, assertPlanBaseline, capturePlanResult } from './planning-documents.ts';
+import { assertPlanArtifacts, assertPlanBaseline, capturePlanResult, planRoot } from './planning-documents.ts';
 import { ProjectCatalog } from './projects.ts';
 import { installedInside } from './cli-install.ts';
 import { AgentActivityTracker } from './agent-activity.ts';
@@ -562,7 +562,8 @@ export class ControlPlane {
     const implementationInput: ImplementationStart = { ...input.implementation, branch: input.implementation.branch ?? input.baseline, requestId: input.requestId, kind: 'work', text: input.text, autoContinue: false, turnLimit: input.turnLimit, confirmReady: true };
     const implementation = await this.implementationGroup(implementationInput);
     if (implementation.cwd !== cwd || !sameWorktree(implementation.participants[0]!.worktree, participants[0]!.worktree)) throw new AppError('DIFFERENT_WORKTREE', 'Both phases must use the same prepared workspace.', 409);
-    const plan = newPlanning(input, group, participants, implementation.participants, cwd);
+    // Plan documents belong to CoderCrew, not the project: they live beside the assignments, outside every checkout.
+    const plan = newPlanning(input, group, participants, implementation.participants, cwd, await planRoot(this.config.dataDir, participants[0]!.worktree!.root));
     await access(resolve(process.cwd(), '../skills/plan-handoff/SKILL.md')).catch(() => { throw new AppError('SKILL_MISSING', 'The repository plan-handoff skill is required.', 409); });
     await assertPlanArtifacts(plan); await assertPlanBaseline(plan);
     // Consent may be absent until the checkpoint, but any supplied choice must match this planning baseline.

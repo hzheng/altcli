@@ -33,6 +33,7 @@ export interface PlanIdentity {
   registrationId: string;
   action: PlanAction;
   baseline: string;
+  /** Absolute path of the one document this turn may write, in CoderCrew's data directory, never inside the checkout. */
   outputPath: string;
   inputRevision: number | null;
   inputHash: string | null;
@@ -95,6 +96,7 @@ export interface PlanningRun {
   brief: string;
   briefRevision: number;
   policyRevision: number;
+  /** Canonical absolute <data directory>/plans/<run ID>, holding every draft and plan.md; runs never write plans into the checkout. */
   directory: string;
   planPath: string;
   /** Ordered, N-shaped roster/assignments; dispatch cap is currently two, concurrency one. */

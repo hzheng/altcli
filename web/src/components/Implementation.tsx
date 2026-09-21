@@ -21,6 +21,8 @@ export function Implementation({ token, state, group, workspace, workspaceError,
   const logPath = trackLog && log.trim() ? log.trim() : undefined;
   const [choice, setChoice] = useState<string | null>(null); const [branchName, setBranchName] = useState(''); const [baseline, setBaseline] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState(''); const [busy, setBusy] = useState(false);
+  // A refused start is shown beside its button; the console-wide message sits below the history, out of view.
+  const [startError, setStartError] = useState('');
   const [checking, setChecking] = useState(false);
   const [baselineChoice, setBaselineChoice] = useState(''); // '' = earliest candidate, a SHA, or 'other' for a typed baseline
   const [lastPreview, setLastPreview] = useState<{ key: string; data?: ReviewPreview; error?: string }>();
@@ -108,7 +110,7 @@ export function Implementation({ token, state, group, workspace, workspaceError,
     const standalone = !planning && kind === 'work' && !handoff;
     if ((standalone ? sendDisabled : disabled || (kind === 'review' && !git?.clean)) || !ready || !group || !implementationGroup || !git || !target) return;
     if ((kind === 'review' || (kind === 'commit' && handoff)) && (!review || review.head !== git.head || !reviewer)) return;
-    setBusy(true); setConfirmed(''); const requestId = crypto.randomUUID();
+    setBusy(true); setConfirmed(''); setStartError(''); const requestId = crypto.randomUUID();
     try {
       const branch = { branch: git.branch, head: git.head, ...(branchChoice === 'new' ? { newBranch: branchName.trim() } : needsBaseline ? { taskBase: taskBase.trim() } : {}) };
       const record = standalone ? await api<CommandRecord>(token, 'instructions', { body: { requestId, groupId: group.id, groupRevision: group.revision, registrations, agentId: target, text: text.trim(), policy: selectedPolicy, ...(selectedPolicy === 'worker_reviewer' ? { workerId } : {}), confirmReady: true } }) : planning ? await api<CommandRecord>(token, 'planning', { body: { requestId, groupId: group.id, groupRevision: group.revision, registrations: plannerRegistrations,
@@ -121,19 +123,19 @@ export function Implementation({ token, state, group, workspace, workspaceError,
         ...(selectedPolicy === 'worker_reviewer' ? { workerId } : {}), autoContinue: !solo && automatic && (kind === 'review' || handoff),
         turnLimit: limit, pauseOnObjection: !solo && pauseOnObjection, ...(logPath ? { logPath } : {}), branch,
         ...(review ? { reviewBase: review.base } : {}), confirmReady: true } });
-      onMessage(`${record.status.toUpperCase()}: ${record.error ?? `${standalone ? 'Standalone instruction' : planning ? 'Plan' : 'Implementation'} started. The server owns this run.`}`);
-      if (record.status !== 'rejected') { setText(''); setBaselineChoice(''); }
+      if (record.status === 'rejected') setStartError(`REJECTED: ${record.error ?? 'The server refused this start.'}`);
+      else { onMessage(`${record.status.toUpperCase()}: ${record.error ?? `${standalone ? 'Standalone instruction' : planning ? 'Plan' : 'Implementation'} started. The server owns this run.`}`); setText(''); setBaselineChoice(''); }
     } catch (error) {
-      onMessage(error instanceof Error ? error.message : 'Phase start failed.');
+      setStartError(error instanceof Error ? error.message : 'Phase start failed.');
       if (!(error instanceof HttpError) || error.status >= 500) onUncertain(requestId);
     } finally { await Promise.all([refresh(), onRecheck()]); setBusy(false); }
   }
   return <section className="composer implementation" aria-label={planning ? 'Plan setup' : 'Implementation setup'}>
-    <div className="section-heading"><h2>{planning ? 'Plan' : 'Implementation'}</h2><span className="badge">{planning ? 'IGNORED DOCUMENTS · NO CODE EDITS' : 'SEND / COMMIT / RELAY'}</span></div>
+    <div className="section-heading"><h2>{planning ? 'Plan' : 'Implementation'}</h2><span className="badge">{planning ? 'PLAN DOCUMENTS · NO CODE EDITS' : 'SEND / COMMIT / RELAY'}</span></div>
     <p className="muted">{planning ? 'Each planner drafts independently, one at a time. Then refine one shared plan. Coding starts only after the separate approval and branch gates.' : 'Send an instruction, commit the current changes, or choose committed changes for peer review. Commit does not start a review.'}</p>
     <div className="register-actions">
       <p className="muted">{git ? `Current: ${git.branch ?? 'detached HEAD'} at ${git.head.slice(0, 12)} · ${git.clean ? 'clean' : 'uncommitted changes'}. ${git.integration ? `${git.branch} is an integration branch: a starting point, not an implementation branch.` : git.primary ? `Integration branch: ${git.primary}.` : 'No default branch is recorded; configured integration branches apply.'}` : 'Workspace Git state is unavailable.'}</p>
-      <button type="button" disabled={busy || checking} onClick={() => { setConfirmed(''); setChecking(true); void onRecheck().finally(() => { setPreviewRevision((revision) => revision + 1); setChecking(false); }); }}>{checking ? 'Checking…' : 'Recheck'}</button>
+      <button type="button" disabled={busy || checking} onClick={() => { setConfirmed(''); setStartError(''); setChecking(true); void onRecheck().finally(() => { setPreviewRevision((revision) => revision + 1); setChecking(false); }); }}>{checking ? 'Checking…' : 'Recheck'}</button>
     </div>
     {(workspaceError || workspace?.gitError) && <p className="notice error" role="alert">{workspaceError || workspace?.gitError} Recheck before starting.</p>}
     {planning && !blocked && git && !git.clean && <section className="notice workspace-changes" aria-label="Uncommitted changes">
@@ -163,7 +165,7 @@ export function Implementation({ token, state, group, workspace, workspaceError,
         {needsBaseline && <div className="field"><label htmlFor="task-baseline">Task baseline commit</label><input id="task-baseline" value={taskBase} disabled={blocked || busy} placeholder="Full commit ID where this task began" onChange={(e) => setBaseline(e.target.value)} />
           <small>{git?.taskBase ? 'Inferred from the nearest integration branch; confirm or correct it. It is recorded permanently for this task.' : 'Where this task began cannot be inferred unambiguously from the integration branches (diverged tips or criss-cross history). Enter the commit; it is recorded permanently for this task.'}</small></div>}
       </div>
-      {planning && <p className="fine">Prepare a narrow <code>.codercrew/plans/</code> ignore rule yourself. No branch is created during Plan. Output permissions are cooperative and validated, not native CLI sandbox isolation.</p>}
+      {planning && <p className="fine">Plan documents are kept in CoderCrew’s data directory, not in this checkout. No branch is created during Plan. Output permissions are cooperative and validated, not native CLI sandbox isolation.</p>}
       <label htmlFor="implementation-instruction">{planning ? 'Shared task brief' : 'Instruction or review context'}</label><textarea id="implementation-instruction" rows={3} value={text} disabled={blocked || busy} maxLength={1900} onChange={(e) => setText(e.target.value)} />
       {!planning && !solo && <p className="fine">For Commit and Relay, text is optional context. The current changes are committed as they stand; unfinished requests can be recorded for the peer.</p>}
       <details className="agreement"><summary>Collaboration settings</summary>
@@ -194,6 +196,7 @@ export function Implementation({ token, state, group, workspace, workspaceError,
         </>}
 
       </div>
+      {startError && <p className="notice error" role="alert">{startError}</p>}
       {planBlockedReason && <p className="fine" role="status" id={planReasonId}>{planBlockedReason}</p>}
       {!planning && !solo && snapshotRelay && <p className="fine">{targetName} commits the current changes; {reviewerName} reviews all changes after the selected baseline through the new snapshot. Choose current HEAD to review only the current changes.</p>}
       {!planning && !solo && last?.error && <p className="fine" role="alert">{last.error}</p>}

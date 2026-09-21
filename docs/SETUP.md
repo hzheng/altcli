@@ -151,10 +151,11 @@ membership changes are blocked while a run owns the checkout.
 
 ## 1 · Plan
 
-Prepare a narrow `.codercrew/plans/` ignore rule. Outputs must be ignored and
-untracked; a broad `.codercrew/` rule is refused. Inspect existing ignored content
-before narrowing such a rule so private files are not exposed. CoderCrew never
-edits ignore rules or force-adds planning documents.
+No ignore rule is needed. Drafts and the shared plan are written to
+`<data directory>/plans/<run-ID>/` (by default
+`~/.local/share/codercrew/<mode>/plans/`), beside the assignment and result files,
+so planning never writes into the checkout. Planners need write access there just
+as they already do for their result files.
 
 Choose **1 · Plan**, enter the shared brief, and choose the implementation roles.
 The same workspace group participates in both phases. The collapsible **Collaboration

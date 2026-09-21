@@ -8,7 +8,7 @@ creation. SQLite v8 retains uncertain creation/removal operations while preservi
 historical pairs into groups and guards against an implementation-only scheduler
 opening phase-aware runs. ADR-0011 remains the lifecycle/ownership
 boundary and the legacy staging contract. The local sequential Plan path now
-implements captured ignored documents, exact-version endorsements and the approval
+implements captured plan documents, exact-version endorsements and the approval
 gate of ADR-0016, using ADR-0017's ownership and transition invariants. Larger
 rosters, native plan-mode integrations and remote paths remain future direction;
 installed-host acceptance remains outstanding.
@@ -95,13 +95,13 @@ Use these labels when implementing:
 | D15 | Build incrementally, without introducing a third AI, native iOS app, or additional service as a prerequisite. | Agreed direction |
 | D16 | Introduce optional **Plan** and **Implementation** phases, separate from collaboration policies. The UI may start in either phase. | Agreed direction |
 | D17 | Support initial planning by an N-shaped group in one clean, user-prepared workspace, one assigned draft per participant, and a bounded concurrency cap. N may be 1; initial UI dispatch permits at most 2 members, with 3+ planning retained as a later enablement. | Retained N-capable direction plus latest rollout decision; see D28/D40 |
-| D18 | Keep planning drafts under a narrowly ignored planning directory. Do not stage, force-add, commit, or create candidate branches during planning. | Agreed direction |
-| D19 | Withhold peer draft contents until all required initial drafts are finalized; ignore rules are not read restrictions. | Existing direction generalized to N planners |
+| D18 | Keep planning drafts in CoderCrew's data directory, outside the checkout, so no project ignore rule is needed. Do not stage, force-add, commit, or create candidate branches during planning. | Agreed direction; revised September 21, 2026 from a narrowly ignored in-checkout directory ([ADR-0016](docs/adr/ADR-0016-plan-phase-and-approval.md)) |
+| D19 | Withhold peer draft contents until all required initial drafts are finalized; document placement is not a read restriction. | Existing direction generalized to N planners |
 | D20 | Preserve N initial drafts and refine one unified plan sequentially: N+1 app-managed working plan documents per task, independent of the number of review turns. | Existing direction generalized to N planners |
 | D21 | Require exact-version endorsements from every required planner before multi-agent agreement. No majority/timeout shortcut. N=1 produces a solo plan-ready result, not independent consensus; its approval checkpoint still applies. | Existing invariant extended to solo and later N-party planning |
 | D22 | Separate automatic collaboration from **Require my approval before implementation**. The latter is a run-level checkpoint, not a third mode. | Agreed direction |
 | D23 | With prior authorization and the checkpoint disabled, agreement may lead automatically into the configured implementation workflow. Unknown state and out-of-scope decisions still stop progression. | Agreed direction |
-| D24 | Preserve a frozen final-plan snapshot and its authorization record when entering implementation, even if ignored draft files are later discarded. | Design refinement from the latest discussion |
+| D24 | Preserve a frozen final-plan snapshot and its authorization record when entering implementation, even if working draft files are later discarded. | Design refinement from the latest discussion |
 | D25 | Share the controller, identity, versioning, budgets, and recovery machinery; use phase-specific permissions, result validation, and storage. | Agreed direction |
 | D26 | Concurrent planning is a narrow disjoint-file exception, not permission for simultaneous edits to the unified plan, shared index, a tracked log, or project content. | Implementation consequence |
 | D27 | Build commit relay before Plan based on the comparison in [Product purpose, retained architecture, and comparison with the reference implementation](docs/SOURCES.md#product-purpose-retained-architecture-and-comparison-with-the-reference-implementation), whose shipped-code descriptions are verified at the pinned baseline `46f228b`. | Recommendation retained from the supplied revision; baseline pinned by review |

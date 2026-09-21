@@ -36,7 +36,7 @@ not stop a run. A backend restart pauses owned runs without replaying commands.
 | Projects and worktrees | Local repositories grouped by shared Git metadata; linked and empty worktrees remain visible; explicit confirmed creation under `~/.codercrew/<repo-name>/<branch-name>` |
 | Command delivery | Bounded text (multi-line delivered as one bracketed paste), exact pane checks, durable delivery receipt and uncertainty |
 | Implementation groups | One or two exact registered instances, frozen into each run; solo, peers, or fixed worker/reviewer |
-| Optional Plan | One or two required planners, concurrency one; ignored drafts, captured shared-plan versions, exact-version approval/override and retained final text |
+| Optional Plan | One or two required planners, concurrency one; drafts in CoderCrew's data directory, captured shared-plan versions, exact-version approval/override and retained final text |
 | Committed handoffs | One published result per completed turn in CoderCrew's handoff journal, at most one direct commit (none for report-only turns), archived patches, exact review range and role checks, captured initial work, clean review entry and leftovers; a tracked log mirror is an explicit project preference |
 | Automatic continuation | Server-only; correlated completion, clear background-work evidence, valid publication, frozen participants and bounded automatic turns (default 20); work hands off only when project content changed |
 | Unknown evidence | Pause and retain execution ownership; never guess from terminal text or recent history |
@@ -86,11 +86,9 @@ An active run always displays its server-owned phase separately.
 
 ### Plan first
 
-Prepare a narrow `.codercrew/plans/` exclusion yourself, then start from a clean
-checkout. The controller checks every assigned output is ignored and untracked;
-it never changes ignore rules. A broad `.codercrew/` exclusion is refused. In
-this repository that existing broad rule must be narrowed deliberately before
-using Plan; this change does not expose or adopt any existing ignored files.
+Start from a clean checkout. Drafts and the shared plan are written to
+`<data directory>/plans/<run-ID>/`, outside the checkout, so no ignore rule is
+needed and planning leaves the project untouched.
 
 Each selected planner drafts independently, sequentially, without receiving peer
 content. Once every required draft is finalized, one planner synthesizes a shared

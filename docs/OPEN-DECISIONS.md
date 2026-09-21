@@ -28,8 +28,8 @@ Planning details still to specify:
 
 | Topic | Current position |
 | --- | --- |
-| Plan directory and filenames | Local schema 1 uses `.codercrew/plans/<run-UUID>/draft-<agent-id>.md` plus `plan.md`, all ignored/untracked. Solo initially uses its captured draft as the shared version and creates plan.md only for requested refinement. No per-turn project report files. |
-| Ignore-rule setup | Narrow exclusion required and verified read-only; `.gitignore` versus local exclude is the human's choice. This repository's `.gitignore` has excluded `.codercrew/` wholesale since the initial commit, which also hides the once-proposed `.codercrew/relay-log.md`. A tracked mirror there would first need the broad rule narrowed to `.codercrew/plans/`, or another nonignored log path; the default journal needs no ignore change. The controller does not edit ignore rules. |
+| Plan directory and filenames | Local schema 1 uses `<data directory>/plans/<run-UUID>/draft-<agent-id>.md` plus `plan.md`, outside the checkout (moved from an ignored `.codercrew/plans/` on September 21, 2026). Solo initially uses its captured draft as the shared version and creates plan.md only for requested refinement. No per-turn project report files. |
+| Ignore-rule setup | Resolved: none. Plan documents live outside the checkout, so planning requires and inspects no ignore rule. A tracked relay-log mirror still must not be ignored; the default journal needs no project file. The controller does not edit ignore rules. |
 | Plan completion API/helper | Local schema 1 uses the strict external `<commandId>.result.json` from the assignment, published before lifecycle completion. Matching hooks, activity evidence and stable artifact capture acknowledge it once. Missing/invalid/late results pause without polling or replay. Native provider result integration remains future work. |
 | Guidance during drafting | Local Request changes is available at a captured, settled plan boundary, with an explicit target and new shared brief revision. Guidance queues during initial drafting, mid-turn supersession and nesting remain deferred. |
 | Native CLI plan-mode integration | Per-adapter host tests for output capture, correlation, allowed writes, activity evidence, and native approval. Gemini is a planned adapter target, not claimed implemented support. |
@@ -49,7 +49,7 @@ Planning details still to specify:
 | Capability verification record | Adapter/version/capability scope, observed evidence, and manual fallback policy need storage/UI design. |
 | Reference implementation | Pinned at `46f228b` by the relay review of the supplied design ([Product purpose, retained architecture, and comparison with the reference implementation](SOURCES.md#product-purpose-retained-architecture-and-comparison-with-the-reference-implementation)). Re-pin before using shipped-code assertions against a later baseline. |
 
-None of this reopens the central choice: lightweight ignored planning documents, an optional approval gate, then the selected implementation collaboration and handoff mechanism.
+None of this reopens the central choice: lightweight planning documents kept outside the checkout, an optional approval gate, then the selected implementation collaboration and handoff mechanism.
 
 ### Workspace/group details still to implement
 

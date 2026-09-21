@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: CoderCrew host API
   version: 0.1.0
-  description: Host-resident tmux console with explicit Plan and Implementation phases, captured ignored plans, committed handoffs recorded in an app-owned journal, and an opt-in deprecated staging relay.
+  description: Host-resident tmux console with explicit Plan and Implementation phases, captured plans kept in the app data directory, committed handoffs recorded in an app-owned journal, and an opt-in deprecated staging relay.
     Native iOS remains deferred. This contract and the JSON-only TypeScript types are maintained together.
 servers:
 - url: http://127.0.0.1:8787
@@ -2513,7 +2513,7 @@ components:
         registrationId: {"type":"string","format":"uuid"}
         action: {"enum":["draft","synthesize","review","revise"]}
         baseline: {"$ref":"#/components/schemas/GitSha"}
-        outputPath: {"type":"string"}
+        outputPath: {"type":"string","description":"Absolute path of the one document this turn may write, in CoderCrew's data directory, never inside the checkout."}
         inputRevision: {"oneOf":[{"type":"integer","minimum":1},{"type":"null"}]}
         inputHash: {"oneOf":[{"type":"string","pattern":"^[a-f0-9]{64}$"},{"type":"null"}]}
       required: ["schema","phase","runId","commandId","epoch","briefRevision","rosterRevision","policyRevision","agentId","registrationId","action","baseline","outputPath","inputRevision","inputHash"]
@@ -2609,7 +2609,7 @@ components:
         brief: {"type":"string"}
         briefRevision: {"type":"integer","minimum":1}
         policyRevision: {"type":"integer","minimum":1}
-        directory: {"type":"string"}
+        directory: {"type":"string","description":"Canonical absolute <data directory>/plans/<run ID> holding every draft and plan.md; plans are never written into the checkout."}
         planPath: {"type":"string"}
         required: {"type":"array","items":{"$ref":"#/components/schemas/AgentId"},"minItems":1,"uniqueItems":true}
         drafts: {"type":"object","additionalProperties":{"$ref":"#/components/schemas/DraftAssignment"}}

@@ -4,6 +4,45 @@
 **Last local validation:** September 21, 2026
 **Scope:** Source scaffold, not a completed release or security certification
 
+## Plan root links and in-checkout roots are refused on September 21, 2026
+
+Review of the move found that `mkdir -p` accepted an existing `<data directory>/plans`
+link and `realpath` then trusted its target, so a link to an ignored directory
+inside the checkout let a draft land in the project while the clean-baseline check
+still passed. Start now refuses a plans root that is a link or not a directory
+before following it, and refuses a canonical root inside the bound worktree; every
+validation repeats both checks, so a link swapped in after Start pauses capture.
+A new workflow case reproduces the reported layout (refused, nothing delivered, no
+run), a mid-run swap (paused, draft not finalized) and an ordinary in-checkout
+directory; with the root check disabled it fails with "Missing expected
+rejection". `./scripts/check.sh` exited 0: 30 hook/setup, 41 smoke, 268 workflow,
+56 unit, type checks and production build. The UI is unchanged and the browser
+suite was not rerun for this server-only fix.
+
+## Plan documents move to the data directory on September 21, 2026
+
+Start Plan was refused on every click in this repository: plans were written to
+`<checkout>/.codercrew/plans/`, the controller required that exact ignore rule,
+and the checkout's `.gitignore` excluded all of `.codercrew/`. The refusal reason
+appeared only in the console message below the history, so nothing seemed to
+happen. Plan documents are CoderCrew working data, so each run now writes its
+drafts and `plan.md` to `<data directory>/plans/<run-ID>/` beside the assignments,
+with absolute canonical paths; the ignore-rule and tracked-file checks are gone
+and the link, special-file, collision and protected-artifact checks remain. A run
+stored with the old checkout-relative layout is refused, not resolved (the live
+store had no planning runs). The `plan-handoff` skill grants the absolute output
+path; ADR-0016, D18/D19 and the guides describe the new layout, and `.gitignore`
+matches main again. A refused Start (Plan or Implementation) now shows its reason
+as an alert beside the buttons, cleared by the next attempt or Recheck. The
+planning fixture repository has no ignore rule; a rewritten workflow case checks
+that plans land in the data directory, that nothing (not even an ignored file)
+appears in the checkout, that a pre-existing document collides, and that the old
+layout is refused. A new Playwright case covers the inline refusal.
+`CODERCREW_E2E_PORT=9787 ./scripts/check.sh --e2e` exited 0 beside the live
+console: 30 hook/setup, 41 smoke, 267 workflow, 56 unit, type checks, production
+build, and 148 browser cases across both viewports. No real planner has run
+against the new location yet.
+
 ## Start Plan explains why it is disabled on September 21, 2026
 
 Clicking Start Plan after filling the brief did nothing: the Plan consent key

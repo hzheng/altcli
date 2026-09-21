@@ -1,6 +1,6 @@
 ---
 name: plan-handoff
-description: Carry out a CoderCrew Plan assignment using its exact ignored document and correlated result file. Use only for controller-issued planning assignments, not implementation or legacy relay.
+description: Carry out a CoderCrew Plan assignment using its exact assigned document and correlated result file. Use only for controller-issued planning assignments, not implementation or legacy relay.
 ---
 
 # Planning handoff
@@ -17,10 +17,11 @@ Do not approve a native CLI transition into coding or broaden tool permissions.
 This protocol uses cooperative restrictions and controller validation, not a
 claim that your CLI is in a filesystem-isolated native plan mode.
 
-Your only write grants are `identity.outputPath` relative to `root`, its missing
-parent directories, and the exact external `resultPath`. Do not change project
-files, the index, any tracked relay log, assignment JSON, or other planning documents.
-Require ordinary, nonsymlink paths and an ignored, untracked planning output.
+Your only write grants are the absolute `identity.outputPath`, its missing
+parent directories, and the exact `resultPath`. Both are in CoderCrew's data
+directory, outside the checkout; never copy a plan into the project. Do not change
+project files, the index, any tracked relay log, assignment JSON, or other planning
+documents. Require ordinary, nonsymlink paths.
 If required permission is unavailable, report the blocker; do not bypass it.
 
 Follow the assigned action:

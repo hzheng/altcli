@@ -43,7 +43,7 @@ Task / project
     ├── Branch choice, consent, and checked-out branch/baseline
     ├── Shared brief revision and planning/code baseline
     ├── Implementation task branch and publication destination
-    ├── N ignored drafts, one unified plan, captured versions
+    ├── N drafts, one unified plan (data directory), captured versions
     ├── Frozen final plan and authorization
     └── Collaboration run
          ├── Task phase and planning step
@@ -122,7 +122,7 @@ Hooks may wake the controller sooner, and polling the published branch can redis
 
 A commit records a snapshot; it does not stop background tasks or prove readiness. The participant must finish the turn and cease edits before ownership transfers. The supplied record flags a conservative missing-evidence policy that may prevent a continuous mixed-agent loop, depending on installed adapter capabilities; commit relay reduces dependence on fragile outcome parsing, but **the acceptable evidence for safe ownership transfer remains a deliberate choice**, and absent background fields are never treated as empty lists.
 
-**Working specification.** Ownership transfers only when three things agree for the same turn: correlated lifecycle completion and adequate activity evidence under the verified adapter policy, a validated handoff commit at the publication destination ([Validation and permissions](../SECURITY.md#validation-and-permissions)), and a post-publication leftover check. For the last, take a read-only *leftover digest* right after the commit is observed: staged changes relative to HEAD, unstaged changes, and the contents of untracked non-ignored files. This is a proposed HEAD-relative inspection derived from the digest described by the source: compare index to current HEAD, worktree to index, and nonignored untracked content. The **change set must be empty**; a hash of an empty set is still a hash, not an empty string. A legitimate new commit must not count as a leftover merely because HEAD advanced. Unexpected changes pause and report paths from the same inspection. Ignored draft files do not count as code leftovers; changes to protected frozen planning artifacts are checked separately. These checks cannot prove a same-user process will not write after the inspection.
+**Working specification.** Ownership transfers only when three things agree for the same turn: correlated lifecycle completion and adequate activity evidence under the verified adapter policy, a validated handoff commit at the publication destination ([Validation and permissions](../SECURITY.md#validation-and-permissions)), and a post-publication leftover check. For the last, take a read-only *leftover digest* right after the commit is observed: staged changes relative to HEAD, unstaged changes, and the contents of untracked non-ignored files. This is a proposed HEAD-relative inspection derived from the digest described by the source: compare index to current HEAD, worktree to index, and nonignored untracked content. The **change set must be empty**; a hash of an empty set is still a hash, not an empty string. A legitimate new commit must not count as a leftover merely because HEAD advanced. Unexpected changes pause and report paths from the same inspection. Plan documents live outside the checkout, so they never count as code leftovers; changes to protected frozen planning artifacts are checked separately. These checks cannot prove a same-user process will not write after the inspection.
 
 #### Planning: explicit completion plus captured document version
 

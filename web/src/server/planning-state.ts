@@ -1,14 +1,16 @@
 import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
 import type { Group } from '../contracts/implementation.ts';
 import type { CapturedPlanResult, PlanAction, PlanningRun, PlanStart } from '../contracts/planning.ts';
 import type { ManagedSession } from '../contracts/workflow.ts';
 
-/** N-shaped state; the API's separate rollout guard limits selected groups to two. */
-export function newPlanning(input: PlanStart, group: Group, participants: ManagedSession[], implementationParticipants: ManagedSession[], cwd: string): PlanningRun {
-  const directory = `.codercrew/plans/${input.requestId}`;
+/** N-shaped state; the API's separate rollout guard limits selected groups to two. `plans` is the canonical plan-document
+ * directory in CoderCrew's data directory, so planning never writes into the checkout. */
+export function newPlanning(input: PlanStart, group: Group, participants: ManagedSession[], implementationParticipants: ManagedSession[], cwd: string, plans: string): PlanningRun {
+  const directory = join(plans, input.requestId);
   return { phase: 'plan', group: { ...group, cwd }, participants, implementationParticipants, cwd, worktree: participants[0]!.worktree!,
-    epoch: 1, brief: input.text, briefRevision: 1, policyRevision: 1, directory, planPath: `${directory}/plan.md`, required: [...group.members],
-    drafts: Object.fromEntries(group.members.map((id, index) => [id, { agentId: id, commandId: index === 0 ? input.requestId : randomUUID(), path: `${directory}/draft-${id}.md`, status: 'queued', document: null, briefRevision: 1 }])),
+    epoch: 1, brief: input.text, briefRevision: 1, policyRevision: 1, directory, planPath: join(directory, 'plan.md'), required: [...group.members],
+    drafts: Object.fromEntries(group.members.map((id, index) => [id, { agentId: id, commandId: index === 0 ? input.requestId : randomUUID(), path: join(directory, `draft-${id}.md`), status: 'queued', document: null, briefRevision: 1 }])),
     step: 'drafts', current: null, endorsements: {}, endorsementHistory: [], objections: {}, next: { agentId: group.members[0]!, action: 'draft' }, frozen: null, request: input };
 }
 export function planAgreed(plan: PlanningRun): boolean {
