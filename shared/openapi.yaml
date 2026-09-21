@@ -639,7 +639,7 @@ paths:
                 requestId: {type: string, format: uuid}
       responses:
         '200':
-          description: Read-only inspection; the exact expected commit completes integration, an unchanged clean checkout releases the hold as failed, a staged squash without a commit stays uncertain for the human
+          description: Read-only inspection. A dirty integration checkout keeps the operation uncertain (the staged squash may still be pending). A clean checkout settles it — the previewed commit anywhere on the branch's first-parent chain since the pinned tip completes it, an unchanged tip or a tip that moved on without that commit releases the hold as failed; nothing is retried
           content:
             application/json:
               schema: {$ref: '#/components/schemas/WorktreeIntegration'}

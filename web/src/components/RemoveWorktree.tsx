@@ -5,6 +5,9 @@ import { api, HttpError } from '../client/api';
 import { MAX_MESSAGE_JSON_BYTES, messageJsonBytes } from '../core/squash-message';
 
 interface ActionProps { project: Project; tree: ProjectWorktree; token: string; disabled: boolean; disabledReason?: string; onChanged: (notice: string) => Promise<void> }
+/** Deletion actions disable only for hard blocks (read-only host, a request in flight, unreadable state); a known soft blocker is shown as a hint
+ * and the click still runs the server preview, whose exact refusal (pane inside, dirty files, not integrated) is then displayed. */
+interface DeletionProps extends ActionProps { hint?: string }
 const nameFor = (tree: ProjectWorktree) => tree.branch ?? tree.path.split('/').filter(Boolean).pop() ?? tree.path;
 /** Any applying or uncertain operation on the project holds every lifecycle action until it is inspected. */
 const isHeld = (project: Project) => [...project.creations, ...(project.removals ?? []), ...(project.integrations ?? []), ...(project.discards ?? [])].some((op) => ['applying', 'uncertain'].includes(op.status));
@@ -12,13 +15,18 @@ const short = (sha: string) => sha.slice(0, 12);
 const refName = (ref: string) => ref.replace('refs/heads/', '');
 
 /** The three confirmed end-of-task operations on a linked worktree, each with its own server preview and confirmation. */
-export function WorktreeActions(props: ActionProps & { deletionDisabled?: boolean }) {
+export function WorktreeActions(props: ActionProps & { deletionReason?: string; deletionHint?: string }) {
   return <div className="worktree-actions">
     <IntegrateWorktree {...props} />
-    <RemoveWorktree {...props} disabled={props.disabled || !!props.deletionDisabled} />
-    <DiscardWorktree {...props} disabled={props.disabled || !!props.deletionDisabled} />
+    <RemoveWorktree {...props} disabled={!!props.deletionReason} disabledReason={props.deletionReason} hint={props.deletionHint} />
+    <DiscardWorktree {...props} disabled={!!props.deletionReason} disabledReason={props.deletionReason} hint={props.deletionHint} />
   </div>;
 }
+const holdReason = (disabled: boolean, disabledReason: string | undefined, held: boolean, unknown: boolean, busy: boolean, what: string) =>
+  disabled ? disabledReason || `${what} is unavailable. Recheck the worktree.`
+    : held ? 'A worktree operation is applying or uncertain. Inspect its result below first.'
+    : unknown ? `The last ${what.toLowerCase()} response is unknown. Inspect its result before continuing.`
+    : busy ? 'Checking or applying this operation. Wait for it to finish.' : '';
 
 /** One squash commit on the integration branch, made in the checkout that has it checked out. The task worktree is untouched. */
 export function IntegrateWorktree({ project, tree, token, disabled, disabledReason, onChanged }: ActionProps) {
@@ -94,11 +102,13 @@ export function IntegrateWorktree({ project, tree, token, disabled, disabledReas
 }
 
 /** Deletion always requires a fresh server preview and explicit confirmation. */
-export function RemoveWorktree({ project, tree, token, disabled, onChanged }: ActionProps) {
+export function RemoveWorktree({ project, tree, token, disabled, disabledReason, hint, onChanged }: DeletionProps) {
   const [preview, setPreview] = useState<WorktreeRemovalPreview | null>(null);
   const [busy, setBusy] = useState(false); const [error, setError] = useState('');
-  const [unknown, setUnknown] = useState(false);
+  const [unknown, setUnknown] = useState(false); const controlId = useId();
   const held = isHeld(project); const name = nameFor(tree);
+  const blockedReason = holdReason(disabled, disabledReason, held, unknown, busy, 'Removal');
+  const reason = blockedReason || (!preview && hint) || '';
   const current = preview?.head === tree.head && preview?.branch === tree.branch && preview?.worktree.root === tree.path;
   async function inspect() {
     setBusy(true); setError(''); setPreview(null);
@@ -128,7 +138,8 @@ export function RemoveWorktree({ project, tree, token, disabled, onChanged }: Ac
     finally { setBusy(false); }
   }
   return <div className="create-worktree">
-    {!preview && <button type="button" className="quiet" aria-label={`Check removal of ${name}`} disabled={disabled || busy || held || unknown} onClick={() => void inspect()}>Check removal</button>}
+    {!preview && <button type="button" className="quiet" aria-label={`Check removal of ${name}`} aria-describedby={reason ? `${controlId}-reason` : undefined} disabled={!!blockedReason} onClick={() => void inspect()}>Check removal</button>}
+    {reason && <p className="fine" id={`${controlId}-reason`} role="status">{reason}</p>}
     {preview && <div className="notice" role="region" aria-label={`Remove ${name}`}>
       <p>{preview.integratedBy === 'squash' ? 'Squash integration verified' : 'Merged ancestry verified'} in <span className="mono">{refName(preview.targetRef)}</span> at <span className="mono">{short(preview.integratedCommit)}</span>.</p>
       <p>Remove directory <span className="mono">{preview.worktree.root}</span> at <span className="mono">{short(preview.head)}</span>? The branch, commits and run history will be kept. This cannot be undone in the app.</p>
@@ -143,10 +154,13 @@ export function RemoveWorktree({ project, tree, token, disabled, onChanged }: Ac
 }
 
 /** Forced deletion of the worktree and its branch without integration evidence: the branch name must be typed to confirm. */
-export function DiscardWorktree({ project, tree, token, disabled, onChanged }: ActionProps) {
+export function DiscardWorktree({ project, tree, token, disabled, disabledReason, hint, onChanged }: DeletionProps) {
   const [preview, setPreview] = useState<WorktreeDiscardPreview | null>(null); const [typed, setTyped] = useState('');
   const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [unknown, setUnknown] = useState(false);
+  const controlId = useId();
   const held = isHeld(project); const name = nameFor(tree);
+  const blockedReason = holdReason(disabled, disabledReason, held, unknown, busy, 'Discard');
+  const reason = blockedReason || (!preview && hint) || '';
   const current = preview?.head === tree.head && preview?.branch === tree.branch && preview?.worktree.root === tree.path;
   async function inspect() {
     setBusy(true); setError(''); setPreview(null); setTyped('');
@@ -176,7 +190,8 @@ export function DiscardWorktree({ project, tree, token, disabled, onChanged }: A
     finally { setBusy(false); }
   }
   return <div className="create-worktree">
-    {!preview && <button type="button" className="quiet danger" aria-label={`Discard ${name}`} disabled={disabled || busy || held || unknown} onClick={() => void inspect()}>Discard…</button>}
+    {!preview && <button type="button" className="quiet danger" aria-label={`Discard ${name}`} aria-describedby={reason ? `${controlId}-reason` : undefined} disabled={!!blockedReason} onClick={() => void inspect()}>Discard…</button>}
+    {reason && <p className="fine" id={`${controlId}-reason`} role="status">{reason}</p>}
     {preview && <div className="notice error" role="region" aria-label={`Discard ${name}`}>
       <p><strong>Discard {preview.branch}?</strong> This deletes the directory <span className="mono">{preview.worktree.root}</span>, including ignored files, and deletes the branch <span className="mono">{preview.branch}</span> at <span className="mono">{short(preview.head)}</span>. It does not check that anything was integrated.</p>
       <p>Lost: {preview.unmergedCommits} commit{preview.unmergedCommits === 1 ? '' : 's'} not in <span className="mono">{refName(preview.targetRef)}</span>{preview.dirty ? ` and ${preview.changeCount} uncommitted change${preview.changeCount === 1 ? '' : 's'}` : ''}. The handoff journal is archived first and run history is kept. This cannot be undone in the app.</p>

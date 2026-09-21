@@ -170,7 +170,12 @@ when its latest source endpoint equals the current task HEAD.
 The UI shows a visible, accessible explanation whenever squash is disabled,
 including host read-only mode, a pending request, discovery errors, detached
 HEAD, run/delivery ownership, unresolved worktree operations, stale previews and
-invalid messages. Pane presence alone disables deletion actions, not squash.
+invalid messages. Removal and Discard disable only for hard blocks (read-only
+host, a request in flight, unreadable discovery or worktree state, a pending
+operation); a known occupant, run or delivery owner is shown as a hint beside
+them and the click still runs the server preview, whose exact refusal (pane
+inside the checkout, dirty files, no integration evidence) is then displayed
+(September 21, 2026 update: previously any agent pane silently disabled them).
 Git checks remain authoritative and their rejection messages appear beside the
 preview controls. Selecting another SHA clears the old preview and message
 consent; the browser never starts a batch automatically.
@@ -199,10 +204,18 @@ ID conflicts.
 
 Restart or any failure after Git started retains an uncertain owner. A rejecting
 hook is the typical case: the squash is staged but not committed, and inspection
-keeps the operation uncertain until the human commits or resets that checkout;
-an unchanged clean checkout at the previous tip releases it as failed, and the
-exact expected commit completes it. No reset, abort, retry or history rewrite is
-performed by the app. Remote publication remains outside the app.
+keeps the operation uncertain while that checkout is dirty, until the human
+commits or resets it. A clean integration checkout settles the operation on
+inspection: the previewed commit (single parent at the pinned tip, the previewed
+tree) anywhere on the branch's first-parent chain since that tip completes it,
+even under later commits; an unchanged tip releases it as failed; and a tip that
+moved on without that commit, because the human integrated, reset or rewrote by
+hand, releases it as failed too, since nothing is left to retry and a later
+removal check or squash preview judges the current history on its own evidence
+(September 21, 2026 update: previously such a record stayed uncertain and held
+every lifecycle action on the project with no recovery path). No reset, abort,
+retry or history rewrite is performed by the app. Remote publication remains
+outside the app.
 
 ### Confirmed discard
 

@@ -64,12 +64,15 @@ export function Workspaces(props: Props) {
       <ul className="workspace-cards" aria-label="Available worktrees">{project.worktrees.map((tree) => {
         const groups = workspaces.filter((w) => w.worktree.root === tree.path); const agents = groups.flatMap((w) => w.agents);
         const run = props.runs.find((r) => r.repository === tree.path && ['running', 'waiting', 'paused'].includes(r.status));
-        const squashReason = !props.inputEnabled ? 'The host is read-only. Enable input before squashing.'
+        // Hard blocks make a click pointless; everything else is left to the server's preview, whose exact refusal is shown on click.
+        const hardReason = !props.inputEnabled ? 'The host is read-only. Enable input before changing worktrees.'
           : props.disabled ? 'Another request is in progress. Wait for it to finish.'
-          : discoveryError || discovery?.error || tree.error || project.error
-          || (!tree.branch ? 'The task worktree has detached HEAD. Check out its task branch, then Recheck.' : '')
-          || (run ? `A ${run.status} run owns this worktree. Finish it or reconcile it in Console before squashing.` : '')
-          || (props.deliveryRepositories?.includes(tree.path) ? 'An unresolved delivery owns this worktree. Inspect it in Console before squashing.' : '');
+          : discoveryError || discovery?.error || tree.error || project.error || '';
+        const ownerReason = (!tree.branch ? 'The task worktree has detached HEAD. Check out its task branch, then Recheck.' : '')
+          || (run ? `A ${run.status} run owns this worktree. Finish it or reconcile it in Console first.` : '')
+          || (props.deliveryRepositories?.includes(tree.path) ? 'An unresolved delivery owns this worktree. Inspect it in Console first.' : '');
+        const squashReason = hardReason || ownerReason;
+        const occupied = agents.length ? `${agents.map((a) => a.label).join(', ')} ${agents.length === 1 ? 'is' : 'are'} still in this worktree; the server refuses removal while a pane is inside it. Close or move the pane, then Recheck.` : '';
         const selected = (directoryRoot ?? selectedRoot) === tree.path;
         return <li key={tree.id} className={selected ? 'selected' : ''}><button type="button" className="workspace-card" aria-pressed={selected} aria-label={`Open ${nameOf(tree.path)}`} onClick={() => {
           setDirectoryRoot(tree.path);
@@ -81,7 +84,7 @@ export function Workspaces(props: Props) {
           <span className="muted">{tree.error ?? (run ? `${run.implementation ? 'Implementation' : run.planning ? 'Plan' : 'Staging'} · ${run.status}` : agents.length ? agents.map((a) => a.label).join(', ') : 'No agents · start coding CLIs here, then Recheck')}</span>
           {groups.length > 1 && <span>{groups.length} agent directories · choose a task group</span>}
         </button>{!tree.main && <WorktreeActions project={project} tree={tree} token={props.token}
-          disabled={!!squashReason} disabledReason={squashReason} deletionDisabled={agents.length > 0}
+          disabled={!!squashReason} disabledReason={squashReason} deletionReason={hardReason} deletionHint={ownerReason || occupied}
           onChanged={props.onChanged} />}</li>;
       })}</ul>
       {directories.length > 1 && <div className="directory-groups"><h3>Choose the task group directory</h3><p className="fine">Collaborators must share a directory. These groups share one checkout; only one may own it at a time.</p>

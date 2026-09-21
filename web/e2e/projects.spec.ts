@@ -195,6 +195,21 @@ test('discard warns about the work that would be lost and requires the exact bra
   await expect(page.getByRole('status')).toContainText('worktree and branch are deleted');
   expect(posted).toEqual([{ ...shown, confirmBranch: 'feature/finished', confirm: true }]);
 });
+test('deletion actions stay clickable while agents occupy a worktree: the hint names them and the click shows the server refusal', async ({ page, request }) => {
+  const inventory = await fixture(page, request); const project = inventory.projects![0]!;
+  const target = tree('/home/fixture/tasks/busy', 'feature/busy'); project.worktrees.push(target);
+  const demo = inventory.workspaces[0]!; // give the task worktree the demo agents so the card counts them as occupants
+  inventory.workspaces.push({ ...demo, cwd: target.path, worktree: target.identity!, branch: target.branch, sharesIndexWith: [] });
+  await page.route('**/api/v1/projects/worktrees/removal/preview', (route) => route.fulfill({ status: 409, json: { error: { code: 'WORKTREE_IN_USE', message: 'A tmux pane is still in this worktree. Move or close it yourself, then Recheck.' } } }));
+  await page.getByRole('button', { name: 'Recheck', exact: true }).click();
+  const card = page.getByRole('list', { name: 'Available worktrees' }).getByRole('listitem').filter({ hasText: 'busy' });
+  await expect(card.getByRole('status').filter({ hasText: 'still in this worktree' }).first()).toContainText(/Codex, Claude( Code)? are still in this worktree; the server refuses removal/);
+  const check = page.getByRole('button', { name: 'Check removal of feature/busy', exact: true }); await expect(check).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Discard feature/busy', exact: true })).toBeEnabled();
+  await check.click();
+  await expect(page.getByRole('alert').filter({ hasText: 'tmux pane' })).toContainText('A tmux pane is still in this worktree. Move or close it yourself, then Recheck.');
+  await expect(check).toBeEnabled(); // the refusal is information, not a lock
+});
 test('removal rejection is shown and stale worktree preview disables confirmation', async ({ page, request }) => {
   const inventory = await fixture(page, request); const project = inventory.projects![0]!;
   const target = tree('/home/fixture/tasks/finished', 'feature/finished'); project.worktrees.push(target);
@@ -250,21 +265,24 @@ test('an empty worktree keeps its setup guidance beside a shell pane, while a bl
   await expect(page.getByText('Start coding CLIs in')).toHaveCount(0);
 });
 
-test('idle source agents permit squash while deletion stays disabled; disabled squash explains host and ownership blockers', async ({ page, request }) => {
+test('idle source agents permit squash and leave deletion clickable with an occupant hint; disabled squash explains host and ownership blockers', async ({ page, request }) => {
   const inventory = await fixture(page, request); const project = inventory.projects![0]!;
   const target = tree('/home/fixture/tasks/batches', 'feature/batches'); project.worktrees.push(target);
   inventory.workspaces.push({ ...inventory.workspaces[0]!, cwd: target.path, worktree: target.identity!, branch: target.branch });
   await page.getByRole('button', { name: 'Recheck', exact: true }).click();
   const squash = page.getByRole('button', { name: 'Squash feature/batches into main', exact: true });
   await expect(squash).toBeEnabled();
-  await expect(page.getByRole('button', { name: 'Check removal of feature/batches', exact: true })).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Discard feature/batches', exact: true })).toBeDisabled();
+  const check = page.getByRole('button', { name: 'Check removal of feature/batches', exact: true }); await expect(check).toBeEnabled();
+  await expect(check).toHaveAccessibleDescription(/are still in this worktree; the server refuses removal while a pane is inside it/);
+  await expect(page.getByRole('button', { name: 'Discard feature/batches', exact: true })).toBeEnabled();
   const state = await (await request.get('/api/v1/state', { headers })).json() as WorkflowState;
   state.runs = []; state.executions = []; state.reservations = []; state.inputEnabled = false;
   await page.route('**/api/v1/state', (route) => route.fulfill({ json: state }));
-  await expect(squash).toBeDisabled(); await expect(squash).toHaveAccessibleDescription('The host is read-only. Enable input before squashing.');
+  await expect(squash).toBeDisabled(); await expect(squash).toHaveAccessibleDescription('The host is read-only. Enable input before changing worktrees.');
+  await expect(check).toBeDisabled(); await expect(check).toHaveAccessibleDescription('The host is read-only. Enable input before changing worktrees.'); // a hard block disables deletion too
   state.inputEnabled = true; state.reservations = [{ repository: target.path, activeCommandId: crypto.randomUUID() }];
-  await expect(squash).toHaveAccessibleDescription('An unresolved delivery owns this worktree. Inspect it in Console before squashing.');
+  await expect(squash).toHaveAccessibleDescription('An unresolved delivery owns this worktree. Inspect it in Console first.');
+  await expect(check).toBeEnabled(); await expect(check).toHaveAccessibleDescription('An unresolved delivery owns this worktree. Inspect it in Console first.'); // ownership is a hint for deletion; the server decides
   state.reservations = [];
   project.creations = [{ input: { ...preview(inventory, 'feature/pending'), confirm: true }, status: 'uncertain', message: 'Inspect creation.', updatedAt: new Date().toISOString() }];
   await page.getByRole('button', { name: 'Recheck', exact: true }).click();

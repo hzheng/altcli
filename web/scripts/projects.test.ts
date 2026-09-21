@@ -683,3 +683,30 @@ test('v10 full-branch squash records remain valid batch boundaries after upgrade
   assert.equal(next.mergeBase, preview.head); assert.equal(next.previousCommit, result.commit); assert.equal(next.commitCount, 1);
   assert.equal((await catalog.integrate(confirmSquash(next), noGuard)).status, 'integrated');
 });
+test('inspection settles an uncertain squash from the branch history: a buried expected commit completes it, a tip moved on without it releases the hold, a dirty checkout keeps it', async () => {
+  const { request, target } = await taskFixture();
+  const preview = await catalog.previewIntegration({ ...target, through: git(request.path, 'rev-parse', 'HEAD~1') });
+  const verify = catalog['integratedExactly'].bind(catalog); catalog['integratedExactly'] = async () => null;
+  assert.equal((await catalog.integrate(confirmSquash(preview), noGuard)).status, 'uncertain'); catalog['integratedExactly'] = verify;
+  const squash = git(root, 'rev-parse', 'HEAD');
+  // The human sees the commit landed and keeps working on main; inspection must still find the commit under the later work.
+  writeFileSync(join(root, 'later.txt'), 'later main work\n'); git(root, 'add', '.'); git(root, 'commit', '-m', 'later main work');
+  writeFileSync(join(root, 'scratch-in-progress.txt'), 'not yet\n'); git(root, 'add', '.'); // dirty: nothing is settled yet
+  assert.equal((await catalog.reconcileIntegration(preview.requestId)).status, 'uncertain');
+  git(root, 'reset', '-q', '--hard', 'HEAD');
+  const settled = await catalog.reconcileIntegration(preview.requestId);
+  assert.equal(settled.status, 'integrated'); assert.equal(settled.commit, squash); assert.match(settled.message, /moved on since/);
+  const next = await catalog.previewIntegration(target); assert.equal(next.previousCommit, squash); assert.equal(next.mergeBase, preview.through); // the batch boundary is usable
+  // A second attempt goes uncertain and the human resolves it another way: reset and integrate the rest by hand as two commits.
+  const interrupted = { ...next, requestId: randomUUID(), confirm: true as const };
+  store.saveWorktreeIntegration({ input: interrupted, status: 'applying', message: 'interrupted', updatedAt: new Date().toISOString(), commit: null });
+  catalog = new ProjectCatalog(store, config); assert.throws(() => catalog.assertWorktreeReady(root), /squash integration/);
+  writeFileSync(join(root, 'by-hand.txt'), 'integrated some other way\n'); git(root, 'add', '.'); git(root, 'commit', '-m', 'hand-made part one'); git(root, 'commit', '--allow-empty', '-m', 'hand-made part two');
+  const released = await catalog.reconcileIntegration(interrupted.requestId);
+  assert.equal(released.status, 'failed'); assert.match(released.message, new RegExp(`main moved from ${next.targetHead.slice(0, 12)} to ${git(root, 'rev-parse', 'HEAD').slice(0, 12)} without the previewed squash commit`)); assert.equal(released.commit, null);
+  catalog.assertWorktreeReady(root); await catalog.create(await input('another')); // the hold is gone
+  assert.equal((await catalog.reconcileIntegration(interrupted.requestId)).status, 'failed'); // settled records are not re-inspected
+  // Removal and the next batch judge the current history on their own evidence; the failed record is not a checkpoint, the verified first batch still is.
+  await assert.rejects(catalog.previewRemoval(target), /not an ancestor/);
+  const resumed = await catalog.previewIntegration(target); assert.equal(resumed.previousCommit, squash); assert.equal(resumed.mergeBase, preview.through);
+});

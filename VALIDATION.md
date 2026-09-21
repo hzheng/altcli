@@ -61,6 +61,42 @@ No live worktree was integrated or deleted, and installed-agent acceptance was
 not performed. The live backend was not restarted while delivering this task;
 restart it after the turn settles before using the new server behavior.
 
+## Deletion actions explain instead of silently disabling on September 21, 2026
+
+Check removal and Discard were disabled whenever an agent pane sat in the
+worktree, with no visible reason. They now disable only for hard blocks (read-only
+host, a request in flight, unreadable discovery/worktree state, a pending
+operation) and otherwise stay clickable: a status line beside them names a known
+occupant, run or delivery owner, and clicking runs the server preview whose exact
+refusal (pane inside the checkout, modified files, missing integration evidence)
+appears as the alert. Squash keeps its disabled-with-reason behaviour. Browser
+tests: a worktree occupied by the demo agents shows "Codex, Claude Code are still
+in this worktree; the server refuses removal…", both deletion buttons are enabled,
+and a routed WORKTREE_IN_USE refusal is displayed on click while the button stays
+enabled; the batches test now asserts the hint, the read-only hard block and the
+delivery-owner hint. `./scripts/check.sh` exited 0 and both Playwright projects
+passed on the final source (counts in the entries below are superseded by this
+run: 28 hook/setup, 41 smoke, 264 workflow, 56 unit tests; 71 + 71 browser cases).
+
+## Uncertain squash release after inspection on September 21, 2026
+
+A squash that went uncertain (the staged squash was never committed) and was
+then resolved by hand — main reset and integrated as three separate commits —
+stayed uncertain forever: inspection only recognised the exact expected commit
+at HEAD or an unchanged tip, and the record held every lifecycle action on the
+project. `reconcileIntegration` now keeps the hold only while the integration
+checkout is dirty; once clean it completes the operation when the previewed
+commit (pinned parent, previewed tree) is anywhere on the branch's first-parent
+chain since the pinned tip, and otherwise releases it as failed, naming the tip
+it moved to. A new real-Git test covers the buried commit under later main work,
+the dirty checkout, the hand-resolved tip after restart, the released project
+hold, and that a failed record is not a batch checkpoint while a verified one
+still is. ADR-0013, TESTING and the OpenAPI reconcile description were updated.
+`./scripts/check.sh` exited 0 (28 hook/setup, 41 smoke, 264 workflow and 56 unit
+tests, typecheck, build); no component changed, so Playwright was not rerun. The
+live uncertain record on this host is released by pressing **Inspect squash
+result** after the backend is restarted with this code; it was not edited.
+
 ## Confirmed squash integration and discard on September 21, 2026
 
 Projects now offers three confirmed end-of-task actions per linked task worktree,

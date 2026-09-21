@@ -165,8 +165,10 @@ on confirmation; the target checkout must be clean and unowned, and the task
 branch and worktree are left as they are. **Check removal** previews and confirms
 non-force removal after ancestry, an exact squash patch, or verified batches
 through the current task HEAD prove integration;
-modified and nonignored untracked files, panes and unresolved runs block it,
-ignored files are allowed with a warning, and the branch and history remain.
+modified and nonignored untracked files, panes and unresolved runs block it
+(the button stays clickable and the server's exact refusal is shown; a known
+occupant or owner is named beside it beforehand), ignored files are allowed with
+a warning, and the branch and history remain.
 **Discard…** force-removes the worktree and deletes its branch without
 integration evidence after you type the branch name; it reports the commits and
 uncommitted changes that will be lost and archives the handoff journal first.

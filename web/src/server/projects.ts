@@ -478,15 +478,35 @@ export class ProjectCatalog {
       return state.head;
     } catch { return null; }
   }
+  /** The previewed squash commit (single parent = the pinned target tip, tree = the previewed merge tree) anywhere on the
+   * integration branch's first-parent chain since that tip, or null. Later commits on top of it do not hide it. */
+  private async integratedEventually(operation: WorktreeIntegration, tip: string): Promise<string | null> {
+    const { input } = operation;
+    if (tip === input.targetHead) return null;
+    const chain = (await git(['-C', input.target.root, 'rev-list', '--first-parent', '--max-count=500', `${input.targetHead}..${tip}`])).trim().split('\n').filter(Boolean);
+    for (const sha of chain) {
+      const lineage = (await git(['-C', input.target.root, 'rev-list', '--parents', '-n', '1', sha])).trim().split(' ');
+      if (lineage.length === 2 && lineage[1] === input.targetHead && (await git(['-C', input.target.root, 'rev-parse', `${sha}^{tree}`])).trim() === input.tree) return sha;
+    }
+    return null;
+  }
+  /** Read-only inspection of an uncertain squash. A dirty integration checkout may still hold the staged squash, so ownership is
+   * retained. A clean checkout settles it: the previewed commit on the branch (even under later commits) completes the
+   * operation; otherwise the human resolved it another way, by leaving the tip untouched or by integrating, resetting or
+   * rewriting by hand, and the hold is released as failed. Nothing is retried and no Git state is changed. */
   async reconcileIntegration(requestId: string): Promise<WorktreeIntegration> {
     const operation = this.store.worktreeIntegrations().find((op) => op.input.requestId === requestId);
     if (!operation) throw new AppError('NOT_FOUND', 'Integration operation not found.', 404);
     if (operation.status !== 'uncertain') return operation;
+    const { input } = operation; const name = input.targetRef.replace('refs/heads/', '');
     try {
-      const commit = await this.integratedExactly(operation);
-      if (commit) return this.integrationFinish(operation, 'integrated', `Squash verified as ${commit.slice(0, 12)}. No Git changes were made by inspection.`, commit);
-      const state = await branchState(operation.input.target.root);
-      if (state.clean && state.head === operation.input.targetHead && state.branch === operation.input.targetRef.replace('refs/heads/', '')) return this.integrationFinish(operation, 'failed', 'The integration checkout is unchanged at its previous commit. Nothing was squashed; preview again if needed.');
+      const state = await branchState(input.target.root);
+      if (!state.clean) return operation; // the staged squash (or other work) is still pending for the human
+      const tip = (await git(['-C', input.target.root, 'rev-parse', '--verify', `${input.targetRef}^{commit}`])).trim();
+      const commit = await this.integratedEventually(operation, tip);
+      if (commit) return this.integrationFinish(operation, 'integrated', `Squash verified as ${commit.slice(0, 12)}${commit === tip ? '' : `; ${name} has moved on since`}. No Git changes were made by inspection.`, commit);
+      if (tip === input.targetHead) return this.integrationFinish(operation, 'failed', 'The integration checkout is unchanged at its previous commit. Nothing was squashed; preview again if needed.');
+      return this.integrationFinish(operation, 'failed', `${name} moved from ${input.targetHead.slice(0, 12)} to ${tip.slice(0, 12)} without the previewed squash commit: it was integrated, reset or rewritten by hand. The hold is released; nothing was retried. Check removal or a new squash preview will judge the current history on its own evidence.`);
     } catch { /* Missing evidence retains ownership. */ }
     return operation;
   }

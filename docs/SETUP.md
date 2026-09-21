@@ -116,8 +116,12 @@ perform it under the repository's normal hook policy. **Check removal** verifies
 integration and removes the clean, unused directory while keeping the branch.
 **Discard…** deletes the directory and the branch without integration evidence:
 it lists the commits and uncommitted changes that would be lost, archives the
-handoff journal first, and requires typing the branch name. All three record a
-durable result; an uncertain one is inspected, never retried.
+handoff journal first, and requires typing the branch name. Check removal and
+Discard stay clickable while agents, runs or deliveries occupy the worktree: a
+hint names the occupant, and clicking shows the server's exact refusal (a pane
+inside the checkout, modified files, or missing integration evidence). Only a
+read-only host, a request in flight or unreadable state disables them. All three
+record a durable result; an uncertain one is inspected, never retried.
 
 Dirty or unavailable workspaces remain readable, but Plan and Implementation
 starts are disabled until the index and nonignored worktree are clean. The console
