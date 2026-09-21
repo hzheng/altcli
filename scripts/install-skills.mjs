@@ -5,8 +5,11 @@ import { lstat, mkdir, readdir, readFile, readlink, realpath, symlink, unlink } 
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-const root = fileURLToPath(new URL("..", import.meta.url));
+import { installRoot } from "./lib/install-root.mjs";
+const { root, linked } = installRoot(fileURLToPath(new URL("..", import.meta.url)));
 const check = process.argv.includes("--check");
+// A linked worktree may verify the main checkout's links but never own them; see lib/install-root.mjs.
+if (linked && !check) { console.error(`Skills are linked from the main checkout so that removing this worktree cannot break them. Run this from ${root}.`); process.exit(1); }
 const claudeRoot = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude");
 const codexRoot = process.env.CODEX_HOME ?? join(homedir(), ".codex");
 const roots = [join(claudeRoot, "skills"), join(codexRoot, "skills")];

@@ -3,7 +3,10 @@
 Use Node 24, tmux and Git 2.40 or newer on the same awake host as Codex and
 Claude Code; project discovery reads `git worktree list --porcelain -z`, which
 older Git rejects. Run one backend per store, as the user who owns the tmux
-socket. Keep this clone available: installed hooks and skills point into it.
+socket. Keep this clone available: installed hooks and skills point into its main
+checkout. The installers resolve that checkout themselves and refuse to install
+from a linked worktree, where `--check` still verifies the main installation, so a
+disposable task worktree never owns the host's configuration.
 
 ## Install and start
 
@@ -19,6 +22,11 @@ links, and creates `web/.env.local` with a private access token. An existing
 create private backups; skill links never replace real directories. Both installers
 respect `CLAUDE_CONFIG_DIR` and `CODEX_HOME`. Unsupported hook configuration or
 conflicting skill directories stop setup with a diagnostic; resolve it and rerun.
+In a linked task worktree the same command installs that worktree's web
+dependencies, verifies the main checkout's hook and skill installation instead of
+reinstalling, and copies the main checkout's `web/.env.local` rather than minting a
+token: the installed hook posts the main checkout's token, so a backend started
+from the worktree must accept it. Run one backend per store at a time.
 
 Restart the coding CLIs to load the hooks and skills. For the first checks, set
 `CODERCREW_ENABLE_INPUT=false` in `web/.env.local`, then start the console:
@@ -41,7 +49,7 @@ files under `~/.local/share/codercrew/hook-turns/`; they contain no prompt,
 response, token or raw error text.
 Native hooks must be enabled (`features.hooks`, enabled by default in Codex
 0.155.1). To update only hook installation, run `node scripts/install-hooks.mjs`
-while the CLIs are idle, then restart Codex and use `/hooks` to review and trust
+from the main checkout while the CLIs are idle, then restart Codex and use `/hooks` to review and trust
 the CoderCrew UserPromptSubmit, SessionStart and Interrupt hooks before the next command. Codex skips new or
 changed native hooks until trusted; see [hook trust](https://learn.chatgpt.com/docs/hooks#review-and-trust-hooks).
 A turn that
@@ -119,7 +127,9 @@ it lists the commits and uncommitted changes that would be lost, archives the
 handoff journal first, and requires typing the branch name. Check removal and
 Discard stay clickable while agents, runs or deliveries occupy the worktree: a
 hint names the occupant, and clicking shows the server's exact refusal (a pane
-inside the checkout, modified files, or missing integration evidence). Only a
+inside the checkout, modified files, missing integration evidence, or installed
+CLI hooks or skill links that still point into the worktree; reinstall them from
+the main checkout first). Only a
 read-only host, a request in flight or unreadable state disables them. All three
 record a durable result; an uncertain one is inspected, never retried.
 

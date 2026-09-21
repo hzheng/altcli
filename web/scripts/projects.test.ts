@@ -28,7 +28,7 @@ async function workspace(path: string): Promise<Workspace> {
 beforeEach(() => {
   directory = realpathSync(mkdtempSync(join(tmpdir(), 'codercrew-projects-'))); root = join(directory, 'repo'); mkdirSync(root);
   git(root, 'init', '-b', 'main'); writeFileSync(join(root, 'app.txt'), 'baseline\n'); git(root, 'add', 'app.txt'); git(root, 'commit', '-m', 'baseline');
-  config = { ...loadConfig({ CODERCREW_TOKEN: 'a'.repeat(64), CODERCREW_DATA_DIR: join(directory, 'metadata') }), worktreeDir: join(directory, 'tasks') };
+  config = { ...loadConfig({ CODERCREW_TOKEN: 'a'.repeat(64), CODERCREW_DATA_DIR: join(directory, 'metadata'), CLAUDE_CONFIG_DIR: join(directory, 'claude'), CODEX_HOME: join(directory, 'codex') }), worktreeDir: join(directory, 'tasks') };
   store = new Store(config.dataDir); catalog = new ProjectCatalog(store, config);
 });
 afterEach(() => { store.close(); rmSync(directory, { recursive: true, force: true }); });
@@ -289,6 +289,46 @@ test('removal rechecks pane occupancy and retained run ownership at the HTTP con
   assert.equal(existsSync(request.path), true);
   adapter.listPanes = async () => { throw new Error('inventory unavailable'); };
   await assert.rejects(plane.previewRemoval(target), /inventory unavailable/);
+});
+test('removal and discard refuse a worktree that the host\'s installed hooks or skill links still point into', async () => {
+  const { Controller } = await import('../src/server/controller.ts');
+  const { ControlPlane } = await import('../src/server/control-plane.ts');
+  const { MockAdapter } = await import('../src/server/adapters/mock.ts');
+  const { request, target } = await removalFixture();
+  const adapter = new MockAdapter(); adapter.listPanes = async () => [];
+  const plane = new ControlPlane(new Controller(config, store, adapter));
+  const claude = join(directory, 'claude'); const codex = join(directory, 'codex'); mkdirSync(claude); mkdirSync(join(codex, 'skills'), { recursive: true });
+  const hook = (checkout: string) => JSON.stringify({ theme: 'dark', hooks: { Stop: [{ hooks: [{ type: 'command', command: `'${join(checkout, 'hooks', 'codercrew-turn-complete.sh')}' claude`, timeout: 10 }] }] } });
+  writeFileSync(join(claude, 'settings.json'), hook(request.path));
+  await assert.rejects(plane.previewRemoval(target), /settings\.json Stop hook.*Reinstall them from the main checkout/);
+  const preview = { ...await catalog.previewRemoval(target), confirm: true as const };
+  const result = await plane.removeWorktree(preview); assert.equal(result.status, 'failed'); assert.match(result.message, /Stop hook/);
+  assert.equal(existsSync(request.path), true);
+  writeFileSync(join(claude, 'settings.json'), hook(root)); // installed from the main checkout: no block
+  assert.equal((await plane.previewRemoval(target)).worktree.root, request.path);
+  // A Codex trust entry for the worktree is not an installation; its notify command is.
+  writeFileSync(join(codex, 'config.toml'), `[projects."${request.path}"]\ntrust_level = "trusted"\n`);
+  assert.equal((await plane.previewRemoval(target)).worktree.root, request.path);
+  writeFileSync(join(codex, 'config.toml'), `notify = ["${join(request.path, 'hooks', 'codercrew-turn-complete.sh')}", "codex"]\n[projects."${request.path}"]\ntrust_level = "trusted"\n`);
+  await assert.rejects(plane.previewRemoval(target), /config\.toml notify/);
+  // A valid multiline root array is what the installer itself accepts, so it must be read completely; a notify inside a table is not the installer's.
+  writeFileSync(join(codex, 'config.toml'), `# host\nmodel = "fixture" # one line\nnotify = [ # installed\n  "${join(request.path, 'hooks', 'codercrew-turn-complete.sh')}",\n  'codex',\n]\n[projects."${request.path}"]\ntrust_level = "trusted"\n`);
+  await assert.rejects(plane.previewRemoval(target), /config\.toml notify/);
+  writeFileSync(join(codex, 'config.toml'), `model = "fixture"\n[tui]\nnotify = ["${join(request.path, 'hooks', 'codercrew-turn-complete.sh')}"]\n`);
+  assert.equal((await plane.previewRemoval(target)).worktree.root, request.path);
+  for (const malformed of [`notify = [\n  "${join(root, 'hooks', 'x.sh')}",\n  "unclosed\n]\n`, `notify = ["""${join(root, 'hooks', 'x.sh')}"""]\n`, `notify = [1]\n`, `other = [\n"x"]\nnotify = ["y"]\n`]) {
+    writeFileSync(join(codex, 'config.toml'), malformed);
+    await assert.rejects(plane.previewRemoval(target), /notify command cannot be verified/); // fails closed, even with no reference into the worktree
+  }
+  writeFileSync(join(codex, 'config.toml'), `notify = ["${join(root, 'hooks', 'codercrew-turn-complete.sh')}", "codex"]\n`);
+  symlinkSync(join(request.path, 'skills', 'review-handoff'), join(codex, 'skills', 'review-handoff'));
+  await assert.rejects(plane.previewDiscard(target), /codex\/skills\/review-handoff/);
+  await assert.rejects(plane.previewRemoval(target), /codex\/skills\/review-handoff/);
+  rmSync(join(codex, 'skills', 'review-handoff')); mkdirSync(join(codex, 'skills', 'review-handoff')); // a real directory is the user's own skill
+  assert.equal((await plane.previewDiscard(target)).worktree.root, request.path);
+  writeFileSync(join(claude, 'settings.json'), '{'); // unreadable configuration fails closed
+  await assert.rejects(plane.previewRemoval(target), /not valid JSON/);
+  assert.equal(existsSync(request.path), true);
 });
 test('a pane in a deleted directory elsewhere never blocks removal; a deleted subdirectory of the checkout still fails closed', async () => {
   const { Controller } = await import('../src/server/controller.ts');

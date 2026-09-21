@@ -5,9 +5,13 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { claudeSettings, codexConfig, codexHooks } from './lib/hook-config.mjs';
-const root = fileURLToPath(new URL('..', import.meta.url));
+import { installRoot } from './lib/install-root.mjs';
+const { root, linked } = installRoot(fileURLToPath(new URL('..', import.meta.url)));
 const hook = join(root, 'hooks', 'codercrew-turn-complete.sh');
 const check = process.argv.includes('--check');
+// A linked worktree may verify the main checkout's installation but never own it; see lib/install-root.mjs.
+if (linked && !check) { console.error(`Hooks are installed from the main checkout so that removing this worktree cannot break them. Run this from ${root}.`); process.exit(1); }
+if (!(await lstat(hook).catch(() => null))?.isFile()) { console.error(`${hook} is missing; check out a revision of the main checkout that has it.`); process.exit(1); }
 async function read(path) {
   try { const info = await lstat(path); if (!info.isFile() || info.isSymbolicLink()) throw new Error(`Refusing to replace a symlink or non-file: ${path}`); return await readFile(path, 'utf8'); }
   catch (error) { if (error.code === 'ENOENT') return null; throw error; }

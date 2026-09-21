@@ -105,7 +105,10 @@ The confirmation pins project/worktree/index identity, branch, HEAD, target ref
 and HEAD, integration evidence and request ID. Persist a project setup owner,
 revalidate live occupancy and exact Git evidence, then execute only non-force
 `git worktree remove -- <path>` with hooks disabled. Refuse the main checkout,
-integration branches and controller-data overlap. Never delete files directly or
+integration branches, controller-data overlap, and a checkout that the host's
+installed CoderCrew hook commands or skill links still point into (read from the
+CLIs' user configuration, never edited: the installers own it and only install
+from the main checkout). Never delete files directly or
 use force, prune, reset or automatic cleanup. This remains cooperative same-user
 control; external processes are not isolated by an OS filesystem lock.
 
@@ -224,7 +227,7 @@ User requirement, September 20, 2026: each linked task worktree also offers
 that uses force: it removes the worktree and deletes its branch without
 integration evidence. A read-only preview requires a named non-integration
 branch in an accessible linked worktree with no tmux pane, run owner, unresolved
-delivery or uncertain setup, and reports the commits absent from the integration
+delivery, uncertain setup or installed hook/skill reference, and reports the commits absent from the integration
 branch and the modified or nonignored untracked files that would be lost; neither
 refuses the operation. Confirmation requires the branch name to be typed exactly
 and warns that ignored files are deleted too and that the app cannot undo it.

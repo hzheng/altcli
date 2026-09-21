@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile, spawnSync } from 'node:child_process';
@@ -142,7 +142,9 @@ test('the installer validates both files before writing either and creates backu
     const claude = join(home, '.claude'); const codex = join(home, '.codex'); mkdirSync(claude); mkdirSync(codex);
     const settings = '{"theme":"dark"}\n'; writeFileSync(join(claude, 'settings.json'), settings);
     writeFileSync(join(codex, 'config.toml'), 'notify = ["""unsupported"""]\n');
-    const script = fileURLToPath(new URL('./install-hooks.mjs', import.meta.url));
+    // A plain copy: run in place, a linked worktree checkout would refuse to install itself.
+    for (const name of ['scripts', 'hooks']) cpSync(fileURLToPath(new URL(`../${name}`, import.meta.url)), join(home, 'clone', name), { recursive: true });
+    const script = join(home, 'clone', 'scripts', 'install-hooks.mjs');
     const env = { ...process.env, HOME: home, CLAUDE_CONFIG_DIR: claude, CODEX_HOME: codex };
     const failure = spawnSync(process.execPath, [script], { env, encoding: 'utf8' });
     assert.notEqual(failure.status, 0); assert.equal(readFileSync(join(claude, 'settings.json'), 'utf8'), settings);

@@ -4,6 +4,57 @@
 **Last local validation:** September 21, 2026
 **Scope:** Source scaffold, not a completed release or security certification
 
+## Installed hooks and skills follow the main checkout on September 21, 2026
+
+Discarding the `feature/task-mgt` worktree left every CLI hook (`~/.claude/settings.json`
+Stop/UserPromptSubmit/SessionStart, `~/.codex/config.toml` notify, `~/.codex/hooks.json`)
+and all six skill links dangling: the installers had been run from that worktree,
+because `scripts/check.sh` verifies the links against the running checkout and told
+a session there to reinstall. Turn completion then went unobserved (`Stop hook error:
+… No such file or directory`) and the run for the last standalone instruction on
+`feature/ui` stayed `running`. Both installers now resolve the repository's main
+worktree (`git worktree list`, falling back to a plain non-Git copy) and refuse to
+install from a linked worktree, whose `--check` verifies the main installation
+instead; the removal guard shared by Check removal and Discard refuses, before
+mutation, a worktree that any installed hook command, Codex `notify` entry or skill
+link still points into, and fails closed on unreadable CLI configuration. The server
+reads that configuration only; it never edits it.
+
+- `node --test scripts/review-regressions.test.mjs scripts/setup.test.mjs`: 30
+  passed, including a new real-Git fixture where a linked worktree is refused and
+  leaves the isolated home untouched, the main checkout installs, and the linked
+  worktree's `--check` then passes; the installer regression now runs a plain copy.
+  `scripts/setup.mjs` in a linked worktree installs that worktree's dependencies,
+  verifies instead of reinstalling, and copies the main checkout's `web/.env.local`
+  (the installed hook posts that token) instead of minting a new one; a second
+  fixture covers the failing verification before main is set up, the copy, the
+  unchanged host configuration and backups, and the no-overwrite rerun.
+- `npm --prefix web run check`: 41 smoke, 267 workflow (the new control-plane case
+  covers a Stop hook, a Codex `notify` entry and a skill link into the task
+  worktree, a Codex trust entry and a real skill directory that do not block, a
+  main-checkout installation that does not block, and malformed JSON failing
+  closed; it failed with the guard removed), 56 unit tests, type checks and build.
+- `./scripts/check.sh` exited 1 on this host at its first line: the live skill
+  links still point at the deleted worktree, which is the condition being reported
+  and must be fixed by reinstalling from the main checkout. Playwright was not run
+  (no component changed). The live backend was not restarted while delivering.
+
+Peer review of the handoff commit `98ac6f9` objected on two points, both
+reproduced and fixed afterwards: the guard read only the first physical line of
+Codex `notify`, so a valid multiline array (which the installer itself accepts)
+evaded it; and a worktree `web/.env.local` left by an earlier setup with its own
+minted token passed as complete although the installed hooks post the main
+checkout's token. `notify` is now parsed as the installer parses it (root scope
+only, strings across lines and comments, escapes) and any unsupported or
+malformed value fails closed; `setup.mjs` compares the existing worktree token with
+the main checkout's and stops with a reconciliation message on mismatch. The
+`readdir` call was reshaped so the production build no longer traces the whole
+project. After the fixes on this host (hooks and skills reinstalled from the main
+checkout by the human): `./scripts/check.sh` exited 0 from this linked worktree —
+30 hook/setup (mismatched-token case added), 41 smoke, 267 workflow (multiline,
+table-local and four malformed `notify` cases added), 56 unit, type checks and a
+warning-free production build.
+
 ## Stale squash checkpoint recovery on September 21, 2026
 
 Checkpoints outside either current branch history, or with missing Git objects,

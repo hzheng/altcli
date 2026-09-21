@@ -15,6 +15,9 @@ export interface Config {
   integrationBranches: string[];
   /** Host-local task checkouts, separate from controller metadata. Tests use an isolated root. */
   worktreeDir?: string;
+  /** The CLIs' user-level configuration, read only to see where the installed CoderCrew hooks and skill links point. */
+  claudeConfigDir: string;
+  codexHome: string;
 }
 // Not NodeJS.ProcessEnv: Next's global types make NODE_ENV required there, which breaks the partial env objects tests pass.
 export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
@@ -42,6 +45,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   if (integrationBranches.some((name) => !/^[A-Za-z0-9][A-Za-z0-9/_.-]{0,150}$/.test(name))) throw new AppError('CONFIG', 'CODERCREW_INTEGRATION_BRANCHES must be a comma-separated list of branch names.', 503);
   return { mode, token, allowedOrigins, inputEnabled: input === "true", legacyEnabled: legacy === 'true', integrationBranches,
     worktreeDir: join(homedir(), '.codercrew'),
+    claudeConfigDir: env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), codexHome: env.CODEX_HOME ?? join(homedir(), '.codex'),
     dataDir: resolve(base, mode), tmuxBin: env.CODERCREW_TMUX_BIN ?? "tmux",
     ...(env.CODERCREW_TMUX_SOCKET ? { tmuxSocket: env.CODERCREW_TMUX_SOCKET } : {}) };
 }

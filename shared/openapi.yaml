@@ -552,7 +552,7 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/WorktreeRemovalPreview'}
-        '409': {description: Worktree is occupied, dirty, inaccessible or integration cannot be verified}
+        '409': {description: Worktree is occupied, dirty, inaccessible, still referenced by the host's installed CLI hooks or skill links, or integration cannot be verified}
   /api/v1/projects/worktrees/removal:
     post:
       operationId: removeWorktree
@@ -648,7 +648,7 @@ paths:
     post:
       operationId: previewWorktreeDiscard
       summary: Read-only preview of what a forced discard would lose
-      description: Requires a linked task worktree on a named non-integration branch with no pane, run owner or unresolved delivery. Modified files and commits absent from the integration branch are counted and reported, not refused.
+      description: Requires a linked task worktree on a named non-integration branch with no pane, run owner, unresolved delivery or installed CLI hook/skill reference. Modified files and commits absent from the integration branch are counted and reported, not refused.
       requestBody:
         required: true
         content:
@@ -660,7 +660,7 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/WorktreeDiscardPreview'}
-        '409': {description: Occupied or inaccessible worktree, or an integration-branch worktree}
+        '409': {description: Occupied or inaccessible worktree, an integration-branch worktree, or one the host's installed CLI hooks or skill links still point into}
   /api/v1/projects/worktrees/discard:
     post:
       operationId: discardWorktree

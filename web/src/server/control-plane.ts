@@ -21,6 +21,7 @@ import type { PlanCapture, PlanDecision, PlanningAssignment, PlanStart } from '.
 import { newPlanning, planAgreed } from './planning-state.ts';
 import { assertPlanArtifacts, assertPlanBaseline, capturePlanResult } from './planning-documents.ts';
 import { ProjectCatalog } from './projects.ts';
+import { installedInside } from './cli-install.ts';
 import { AgentActivityTracker } from './agent-activity.ts';
 import type { WorktreeCreateInput, WorktreeDiscardConfirm, WorktreeDiscardFinish, WorktreeDiscardInput, WorktreeIntegrateRequest, WorktreeIntegrationInput, WorktreePreviewInput, WorktreeRemovalInput, WorktreeRemoveInput } from '../contracts/projects.ts';
 
@@ -118,6 +119,9 @@ export class ControlPlane {
       if (cwd === worktree.root || cwd.startsWith(`${worktree.root}/`)) throw new AppError('WORKTREE_IN_USE', 'A tmux pane is still in this worktree. Move or close it yourself, then Recheck.', 409);
     }
     if (this.workflow.owner(worktree.indexPath) || this.store.activeFor(worktree.root)) throw new AppError('WORKTREE_BUSY', 'A run or unresolved delivery owns this worktree. Inspect and take over before removal.', 409);
+    // Deleting the checkout the CLIs' hooks or skill links point into would silently end every turn observation on the host.
+    const installed = await installedInside(worktree.root, this.config);
+    if (installed.length) throw new AppError('WORKTREE_INSTALLED', `The host's CLI hooks or skills point into this worktree: ${installed.join(', ')}. Reinstall them from the main checkout (node scripts/install-hooks.mjs and node scripts/install-skills.mjs there), then Recheck.`, 409);
   }
   async previewRemoval(input: WorktreeRemovalInput) {
     await this.workspaces();
