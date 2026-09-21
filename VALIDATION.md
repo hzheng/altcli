@@ -4,6 +4,59 @@
 **Last local validation:** September 20, 2026
 **Scope:** Source scaffold, not a completed release or security certification
 
+## Handoff journal as app data on September 20, 2026
+
+The tracked `RELAY-LOG.jsonl` requirement is dropped. A completed commit-mode turn
+now publishes one schema-1 result object to an external `resultPath` beside its
+assignment (the Plan pattern); the controller validates it against the immutable
+identity and Git, records it in the new `handoff_journal` table together with the
+handoff commit's archived patch (the `git apply`-able patch with binary data when
+it fits 1 MiB and is storable as UTF-8 text, else its diffstat marked incomplete;
+the binary handling is a review follow-up covered by a fixture that applies the
+archived patch in a separate clone), and derives
+the Review-baseline default from that journal instead of Git log history.
+Report-only turns publish no commit; empty commits, extra commits, missing,
+malformed or mismatched results are refused without entering the journal.
+Mirroring the journal into a tracked, nonignored file is an explicit opt-in
+(**Also track the journal in the repository**, `logPath`), in which case every
+turn commits and the mirrored line must equal the published result. `GET
+/api/v1/history/export` and **Export history** in Status download runs, turns
+and journal for one worktree or all; confirmed worktree removal archives any
+unarchived handoff commit first and reports the count. Existing publications are
+backfilled into the journal at startup; the database version is now 9. The
+repository's own `RELAY-LOG.jsonl` is deleted from the worktree in this change;
+the deletion is left uncommitted for the user to commit with the rest.
+
+Executed checks on this task's final source:
+
+- `./scripts/check.sh` exited 0 on the installed Node 26.0.0: installed skill
+  links verified, 28 hook/setup tests, 41 smoke tests, 240 workflow tests (real Git
+  and SQLite in disposable repositories; terminal delivery and lifecycle evidence
+  simulated), type checking, 53 unit tests and the production build including the
+  new `/api/v1/history/export` route. New coverage: report-only turns without a
+  commit and their journal records with archived patches; the tracked-log
+  preference; twelve invalid-publication faults (including empty commit, mirrored
+  line mismatch, report-only turn without the required mirrored commit, and an
+  invalid result) that pause with ownership and leave the journal untouched;
+  journal-derived Review baselines with side-branch merges, hand-committed log
+  lines and other agents' entries; history export scoping; startup backfill,
+  pre-removal archiving that skips commits already gone, diffstat fallback for an
+  oversized commit; and archive-before-`git worktree remove` ordering.
+- `env CODERCREW_E2E_PORT=9787 npx playwright test --project=desktop` and
+  `--project=iphone` (run separately beside the live console on 8787) each
+  passed all 66 cases, 132 in total, including the new tracked-log opt-in and
+  history-export download cases and the renamed reviewer tooltip.
+- `git diff HEAD --check` passed. The diff was screened for credentials: only the
+  pre-existing synthetic e2e token appears.
+
+Not executed: no installed Codex or Claude agent performed a real handoff under
+the revised `commit-handoff` skill, so installed-host acceptance of the
+result-file publication remains pending. The development backend on 8787 was not
+restarted, because this change was delivered as an active controller command;
+restart it after this turn completes and before the next Implementation run, since
+older server code cannot read runs without a tracked log. No live journal was
+exported and no real worktree was removed during validation.
+
 ## Moved sessions and confirmed worktree removal on September 20, 2026
 
 Follow-up: ignored files now permit removal, with an explicit warning before

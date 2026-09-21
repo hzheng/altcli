@@ -54,7 +54,7 @@ export function parseImplementation(value: unknown): ImplementationStart {
   if (b.kind === 'review' && b.reviewBase === undefined) return invalid('An existing-candidate review needs an explicit baseline.');
   return { requestId: requestId(b.requestId), groupId: agentId(b.groupId), groupRevision: Number(b.groupRevision), registrations: instances, agentId: agentId(b.agentId), kind: b.kind as ImplementationStart['kind'],
     ...(text ? { text } : {}), handoff: b.handoff, policy: b.policy as ImplementationStart['policy'], ...(b.workerId !== undefined ? { workerId: agentId(b.workerId) } : {}),
-    autoContinue: b.autoContinue, turnLimit: Number(b.turnLimit), ...(b.pauseOnObjection !== undefined ? { pauseOnObjection: b.pauseOnObjection } : {}), logPath: logPath(b.logPath),
+    autoContinue: b.autoContinue, turnLimit: Number(b.turnLimit), ...(b.pauseOnObjection !== undefined ? { pauseOnObjection: b.pauseOnObjection } : {}), ...(b.logPath !== undefined ? { logPath: logPath(b.logPath) } : {}),
     branch: { branch: branch.branch as string | null, head: sha(branch.head), ...(branch.newBranch !== undefined ? { newBranch: branch.newBranch as string } : {}), ...(branch.taskBase !== undefined ? { taskBase: sha(branch.taskBase) } : {}) },
     ...(b.reviewBase !== undefined ? { reviewBase: sha(b.reviewBase) } : {}), confirmReady: true };
 }
@@ -84,6 +84,6 @@ export function parseReviewPreview(value: unknown): ReviewPreviewInput {
   if (Object.keys(b).some((key) => !['groupId', 'head', 'logPath', 'base', 'recipient', 'taskBase', 'commitPending'].includes(key))) return invalid('Unknown review preview field.');
   if (b.commitPending !== undefined && typeof b.commitPending !== 'boolean') return invalid('commitPending must be a boolean.');
   if (b.base === undefined ? b.recipient === undefined || b.taskBase === undefined : b.recipient !== undefined || b.taskBase !== undefined) return invalid('Preview either an explicit baseline, or the recipient and task baseline that derive one.');
-  return { groupId: agentId(b.groupId), head: sha(b.head), logPath: logPath(b.logPath), ...(b.commitPending !== undefined ? { commitPending: b.commitPending } : {}),
+  return { groupId: agentId(b.groupId), head: sha(b.head), ...(b.logPath !== undefined ? { logPath: logPath(b.logPath) } : {}), ...(b.commitPending !== undefined ? { commitPending: b.commitPending } : {}),
     ...(b.base !== undefined ? { base: sha(b.base) } : { recipient: agentId(b.recipient), taskBase: sha(b.taskBase) }) };
 }

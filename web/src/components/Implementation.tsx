@@ -16,7 +16,9 @@ export function Implementation({ token, state, group, workspace, workspaceError,
   const [policy, setPolicy] = useState<CollaborationPolicy>('peer');
   const [worker, setWorker] = useState(''); const [text, setText] = useState('');
   const [automatic, setAutomatic] = useState(true); const [limit, setLimit] = useState(20); const [pauseOnObjection, setPauseOnObjection] = useState(false);
-  const [log, setLog] = useState('RELAY-LOG.jsonl'); const [reviewBase, setReviewBase] = useState('');
+  const [trackLog, setTrackLog] = useState(false); const [log, setLog] = useState('RELAY-LOG.jsonl'); const [reviewBase, setReviewBase] = useState('');
+  // The journal lives in CoderCrew; mirroring it into a tracked file is an explicit project preference, off by default.
+  const logPath = trackLog && log.trim() ? log.trim() : undefined;
   const [choice, setChoice] = useState<string | null>(null); const [branchName, setBranchName] = useState(''); const [baseline, setBaseline] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState(''); const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -40,7 +42,7 @@ export function Implementation({ token, state, group, workspace, workspaceError,
   async function previewBase(base: string, signal?: AbortSignal) {
     if (!group || !git || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(base)) return;
     const key = JSON.stringify([previewKey, base]); const request = ++previewRequests.current; setPreviewing(request); setConfirmed('');
-    try { const data = await api<ReviewPreview>(token, 'implementation/preview', { body: { groupId: group.id, head: git.head, logPath: log, base, commitPending: snapshotRelay }, signal }); if (!signal?.aborted) setExplicitPreview({ key, data }); }
+    try { const data = await api<ReviewPreview>(token, 'implementation/preview', { body: { groupId: group.id, head: git.head, ...(logPath ? { logPath } : {}), base, commitPending: snapshotRelay }, signal }); if (!signal?.aborted) setExplicitPreview({ key, data }); }
     catch (error) { if (!signal?.aborted) setExplicitPreview({ key, error: error instanceof Error ? error.message : 'Could not preview this range.' }); }
     finally { setPreviewing((current) => current === request ? 0 : current); }
   }
@@ -53,7 +55,7 @@ export function Implementation({ token, state, group, workspace, workspaceError,
   const taskBase = baseline ?? git?.taskBase ?? '';
   // A new branch begins at the displayed head; an existing task branch reviews back to its confirmed baseline.
   const reviewTaskBase = branchChoice === 'new' ? git?.head ?? '' : taskBase.trim();
-  const previewKey = JSON.stringify([group?.id, git?.head, log, reviewer, reviewTaskBase, previewRevision, snapshotRelay]);
+  const previewKey = JSON.stringify([group?.id, git?.head, logPath ?? null, reviewer, reviewTaskBase, previewRevision, snapshotRelay]);
   const last = lastPreview?.key === previewKey ? lastPreview : undefined;
   // Candidate baselines come from the server's first-parent chain, earliest (everything new to the recipient) to latest (the last commit only).
   const candidates = last?.data?.candidates ?? [];
@@ -73,12 +75,12 @@ export function Implementation({ token, state, group, workspace, workspaceError,
   useEffect(() => {
     if (planning || solo || !group || !git || !reviewer || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(reviewTaskBase)) return;
     const abort = new AbortController();
-    void api<ReviewPreview>(token, 'implementation/preview', { body: { groupId: group.id, head: git.head, logPath: log, recipient: reviewer, taskBase: reviewTaskBase, commitPending: snapshotRelay }, signal: abort.signal })
+    void api<ReviewPreview>(token, 'implementation/preview', { body: { groupId: group.id, head: git.head, ...(logPath ? { logPath } : {}), recipient: reviewer, taskBase: reviewTaskBase, commitPending: snapshotRelay }, signal: abort.signal })
       .then((data) => { if (!abort.signal.aborted) setLastPreview({ key: previewKey, data }); })
       .catch((error) => { if (!abort.signal.aborted) setLastPreview({ key: previewKey, error: error instanceof Error ? error.message : 'Could not read the commits to review.' }); });
     return () => abort.abort();
-  }, [token, planning, solo, group?.id, git?.head, git?.clean, log, reviewer, reviewTaskBase, previewKey]);
-  const key = JSON.stringify([phase, group?.id, group?.revision, plannerRegistrations, implementationGroup?.id, implementationGroup?.revision, registrations, members.map((id) => state.instances.find((i) => i.agentId === id)?.status), workspace?.agents, target, git, workspaceError, branchChoice, branchName, taskBase, selectedPolicy, workerId, automatic, requireApproval, limit, pauseOnObjection, log, reviewBase, chosen, recent?.data, last?.data, planning ? text : null]);
+  }, [token, planning, solo, group?.id, git?.head, git?.clean, logPath, reviewer, reviewTaskBase, previewKey]);
+  const key = JSON.stringify([phase, group?.id, group?.revision, plannerRegistrations, implementationGroup?.id, implementationGroup?.revision, registrations, members.map((id) => state.instances.find((i) => i.agentId === id)?.status), workspace?.agents, target, git, workspaceError, branchChoice, branchName, taskBase, selectedPolicy, workerId, automatic, requireApproval, limit, pauseOnObjection, logPath ?? null, reviewBase, chosen, recent?.data, last?.data, planning ? text : null]);
   // Once the displayed checkout/settings change, returning to old values must not revive consent.
   useEffect(() => { setConfirmed(''); }, [key]);
   const ready = confirmed === key;
@@ -101,12 +103,12 @@ export function Implementation({ token, state, group, workspace, workspaceError,
       const record = standalone ? await api<CommandRecord>(token, 'instructions', { body: { requestId, groupId: group.id, groupRevision: group.revision, registrations, agentId: target, text: text.trim(), policy: selectedPolicy, ...(selectedPolicy === 'worker_reviewer' ? { workerId } : {}), confirmReady: true } }) : planning ? await api<CommandRecord>(token, 'planning', { body: { requestId, groupId: group.id, groupRevision: group.revision, registrations: plannerRegistrations,
         text: text.trim(), baseline: { branch: git.branch, head: git.head }, autoContinue: automatic, requireApproval, turnLimit: limit, pauseOnObjection, confirmReady: true,
         implementation: { groupId: implementationGroup.id, groupRevision: implementationGroup.revision, registrations, agentId: target, policy: selectedPolicy,
-          ...(selectedPolicy === 'worker_reviewer' ? { workerId } : {}), handoff: !solo, logPath: log, branch: branchChoice ? branch : null } } })
+          ...(selectedPolicy === 'worker_reviewer' ? { workerId } : {}), handoff: !solo, ...(logPath ? { logPath } : {}), branch: branchChoice ? branch : null } } })
         : await api<CommandRecord>(token, 'implementation', { body: { requestId, groupId: group.id, groupRevision: group.revision, registrations,
         agentId: kind === 'review' ? reviewer : target,
         kind, ...(text.trim() ? { text: text.trim() } : {}), handoff, policy: selectedPolicy,
         ...(selectedPolicy === 'worker_reviewer' ? { workerId } : {}), autoContinue: !solo && automatic && (kind === 'review' || handoff),
-        turnLimit: limit, pauseOnObjection: !solo && pauseOnObjection, logPath: log, branch,
+        turnLimit: limit, pauseOnObjection: !solo && pauseOnObjection, ...(logPath ? { logPath } : {}), branch,
         ...(review ? { reviewBase: review.base } : {}), confirmReady: true } });
       onMessage(`${record.status.toUpperCase()}: ${record.error ?? `${standalone ? 'Standalone instruction' : planning ? 'Plan' : 'Implementation'} started. The server owns this run.`}`);
       if (record.status !== 'rejected') { setText(''); setBaselineChoice(''); }
@@ -154,8 +156,10 @@ export function Implementation({ token, state, group, workspace, workspaceError,
       <label htmlFor="implementation-instruction">{planning ? 'Shared task brief' : 'Instruction or review context'}</label><textarea id="implementation-instruction" rows={3} value={text} disabled={blocked || busy} maxLength={1900} onChange={(e) => setText(e.target.value)} />
       {!planning && !solo && <p className="fine">For Commit and Relay, text is optional context. The current changes are committed as they stand; unfinished requests can be recorded for the peer.</p>}
       <details className="agreement"><summary>Collaboration settings</summary>
-        <label>Tracked relay log<input aria-label="Tracked relay log" value={log} disabled={blocked || busy} onChange={(e) => setLog(e.target.value)} /></label>
-        <p className="fine">A nonignored JSON-lines file. The agent creates it in its first handoff commit. Existing entries must use the same schema.</p>
+        <label className="readiness"><input type="checkbox" checked={trackLog} disabled={blocked || busy} onChange={(e) => setTrackLog(e.target.checked)} />Also track the journal in the repository</label>
+        {trackLog ? <><label>Tracked relay log<input aria-label="Tracked relay log" value={log} disabled={blocked || busy} onChange={(e) => setLog(e.target.value)} /></label>
+          <p className="fine">A nonignored JSON-lines file mirroring every journal entry inside its handoff commit, so report-only turns also commit. The agent creates it in its first handoff commit; existing entries must use the same schema.</p></>
+          : <p className="fine">The handoff journal stays in CoderCrew’s history: turns, reviewed ranges, findings and reported checks. Report-only turns publish no commit. Export it from Status; promote enduring knowledge into the repository’s documents when finishing the task.</p>}
         {(planning || !solo) && <><label className="readiness"><input type="checkbox" checked={automatic} disabled={blocked || busy} onChange={(e) => setAutomatic(e.target.checked)} />{planning ? 'Automatic collaboration across both phases' : 'Automatic collaboration after the initial review'}</label>
         <label className="readiness turn-limit">{planning ? 'Maximum automatic turns across both phases' : 'Maximum automatic implementation turns'}<input type="number" aria-label={planning ? 'Maximum automatic turns across both phases' : 'Maximum automatic implementation turns'} min={1} max={200} value={limit} disabled={blocked || busy} onChange={(e) => setLimit(Number(e.target.value))} /></label>
         <label className="readiness"><input type="checkbox" checked={pauseOnObjection} disabled={blocked || busy} onChange={(e) => setPauseOnObjection(e.target.checked)} />Pause on a reviewer objection</label>
@@ -175,7 +179,7 @@ export function Implementation({ token, state, group, workspace, workspaceError,
             <option value="other">Another commit…</option>
           </select></label>
           {snapshotRelay ? <button title={`${reviewBlockedReason || (chosen === 'other' && !recent?.data ? 'Enter a baseline commit and preview it first.' : last?.error || (!selectedRange ? 'Reading the commits to review…' : ''))} ${targetName} snapshots all staged, unstaged and nonignored untracked changes as they stand, then the controller relays the selected baseline through the new commit to ${reviewerName} after validating publication and completion. No pending requests are implemented. One local handoff commit with Git hooks disabled; project checks still run.`} disabled={disabled || !ready || !selectedRange} onClick={() => void start('commit', true, selectedRange)}>Commit current changes & relay {reviewerName}</button>
-            : <button title={`${reviewBlockedReason || (chosen !== 'other' && (last?.error || (!last?.data ? 'Reading the commits to review…' : ''))) || (chosen === 'other' && !recent?.data ? 'Enter a baseline commit and preview it first.' : '')} Relay ${reviewerName}: review every commit after the chosen baseline through the displayed HEAD. The earliest baseline is everything new to ${reviewerName}; the latest is the last commit only. ${selectedPolicy === 'worker_reviewer' ? 'The reviewer changes only the log.' : 'The peer may improve accepted code.'}`} disabled={disabled || !git?.clean || !ready || !selectedRange} onClick={() => void start('review', true, selectedRange)}>Relay {reviewerName}</button>}
+            : <button title={`${reviewBlockedReason || (chosen !== 'other' && (last?.error || (!last?.data ? 'Reading the commits to review…' : ''))) || (chosen === 'other' && !recent?.data ? 'Enter a baseline commit and preview it first.' : '')} Relay ${reviewerName}: review every commit after the chosen baseline through the displayed HEAD. The earliest baseline is everything new to ${reviewerName}; the latest is the last commit only. ${selectedPolicy === 'worker_reviewer' ? 'The reviewer reports without changing project content.' : 'The peer may improve accepted code.'}`} disabled={disabled || !git?.clean || !ready || !selectedRange} onClick={() => void start('review', true, selectedRange)}>Relay {reviewerName}</button>}
         </>}
 
       </div>

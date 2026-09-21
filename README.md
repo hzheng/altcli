@@ -37,7 +37,7 @@ not stop a run. A backend restart pauses owned runs without replaying commands.
 | Command delivery | Bounded text (multi-line delivered as one bracketed paste), exact pane checks, durable delivery receipt and uncertainty |
 | Implementation groups | One or two exact registered instances, frozen into each run; solo, peers, or fixed worker/reviewer |
 | Optional Plan | One or two required planners, concurrency one; ignored drafts, captured shared-plan versions, exact-version approval/override and retained final text |
-| Committed handoffs | One direct commit per completed turn, append-only JSON log, exact review range and role checks, captured initial work, clean review entry and leftovers |
+| Committed handoffs | One published result per completed turn in CoderCrew's handoff journal, at most one direct commit (none for report-only turns), archived patches, exact review range and role checks, captured initial work, clean review entry and leftovers; a tracked log mirror is an explicit project preference |
 | Automatic continuation | Server-only; correlated completion, clear background-work evidence, valid publication, frozen participants and bounded automatic turns (default 20); work hands off only when project content changed |
 | Unknown evidence | Pause and retain execution ownership; never guess from terminal text or recent history |
 | Human control | Explicit branch/readiness confirmation; normal Next turn at manual waits; pause does not interrupt; takeover requires inspection of all participants |
@@ -160,10 +160,19 @@ that they will also be deleted. The branch and history remain. Uncertain creatio
 
 Each assigned agent reads the repository's separate `commit-handoff` skill and
 an immutable assignment file outside the managed checkout. The agent publishes
-exactly one direct commit with its permitted project edits and one appended JSON
-line in `RELAY-LOG.jsonl` (configurable, nonignored). The controller validates that
-committed entry, exact parent/range, clean leftovers, and correlated lifecycle
-evidence before scheduling another turn. Existing lifecycle hooks remain required.
+one JSON result to the external result path named there and, when it changed
+project content, exactly one direct commit with its permitted edits; a report-only
+turn publishes no commit. The controller validates the result, exact parent/range,
+clean leftovers, and correlated lifecycle evidence before recording the turn in
+its handoff journal (with the commit's archived patch) and scheduling another
+turn. Existing lifecycle hooks remain required. The journal is app data: **Export
+history** in Status downloads a worktree's runs, turns and journal as JSON, since
+cloning the repository cannot recover it, and worktree removal archives any
+unarchived handoff commits first. Promote enduring knowledge (rationale, tests,
+usage documentation, limitations) into the repository's documents when finishing
+a task. Tracking the full journal in a nonignored file (default `RELAY-LOG.jsonl`)
+remains an explicit opt-in under **Collaboration settings** for projects that
+need that audit trail; every turn then commits the mirrored line.
 
 Every action names its recipient. **Send [agent]** delivers one standalone
 instruction without an automatic commit, branch change, or relay. **Commit
@@ -175,19 +184,19 @@ new commit to the peer after validating publication and completion. The baseline
 selector stays available; selecting current HEAD reviews only the current changes.
 Readiness and active-run gates still apply. On a clean checkout, **Relay [peer]** reviews every commit
 after the **Review baseline** chosen beside it. The selector lists each candidate
-as a short SHA and subject: the earliest (default) is the recipient's last handoff
-commit on this branch per the tracked relay log, or the task baseline when they
-have none; the latest is HEAD's parent (the last commit only); **Another commit…**
+as a short SHA and subject: the earliest (default) is the newest commit on this
+branch at which the journal records a completed turn of the recipient's, or the
+task baseline when it records none; the latest is HEAD's parent (the last commit only); **Another commit…**
 takes a typed SHA with a commit-list preview. The baseline is excluded and the
 displayed HEAD is included; changing it needs fresh readiness. No range is guessed
-from Git author or date. Log-only ranges cannot be relayed as project proposals.
+from Git author or date. A range with no project content cannot be relayed as a proposal.
 Send and Commit target the selected agent (or fixed worker); Relay targets the
 other member (or fixed reviewer). Local handoff commits use a command-scoped hook
 override; repository hook configuration is unchanged and required checks still run.
 Automatic collaboration governs later turns. Otherwise use Next turn at the
 normal waiting boundary without takeover. Roles and continuation policy can
-change there without resetting the budget. Fixed reviewers edit only the log.
-The collapsible **Collaboration settings** panel holds the tracked relay log,
+change there without resetting the budget. Fixed reviewers publish no project changes.
+The collapsible **Collaboration settings** panel holds the optional tracked relay log,
 automatic collaboration, the turn budget and **Pause on a reviewer objection**; by default an objection goes
 straight back to the author as the next automatic turn. A result marked `needsHuman`
 pauses for scope or permission decisions. Restart and uncertain publication pause

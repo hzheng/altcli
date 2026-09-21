@@ -141,7 +141,7 @@ is implied.
 
 ### Step 1: local commit relay
 
-Specify log path/schema, captured unfinished input for initial work and clean entry for reviews/later turns, exact parent and review ranges, one direct handoff commit, permitted diff, leftovers, and publication. Use the user-prepared workspace and recorded implementation branch with existing tmux agents. Implement plain solo work and two-member peer relay, normal manual waiting, bounded continuation, and unique result consumption. Solo never schedules a duplicate instance as its peer. Write a separate commit-relay skill; do not modify the legacy staging contract.
+Specify the result schema and journal (app data; a tracked log path is an explicit preference since September 20, 2026), captured unfinished input for initial work and clean entry for reviews/later turns, exact parent and review ranges, at most one direct handoff commit, permitted diff, leftovers, and publication. Use the user-prepared workspace and recorded implementation branch with existing tmux agents. Implement plain solo work and two-member peer relay, normal manual waiting, bounded continuation, and unique result consumption. Solo never schedules a duplicate instance as its peer. Write a separate commit-relay skill; do not modify the legacy staging contract.
 
 **Exit:** proposals and report-only reviews behave correctly; wrong parents, hidden intermediate commits, leftovers, contradictory structured results, and duplicates are handled explicitly. No user work is adopted automatically; routine manual progression needs no takeover.
 

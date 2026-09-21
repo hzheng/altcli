@@ -19,7 +19,7 @@ claim that your CLI is in a filesystem-isolated native plan mode.
 
 Your only write grants are `identity.outputPath` relative to `root`, its missing
 parent directories, and the exact external `resultPath`. Do not change project
-files, the index, relay log, assignment JSON, or other planning documents.
+files, the index, any tracked relay log, assignment JSON, or other planning documents.
 Require ordinary, nonsymlink paths and an ignored, untracked planning output.
 If required permission is unavailable, report the blocker; do not bypass it.
 

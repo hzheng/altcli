@@ -130,7 +130,7 @@ edits ignore rules or force-adds planning documents.
 
 Choose **1 · Plan**, enter the shared brief, and choose the implementation roles.
 The same workspace group participates in both phases. The collapsible **Collaboration
-settings** panel holds the tracked relay log, **Automatic collaboration**, the automatic turn budget,
+settings** panel holds the optional tracked relay log, **Automatic collaboration**, the automatic turn budget,
 **Pause on a reviewer objection** (off by default) and **Require my approval before
 implementation**; these are independent controls, and approval is required by default.
 Branch consent can be supplied now or at the checkpoint. Planning never changes
@@ -164,15 +164,16 @@ Integrate accepted results yourself, preferably by squash merge or pull request.
 CoderCrew never switches to an existing branch, stages, commits, stashes or resets
 your work.
 
-The assigned agent uses `commit-handoff` to publish one commit per completed turn,
-including an entry in the tracked, nonignored `RELAY-LOG.jsonl`. **Send** performs
+The assigned agent uses `commit-handoff` to publish one result per completed turn
+to CoderCrew's handoff journal, plus one commit when it changed project content;
+report-only turns commit nothing. **Send** performs
 one standalone instruction without an automatic commit, branch change, or relay.
 **Commit [agent]** snapshots all current staged, unstaged and nonignored untracked
 changes as they stand, then stops. It does not finish pending requests; text is
 optional handoff context. **Relay [peer]** reviews every commit after the selected
-**Review baseline**: the earliest candidate (default) is the recipient's last
-handoff commit on this branch from the relay log, or the task baseline when they
-have none; the latest is the last commit only; **Another commit…** previews a typed
+**Review baseline**: the earliest candidate (default) is the newest commit on this
+branch at which the journal records a completed turn of the recipient's, or the
+task baseline when it records none; the latest is the last commit only; **Another commit…** previews a typed
 baseline before sending. On a dirty checkout, the button becomes **Commit current
 changes & relay [peer]**: the selected worker snapshots the current changes,
 and the controller sends the selected baseline through the new snapshot for review
@@ -182,11 +183,23 @@ required for this action; readiness and active-run gates still apply. Clean
 checkout review requires project changes in the selected range.
 Send and Commit name the selected worker; Relay names the receiving
 peer or designated reviewer.
-The collapsible **Collaboration settings** panel holds the tracked relay log and
-the agreement for subsequent turns: automatic collaboration, the turn budget, and
-whether a reviewer objection pauses for you (by default it is routed straight
-back to the author). Otherwise use **Next turn**.
+The collapsible **Collaboration settings** panel holds the agreement for
+subsequent turns: automatic collaboration, the turn budget, and whether a reviewer
+objection pauses for you (by default it is routed straight back to the author).
+It also offers **Also track the journal in the repository**: an explicit project
+preference that mirrors every journal entry into a tracked, nonignored JSON-lines
+file (default `RELAY-LOG.jsonl`) inside each handoff commit, so report-only turns
+commit too. Otherwise use **Next turn**.
 A completed chain still needs final task-level verification.
+
+The handoff journal (turns, reviewed ranges, findings, reported checks, archived
+handoff patches) is CoderCrew data under the controller data directory, not part
+of the repository. **Export history** in the Status panel downloads the current
+worktree's runs, turns and journal as JSON; keep such exports with your backups,
+because cloning the repository cannot recover them. Removing a task worktree in
+Projects archives any handoff commit the journal has not archived yet before the
+checkout is deleted. Promote enduring knowledge into the repository's own
+documents as part of finishing a task.
 
 ## Pause and recovery
 

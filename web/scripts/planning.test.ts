@@ -49,7 +49,7 @@ function request(more: Partial<PlanStart> = {}): PlanStart {
   const baseline = { branch: git('branch', '--show-current') || null, head: git('rev-parse', 'HEAD') };
   return { requestId: randomUUID(), groupId: selected.id, groupRevision: selected.revision, registrations: registrations(selected), text: 'Plan the requested feature', baseline,
     autoContinue: true, requireApproval: true, turnLimit: 20, implementation: { groupId: selected.id, groupRevision: selected.revision, registrations: registrations(selected), agentId: selected.members[0]!,
-      policy: selected.members.length === 1 ? 'solo' : 'peer', handoff: selected.members.length > 1, logPath: 'RELAY-LOG.jsonl', branch: baseline }, confirmReady: true, ...more };
+      policy: selected.members.length === 1 ? 'solo' : 'peer', handoff: selected.members.length > 1, branch: baseline }, confirmReady: true, ...more };
 }
 function assignment(commandId: string): PlanningAssignment { return JSON.parse(readFileSync(join(plane.workflow.assignmentDirectory, `${commandId}.json`), 'utf8')); }
 function publish(commandId: string, text = '# Plan\nImplement and verify the task.\n', fields: Partial<PlanResult> = {}) {
@@ -320,7 +320,7 @@ test('checkpoint restart preserves captured text, roster, endorsements and owner
 test('v5 upgrade preserves stored runs and groups and marks phase-aware data as incompatible with older schedulers', async () => {
   const input = request(); await plane.submitPlan(input); const saved = run(input.requestId); const groups = store.groups();
   store.db.pragma('user_version = 5'); store.close(); store = new Store(join(directory, 'metadata'));
-  assert.equal(store.db.pragma('user_version', { simple: true }), 8); assert.deepEqual(store.groups(), groups);
+  assert.equal(store.db.pragma('user_version', { simple: true }), 9); assert.deepEqual(store.groups(), groups);
   const record = store.db.prepare('SELECT value FROM workflow_runs WHERE id=?').get(input.requestId) as { value: string };
   assert.deepEqual(JSON.parse(record.value), saved);
 });
@@ -331,10 +331,10 @@ test('manual plan-to-code transition retains initial review intent and protects 
     if (i < 3) await plane.action({ runId: input.requestId, action: 'continue', expectedCommandId: id, confirmReady: true });
   }
   await plane.decidePlan(decision(input.requestId)); const worker = run(input.requestId).currentCommandId;
-  const identity = plane.workflow.execution(worker)!.implementation!.identity;
+  const { identity, resultPath } = plane.workflow.execution(worker)!.implementation!;
   appendFileSync(join(root, 'app.txt'), 'implementation');
-  writeFileSync(join(root, 'RELAY-LOG.jsonl'), `${JSON.stringify({ ...identity, model: 'unknown', decision: null, reason: null, needsHuman: false, summary: 'Code proposal', checks: [] })}\n`);
-  git('add', 'app.txt', 'RELAY-LOG.jsonl'); git('commit', '-m', 'implementation proposal'); await complete(worker);
+  writeFileSync(resultPath, JSON.stringify({ ...identity, model: 'unknown', decision: null, reason: null, needsHuman: false, summary: 'Code proposal', checks: [] }));
+  git('add', 'app.txt'); git('commit', '-m', 'implementation proposal'); await complete(worker);
   assert.equal(sent.length, 6); assert.equal(plane.workflow.execution(run(input.requestId).currentCommandId)!.implementation!.identity.action, 'review_and_improve');
   const frozen = run(input.requestId).planning!.frozen!; appendFileSync(join(root, run(input.requestId).planning!.planPath), 'attempted approval bypass');
   await complete(run(input.requestId).currentCommandId); assert.equal(run(input.requestId).status, 'paused'); assert.match(run(input.requestId).reason, /Protected planning artifact/);

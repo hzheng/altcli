@@ -66,7 +66,7 @@ async function checkpoint(page: Page, request: APIRequestContext, consent: 'upfr
   const registrations = Object.fromEntries(participants.map((p) => [p.id, p.registrationId]));
   const input: PlanStart = { requestId: id, groupId: group.id, groupRevision: 1, registrations, text: 'Plan the feature.', baseline, autoContinue: true, requireApproval: true, turnLimit: 20,
     // main is an integration branch, so recorded consent is always a new task branch; deferred consent is collected at the checkpoint.
-    implementation: { groupId: group.id, groupRevision: 1, registrations, agentId: 'codex', policy: 'peer', handoff: true, logPath: 'RELAY-LOG.jsonl', branch: consent === 'upfront' ? { ...baseline, newBranch: 'task/planned' } : null }, confirmReady: true };
+    implementation: { groupId: group.id, groupRevision: 1, registrations, agentId: 'codex', policy: 'peer', handoff: true, branch: consent === 'upfront' ? { ...baseline, newBranch: 'task/planned' } : null }, confirmReady: true };
   const plan = newPlanning(input, group, participants, participants, '/demo/project');
   plan.current = { text: '# Shared plan\nImplement the scoped feature and test recovery.\n', hash: 'b'.repeat(64), path: plan.planPath, revision: 1, briefRevision: 1, author: 'codex', commandId: id };
   for (const member of group.members) { plan.drafts[member]!.status = 'finalized'; plan.drafts[member]!.document = { text: `Initial ${member} approach`, hash: 'c'.repeat(64) }; }

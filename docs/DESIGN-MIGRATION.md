@@ -29,7 +29,7 @@ Existing setup instructions, current behavior, runtime skill, and historical ADR
 | 5. Plan approval, phase transition, and final-plan retention | [ADR-0016-plan-phase-and-approval.md](adr/ADR-0016-plan-phase-and-approval.md#plan-approval-phase-transition-and-final-plan-retention) |
 | 6. Deprecate the uncommitted relay mode | [ADR-0014-commit-relay-and-deprecation.md](adr/ADR-0014-commit-relay-and-deprecation.md#deprecate-the-uncommitted-relay-mode) |
 | 7. Commit-based handoff contract | [ADR-0014-commit-relay-and-deprecation.md](adr/ADR-0014-commit-relay-and-deprecation.md#commit-based-handoff-contract) |
-| 8. One tracked append-only relay log | [ADR-0014-commit-relay-and-deprecation.md](adr/ADR-0014-commit-relay-and-deprecation.md#one-tracked-append-only-relay-log) |
+| 8. One tracked append-only relay log | [ADR-0014-commit-relay-and-deprecation.md](adr/ADR-0014-commit-relay-and-deprecation.md#one-tracked-append-only-relay-log); superseded as the default by [Journal as app data](adr/ADR-0014-commit-relay-and-deprecation.md#journal-as-app-data-september-20-2026) |
 | 9. What the log records and what Git supplies | [ADR-0014-commit-relay-and-deprecation.md](adr/ADR-0014-commit-relay-and-deprecation.md#what-the-log-records-and-what-git-supplies) |
 | 10. Revision identity and review scope | [ADR-0014-commit-relay-and-deprecation.md](adr/ADR-0014-commit-relay-and-deprecation.md#revision-identity-and-review-scope) |
 | 11. Review decisions and derived change status | [ADR-0014-commit-relay-and-deprecation.md](adr/ADR-0014-commit-relay-and-deprecation.md#review-decisions-and-derived-change-status) |
@@ -114,7 +114,7 @@ The full decision text and original status remain in the [decision ledger](../Ar
 - ADR-0013 now records the requested narrow branch-setup exception. Places asking for a future ADR now link that record while still stating implementation and host acceptance are pending.
 - Current runtime behavior and historical test records remain separate from target design and acceptance requirements. The pinned source comparison does not become an installed-host guarantee.
 - The original Git exclusion alternative is described as a repository-local exclude entry, rather than assuming every worktree has a physical `.git/` directory. This does not authorize the controller to edit exclusions or configuration.
-- Runtime logs/databases remain uncommitted. The future tracked implementation relay log is explicitly distinguished from that existing runtime-data prohibition.
+- Runtime logs/databases remain uncommitted. The handoff journal is such app data (exported for backup); a tracked relay log is an explicit project preference distinguished from that existing runtime-data prohibition.
 - The planning acceptance rows that name `PLAN-OUTCOME` are interpreted under their final-line transport. The source also permits an equivalent correlated helper; its required evidence is not removed and both transports are not made mandatory.
 - Recommendations and open choices remain unresolved, including automatic peer-objection policy, concrete parsers/helper APIs, exact safe lifecycle evidence, provider capability validation, numerical planning budgets, retention, and remote-worker control.
 - Historical `pair` references and vendor event pairing retain their meaning. New product design uses **group**, with explicit migration preserving identities and old runs. Solo is not a duplicated participant; larger planning groups remain a separate rollout gate.

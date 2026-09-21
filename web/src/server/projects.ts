@@ -255,8 +255,9 @@ export class ProjectCatalog {
     }
     return { ...input, requestId: randomUUID(), worktree: tree.identity, branch: tree.branch, head: tree.head, targetRef, targetHead, integratedBy, integratedCommit };
   }
-  /** One confirmed non-force removal. Guard is supplied by ControlPlane and rechecks live panes and execution ownership. */
-  async remove(raw: WorktreeRemoveInput, guard: (worktree: WorktreeIdentity) => Promise<void>): Promise<WorktreeRemoval> {
+  /** One confirmed non-force removal. Guard is supplied by ControlPlane and rechecks live panes and execution ownership;
+   * archive keeps the worktree's published handoff content in the journal before anything is deleted. */
+  async remove(raw: WorktreeRemoveInput, guard: (worktree: WorktreeIdentity) => Promise<void>, archive: (worktree: WorktreeIdentity) => Promise<number>): Promise<WorktreeRemoval> {
     const input = parseRemoval(raw);
     if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'The host has disabled Git setup and terminal input.', 403);
     const existing = this.store.worktreeRemovals().find((op) => op.input.requestId === input.requestId);
@@ -280,11 +281,12 @@ export class ProjectCatalog {
       const final = await this.previewRemoval({ projectId: input.projectId, worktreeId: input.worktreeId });
       if (!isDeepStrictEqual({ ...final, requestId: input.requestId, confirm: true }, input)) throw new AppError('WORKTREE_CHANGED', 'The worktree changed during removal checks.', 409);
       await guard(input.worktree);
+      const archived = await archive(input.worktree);
       attempted = true;
       await git(['--git-dir', this.known.get(input.projectId)!.commonDir, '-c', 'core.hooksPath=/dev/null', 'worktree', 'remove', '--', input.worktree.root]);
       if (!await this.removedExactly(operation)) throw new Error('Removal verification failed');
       this.store.clearRepository(input.worktree.root);
-      return this.removalFinish(operation, 'removed', 'Worktree removed. Its branch, commits and run history are retained.');
+      return this.removalFinish(operation, 'removed', `Worktree removed. Its branch, commits and run history are retained${archived ? `; ${archived} handoff commit${archived === 1 ? '' : 's'} archived in the journal` : ''}.`);
     } catch (error) {
       return this.removalFinish(operation, attempted ? 'uncertain' : 'failed', attempted
         ? 'Removal or its verification is uncertain. Inspect the removal result; nothing will be retried or force-removed.' : messageOf(error));

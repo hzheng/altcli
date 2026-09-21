@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { CommandRecord, TurnEvent } from '../contracts/api.ts';
-import type { BackgroundEvidence, Execution, HookEvent, HookReceipt, ManagedSession, ProcessRecord, RelayRun, StartInput } from '../contracts/workflow.ts';
+import type { BackgroundEvidence, Execution, HistoryExport, HookEvent, HookReceipt, ManagedSession, ProcessRecord, RelayRun, StartInput } from '../contracts/workflow.ts';
 import { AppError } from '../core/errors.ts';
 import { promptText } from '../core/validation.ts';
 import type { Store } from './store.ts';
 import { join, resolve } from 'node:path';
-import type { ImplementationAction, ImplementationRun, PolicyChange, PublicationResult, StandaloneStart } from '../contracts/implementation.ts';
+import type { HandoffArchive, ImplementationAction, ImplementationRun, JournalRecord, PolicyChange, Publication, PublicationResult, StandaloneStart } from '../contracts/implementation.ts';
 import type { FrozenPlan, PlanCapture, PlanDecision, PlanningRun } from '../contracts/planning.ts';
 import { consumePlan, planAgreed } from './planning-state.ts';
 
@@ -39,7 +39,58 @@ export class WorkflowStore {
       CREATE INDEX IF NOT EXISTS workflow_turns_run ON workflow_turns(run_id);
       CREATE TABLE IF NOT EXISTS workflow_events (id TEXT PRIMARY KEY, command_id TEXT NOT NULL, digest TEXT NOT NULL, value TEXT NOT NULL, receipt TEXT);
       DROP TABLE IF EXISTS workflow_bindings; -- a CLI session was once pinned per registration; it is now recorded per execution
+      CREATE TABLE IF NOT EXISTS handoff_journal (command_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, repository TEXT NOT NULL, agent_id TEXT NOT NULL, sha TEXT NOT NULL, value TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS handoff_journal_agent ON handoff_journal(agent_id, sha);
+      CREATE INDEX IF NOT EXISTS handoff_journal_repository ON handoff_journal(repository);
     `);
+    this.backfillJournal();
+  }
+  /** Publications recorded before the journal existed (in the turn ledger only) become journal records once; their commits are archived later, if still present. */
+  private backfillJournal(): void {
+    const rows = this.store.db.prepare(`SELECT t.value AS turn, r.value AS run FROM workflow_turns t JOIN workflow_runs r ON r.id = t.run_id
+      WHERE json_extract(t.value, '$.implementation.published') IS NOT NULL AND t.id NOT IN (SELECT command_id FROM handoff_journal) ORDER BY t.rowid`).all() as { turn: string; run: string }[];
+    if (!rows.length) return;
+    this.store.db.transaction(() => {
+      for (const row of rows) {
+        const turn = JSON.parse(row.turn) as Execution; const run = JSON.parse(row.run) as RelayRun;
+        this.saveJournal(run, turn, turn.implementation!.published!, null, run.updatedAt);
+      }
+    }).immediate();
+  }
+  private saveJournal(run: RelayRun, turn: Execution, publication: Publication, archive: HandoffArchive | null, recordedAt = now()): void {
+    const identity = turn.implementation!.identity;
+    const record: JournalRecord = { runId: run.id, commandId: turn.commandId, repository: run.repository, branch: run.implementation!.branch, agentId: turn.agentId,
+      turn: identity.turn, action: identity.action, parent: identity.parent, sha: publication.sha, projectChanged: publication.projectChanged, entry: publication.entry, archive, recordedAt };
+    this.store.db.prepare('INSERT INTO handoff_journal(command_id,run_id,repository,agent_id,sha,value) VALUES (?,?,?,?,?,?) ON CONFLICT(command_id) DO UPDATE SET value=excluded.value')
+      .run(record.commandId, record.runId, record.repository, record.agentId, record.sha, json(record));
+  }
+  /** The durable handoff journal, oldest first; optionally one worktree root only. */
+  journal(repository?: string): JournalRecord[] {
+    const rows = repository === undefined ? this.store.db.prepare('SELECT value FROM handoff_journal ORDER BY rowid').all()
+      : this.store.db.prepare('SELECT value FROM handoff_journal WHERE repository=? ORDER BY rowid').all(repository);
+    return (rows as { value: string }[]).map((row) => JSON.parse(row.value));
+  }
+  /** Which of `shas` are commits at which `agentId` completed a turn (its handoff commit, or the unchanged tip of a report-only turn). */
+  publishedBy(agentId: string, shas: string[]): Set<string> {
+    if (!shas.length) return new Set();
+    const rows = this.store.db.prepare(`SELECT sha FROM handoff_journal WHERE agent_id=? AND sha IN (${shas.map(() => '?').join(',')})`).all(agentId, ...shas) as { sha: string }[];
+    return new Set(rows.map((row) => row.sha));
+  }
+  /** Journal records on one worktree whose handoff commit has not been archived yet. */
+  unarchived(repository: string): JournalRecord[] {
+    return this.journal(repository).filter((record) => record.sha !== record.parent && record.archive === null);
+  }
+  saveArchive(commandId: string, archive: HandoffArchive): void {
+    const row = this.store.db.prepare('SELECT value FROM handoff_journal WHERE command_id=?').get(commandId) as { value: string } | undefined;
+    if (!row) throw new AppError('NOT_FOUND', 'Journal record not found.', 404);
+    this.store.db.prepare('UPDATE handoff_journal SET value=? WHERE command_id=?').run(json({ ...JSON.parse(row.value), archive }), commandId);
+  }
+  /** Every run and turn (not the bounded console view), plus the journal, for backup outside the repository. */
+  exportHistory(repository?: string): HistoryExport {
+    const scope = repository === undefined ? { where: '', args: [] as string[] } : { where: "WHERE json_extract(value, '$.repository')=?", args: [repository] };
+    const runs = this.store.db.prepare(`SELECT value FROM workflow_runs ${scope.where} ORDER BY rowid`).all(...scope.args) as { value: string }[];
+    const turns = this.store.db.prepare(`SELECT value FROM workflow_turns WHERE run_id IN (SELECT id FROM workflow_runs ${scope.where}) ORDER BY rowid`).all(...scope.args) as { value: string }[];
+    return { schema: 1, exportedAt: now(), repository: repository ?? null, runs: runs.map((row) => JSON.parse(row.value)), turns: turns.map((row) => JSON.parse(row.value)), journal: this.journal(repository) };
   }
   run(id: string): RelayRun | undefined {
     const row = this.store.db.prepare('SELECT value FROM workflow_runs WHERE id=?').get(id) as {value: string} | undefined;
@@ -218,8 +269,8 @@ export class WorkflowStore {
     }
     turn.status = 'finished'; this.saveExecution(turn);
     if (run.implementation) {
-      if (!publication?.publication) { this.stop(run, publication?.error ?? 'No validated committed handoff was found.'); return done(run.reason, event); }
-      this.consumePublication(run, turn, publication.publication);
+      if (!publication?.publication) { this.stop(run, publication?.error ?? 'No validated handoff result was found.'); return done(run.reason, event); }
+      this.consumePublication(run, turn, publication.publication, publication.archive);
       return done(run.reason, event);
     }
     if (run.planning && turn.planning) {
@@ -284,7 +335,7 @@ export class WorkflowStore {
     const wire = promptText(`Use the commit-handoff skill at ${JSON.stringify(skill)}. Read your assignment at ${JSON.stringify(join(this.assignmentDirectory, `${commandId}.json`))} and carry it out. [codercrew-command:${commandId}]`);
     return { commandId, runId: run.id, agentId, input: { requestId: commandId, agentId, kind: 'instruction', text: text || 'Review the assigned committed candidate.', handoff, confirmReady: true },
       wireText: wire, status: 'planned', sessionId: null, sourceTurnId: null, continuation: commandId !== run.id, baselineProcesses: null, baselineWorktree: null,
-      implementation: { identity: { schema: 1, phase: 'implementation', runId: run.id, commandId, turn: impl.turn, policyRevision: impl.revision, action, agentId,
+      implementation: { resultPath: join(this.assignmentDirectory, `${commandId}.result.json`), identity: { schema: 1, phase: 'implementation', runId: run.id, commandId, turn: impl.turn, policyRevision: impl.revision, action, agentId,
         registrationId: participant.registrationId, parent: impl.expectedParentSha, base: impl.acceptedSha,
         reviewBase: action === 'work' ? null : impl.acceptedSha, reviewHead: action === 'work' ? null : impl.candidateSha } } };
   }
@@ -353,9 +404,10 @@ export class WorkflowStore {
       run.implementation.setup = 'applying'; this.saveRun(run); return true;
     }).immediate();
   }
-  private consumePublication(run: RelayRun, turn: Execution, publication: NonNullable<PublicationResult['publication']>): void {
+  private consumePublication(run: RelayRun, turn: Execution, publication: Publication, archive: HandoffArchive | null): void {
     const impl = run.implementation!;
     turn.implementation!.published = publication; this.saveExecution(turn);
+    this.saveJournal(run, turn, publication, archive);
     impl.latestPublication = publication;
     impl.expectedParentSha = publication.sha;
     const { entry, projectChanged } = publication;

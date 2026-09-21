@@ -1,5 +1,5 @@
 import type { AgentId, AgentType, CommandInput, CommandRecord, ConsoleState, EventInput, PaneIdentity, SessionRegistration, TurnEvent } from './api.ts';
-import type { Group, ImplementationRun, ImplementationTurn, StandaloneStart, WorkspaceGit } from './implementation.ts';
+import type { Group, ImplementationRun, ImplementationTurn, JournalRecord, StandaloneStart, WorkspaceGit } from './implementation.ts';
 import type { PlanningRun, PlanTurn } from './planning.ts';
 import type { Project } from './projects.ts';
 
@@ -140,3 +140,13 @@ export interface WorkspaceDiscovery {
 /** Forget every registration and group on one checkout so the user can name and group from scratch. */
 export interface WorkspaceReset { repository: string; confirmReady: true }
 export interface WorkspaceResetResult { sessions: AgentId[]; pairs: string[]; groups: string[] }
+/** Backup of CoderCrew's own history, which cloning a repository cannot recover: runs, their turns (captured plan results and
+ * publications included) and the handoff journal. Optionally limited to one worktree root. */
+export interface HistoryExport {
+  schema: 1;
+  exportedAt: string;
+  repository: string | null;
+  runs: RelayRun[];
+  turns: Execution[];
+  journal: JournalRecord[];
+}

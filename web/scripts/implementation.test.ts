@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, test } from 'node:test';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -11,7 +11,8 @@ import { ControlPlane } from '../src/server/control-plane.ts';
 import { MockAdapter, mockSessions } from '../src/server/adapters/mock.ts';
 import { loadConfig } from '../src/server/config.ts';
 import { resolveWorktree } from '../src/server/worktree.ts';
-import { assertWorktreeInput, branchState, taskBaseline } from '../src/server/commit-handoff.ts';
+import { archiveCommit, assertWorktreeInput, branchState, taskBaseline } from '../src/server/commit-handoff.ts';
+import { WorkflowStore } from '../src/server/workflow-store.ts';
 import { parseGroup, parseImplementation, parseStandalone, parseReviewPreview } from '../src/core/implementation-validation.ts';
 import { parseActivityReset, parseHook } from '../src/core/workflow-validation.ts';
 import { assertIdentity } from '../src/core/policy.ts';
@@ -48,15 +49,20 @@ function request(more: Partial<ImplementationStart> = {}): ImplementationStart {
   const selected = store.groups().find((g) => g.id === (more.groupId ?? group.id))!;
   return { requestId: randomUUID(), groupId: group.id, groupRevision: selected.revision,
     registrations: Object.fromEntries(selected.members.map((id) => [id, (store.sessions().find((s) => s.id === id) as ManagedSession).registrationId])), agentId: 'codex', kind: 'work', text: 'Implement the task', handoff: true,
-    policy: 'peer', autoContinue: true, turnLimit: 20, logPath: 'RELAY-LOG.jsonl', branch: { branch: git('branch', '--show-current'), head: git('rev-parse', 'HEAD') }, confirmReady: true, ...more };
+    policy: 'peer', autoContinue: true, turnLimit: 20, branch: { branch: git('branch', '--show-current'), head: git('rev-parse', 'HEAD') }, confirmReady: true, ...more };
 }
+/** Publish as the skill describes: the result file outside the checkout, a commit only when the checkout has content to commit,
+ * and the same line mirrored into the tracked log when the run keeps one. Returns HEAD afterwards. */
 function publish(id: string, changes = false, fields: Partial<HandoffEntry> = {}): string {
-  const turn = plane.workflow.execution(id)!;
+  const turn = plane.workflow.execution(id)!; const { logPath } = plane.workflow.run(turn.runId)!.implementation!;
   const entry: HandoffEntry = { ...turn.implementation!.identity, model: 'unknown', decision: turn.implementation!.identity.action === 'work' ? null : 'accept', reason: null, needsHuman: false, summary: 'Fixture result', checks: ['fixture check passed'], ...fields };
+  writeFileSync(turn.implementation!.resultPath, JSON.stringify(entry));
   if (changes) appendFileSync(join(root, 'app.txt'), `${id}\n`);
-  appendFileSync(join(root, 'RELAY-LOG.jsonl'), `${JSON.stringify(entry)}\n`);
-  git('add', '--', 'app.txt', 'RELAY-LOG.jsonl'); git('commit', '-m', `handoff ${id}`); return git('rev-parse', 'HEAD');
+  if (logPath) appendFileSync(join(root, logPath), `${JSON.stringify(entry)}\n`);
+  git('add', '-A'); if (git('diff', '--cached', '--name-only')) git('commit', '-m', `handoff ${id}`);
+  return git('rev-parse', 'HEAD');
 }
+const journal = () => plane.workflow.journal(root);
 function event(id: string, more: Partial<HookEvent> = {}): HookEvent {
   const turn = plane.workflow.execution(id)!; const participant = plane.workflow.run(turn.runId)!.participants.find((p) => p.id === turn.agentId)!;
   return { commandId: id, event: 'turn_complete', source: participant.agentType, sourceTurnId: `turn-${id}`, sessionId: `session-${participant.id}`,
@@ -147,15 +153,38 @@ test('solo work publishes a candidate without self-acceptance or a self-relay', 
   assert.equal(sent.length, 1);
   await assert.rejects(plane.submitImplementation(request({ groupId: solo.id, policy: 'solo' })), /Solo implementation/);
 });
-test('log-only work, including a disputed correction, ends without review and preserves findings', async () => {
+test('report-only work, including a disputed correction, ends without review, preserves findings and publishes no commit', async () => {
   const input = request({ policy: 'worker_reviewer', workerId: 'codex' }); await plane.submitImplementation(input);
-  publish(input.requestId, true); await complete(input.requestId);
+  const proposal = publish(input.requestId, true); await complete(input.requestId);
   const reviewer = run(input.requestId).currentCommandId;
-  publish(reviewer, false, { decision: 'object', reason: 'Need a human scope decision.' }); await complete(reviewer);
-  const correction = run(input.requestId).currentCommandId; publish(correction); await complete(correction);
+  assert.equal(publish(reviewer, false, { decision: 'object', reason: 'Need a human scope decision.' }), proposal); await complete(reviewer);
+  const correction = run(input.requestId).currentCommandId; assert.equal(publish(correction), proposal); await complete(correction);
   assert.equal(run(input.requestId).status, 'completed'); assert.equal(sent.length, 3);
   assert.equal(run(input.requestId).implementation!.acceptedSha, input.branch.head);
   assert.equal(run(input.requestId).implementation!.findings, 'Need a human scope decision.');
+  // The journal is the history: the proposal commit keeps its patch; the two report-only turns record the unchanged tip and nothing to archive.
+  assert.equal(git('rev-parse', 'HEAD'), proposal); assert.equal(git('rev-list', '--count', `${input.branch.head}..HEAD`), '1');
+  assert.deepEqual(journal().map((record) => [record.commandId, record.agentId, record.action, record.sha, record.projectChanged, record.archive?.complete ?? null]),
+    [[input.requestId, 'codex', 'work', proposal, true, true], [reviewer, 'claude', 'review', proposal, false, null], [correction, 'codex', 'work', proposal, false, null]]);
+  assert.match(journal()[0]!.archive!.patch, new RegExp(`^commit ${proposal}\\nparent ${input.branch.head}\\n[^]*\\+${input.requestId}\\n`));
+  assert.equal(journal()[1]!.entry.reason, 'Need a human scope decision.');
+  assert.equal(git('ls-files', 'RELAY-LOG.jsonl'), ''); // nothing was appended inside the checkout
+});
+test('a tracked relay log is an explicit project preference: every turn commits a mirrored line that must equal the published result', async () => {
+  const input = request({ logPath: 'RELAY-LOG.jsonl', autoContinue: false }); await plane.submitImplementation(input);
+  const assignment = JSON.parse(readFileSync(join(plane.workflow.assignmentDirectory, `${input.requestId}.json`), 'utf8'));
+  assert.equal(assignment.logPath, 'RELAY-LOG.jsonl'); assert.equal(assignment.resultPath, plane.workflow.execution(input.requestId)!.implementation!.resultPath);
+  assert.ok(!assignment.resultPath.startsWith(`${root}/`));
+  const proposal = publish(input.requestId, true); await complete(input.requestId);
+  const review = run(input.requestId).currentCommandId; const accepted = publish(review); await complete(review);
+  assert.notEqual(accepted, proposal); assert.equal(git('rev-list', '--count', `${input.branch.head}..HEAD`), '2');
+  assert.deepEqual(git('diff-tree', '--no-commit-id', '--name-only', '-r', accepted).split('\n'), ['RELAY-LOG.jsonl']);
+  assert.deepEqual(readFileSync(join(root, 'RELAY-LOG.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line)), journal().map((record) => record.entry));
+  assert.equal(run(input.requestId).status, 'completed'); assert.equal(run(input.requestId).implementation!.acceptedSha, proposal);
+  assert.deepEqual(journal().map((record) => [record.sha, record.archive?.complete]), [[proposal, true], [accepted, true]]);
+  // Without the preference, the same default request sends no log path at all.
+  const plain = JSON.parse(readFileSync(join(plane.workflow.assignmentDirectory, `${input.requestId}.json`), 'utf8'));
+  assert.equal(parseImplementation({ ...request(), logPath: undefined }).logPath, undefined); assert.equal(plain.logPath, 'RELAY-LOG.jsonl');
 });
 test('a peer objection routes back to the author automatically unless the agreement pauses it', async () => {
   const input = request(); await plane.submitImplementation(input); publish(input.requestId, true); await complete(input.requestId);
@@ -311,20 +340,26 @@ test('ignored or symlinked log paths are rejected without modifying ignore rules
   symlinkSync(join(directory, 'outside'), join(root, 'log-link')); git('add', 'log-link'); git('commit', '-m', 'symlink fixture');
   await assert.rejects(plane.submitImplementation(request({ logPath: 'log-link' })), /symlinks/);
 });
-for (const fault of ['missing', 'wrong identity', 'intermediate commit', 'leftovers', 'old log rewrite', 'contradictory outcome', 'reviewer edits', 'objection edits'] as const) {
+for (const fault of ['missing', 'wrong identity', 'intermediate commit', 'empty commit', 'leftovers', 'old log rewrite', 'log mismatch', 'log-only without mirror', 'contradictory outcome', 'reviewer edits', 'objection edits', 'invalid result'] as const) {
   test(`invalid publication pauses with ownership: ${fault}`, async () => {
-    const input = request({ policy: 'worker_reviewer', workerId: 'codex' }); await plane.submitImplementation(input);
+    const tracked = ['old log rewrite', 'log mismatch', 'log-only without mirror'].includes(fault);
+    const input = request({ policy: 'worker_reviewer', workerId: 'codex', ...(tracked ? { logPath: 'RELAY-LOG.jsonl' } : {}) }); await plane.submitImplementation(input);
     let command = input.requestId;
-    if (['reviewer edits', 'objection edits', 'old log rewrite', 'contradictory outcome'].includes(fault)) {
+    if (['reviewer edits', 'objection edits', 'old log rewrite', 'log mismatch', 'log-only without mirror', 'contradictory outcome'].includes(fault)) {
       publish(command, true); await complete(command); command = run(input.requestId).currentCommandId;
     }
     if (fault === 'intermediate commit') { appendFileSync(join(root, 'app.txt'), 'checkpoint'); git('add', 'app.txt'); git('commit', '-m', 'unexpected checkpoint'); }
     if (fault === 'old log rewrite') writeFileSync(join(root, 'RELAY-LOG.jsonl'), 'rewritten\n');
-    if (fault !== 'missing') publish(command, ['reviewer edits', 'objection edits'].includes(fault), fault === 'wrong identity' ? { commandId: randomUUID() } : fault === 'objection edits' ? { decision: 'object', reason: 'Not acceptable.' } : {});
+    if (fault !== 'missing') publish(command, ['intermediate commit', 'reviewer edits', 'objection edits'].includes(fault), fault === 'wrong identity' ? { commandId: randomUUID() } : fault === 'objection edits' ? { decision: 'object', reason: 'Not acceptable.' } : {});
+    if (fault === 'empty commit') git('commit', '--allow-empty', '-m', 'nothing');
     if (fault === 'leftovers') writeFileSync(join(root, 'untracked.txt'), 'leftover');
+    if (fault === 'log mismatch') { const lines = readFileSync(join(root, 'RELAY-LOG.jsonl'), 'utf8').split('\n'); lines[1] = lines[1]!.replace('Fixture result', 'Edited mirror'); writeFileSync(join(root, 'RELAY-LOG.jsonl'), lines.join('\n')); git('commit', '--amend', '-a', '--no-edit'); }
+    if (fault === 'log-only without mirror') { git('reset', '--hard', 'HEAD~1'); } // the review result exists, but the tracked log never received its line
+    if (fault === 'invalid result') writeFileSync(plane.workflow.execution(command)!.implementation!.resultPath, JSON.stringify({ ...JSON.parse(readFileSync(plane.workflow.execution(command)!.implementation!.resultPath, 'utf8')), summary: '' }));
     await complete(command, fault === 'contradictory outcome' ? { outcome: 'strong_objection' } : {});
     assert.equal(run(input.requestId).status, 'paused'); assert.equal(plane.workflow.owner(`${root}/.git/index`), input.requestId);
     assert.equal(sent.length, command === input.requestId ? 1 : 2);
+    assert.equal(journal().length, command === input.requestId ? 0 : 1); // nothing invalid enters the journal
   });
 }
 test('unknown background work and restart never automatically transfer ownership', async () => {
@@ -357,7 +392,7 @@ test('v4 migration preserves historical pair IDs and creates versioned groups', 
   store.db.prepare('DELETE FROM groups').run(); store.db.pragma('user_version = 4'); store.close();
   store = new Store(join(directory, 'metadata'));
   assert.equal(store.groups()[0]!.id, group.id); assert.equal(store.groups()[0]!.legacyPairId, group.id);
-  assert.deepEqual(store.groups()[0]!.members, ['codex', 'claude']); assert.equal(store.db.pragma('user_version', { simple: true }), 8);
+  assert.deepEqual(store.groups()[0]!.members, ['codex', 'claude']); assert.equal(store.db.pragma('user_version', { simple: true }), 9);
 });
 test('committed work without handoff and log-only initial work never create a peer review', async () => {
   const first = request({ handoff: false }); await plane.submitImplementation(first); publish(first.requestId, true); await complete(first.requestId);
@@ -823,9 +858,9 @@ test('captured unfinished work cannot authorize a changed branch, tip, or a dirt
   await assert.rejects(assertWorktreeInput(root, input.branch.branch, 'f'.repeat(40), fingerprint), /branch or commit changed/);
   await assert.rejects(assertWorktreeInput(root, input.branch.branch, input.branch.head), /must be clean/);
 });
-test('Send & relay rejects an already modified relay log without committing or discarding it', async () => {
+test('Send & relay rejects an already modified tracked relay log without committing or discarding it', async () => {
   writeFileSync(join(root, 'RELAY-LOG.jsonl'), 'unfinished journal');
-  await assert.rejects(plane.submitImplementation(request()), /relay log has uncommitted changes/);
+  await assert.rejects(plane.submitImplementation(request({ logPath: 'RELAY-LOG.jsonl' })), /relay log has uncommitted changes/);
   assert.equal(readFileSync(join(root, 'RELAY-LOG.jsonl'), 'utf8'), 'unfinished journal'); assert.equal(sent.length, 0);
 });
 
@@ -996,85 +1031,159 @@ test('solo Commit snapshots unfinished input and completes without a successor',
   assert.equal(run(input.requestId).implementation!.candidateSha, candidate);
   assert.equal(git('show', `${candidate}:app.txt`), 'baseline\nunfinished');
 });
-// A handoff entry as an agent would commit it; only the fields the journal validator and provenance need to be realistic.
+// A handoff entry as an agent would mirror it into a tracked log; only the fields the tracked-log validator needs to be realistic.
 function journalEntry(agentId: string, parent: string): string {
   return `${JSON.stringify({ schema: 1, phase: 'implementation', runId: randomUUID(), commandId: randomUUID(), turn: 1, policyRevision: 1, action: 'work', agentId, registrationId: randomUUID(), parent, base: parent, reviewBase: null, reviewHead: null, model: 'fixture', decision: null, reason: null, needsHuman: false, summary: 'Fixture handoff', checks: [] })}\n`;
 }
-test('preview derives the range from the recipient\'s last handoff commit, else the task baseline, without changing Git, ownership or delivery', async () => {
+test('preview derives the range from the recipient\'s last journal entry, else the task baseline, without changing Git, ownership or delivery', async () => {
   const base = git('rev-parse', 'HEAD');
   appendFileSync(join(root, 'app.txt'), 'first\n'); git('add', 'app.txt'); git('commit', '-m', 'First change'); const first = git('rev-parse', 'HEAD');
   appendFileSync(join(root, 'app.txt'), 'second\n'); git('add', 'app.txt'); git('commit', '-m', 'Second change'); const second = git('rev-parse', 'HEAD');
-  const input = parseReviewPreview({ groupId: group.id, head: second, logPath: 'RELAY-LOG.jsonl', recipient: 'claude', taskBase: base });
+  const input = parseReviewPreview({ groupId: group.id, head: second, recipient: 'claude', taskBase: base });
+  assert.equal(input.logPath, undefined);
   const before = store.db.prepare('SELECT total_changes() AS count').get(); const index = readFileSync(join(root, '.git', 'index'));
   // Claude has published nothing here: everything since the task baseline is new to it.
   assert.deepEqual(await plane.previewReview(input), { base, baseSubject: 'baseline', head: second, since: 'task', commits: [{ sha: second, subject: 'Second change' }, { sha: first, subject: 'First change' }], candidates: [{ sha: base, subject: 'baseline' }, { sha: first, subject: 'First change' }] });
-  assert.deepEqual(await plane.previewReview({ groupId: group.id, head: second, logPath: 'RELAY-LOG.jsonl', base: first }), { base: first, baseSubject: 'First change', head: second, since: 'explicit', commits: [{ sha: second, subject: 'Second change' }], candidates: [{ sha: first, subject: 'First change' }] });
+  assert.deepEqual(await plane.previewReview({ groupId: group.id, head: second, base: first }), { base: first, baseSubject: 'First change', head: second, since: 'explicit', commits: [{ sha: second, subject: 'Second change' }], candidates: [{ sha: first, subject: 'First change' }] });
   assert.deepEqual(store.db.prepare('SELECT total_changes() AS count').get(), before);
   assert.deepEqual(readFileSync(join(root, '.git', 'index')), index); assert.equal(git('status', '--porcelain'), '');
   assert.equal(git('rev-parse', 'HEAD'), second); assert.deepEqual(sent, []); assert.deepEqual(plane.workflow.runs(), []);
-  // Once Claude publishes (a log-only review counts), only the commits after its handoff are new to it; Codex's are not.
-  appendFileSync(join(root, 'RELAY-LOG.jsonl'), journalEntry('codex', first)); git('add', 'RELAY-LOG.jsonl'); git('commit', '-m', 'Codex handoff');
-  appendFileSync(join(root, 'RELAY-LOG.jsonl'), journalEntry('claude', git('rev-parse', 'HEAD'))); git('add', 'RELAY-LOG.jsonl'); git('commit', '-m', 'Claude review'); const reviewed = git('rev-parse', 'HEAD');
-  appendFileSync(join(root, 'app.txt'), 'third\n'); appendFileSync(join(root, 'RELAY-LOG.jsonl'), journalEntry('codex', reviewed)); git('add', 'app.txt', 'RELAY-LOG.jsonl'); git('commit', '-m', 'Third change'); const head = git('rev-parse', 'HEAD');
-  assert.deepEqual(await plane.previewReview({ ...input, head }), { base: reviewed, baseSubject: 'Claude review', head, since: 'recipient', commits: [{ sha: head, subject: 'Third change' }], candidates: [{ sha: reviewed, subject: 'Claude review' }] });
-  await assert.rejects(plane.previewReview({ ...input, head, recipient: 'codex' }), /no project proposal/); // Codex published HEAD: nothing new to it.
-  const review = request({ kind: 'review', agentId: 'claude', reviewBase: reviewed });
+  // A real relay: Codex proposes a commit, Claude accepts it report-only. Both turns are journal entries at the same tip.
+  const relay = request({ autoContinue: false, branch: { branch: 'task/fixture', head: second, taskBase: base } }); await plane.submitImplementation(relay);
+  const proposal = publish(relay.requestId, true); await complete(relay.requestId);
+  const reviewed = run(relay.requestId).currentCommandId; assert.equal(publish(reviewed), proposal); await complete(reviewed);
+  assert.equal(run(relay.requestId).status, 'completed');
+  // Both published at HEAD: nothing is new to either of them until another commit lands.
+  await assert.rejects(plane.previewReview({ ...input, head: proposal }), /no project proposal/);
+  await assert.rejects(plane.previewReview({ ...input, head: proposal, recipient: 'codex' }), /no project proposal/);
+  appendFileSync(join(root, 'app.txt'), 'third\n'); git('add', 'app.txt'); git('commit', '-m', 'Third change'); const head = git('rev-parse', 'HEAD');
+  assert.deepEqual(await plane.previewReview({ ...input, head }), { base: proposal, baseSubject: `handoff ${relay.requestId}`, head, since: 'recipient', commits: [{ sha: head, subject: 'Third change' }], candidates: [{ sha: proposal, subject: `handoff ${relay.requestId}` }] });
+  const review = request({ kind: 'review', agentId: 'claude', reviewBase: proposal, branch: { branch: 'task/fixture', head, taskBase: base } });
   await plane.submitImplementation(review);
-  assert.equal(plane.workflow.execution(review.requestId)!.implementation!.identity.reviewBase, reviewed);
+  assert.equal(plane.workflow.execution(review.requestId)!.implementation!.identity.reviewBase, proposal);
   assert.equal(plane.workflow.execution(review.requestId)!.implementation!.identity.reviewHead, head);
 });
-test('preview refuses stale HEAD, log-only proposals, invalid groups or recipients, foreign baselines and unbounded ranges', async () => {
-  const base = git('rev-parse', 'HEAD'); const input = { groupId: group.id, head: base, logPath: 'RELAY-LOG.jsonl', recipient: 'claude', taskBase: base };
+test('preview refuses stale HEAD, empty proposals, invalid groups or recipients, foreign baselines and unbounded ranges', async () => {
+  const base = git('rev-parse', 'HEAD'); const input = { groupId: group.id, head: base, recipient: 'claude', taskBase: base };
   await assert.rejects(plane.previewReview(input), /no project proposal/);
-  appendFileSync(join(root, 'app.txt'), 'proposal\n'); git('add', 'app.txt'); git('commit', '-m', 'Proposal'); const proposal = git('rev-parse', 'HEAD');
-  writeFileSync(join(root, 'RELAY-LOG.jsonl'), journalEntry('claude', proposal)); git('add', 'RELAY-LOG.jsonl'); git('commit', '-m', 'Report only'); const head = git('rev-parse', 'HEAD');
-  await assert.rejects(plane.previewReview({ ...input, head: proposal }), /HEAD changed/);
-  await assert.rejects(plane.previewReview({ ...input, head }), /no project proposal/); // Claude's own log-only commit is HEAD.
-  assert.equal((await plane.previewReview({ ...input, head, recipient: 'codex' })).commits.length, 2);
-  await assert.rejects(plane.previewReview({ ...input, head, groupId: 'missing' }), /Recheck/);
-  await assert.rejects(plane.previewReview({ ...input, head, recipient: 'other' }), /recipient/);
-  await assert.rejects(plane.previewReview({ ...input, head, taskBase: 'f'.repeat(40) }), /Git inspection failed|ancestor/);
+  appendFileSync(join(root, 'app.txt'), 'proposal\n'); git('add', 'app.txt'); git('commit', '-m', 'Proposal'); const head = git('rev-parse', 'HEAD');
+  await assert.rejects(plane.previewReview({ ...input, head: base }), /HEAD changed/);
+  assert.equal((await plane.previewReview({ ...input, head })).commits.length, 1);
+  // With a tracked mirror, a log-only range is not a proposal; without one, every file is project content.
+  writeFileSync(join(root, 'RELAY-LOG.jsonl'), journalEntry('claude', head)); git('add', 'RELAY-LOG.jsonl'); git('commit', '-m', 'Report only'); const report = git('rev-parse', 'HEAD');
+  await assert.rejects(plane.previewReview({ ...input, head: report, base: head, logPath: 'RELAY-LOG.jsonl' }), /no project proposal/);
+  assert.equal((await plane.previewReview({ ...input, head: report, base: head })).commits.length, 1);
+  await assert.rejects(plane.previewReview({ ...input, head: report, groupId: 'missing' }), /Recheck/);
+  await assert.rejects(plane.previewReview({ ...input, head: report, recipient: 'other' }), /recipient/);
+  await assert.rejects(plane.previewReview({ ...input, head: report, taskBase: 'f'.repeat(40) }), /Git inspection failed|ancestor/);
   assert.throws(() => parseReviewPreview({ ...input, repository: root }), /Unknown/);
-  assert.throws(() => parseReviewPreview({ groupId: group.id, head, logPath: 'RELAY-LOG.jsonl', base: 'HEAD~2' }), /full Git object ID/);
-  for (const fields of [{}, { recipient: 'claude' }, { taskBase: base }, { base, recipient: 'claude' }, { base, taskBase: base }]) assert.throws(() => parseReviewPreview({ groupId: group.id, head, logPath: 'RELAY-LOG.jsonl', ...fields }), /explicit baseline, or the recipient/);
+  assert.throws(() => parseReviewPreview({ groupId: group.id, head, base: 'HEAD~2' }), /full Git object ID/);
+  assert.throws(() => parseReviewPreview({ groupId: group.id, head, base, logPath: '../outside' }), /relative file path/);
+  for (const fields of [{}, { recipient: 'claude' }, { taskBase: base }, { base, recipient: 'claude' }, { base, taskBase: base }]) assert.throws(() => parseReviewPreview({ groupId: group.id, head, ...fields }), /explicit baseline, or the recipient/);
   // Build bounded objects without moving the checkout during preview.
   for (let i = 0; i < 99; i++) git('commit', '--allow-empty', '-m', `Checkpoint ${i}`);
   await assert.rejects(plane.previewReview({ ...input, head: git('rev-parse', 'HEAD'), recipient: 'codex' }), /exceeds 100 commits/);
   assert.deepEqual(sent, []); assert.deepEqual(plane.workflow.runs(), []);
 });
 
-test('provenance requires a real handoff commit: merged, imported or rewritten journal entries never advance the baseline', async () => {
+test('provenance comes from the journal on this first-parent chain: side branches, tracked-file entries and other agents never advance the baseline', async () => {
   const base = git('rev-parse', 'HEAD');
-  git('switch', '-c', 'task/side'); writeFileSync(join(root, 'RELAY-LOG.jsonl'), journalEntry('claude', base)); git('add', 'RELAY-LOG.jsonl'); git('commit', '-m', 'Side handoff');
-  const side = git('rev-parse', 'HEAD');
+  // Claude completes a turn on a side branch: a journal entry whose commit this checkout will later only merge.
+  git('switch', '-c', 'task/side');
+  const aside = request({ agentId: 'claude', autoContinue: false, handoff: false, branch: { branch: 'task/side', head: base, taskBase: base } }); await plane.submitImplementation(aside);
+  const side = publish(aside.requestId, true); await complete(aside.requestId); assert.equal(run(aside.requestId).status, 'completed');
   git('switch', 'task/fixture'); writeFileSync(join(root, 'unreviewed-main.txt'), 'main\n'); git('add', 'unreviewed-main.txt'); git('commit', '-m', 'Main change'); const main = git('rev-parse', 'HEAD');
-  await assert.rejects(plane.previewReview({ groupId: group.id, head: main, base: side, logPath: 'RELAY-LOG.jsonl' }), /must be an ancestor/);
-  const input = { groupId: group.id, head: main, logPath: 'RELAY-LOG.jsonl', recipient: 'claude', taskBase: base };
+  await assert.rejects(plane.previewReview({ groupId: group.id, head: main, base: side }), /must be an ancestor/);
+  const input = { groupId: group.id, head: main, recipient: 'claude', taskBase: base };
   assert.deepEqual(await plane.previewReview(input), { base, baseSubject: 'baseline', head: main, since: 'task', commits: [{ sha: main, subject: 'Main change' }], candidates: [{ sha: base, subject: 'baseline' }] });
-  // Claude's side handoff never saw the main-branch change; merging its entry in is not a receipt for this checkout.
+  // Claude's side handoff never saw the main-branch change; merging it in is not a receipt for this checkout.
   git('merge', '--no-ff', 'task/side', '-m', 'Merge side'); const merge = git('rev-parse', 'HEAD');
   appendFileSync(join(root, 'app.txt'), 'after\n'); git('add', 'app.txt'); git('commit', '-m', 'After merge'); const head = git('rev-parse', 'HEAD');
   const preview = await plane.previewReview({ ...input, head });
   assert.equal(preview.since, 'task'); assert.equal(preview.base, base);
-  assert.deepEqual(preview.commits.map((c) => c.subject), ['After merge', 'Merge side', 'Main change', 'Side handoff']);
-  assert.deepEqual(git('diff', '--name-only', `${preview.base}..${head}`).split('\n').sort(), ['RELAY-LOG.jsonl', 'app.txt', 'unreviewed-main.txt']);
+  assert.deepEqual(preview.commits.map((c) => c.subject), ['After merge', 'Merge side', 'Main change', `handoff ${aside.requestId}`]);
   // Later baselines follow HEAD's first parents only, so "the last commit only" is HEAD against its first parent, never a side tip.
   assert.deepEqual(preview.candidates, [{ sha: base, subject: 'baseline' }, { sha: main, subject: 'Main change' }, { sha: merge, subject: 'Merge side' }]);
-  assert.deepEqual((await plane.previewReview({ groupId: group.id, head, base: merge, logPath: 'RELAY-LOG.jsonl' })).commits, [{ sha: head, subject: 'After merge' }]);
-  // A rewritten journal, or one commit appending two entries, is not a handoff by anyone.
-  writeFileSync(join(root, 'RELAY-LOG.jsonl'), journalEntry('claude', head)); git('add', 'RELAY-LOG.jsonl'); git('commit', '-m', 'Rewritten journal'); const rewritten = git('rev-parse', 'HEAD');
-  assert.equal((await plane.previewReview({ ...input, head: rewritten })).since, 'task');
-  appendFileSync(join(root, 'RELAY-LOG.jsonl'), journalEntry('claude', rewritten) + journalEntry('claude', rewritten)); git('add', 'RELAY-LOG.jsonl'); git('commit', '-m', 'Imported entries'); const imported = git('rev-parse', 'HEAD');
+  assert.deepEqual((await plane.previewReview({ groupId: group.id, head, base: merge })).commits, [{ sha: head, subject: 'After merge' }]);
+  // Entries committed to a tracked file by hand, or a journal entry by another agent at this tip, are not Claude's receipt either.
+  writeFileSync(join(root, 'RELAY-LOG.jsonl'), journalEntry('claude', head)); git('add', 'RELAY-LOG.jsonl'); git('commit', '-m', 'Imported entry'); const imported = git('rev-parse', 'HEAD');
   assert.equal((await plane.previewReview({ ...input, head: imported })).since, 'task');
-  // An entry naming the wrong parent is not this commit's handoff either; the exact shape readPublication accepts is.
-  appendFileSync(join(root, 'RELAY-LOG.jsonl'), journalEntry('claude', base)); git('add', 'RELAY-LOG.jsonl'); git('commit', '-m', 'Wrong parent'); const wrong = git('rev-parse', 'HEAD');
-  assert.equal((await plane.previewReview({ ...input, head: wrong })).since, 'task');
-  appendFileSync(join(root, 'RELAY-LOG.jsonl'), journalEntry('claude', wrong)); git('add', 'RELAY-LOG.jsonl'); git('commit', '-m', 'Claude handoff'); const handoff = git('rev-parse', 'HEAD');
+  const codexTurn = request({ autoContinue: false, handoff: false, branch: { branch: 'task/fixture', head: imported, taskBase: base } }); await plane.submitImplementation(codexTurn);
+  const codexHead = publish(codexTurn.requestId, true); await complete(codexTurn.requestId);
+  assert.equal((await plane.previewReview({ ...input, head: codexHead })).since, 'task');
+  await assert.rejects(plane.previewReview({ ...input, head: codexHead, recipient: 'codex' }), /no project proposal/); // Codex's own entry is at HEAD
+  // Once Claude completes a turn on this chain, only what follows is new to it.
+  const review = request({ kind: 'review', agentId: 'claude', autoContinue: false, reviewBase: base, branch: { branch: 'task/fixture', head: codexHead, taskBase: base } }); await plane.submitImplementation(review);
+  assert.equal(publish(review.requestId), codexHead); await complete(review.requestId);
   appendFileSync(join(root, 'app.txt'), 'later\n'); git('add', 'app.txt'); git('commit', '-m', 'Later'); const later = git('rev-parse', 'HEAD');
-  assert.deepEqual(await plane.previewReview({ ...input, head: later }), { base: handoff, baseSubject: 'Claude handoff', head: later, since: 'recipient', commits: [{ sha: later, subject: 'Later' }], candidates: [{ sha: handoff, subject: 'Claude handoff' }] });
-  assert.equal(sent.length, 0);
+  assert.deepEqual(await plane.previewReview({ ...input, head: later }), { base: codexHead, baseSubject: `handoff ${codexTurn.requestId}`, head: later, since: 'recipient', commits: [{ sha: later, subject: 'Later' }], candidates: [{ sha: codexHead, subject: `handoff ${codexTurn.requestId}` }] });
+  assert.equal(sent.length, 3);
 });
-
+test('history export returns every run, turn and journal record for a worktree, or all of them, without touching Git', async () => {
+  const input = request({ autoContinue: false }); await plane.submitImplementation(input);
+  const proposal = publish(input.requestId, true); await complete(input.requestId);
+  const review = run(input.requestId).currentCommandId; publish(review); await complete(review);
+  const status = git('status', '--porcelain'); const index = readFileSync(join(root, '.git', 'index'));
+  const history = plane.exportHistory(root);
+  assert.equal(history.schema, 1); assert.equal(history.repository, root); assert.match(history.exportedAt, /T/);
+  assert.deepEqual(history.runs.map((r) => r.id), [input.requestId]);
+  assert.deepEqual(history.turns.map((t) => t.commandId), [input.requestId, review]);
+  assert.deepEqual(history.journal.map((j) => [j.commandId, j.sha, j.archive?.complete ?? null]), [[input.requestId, proposal, true], [review, proposal, null]]);
+  assert.equal(history.turns[0]!.implementation!.published!.entry.summary, 'Fixture result');
+  assert.deepEqual(plane.exportHistory().runs.map((r) => r.id), [input.requestId]); assert.equal(plane.exportHistory().repository, null);
+  const elsewhere = plane.exportHistory('/elsewhere'); assert.deepEqual([elsewhere.repository, elsewhere.runs, elsewhere.turns, elsewhere.journal], ['/elsewhere', [], [], []]);
+  assert.equal(git('status', '--porcelain'), status); assert.deepEqual(readFileSync(join(root, '.git', 'index')), index);
+});
+test('older publications are backfilled into the journal at startup and archived before a worktree is cleaned up', async () => {
+  const input = request({ autoContinue: false }); await plane.submitImplementation(input);
+  const proposal = publish(input.requestId, true); await complete(input.requestId);
+  const review = run(input.requestId).currentCommandId; publish(review); await complete(review);
+  assert.equal(journal().length, 2);
+  // A database written before the journal existed holds publications only in the turn ledger.
+  store.db.exec('DELETE FROM handoff_journal');
+  const reopened = new WorkflowStore(store, plane.workflow.assignmentDirectory);
+  assert.deepEqual(reopened.journal(root).map((record) => [record.commandId, record.sha, record.archive]), [[input.requestId, proposal, null], [review, proposal, null]]);
+  assert.deepEqual(reopened.unarchived(root).map((record) => record.commandId), [input.requestId]);
+  assert.equal(await plane.archiveJournal(root), 1);
+  assert.match(reopened.journal(root)[0]!.archive!.patch, new RegExp(`^commit ${proposal}\\n`)); assert.equal(reopened.journal(root)[0]!.archive!.complete, true);
+  assert.equal(await plane.archiveJournal(root), 0); // idempotent
+  // A commit that no longer exists leaves nothing to keep; removal is not blocked by evidence that is already gone.
+  const orphan = JSON.parse((store.db.prepare('SELECT value FROM handoff_journal WHERE command_id=?').get(input.requestId) as { value: string }).value);
+  store.db.prepare('INSERT INTO handoff_journal(command_id,run_id,repository,agent_id,sha,value) VALUES (?,?,?,?,?,?)').run('orphan', orphan.runId, root, 'codex', 'f'.repeat(40), JSON.stringify({ ...orphan, commandId: 'orphan', sha: 'f'.repeat(40), archive: null }));
+  assert.equal(await plane.archiveJournal(root), 0);
+  assert.equal(reopened.journal(root).find((record) => record.commandId === 'orphan')!.archive, null);
+  // An oversized commit keeps its diffstat rather than nothing.
+  writeFileSync(join(root, 'large.txt'), 'x'.repeat(1200 * 1024)); git('add', 'large.txt'); git('commit', '-m', 'Large'); const large = git('rev-parse', 'HEAD');
+  const archive = await archiveCommit(root, large);
+  assert.equal(archive.complete, false); assert.match(archive.patch, /large\.txt \| /); assert.ok(archive.patch.length < 4096);
+});
+test('a complete archive reproduces binary content exactly; unreproducible or oversized content is marked incomplete', async () => {
+  const parent = git('rev-parse', 'HEAD'); const bytes = Buffer.from([0x89, 0x50, 0x00, 0xff, 0x0a]);
+  writeFileSync(join(root, 'icon.bin'), bytes); git('add', 'icon.bin'); git('commit', '-m', 'Binary asset'); const binary = git('rev-parse', 'HEAD');
+  const archive = await archiveCommit(root, binary);
+  assert.equal(archive.complete, true); assert.match(archive.patch, /GIT binary patch/); assert.doesNotMatch(archive.patch, /Binary files .* differ/);
+  // The archived patch applies in a separate checkout at the parent and yields the exact bytes, which a "differ" notice never could.
+  const clone = join(directory, 'clone'); execFileSync('git', ['clone', '-q', root, clone], { stdio: 'pipe' }); execFileSync('git', ['-C', clone, 'checkout', '-q', parent], { stdio: 'pipe' });
+  const patch = join(directory, 'archive.patch'); writeFileSync(patch, archive.patch);
+  execFileSync('git', ['-C', clone, 'apply', '--check', patch], { stdio: 'pipe' }); execFileSync('git', ['-C', clone, 'apply', patch], { stdio: 'pipe' });
+  assert.deepEqual(readFileSync(join(clone, 'icon.bin')), bytes);
+  // A text file holding invalid UTF-8 cannot be stored faithfully as JSON text: mark the archive incomplete rather than alter the bytes.
+  writeFileSync(join(root, 'latin1.txt'), Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a])); git('add', 'latin1.txt'); git('commit', '-m', 'Latin-1 text');
+  const latin = await archiveCommit(root, git('rev-parse', 'HEAD'));
+  assert.equal(latin.complete, false); assert.match(latin.patch, /latin1\.txt \| /); assert.doesNotMatch(latin.patch, /caf/);
+  // Oversized binary content keeps its diffstat within the bound.
+  writeFileSync(join(root, 'blob.bin'), randomBytes(1100 * 1024)); git('add', 'blob.bin'); git('commit', '-m', 'Large binary');
+  const oversized = await archiveCommit(root, git('rev-parse', 'HEAD'));
+  assert.equal(oversized.complete, false); assert.match(oversized.patch, /blob\.bin \| Bin 0 -> 1126400 bytes/); assert.ok(oversized.patch.length < 4096);
+  // Publication records the binary handoff with a complete archive too.
+  git('reset', '-q', '--hard', parent);
+  const input = request({ autoContinue: false, handoff: false }); await plane.submitImplementation(input);
+  writeFileSync(join(root, 'asset.bin'), bytes); const turn = plane.workflow.execution(input.requestId)!;
+  writeFileSync(turn.implementation!.resultPath, JSON.stringify({ ...turn.implementation!.identity, model: 'unknown', decision: null, reason: null, needsHuman: false, summary: 'Binary proposal', checks: [] }));
+  git('add', '-A'); git('commit', '-m', 'binary handoff'); await complete(input.requestId);
+  assert.equal(run(input.requestId).status, 'completed');
+  assert.equal(journal()[0]!.archive!.complete, true); assert.match(journal()[0]!.archive!.patch, /GIT binary patch/);
+});
 test('moved agents remain blocked by the old run; takeover enables automatic discovery and explicit binding cleans old membership', async () => {
   const first = request(); await plane.submitImplementation(first);
   const original = store.sessions().find((s) => s.id === 'claude') as ManagedSession;

@@ -117,6 +117,29 @@ test('readiness is explicit and a delivered command retains execution ownership'
   await expect(page.getByRole('region', { name: 'Active run' })).toHaveCount(0);
   await expect(ready).not.toBeChecked();
 });
+test('history export downloads this worktree\'s runs and journal as JSON through the authorized API', async ({ page, request }) => {
+  await unlock(page);
+  await page.getByLabel('Ready to send', { exact: true }).check(); await page.getByRole('button', { name: 'Relay Codex ↗', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Active run' })).toBeVisible();
+  const run = (await state(request)).runs.find((r) => r.status === 'running')!;
+  await complete(request, run.currentCommandId, 'accept_without_improvement');
+  await expect(page.getByRole('region', { name: 'Active run' })).toHaveCount(0);
+  const requests: string[] = [];
+  page.on('request', (sent) => { if (sent.url().includes('/api/v1/history/export')) requests.push(sent.url()); });
+  const download = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export history', exact: true }).click();
+  const file = await download; expect(file.suggestedFilename()).toMatch(/^codercrew-history-.*\.json$/);
+  const exported = JSON.parse(await (await import('node:fs/promises')).readFile(await file.path(), 'utf8'));
+  expect(exported).toMatchObject({ schema: 1, repository: run.repository });
+  expect(exported.runs.map((r: { id: string }) => r.id)).toContain(run.id);
+  expect(exported.turns.map((t: { commandId: string }) => t.commandId)).toContain(run.currentCommandId);
+  expect(Array.isArray(exported.journal)).toBe(true);
+  expect(requests).toHaveLength(1); expect(decodeURIComponent(requests[0]!)).toContain(`repository=${run.repository}`);
+  await expect(page.getByRole('status')).toContainText(/Exported \d+ runs? and \d+ journal entr(y|ies)/);
+  // The endpoint is bearer-gated like every other route.
+  expect((await request.get('/api/v1/history/export')).status()).toBe(401);
+  expect((await request.get('/api/v1/history/export?repository=relative', { headers })).status()).toBe(400);
+});
 test('workspace cards automatically group two eligible agents; selection is read-only and needs no group form', async ({ page, request }) => {
   await unlock(page); await openTab(page, 'Projects');
   await expect(page.getByRole('list', { name: 'Available projects' }).getByRole('listitem')).toHaveCount(2);

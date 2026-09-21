@@ -34,7 +34,7 @@ One controller, common identity/decision concepts, history, budgets, and duplica
 | Action | Responsibility | Project-edit permission |
 | --- | --- | --- |
 | `work` | Implement an instruction or revise a proposal. | Yes, within task scope. |
-| `review` | Evaluate the exact incoming proposal and report a decision. | No; only the relay-log entry may change. |
+| `review` | Evaluate the exact incoming proposal and report a decision. | No; the result is published to the journal (and to the tracked log only when the project keeps one). |
 | `review_and_improve` | Evaluate incoming work; after accepting it, optionally improve it. | Yes after acceptance; none on objection. |
 
 The policy answers, deterministically and without a third model: who acts next, which action they perform, whether they may change project content, and whether the result continues, finishes, waits for a click, or needs a person. Roles belong to a run or phase, not to an agent; Git authorship is not role assignment.
@@ -45,8 +45,8 @@ Planning adds "draft independently", "synthesize the shared plan", and "review/i
 | --- | --- | --- |
 | Review target | Captured plan revision/hash and brief version | Explicit code baseline/candidate SHAs |
 | Editable output | Assigned ignored draft or unified plan | In-scope project files according to role |
-| Decision record | Structured controller-held result | Appended entry in the tracked log |
-| Version history | Controller snapshots/records | Git commits plus log |
+| Decision record | Structured controller-held result | Published result recorded in the handoff journal, optionally mirrored into a tracked log |
+| Version history | Controller snapshots/records | Git commits plus the journal's archived patches |
 | Initial concurrency | N assigned drafts, at most `maxConcurrentDrafts` active (parallel execution added in the last planning step) | One writer/publisher per task workspace |
 | Later progression | Sequential peer refinement and approval checkpoint | Peer relay or fixed worker/reviewer policy |
 

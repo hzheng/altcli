@@ -74,8 +74,11 @@ SQLite version 7 prevents old runtimes from ignoring phase-aware runs or uncerta
 history, lifecycle inbox, run/turn records and prompt text are plaintext outside
 managed worktrees. Workflow/audit retention is not yet pruned. Raw screen snapshots
 are not stored. Hook correlation context is private local data. No runtime log or database
-should be committed. The future tracked implementation relay log is a distinct
-protocol artifact defined by ADR-0014, not permission to commit runtime data. The original review skill remains responsible for staging;
+should be committed. The handoff journal is such app data: it stays under the
+controller data directory, and its export (`/api/v1/history/export`) carries
+prompts, findings and archived patches in plaintext, so store exports with the
+same care. The optional tracked relay log is a distinct protocol artifact defined
+by ADR-0014, not permission to commit runtime data. The original review skill remains responsible for staging;
 the staging controller issues no Git mutations and does not independently prove its outcome.
 
 ---

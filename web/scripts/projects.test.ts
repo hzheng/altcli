@@ -167,6 +167,7 @@ test('worktree creation requires exact confirmation fields, not arbitrary Git ar
   assert.throws(() => parseWorktreePreview({ projectId: request.projectId, sourceWorktreeId: request.sourceWorktreeId, branch: 'task;touch file' }));
 });
 
+const noArchive = async () => 0; // ControlPlane supplies the journal archive step; these tests exercise the Git removal alone
 async function removalFixture(squash = true) {
   const request = await input('feature/finished'); await catalog.create(request);
   writeFileSync(join(request.path, 'app.txt'), 'one\n'); git(request.path, 'add', '.'); git(request.path, 'commit', '-m', 'first');
@@ -181,13 +182,15 @@ for (const squash of [false, true]) test(`confirmed removal verifies ${squash ? 
   const { request, target } = await removalFixture(squash);
   const preview = await catalog.previewRemoval(target); assert.equal(preview.integratedBy, squash ? 'squash' : 'ancestry');
   const branchHead = git(request.path, 'rev-parse', 'HEAD'); const input = { ...preview, confirm: true as const };
-  let checks = 0;
-  const removed = await catalog.remove(input, async () => { checks++; });
-  assert.equal(removed.status, 'removed', removed.message); assert.equal(checks, 2);
+  let checks = 0; let archived = 0;
+  // The journal archive runs after every guard and before anything is deleted, while the commits are still reachable here.
+  const removed = await catalog.remove(input, async () => { checks++; }, async (worktree) => { assert.equal(checks, 2); assert.equal(worktree.root, request.path); assert.ok(existsSync(request.path)); archived++; return 2; });
+  assert.equal(removed.status, 'removed', removed.message); assert.equal(checks, 2); assert.equal(archived, 1);
+  assert.match(removed.message, /2 handoff commits archived in the journal/);
   assert.equal(existsSync(request.path), false); assert.equal(git(root, 'rev-parse', request.branch), branchHead);
-  assert.deepEqual(await catalog.remove(input, async () => { throw new Error('must not retry'); }), removed);
+  assert.deepEqual(await catalog.remove(input, async () => { throw new Error('must not retry'); }, noArchive), removed);
   assert.equal((await catalog.discover([], []))[0]!.worktrees.length, 1);
-  await assert.rejects(catalog.remove({ ...input, head: 'b'.repeat(40) }, async () => {}), /different request/);
+  await assert.rejects(catalog.remove({ ...input, head: 'b'.repeat(40) }, async () => {}, noArchive), /different request/);
 });
 test('squash detection tolerates unrelated later main commits, but rejects later task changes', async () => {
   const { request, target } = await removalFixture();
@@ -201,7 +204,7 @@ for (const dirty of ['tracked', 'untracked']) test(`removal blocks ${dirty} loca
   const preview = await catalog.previewRemoval(target);
   writeFileSync(join(request.path, dirty === 'tracked' ? 'app.txt' : 'local.txt'), 'keep me\n');
   await assert.rejects(catalog.previewRemoval(target), /modified or untracked/);
-  const result = await catalog.remove({ ...preview, confirm: true }, async () => {});
+  const result = await catalog.remove({ ...preview, confirm: true }, async () => {}, noArchive);
   assert.equal(result.status, 'failed'); assert.match(result.message, /modified or untracked/);
   assert.equal(existsSync(request.path), true);
 });
@@ -214,7 +217,7 @@ test('confirmed non-force removal permits ignored environment files and generate
   writeFileSync(join(request.path, 'node_modules', 'fixture.txt'), 'generated\n');
   const preview = await catalog.previewRemoval(target);
   assert.equal(readFileSync(join(request.path, '.env.local'), 'utf8'), 'FIXTURE=true\n');
-  const result = await catalog.remove({ ...preview, confirm: true }, async () => {});
+  const result = await catalog.remove({ ...preview, confirm: true }, async () => {}, noArchive);
   assert.equal(result.status, 'removed', result.message);
   assert.equal(existsSync(request.path), false);
   assert.equal(git(root, 'rev-parse', request.branch), preview.head);
@@ -222,12 +225,12 @@ test('confirmed non-force removal permits ignored environment files and generate
 test('stale removal consent, busy guard, read-only host and main checkout never remove files', async () => {
   const { request, target } = await removalFixture(); const preview = await catalog.previewRemoval(target);
   git(root, 'commit', '--allow-empty', '-m', 'advanced main');
-  const stale = await catalog.remove({ ...preview, confirm: true }, async () => {});
+  const stale = await catalog.remove({ ...preview, confirm: true }, async () => {}, noArchive);
   assert.equal(stale.status, 'failed'); assert.match(stale.message, /changed/);
   const fresh = { ...await catalog.previewRemoval(target), confirm: true as const };
-  const busy = await catalog.remove(fresh, async () => { throw new Error('run owns checkout'); });
+  const busy = await catalog.remove(fresh, async () => { throw new Error('run owns checkout'); }, noArchive);
   assert.equal(busy.status, 'failed'); assert.match(busy.message, /run owns/);
-  await assert.rejects(new ProjectCatalog(store, { ...config, inputEnabled: false }).remove(fresh, async () => {}), /disabled/);
+  await assert.rejects(new ProjectCatalog(store, { ...config, inputEnabled: false }).remove(fresh, async () => {}, noArchive), /disabled/);
   const project = (await catalog.discover([], []))[0]!;
   await assert.rejects(catalog.previewRemoval({ projectId: project.id, worktreeId: project.worktrees.find((w) => w.main)!.id }), /Only an accessible linked/);
   assert.equal(existsSync(request.path), true);
@@ -236,8 +239,8 @@ test('duplicate concurrent removal dispatches once; project setup holds block cr
   const { target } = await removalFixture(); const preview = { ...await catalog.previewRemoval(target), confirm: true as const };
   let release!: () => void; let entered!: () => void;
   const ready = new Promise<void>((resolve) => { entered = resolve; }); const wait = new Promise<void>((resolve) => { release = resolve; });
-  const removing = catalog.remove(preview, async () => { entered(); await wait; }); await ready;
-  assert.equal((await catalog.remove(preview, async () => { throw new Error('duplicate'); })).status, 'applying');
+  const removing = catalog.remove(preview, async () => { entered(); await wait; }, noArchive); await ready;
+  assert.equal((await catalog.remove(preview, async () => { throw new Error('duplicate'); }, noArchive)).status, 'applying');
   assert.throws(() => catalog.assertWorktreeReady(preview.worktree.root), /removal is applying/);
   await assert.rejects(catalog.create(await input('another')), /owns this project/);
   release(); assert.equal((await removing).status, 'removed');
@@ -245,7 +248,7 @@ test('duplicate concurrent removal dispatches once; project setup holds block cr
 test('uncertain removal survives restart and reconciliation never repeats Git mutation', async () => {
   const { request, target } = await removalFixture(); const preview = { ...await catalog.previewRemoval(target), confirm: true as const };
   catalog['removedExactly'] = async () => false;
-  assert.equal((await catalog.remove(preview, async () => {})).status, 'uncertain');
+  assert.equal((await catalog.remove(preview, async () => {}, noArchive)).status, 'uncertain');
   store.close(); store = new Store(config.dataDir); catalog = new ProjectCatalog(store, config);
   assert.throws(() => catalog.assertWorktreeReady(request.path), /uncertain/);
   assert.equal((await catalog.reconcileRemoval(preview.requestId)).status, 'removed');

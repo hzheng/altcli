@@ -178,9 +178,34 @@ test('committed implementation is default and explicit branch consent carries fi
   await page.getByRole('button', { name: 'Commit Claude', exact: true }).click();
   await expect.poll(() => starts.length).toBe(1);
   expect(starts[0]).toMatchObject({ groupId: group.id, agentId: 'claude', policy: 'worker_reviewer', workerId: 'claude', kind: 'commit', handoff: false, autoContinue: false,
-    branch: { branch: 'main', head: 'a'.repeat(40), newBranch: 'task/browser-fixture' }, logPath: 'RELAY-LOG.jsonl', confirmReady: true });
+    branch: { branch: 'main', head: 'a'.repeat(40), newBranch: 'task/browser-fixture' }, confirmReady: true });
+  expect(starts[0]).not.toHaveProperty('logPath'); // the journal stays in CoderCrew unless the project opts into a tracked mirror
   await expect(page.getByLabel('Ready for implementation')).not.toBeChecked();
   await page.getByRole('button', { name: 'Lock', exact: true }).click(); expect(starts).toHaveLength(1);
+});
+test('a tracked relay log is an explicit opt-in whose path is sent only when enabled', async ({ page, request }) => {
+  await snapshotAvailable(page);
+  const group = await post(request, 'groups', { name: 'Tracked log', members: ['codex','claude'] });
+  const starts: ImplementationStart[] = []; const previews: { logPath?: string }[] = [];
+  await page.route('**/api/v1/implementation', async (route) => { starts.push(route.request().postDataJSON()); await route.fulfill({ json: { status: 'delivered', error: null } }); });
+  await page.route('**/api/v1/implementation/preview', async (route) => {
+    const input = route.request().postDataJSON(); previews.push(input);
+    await route.fulfill({ json: { base: input.base ?? 'b'.repeat(40), baseSubject: 'Baseline change', head: input.head, since: 'task', commits: [], candidates: [{ sha: input.base ?? 'b'.repeat(40), subject: 'Baseline change' }, { sha: input.head, subject: 'Current' }] } });
+  });
+  await openGroup(page, group);
+  await page.getByText('Collaboration settings', { exact: true }).click();
+  await expect(page.getByLabel('Tracked relay log')).toHaveCount(0);
+  await expect(page.getByText(/journal stays in CoderCrew/)).toBeVisible();
+  await page.getByLabel('Implementation branch').selectOption('new'); await page.getByLabel('New branch name').fill('task/tracked');
+  await expect.poll(() => previews.length).toBeGreaterThan(0); expect(previews.at(-1)).not.toHaveProperty('logPath');
+  await page.getByLabel('Also track the journal in the repository').check();
+  const path = page.getByLabel('Tracked relay log'); await expect(path).toHaveValue('RELAY-LOG.jsonl');
+  await path.fill('docs/relay-log.jsonl');
+  await expect.poll(() => previews.at(-1)?.logPath).toBe('docs/relay-log.jsonl');
+  await page.getByLabel('Ready for implementation').check();
+  await page.getByRole('button', { name: 'Commit Codex', exact: true }).click();
+  await expect.poll(() => starts.length).toBe(1);
+  expect(starts[0]).toMatchObject({ kind: 'commit', logPath: 'docs/relay-log.jsonl' });
 });
 test('solo implementation has one participant and no automatic review controls', async ({ page, request }) => {
   await post(request, 'sessions', { paneId: '%3', label: 'Solo worker' });
@@ -426,7 +451,7 @@ test('plain Send ignores branch setup and automation; all four actions explain t
   await page.getByLabel('Collaboration', { exact: true }).selectOption('worker_reviewer');
   await page.getByLabel('Worker', { exact: true }).selectOption('claude');
   await expect(page.getByRole('button', { name: 'Commit Claude', exact: true })).toHaveAttribute('title', /Commit Claude:/);
-  await expect(page.getByRole('button', { name: 'Relay Codex', exact: true })).toHaveAttribute('title', /reviewer changes only the log/);
+  await expect(page.getByRole('button', { name: 'Relay Codex', exact: true })).toHaveAttribute('title', /reviewer reports without changing project content/);
   await page.getByLabel('Implementation branch').selectOption('new');
   await page.getByLabel('New branch name').fill('task/not-created-by-send');
   await page.getByLabel('Instruction or review context').fill('Explain this code.');

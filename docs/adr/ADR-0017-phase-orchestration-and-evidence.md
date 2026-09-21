@@ -60,7 +60,7 @@ Task / project
 
 #### Ownership and dispatch
 
-Retain one task-level reservation for the shared local workspace. This excludes competing implementation/uncommitted runs while planning is active. Within that reservation, draft assignments receive disjoint file grants. They do not gain permission to write the shared plan, index, tracked log, or project content.
+Retain one task-level reservation for the shared local workspace. This excludes competing implementation/uncommitted runs while planning is active. Within that reservation, draft assignments receive disjoint file grants. They do not gain permission to write the shared plan, index, a tracked log, or project content.
 
 Register N assignments from the start, even when `maxConcurrentDrafts=1`. When concurrency is enabled, the active set is bounded and identified; never overwrite one `currentCommandId` repeatedly and reinterpret other valid completions as late. During synthesis, refinement, and implementation, retain a single current editing turn.
 

@@ -6,15 +6,61 @@ Status: Accepted design direction; implementation and host acceptance pending.
 Items explicitly labeled working specification, recommendation, or open choice retain that status.
 This documentation-only change does not enable the described features.
 
+### Journal as app data (September 20, 2026)
+
+This update supersedes the tracked-log requirement in [One tracked append-only
+relay log](#one-tracked-append-only-relay-log) below, which is retained as design
+provenance. What is preserved is separated by where it belongs:
+
+| Where | What |
+| --- | --- |
+| Repository | Accepted design rationale, relevant tests, usage documentation, and important limitations, promoted into the appropriate documents as part of finishing a task. |
+| CoderCrew history (app data) | The detailed journal: agent turns, reviewed commit ranges, findings, intermediate plans, reported validation, and each handoff commit's archived patch. |
+| PR or final task summary | A concise explanation of the result and significant decisions, drawn from that history. |
+
+Consequently a commit-mode turn no longer has to commit `RELAY-LOG.jsonl`. The
+result channel is an external result file named in the assignment
+(`resultPath`, beside the assignment JSON under the controller data directory, as
+Plan already does): the agent writes one `HandoffEntry` object there before
+finishing. The controller validates it against the immutable identity, reads Git
+read-only, and records the validated publication in the `handoff_journal` table
+as a `JournalRecord`, together with the commit's patch (`HandoffArchive`: the
+`git apply`-able patch including binary data when it fits 1 MiB and is storable
+as UTF-8 text, otherwise its diffstat marked incomplete). Publications recorded before this table existed
+are backfilled from the turn ledger at startup and archived when their commit is
+still present. Report-only turns (acceptance without improvements, objection,
+question, blocked report) publish **no commit**: HEAD stays at the assigned parent
+and the journal records it; empty commits are refused. A turn that changed project
+content still publishes exactly one direct, single-parent commit on the assigned
+parent. The Review-baseline default now comes from the journal: the newest
+first-parent commit at which the recipient completed a turn, or the task baseline.
+
+Tracking the full journal in the repository remains an **explicit project
+preference**: with `logPath` set on Start, the agent also appends the identical
+entry as one JSON line to that tracked, nonignored file inside the handoff commit,
+so every turn (report-only included) commits, and the controller requires the
+mirrored line to equal the published result. Ignore rules are still never edited.
+
+Because cloning the repository cannot recover app history, `GET
+/api/v1/history/export` (and **Export history** in Status) returns every run, turn
+and journal record, optionally for one worktree root. Before a confirmed worktree
+removal, the controller archives any journal entry on that worktree whose commit
+has not been archived yet; commit hashes alone do not preserve intermediate
+revisions after squash integration and branch deletion. The removal message
+reports how many commits were archived. The database version is 9; older servers
+refuse it rather than misread a run without a tracked log.
+
 ### Local implementation update (September 19, 2026)
 
 The new implementation path now realizes the one-direct-commit contract below;
-installed-agent acceptance remains pending. It defaults to `RELAY-LOG.jsonl`,
-with a validated user-selectable relative path, so the existing `.codercrew/`
-ignore rule needs no mutation. The proposed Markdown metadata representation
-below is retained as design provenance; the implemented encoding is UTF-8 JSON
-Lines, schema 1, exactly one appended line per completed turn. Existing bytes
-must remain unchanged, and log files/symlinked parents/ignored paths are checked.
+installed-agent acceptance remains pending. It originally defaulted to
+`RELAY-LOG.jsonl`, with a validated user-selectable relative path, so the existing
+`.codercrew/` ignore rule needs no mutation; since the September 20 update above,
+that tracked mirror is opt-in. The proposed Markdown metadata representation
+below is retained as design provenance; the implemented encoding is UTF-8 JSON,
+schema 1, exactly one result per completed turn (one appended line per turn when
+mirrored). Existing mirrored bytes must remain unchanged, and log files/symlinked
+parents/ignored paths are checked.
 
 The exact schema is `HandoffEntry` in `web/src/contracts/implementation.ts` and
 `shared/openapi.yaml`: the controller supplies the immutable `identity` object
@@ -23,7 +69,7 @@ The agent copies those fields and adds model, decision, reason, needsHuman,
 summary, and checks. Work uses null decision/reason. `needsHuman` is the explicit
 escalation encoding: it pauses automation and retains ownership; an acceptance
 cannot also require a blocking human decision. Project changes are derived from
-Git, excluding only the reserved log. Any supplied legacy outcome must agree.
+Git, excluding only the reserved tracked log when one is kept. Any supplied legacy outcome must agree.
 
 New staging starts are disabled unless the host opts in with
 `CODERCREW_ENABLE_LEGACY_RELAY=true`. Existing staging runs, hooks, and the legacy
@@ -45,8 +91,9 @@ This per-command override prevents repository hooks, including commit-msg, from
 blocking or rewriting intermediate handoffs. It changes neither hook files nor
 persistent Git configuration. Required validation still runs before publication;
 normal hooks apply to final integration. An explicit conflicting repository rule
-must be reported, not silently overridden. Both initial work and reviews, including
-log-only reviews, still publish exactly one direct handoff commit.
+must be reported, not silently overridden. Initial work and reviews that change project
+content publish exactly one direct handoff commit; report-only reviews publish
+none unless the project mirrors the journal into a tracked log.
 
 Relationship: ADR-0010 and ADR-0011 only for the new handoff path. The existing review-handoff skill and pinned compatibility behavior remain intact.
 
@@ -92,7 +139,7 @@ Planning is not this fallback: ignored plan-file refinement is a phase-specific 
 
 ### Commit-based handoff contract
 
-**In commit-based Implementation, one completed turn publishes one handoff commit** containing one appended relay-log entry and any project changes permitted by the assigned action and decision. A report-only turn is meaningful work: acceptance without edits and objection with findings produce commits even when application files are unchanged, and no empty commit is needed because the log changes.
+**In commit-based Implementation, one completed turn publishes one result and at most one handoff commit** containing the project changes permitted by the assigned action and decision. A report-only turn is meaningful work: acceptance without edits and objection with findings are recorded in the journal without a commit (September 20, 2026 update; originally the appended log entry made every turn a commit, which remains the behavior under the tracked-log preference).
 
 A task contains many turns and commits on one recorded implementation branch, normally a dedicated task branch, and at most one PR for the whole task. A user may explicitly continue on main/the configured primary branch instead; the same lineage and ownership checks still apply, and no automatic merge is implied. "Every completed turn" does not mean every tool action or partial attempt; an interrupted execution must not fabricate an acceptance to produce a commit. **First-release lineage rule:** each handoff is exactly one direct, single-parent commit on the expected task-branch tip. Do not create unreported intermediate commits on that active branch during the turn. Arbitrary new commits are not publications. The supplied text permitted local checkpoints while also requiring the handoff commit's parent to equal the turn's original parent; these cannot both hold when checkpoints advance the same branch. Multi-commit turns need a separate starting-base-to-final-head contract and remain deferred. No controller reset or history rewriting is introduced to hide extra commits.
 
@@ -113,9 +160,9 @@ The controller still never stages or commits on the agent's behalf.
 Commit sets `handoff: false` and `autoContinue: false`, including solo mode. Each
 button names its recipient: selected agent/fixed worker for Send and Commit,
 other member/fixed reviewer for Relay. Relay offers a baseline selector whose
-earliest, default candidate is derived from the tracked relay log committed at
-HEAD: the newest first-parent commit after the task baseline whose entry the
-recipient published, or the task baseline itself when the recipient has none on
+earliest, default candidate is derived from the handoff journal (originally from
+the tracked relay log committed at HEAD): the newest first-parent commit after
+the task baseline at which the recipient completed a turn, or the task baseline itself when the recipient has none on
 this branch. Every later commit through HEAD's parent is a further candidate, the
 last one being the last commit only. Git author and date are never consulted. A
 typed baseline requires a read-only commit-list preview before it can be sent.
@@ -145,7 +192,7 @@ Readiness authorizes the full current snapshot. The controller captures its
 worktree fingerprint, persists it with the run, and rechecks it at setup and
 immediately before dispatch. The agent verifies the captured input. A changed
 snapshot blocks delivery and retains ownership; it never silently refreshes the
-input. An already modified relay log must be reconciled or another log path
+input. An already modified tracked relay log, when the project keeps one, must be reconciled or another log path
 selected. Secret screening and unresolved conflicts can block publication rather
 than force a commit. Clean checkouts use either explicit Relay action.
 
@@ -156,6 +203,8 @@ direct commit and no uncommitted leftovers; completion does not certify task suc
 
 
 ### One tracked append-only relay log
+
+*Superseded as the default by [Journal as app data](#journal-as-app-data-september-20-2026); retained as provenance and as the contract of the opt-in tracked mirror.*
 
 Use one ordinary Git-tracked file on the task branch, working path `.codercrew/relay-log.md`. The path is a proposal; the single-file, append-only behavior is the agreed direction. It is the collaboration journal, separate from the product's release `CHANGELOG.md`, and Plan turns do not append to it. This repository currently ignores `.codercrew/` wholesale, so that proposed path first requires the human setup decision recorded in [OPEN-DECISIONS](../OPEN-DECISIONS.md#open-choices-and-intentionally-deferred-work); the controller does not rewrite ignore rules during a run.
 
@@ -169,7 +218,7 @@ For remote operation, the commit is pushed to the selected remote branch.
 The next worker fetches the commit, including the log.
 ```
 
-The log must not be ignored or kept only in CoderCrew's database: a tracked log travels with the code, and with a PR it is a file in the branch, not a PR comment. Runtime metadata (databases, tokens, sockets, diagnostics) stays outside managed worktrees regardless.
+The original argument was that the log must not be kept only in CoderCrew's database, because a tracked log travels with the code. The September 20, 2026 update reverses that default: the journal is app history with export and pre-cleanup archiving, enduring knowledge is promoted into repository documents, and a tracked mirror is an explicit preference for projects that need the audit trail in Git. Runtime metadata (databases, tokens, sockets, diagnostics) stays outside managed worktrees regardless.
 
 Each completed commit-mode turn appends exactly one structured entry; earlier entries are never rewritten, and corrections are new entries. Sequential turn ownership is what makes one growing file appropriate: competing publications are a coordination conflict, not an invitation to merge fragments. `.codercrew/plans/` is excluded narrowly while the log stays tracked; a one-time implementation-start record may carry the approved plan when that transfer format is selected.
 

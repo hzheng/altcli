@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
-import { constants } from 'node:fs';
-import { lstat, open, readdir, realpath } from 'node:fs/promises';
+import { lstat, readdir, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import type { CapturedPlanResult, PlanDocument, PlanningRun, PlanResult, PlanTurn } from '../contracts/planning.ts';
 import { AppError } from '../core/errors.ts';
+import { readBounded as readBoundedFile } from './bounded-read.ts';
 import { assertClean, gitRead } from './commit-handoff.ts';
 
 const fail = (text: string): never => { throw new AppError('PLAN_ARTIFACT', text, 409); };
@@ -21,20 +21,7 @@ async function safePath(root: string, relative: string): Promise<void> {
     if (info.isSymbolicLink() || (i < parts.length - 1 ? !info.isDirectory() : !info.isFile() || info.nlink !== 1) || await realpath(path) !== path) fail(`Unsafe planning path: ${relative}. Use ordinary unlinked files inside this checkout.`);
   }
 }
-async function readBounded(path: string, maximum: number): Promise<string | null> {
-  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK).catch((e: NodeJS.ErrnoException) => { if (e.code !== 'ENOENT') throw e; return null; });
-  if (!file) return null;
-  try {
-    const info = await file.stat();
-    if (!info.isFile() || info.nlink !== 1 || info.size > maximum) fail('Planning output must be a bounded ordinary file.');
-    const bytes = Buffer.alloc(maximum + 1); let length = 0;
-    while (length < bytes.length) { const { bytesRead } = await file.read(bytes, length, bytes.length - length, length); if (!bytesRead) break; length += bytesRead; }
-    if (length > maximum) fail('Planning output exceeded its size limit.');
-    // Preserve a UTF-8 BOM as content: hashes identify exact bytes, not normalized text.
-    try { return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes.subarray(0, length)); }
-    catch { return fail('Planning output must be valid UTF-8.'); }
-  } finally { await file.close(); }
-}
+const readBounded = (path: string, maximum: number) => readBoundedFile(path, maximum, fail, 'Planning output');
 export async function validatePlanPaths(plan: PlanningRun): Promise<void> {
   const root = plan.worktree.root;
   // A broad .codercrew exclusion could hide a tracked relay log; require a narrow planning exclusion.

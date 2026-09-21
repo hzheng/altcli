@@ -1,8 +1,10 @@
 import { execFile, spawn } from 'node:child_process';
 import { lstat, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { AppError } from '../core/errors.ts';
-import type { BranchState, GitChange, HandoffEntry, HandoffIdentity, ImplementationRun, Publication, ReviewPreview, ReviewPreviewInput, WorkspaceGit } from '../contracts/implementation.ts';
+import type { BranchState, GitChange, HandoffArchive, HandoffEntry, HandoffIdentity, ImplementationRun, ImplementationTurn, Publication, ReviewPreview, ReviewPreviewInput, WorkspaceGit } from '../contracts/implementation.ts';
+import { readBounded } from './bounded-read.ts';
 import { gitEnvironment, worktreeFingerprint } from './worktree.ts';
 
 const fail = (message: string): never => { throw new AppError('COMMIT_HANDOFF', message, 409); };
@@ -129,77 +131,105 @@ async function logAt(root: string, sha: string, path: string): Promise<string> {
   if (!/^100644 blob [0-9a-f]+\t/.test(entry) || entry.split('\0').filter(Boolean).length !== 1) fail('The relay log must be an ordinary nonexecutable tracked file.');
   return gitRead(root, ['show', `${sha}:${path}`]);
 }
-export async function validateReviewRange(root: string, base: string, head: string, path: string, commitPending = false): Promise<void> {
+/** `path` is the tracked journal mirror to exclude from project content, when the project keeps one. */
+export async function validateReviewRange(root: string, base: string, head: string, path: string | null, commitPending = false): Promise<void> {
   if ((await gitRead(root, ['merge-base', base, head])).trim() !== base) fail('The review baseline must be an ancestor of the current candidate.');
   // A pending snapshot can supply the proposal even when the committed portion is empty.
   if (commitPending) return;
   const files = (await gitRead(root, ['diff', '--name-only', '--no-renames', '-z', base, head, '--'])).split('\0').filter(Boolean);
   if (!files.some((p) => p !== path)) fail('This range contains no project proposal to review.');
 }
-export async function readPublication(run: ImplementationRun, identity: HandoffIdentity, outcome?: string): Promise<Publication> {
-  const root = run.worktree.root;
-  const state = await branchState(root);
-  if (state.branch !== run.branch || !state.clean) fail('Publication has a changed branch or uncommitted leftovers. Reconcile before transferring ownership.');
-  const lineage = (await gitRead(root, ['rev-list', '--parents', '-n', '1', state.head])).trim().split(' ');
-  if (lineage.length !== 2 || lineage[1] !== identity.parent || state.head === identity.parent) fail('Expected exactly one direct, single-parent handoff commit.');
-  await assertLogPath(root, run.logPath);
-  const [before, after] = await Promise.all([logAt(root, identity.parent, run.logPath), logAt(root, state.head, run.logPath)]);
-  if ((before && !before.endsWith('\n')) || !after.startsWith(before)) fail('Earlier relay-log entries were rewritten.');
-  const appended = after.slice(before.length);
-  if (!appended.endsWith('\n') || appended.slice(0, -1).includes('\n') || Buffer.byteLength(appended, 'utf8') > 65536) fail('Append exactly one bounded JSON line to the relay log.');
-  let raw: unknown;
-  try { raw = JSON.parse(appended); } catch { return fail('The appended relay-log entry is not valid JSON.'); }
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail('Malformed relay-log entry.');
+const MAX_RESULT = 64 * 1024;
+const MAX_ARCHIVE = 1024 * 1024;
+/** Raw Git output bounded by `maxBuffer`; null when the output would exceed it. */
+function gitCapture(root: string, args: string[], maxBuffer: number): Promise<Buffer | null> {
+  return new Promise((resolve, reject) => execFile('git', ['--no-replace-objects', '-C', root, ...args],
+    { encoding: 'buffer', timeout: 10000, maxBuffer, env: gitEnvironment(), shell: false },
+    (error, stdout) => !error ? resolve(stdout) : error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? resolve(null) : reject(new AppError('GIT_STATE', `Git inspection failed (${args[0]}). Recheck the checkout.`, 409))));
+}
+/** The commit's full patch against its parent, binary content included, when it fits the bound and survives storage as text;
+ * otherwise its diffstat marked incomplete. Intermediate revisions outlive squash integration and branch deletion only when
+ * `complete` is true: that patch reproduces the commit exactly (`git apply`), which a "Binary files differ" notice would not. */
+export async function archiveCommit(root: string, sha: string): Promise<HandoffArchive> {
+  const header = ['--no-color', '--no-renames', '--full-index', '--no-ext-diff', '--no-textconv', '--ignore-submodules=none', '--format=commit %H%nparent %P%nauthor %an <%ae>%ndate %aI%n%n    %s%n'];
+  const patch = await gitCapture(root, ['show', ...header, '--patch', '--binary', sha, '--'], MAX_ARCHIVE);
+  // A text file holding invalid UTF-8 would be silently altered by the JSON store; keep only what can be reproduced.
+  if (patch !== null) { try { return { patch: new TextDecoder('utf-8', { fatal: true }).decode(patch), complete: true }; } catch { /* fall back to the diffstat */ } }
+  return { patch: await gitRead(root, ['show', ...header, '--stat=200', sha, '--']), complete: false };
+}
+function validateEntry(raw: unknown, identity: HandoffIdentity): HandoffEntry {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail('Malformed handoff result.');
   const entry = raw as HandoffEntry;
   const fields = [...Object.keys(identity), 'model', 'decision', 'reason', 'needsHuman', 'summary', 'checks'];
-  if (Object.keys(entry).length !== fields.length || Object.keys(entry).some((k) => !fields.includes(k))) fail('The relay-log entry does not match schema 1.');
+  if (Object.keys(entry).length !== fields.length || Object.keys(entry).some((k) => !fields.includes(k))) fail('The handoff result does not match schema 1.');
   for (const [key, value] of Object.entries(identity)) if (entry[key as keyof HandoffIdentity] !== value) fail(`Handoff identity mismatch: ${key}.`);
   if (typeof entry.summary !== 'string' || !entry.summary.trim() || entry.summary.length > 16000 || typeof entry.model !== 'string' || !entry.model.trim() || entry.model.length > 200 || !Array.isArray(entry.checks) || entry.checks.length > 100 || entry.checks.some((s) => typeof s !== 'string' || s.length > 2000)) fail('Missing or oversized handoff summary, model, or checks.');
   if (entry.reason !== null && (typeof entry.reason !== 'string' || entry.reason.length > 16000)) fail('Invalid objection reason.');
   if (typeof entry.needsHuman !== 'boolean' || (entry.decision === 'accept' && entry.needsHuman)) fail('needsHuman must explicitly identify results requiring human direction. Acceptance cannot require a blocking decision.');
   if (identity.action === 'work' ? entry.decision !== null || entry.reason !== null : !['accept', 'object'].includes(entry.decision!)) fail('Work is a proposal; only reviews report accept or object.');
   if (entry.decision === 'object' && !entry.reason?.trim()) fail('An objection requires a reason.');
+  return entry;
+}
+/** The result file outside the checkout is the result channel. Git supplies at most one direct handoff commit on the assigned
+ * parent; a report-only turn publishes none unless the project mirrors the journal into a tracked log. */
+export async function readPublication(run: ImplementationRun, turn: ImplementationTurn, outcome?: string): Promise<{ publication: Publication; archive: HandoffArchive | null }> {
+  const { identity } = turn; const root = run.worktree.root;
+  if (!turn.resultPath) fail('This turn was assigned before the handoff journal existed and has no result path. Reconcile it by hand.');
+  const state = await branchState(root);
+  if (state.branch !== run.branch || !state.clean) fail('Publication has a changed branch or uncommitted leftovers. Reconcile before transferring ownership.');
+  const raw = await readBounded(turn.resultPath, MAX_RESULT, fail, 'The handoff result');
+  if (raw === null) fail('The assigned handoff result was not published before completion. Inspect the agent; nothing was inferred from the commit or terminal.');
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw!); } catch { return fail('The handoff result is not valid JSON.'); }
+  const entry = validateEntry(parsed, identity);
+  const committed = state.head !== identity.parent;
+  if (committed) {
+    const lineage = (await gitRead(root, ['rev-list', '--parents', '-n', '1', state.head])).trim().split(' ');
+    if (lineage.length !== 2 || lineage[1] !== identity.parent) fail('Expected at most one direct, single-parent handoff commit on the assigned parent.');
+    if (!(await gitRead(root, ['diff-tree', '--no-commit-id', '--name-only', '--no-renames', '-r', '-z', identity.parent, state.head, '--'])).split('\0').filter(Boolean).length) fail('An empty commit is not a handoff. Report-only results need no commit.');
+  }
+  if (run.logPath !== null) {
+    if (!committed) fail('This project mirrors the journal into a tracked relay log: append the entry there inside one handoff commit.');
+    await assertLogPath(root, run.logPath);
+    const [before, after] = await Promise.all([logAt(root, identity.parent, run.logPath), logAt(root, state.head, run.logPath)]);
+    if ((before && !before.endsWith('\n')) || !after.startsWith(before)) fail('Earlier relay-log entries were rewritten.');
+    const appended = after.slice(before.length);
+    if (!appended.endsWith('\n') || appended.slice(0, -1).includes('\n') || Buffer.byteLength(appended, 'utf8') > MAX_RESULT) fail('Append exactly one bounded JSON line to the relay log.');
+    let mirrored: unknown;
+    try { mirrored = JSON.parse(appended); } catch { return fail('The appended relay-log entry is not valid JSON.'); }
+    if (!isDeepStrictEqual(mirrored, entry)) fail('The appended relay-log line differs from the published handoff result.');
+  }
   // The initial combined action proposes the entire selected range, including earlier committed work.
   const proposalBase = identity.turn === 1 && run.request.kind === 'commit' && run.request.handoff ? run.acceptedSha : identity.parent;
-  const files = (await gitRead(root, ['diff-tree', '--no-commit-id', '--name-only', '--no-renames', '-r', '-z', proposalBase, state.head, '--'])).split('\0').filter(Boolean);
+  const files = proposalBase === state.head ? [] : (await gitRead(root, ['diff-tree', '--no-commit-id', '--name-only', '--no-renames', '-r', '-z', proposalBase, state.head, '--'])).split('\0').filter(Boolean);
   const projectChanged = files.some((p) => p !== run.logPath);
   if (projectChanged && (identity.action === 'review' || entry.decision === 'object')) fail('This reviewer changed project content without permission.');
   const normalized = identity.action === 'work' ? null : entry.decision === 'object' ? 'strong_objection' : projectChanged ? 'accept_and_improve' : 'accept_without_improvement';
-  if (outcome && outcome !== normalized) fail('The structured completion outcome contradicts the committed handoff.');
+  if (outcome && outcome !== normalized) fail('The structured completion outcome contradicts the published handoff.');
+  const archive = committed ? await archiveCommit(root, state.head) : null;
   await assertClean(root, run.branch, state.head); // reject changes during inspection
-  return { sha: state.head, projectChanged, entry };
+  if (await readBounded(turn.resultPath, MAX_RESULT, fail, 'The handoff result') !== raw) fail('The handoff result changed during validation; ownership was not transferred.');
+  return { publication: { sha: state.head, projectChanged, entry }, archive };
 }
 
-/** The newest handoff commit `agentId` published on the first-parent chain after `taskBase`, or null. A handoff commit has
- * exactly one parent and appends exactly one journal entry naming that parent and the agent (the shape readPublication
- * accepts). A merge, a rewritten journal, or an imported entry is not evidence that the agent saw this checkout.
- * Git author and date are never used. */
-export async function lastPublishedBy(root: string, head: string, taskBase: string, path: string, agentId: string): Promise<string | null> {
-  await validateExistingLog(root, head, path);
-  // Only commits that touched the log can be handoffs. Past 101 of them the range is over the preview cap anyway.
-  const touched = (await gitRead(root, ['rev-list', '--first-parent', '--max-count=101', `${taskBase}..${head}`, '--', path])).trim().split('\n').filter(Boolean);
-  for (const sha of touched) {
-    const lineage = (await gitRead(root, ['rev-list', '--parents', '-n', '1', sha])).trim().split(' ');
-    if (lineage.length !== 2) continue;
-    const parent = lineage[1]!;
-    const [before, after] = await Promise.all([logAt(root, parent, path), logAt(root, sha, path)]);
-    if (!after.startsWith(before)) continue;
-    const appended = after.slice(before.length).split('\n').filter(Boolean);
-    if (appended.length !== 1) continue;
-    let entry: HandoffEntry; try { entry = JSON.parse(appended[0]!); } catch { continue; }
-    if (entry.agentId === agentId && entry.parent === parent) return sha;
-  }
-  return null;
+/** The newest commit on HEAD's first-parent chain back to `taskBase` (inclusive) at which the recipient completed a turn per the
+ * journal, or null. A merged side branch, a rewritten history or an imported file is never such a receipt: only the journal's
+ * validated publications count, and only where Git ancestry shows this checkout contains them. Git author and date are never used. */
+export async function lastPublishedBy(root: string, head: string, taskBase: string, publishedBy: (shas: string[]) => Set<string>): Promise<string | null> {
+  // Past 101 commits the range is over the preview cap anyway.
+  const chain = (await gitRead(root, ['rev-list', '--first-parent', '--max-count=101', `${taskBase}..${head}`])).trim().split('\n').filter(Boolean);
+  const seen = publishedBy([...chain, taskBase]);
+  return chain.find((sha) => seen.has(sha)) ?? (seen.has(taskBase) ? taskBase : null);
 }
 /** Read committed objects only, and pin both ends of the displayed range. */
-export async function previewCommittedRange(root: string, input: ReviewPreviewInput): Promise<ReviewPreview> {
+export async function previewCommittedRange(root: string, input: ReviewPreviewInput, publishedBy: (agentId: string, shas: string[]) => Set<string>): Promise<ReviewPreview> {
   const current = async () => (await gitRead(root, ['rev-parse', '--verify', 'HEAD^{commit}'])).trim();
   if (await current() !== input.head) fail('HEAD changed. Recheck before previewing a review.');
   if (input.taskBase && input.taskBase !== input.head && !await isAncestor(root, input.taskBase, input.head)) fail('The task baseline must be the current commit or one of its ancestors.');
-  const recipient = input.base ? null : await lastPublishedBy(root, input.head, input.taskBase!, input.logPath, input.recipient!);
+  const recipient = input.base ? null : await lastPublishedBy(root, input.head, input.taskBase!, (shas) => publishedBy(input.recipient!, shas));
   const since = input.base ? 'explicit' : recipient ? 'recipient' : 'task';
   const base = input.base ?? recipient ?? input.taskBase!;
-  await validateReviewRange(root, base, input.head, input.logPath, input.commitPending);
+  await validateReviewRange(root, base, input.head, input.logPath ?? null, input.commitPending);
   const fields = (await gitRead(root, ['log', '--max-count=101', '--format=%H%x00%s', '-z', `${base}..${input.head}`, '--'])).split('\0');
   const commits: ReviewPreview['commits'] = [];
   for (let i = 0; i + 1 < fields.length; i += 2) commits.push({ sha: fields[i]!, subject: fields[i + 1]! });

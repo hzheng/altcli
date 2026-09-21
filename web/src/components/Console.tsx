@@ -1,7 +1,7 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CommandRecord, SessionRegistration } from '../contracts/api';
-import type { ActivityReset, RelayRun, Workspace, WorkspaceDiscovery, WorkspaceResetResult, WorkflowState } from '../contracts/workflow';
+import type { ActivityReset, HistoryExport, RelayRun, Workspace, WorkspaceDiscovery, WorkspaceResetResult, WorkflowState } from '../contracts/workflow';
 import type { ProjectWorktree } from '../contracts/projects';
 import { api, HttpError } from '../client/api';
 import { nameOf, workspaceKey, Workspaces } from './Workspaces';
@@ -232,6 +232,19 @@ export function Console() {
     } catch (caught) { setMessage(caught instanceof Error ? caught.message : 'Could not acknowledge delivery.'); }
     finally { await refresh(); submission.current = false; setBusy(false); }
   }
+  // The journal is app data: a repository clone cannot recover it, so the console offers it as a downloadable backup.
+  async function exportHistory() {
+    if (!project || submission.current) return;
+    submission.current = true; setBusy(true);
+    try {
+      const history = await api<HistoryExport>(token, `history/export?repository=${encodeURIComponent(project)}`);
+      const url = URL.createObjectURL(new Blob([JSON.stringify(history, null, 2)], { type: 'application/json' }));
+      const anchor = document.createElement('a'); anchor.href = url; anchor.download = `codercrew-history-${nameOf(project)}-${history.exportedAt.replace(/[:.]/g, '-')}.json`;
+      anchor.click(); URL.revokeObjectURL(url);
+      setMessage(`Exported ${history.runs.length} run${history.runs.length === 1 ? '' : 's'} and ${history.journal.length} journal entr${history.journal.length === 1 ? 'y' : 'ies'} for ${project}.`);
+    } catch (caught) { setMessage(caught instanceof Error ? caught.message : 'History export failed.'); }
+    finally { submission.current = false; setBusy(false); }
+  }
   async function resetActivity() {
     if (!statusReset || submission.current) return;
     submission.current = true; setBusy(true);
@@ -306,8 +319,9 @@ export function Console() {
             {latestRun && <span className={`badge ${latestRun.status === 'paused' ? 'warning' : ''}`}>{latestRun.status === 'running' ? 'RUN ACTIVE' : `RUN ${latestRun.status.toUpperCase()}`} · {latestRun.automaticTurns}/{latestRun.turnLimit} automatic turns</span>}</summary>
           {latestRun ? <p className="muted">{latestRun.participants.map((p) => p.label).join(' ⇄ ')}{latestRun.implementation ? ` (group "${latestRun.implementation.group.name}")` : latestRun.planning ? ` (planning group "${latestRun.planning.group.name}")` : latestRun.pairId ? ` (group "${latestRun.pairId}")` : ' (single-agent turn)'} · {latestRun.reason} · {timeOf(latestRun.updatedAt)}</p>
             : <p className="muted">No run with the current agents in this workspace. Earlier runs stay in the history below.</p>}
-          {latestRun?.implementation?.latestPublication && <p className="muted">Commit <span className="mono">{latestRun.implementation.latestPublication.sha.slice(0, 12)}</span> · {latestRun.implementation.latestPublication.entry.summary}<br />
+          {latestRun?.implementation?.latestPublication && <p className="muted">{latestRun.implementation.latestPublication.sha === latestRun.implementation.latestPublication.entry.parent ? 'Report only, no commit' : <>Commit <span className="mono">{latestRun.implementation.latestPublication.sha.slice(0, 12)}</span></>} · {latestRun.implementation.latestPublication.entry.summary}<br />
             Checks reported by the agent: {latestRun.implementation.latestPublication.entry.checks.join('; ') || 'none reported'}</p>}
+          <p className="muted"><button type="button" disabled={busy || !project} onClick={() => void exportHistory()}>Export history</button> Download this worktree’s runs, turns and handoff journal (reviewed ranges, findings, plans, reported checks, archived handoff patches) as JSON. Cloning the repository does not recover it.</p>
           <table><thead><tr><th>Agent</th><th>State</th><th>Detail</th><th>When</th></tr></thead>
             <tbody>{projectSessions.map((s) => { const status = statuses.get(s.id)!;
               const activity = state.activities?.find((a) => a.agentId === s.id);

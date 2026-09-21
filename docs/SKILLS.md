@@ -5,15 +5,20 @@ The controller prompt names its exact repository path and a per-command assignme
 file under the external data directory. No global alias or skill installation is
 required for this path. Optional installed links are still checked if present.
 The assignment includes the exact branch, parent, accepted baseline, review range,
-action, registration, policy revision, original task, and outstanding findings.
+action, registration, policy revision, original task, outstanding findings, the
+external `resultPath`, and the optional tracked `logPath`.
 It authorizes one scoped local publication; the controller never commits it.
 
-The relay log defaults to `RELAY-LOG.jsonl`; every turn appends one schema-1 JSON
-object followed by a newline. The object copies every `identity` field in the
-assignment and adds `model`, `decision`, `reason`, `needsHuman`, `summary`, and
-`checks`. Work has null decision/reason; reviews report accept/object. Objection
-and review-only turns cannot change project files. `needsHuman` explicitly stops
-automatic remediation for out-of-scope questions. See the skill for limits.
+Every turn writes one schema-1 JSON object to `resultPath`, outside the checkout;
+CoderCrew records it in its handoff journal. The object copies every `identity`
+field in the assignment and adds `model`, `decision`, `reason`, `needsHuman`,
+`summary`, and `checks`. Work has null decision/reason; reviews report
+accept/object. A turn commits only when it changed project content; objection and
+review-only turns change no project files and publish no commit. When `logPath` is
+set (an explicit project preference), the same object is also appended as one line
+to that tracked file inside the handoff commit, so every turn commits. `needsHuman`
+explicitly stops automatic remediation for out-of-scope questions. See the skill
+for limits.
 
 The `review-handoff` skill below is used only by the staging fallback, enabled with
 `CODERCREW_ENABLE_LEGACY_RELAY=true`.
@@ -90,7 +95,7 @@ withholding are cooperative and still require installed-host acceptance.
 
 Do not combine incompatible instructions behind a guessed mode. [ADR-0016](adr/ADR-0016-plan-phase-and-approval.md) defines ignored planning documents: assigned draft or unified plan only, no staging/commits, exact-version completion, cooperative draft withholding, and an independent approval checkpoint. Native plan mode is adapter-specific; never broaden edit permissions merely to save a draft.
 
-[ADR-0014](adr/ADR-0014-commit-relay-and-deprecation.md) defines a separate commit-relay skill: captured unfinished input for initial work, clean entry for reviews and later turns, exact assigned revisions, one direct handoff commit with one appended tracked log entry, permitted project changes, and no unpublished leftovers. The agent/authorized helper commits; the server validates read-only. A review-only or objection turn changes only the log. Work is a proposal, not self-approval; optional self-review is visibly non-independent.
+[ADR-0014](adr/ADR-0014-commit-relay-and-deprecation.md) defines a separate commit-relay skill: captured unfinished input for initial work, clean entry for reviews and later turns, exact assigned revisions, one published result recorded in the handoff journal, at most one direct handoff commit with permitted project changes (optionally mirroring the entry into a tracked log), and no unpublished leftovers. The agent/authorized helper commits; the server validates read-only. A review-only or objection turn changes no project content and, without a tracked log, commits nothing. Work is a proposal, not self-approval; optional self-review is visibly non-independent.
 
 [ADR-0015](adr/ADR-0015-collaboration-policies-and-solo.md) supplies phase/group roles and action permissions. Each phase has its own skill contract while sharing CLI lifecycle checks. Native plan-mode and additional adapter integrations remain future work, with open choices in [OPEN-DECISIONS](OPEN-DECISIONS.md).
 

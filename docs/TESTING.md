@@ -122,17 +122,17 @@ Use behavior-based tests and label capability stage. N=3/N>3 model tests preserv
 
 | Scenario | Expected behavior |
 | --- | --- |
-| Local proposal plus log entry | Exactly one handoff commit; the next review names that candidate explicitly. |
-| Accept with log only | No artificial new proposal or metadata review loop. |
+| Local proposal plus published result | Exactly one handoff commit, recorded in the journal with its archived patch; the next review names that candidate explicitly. |
+| Accept with a result only | No commit unless the project keeps a tracked log; no artificial new proposal or metadata review loop. |
 | Peer accepts and improves | Incoming candidate accepted; new edits still require peer review. |
-| Objection with log only | Accepted baseline not advanced; reason available to the author. |
+| Objection with a result only | No commit; accepted baseline not advanced; reason available to the author. |
 | Correction after objection | Review covers the revised proposal against the last accepted baseline, not only the repair commit. |
 | Reviewer-only participant edits a test or config file | Role violation, even outside application source. |
 | Optional advice on an accepted proposal | No forced revision loop. |
 | Worker revises after actionable objection | Same roles; revised candidate returns to the reviewer. |
 | Send with continuation preference on | No automatic successor. |
 | Send & review with later continuation off | Initial review occurs; later cycles need a manual action. |
-| Log-only `work` entry after Send & review | No review scheduled; chain ends or waits; `acceptedSha` unchanged. |
+| Report-only `work` result after Send & review | No commit and no review scheduled; chain ends or waits; `acceptedSha` unchanged. |
 | Empty Review/Relay context | Reviews the assigned incoming revision; nothing inferred from terminal state. |
 | Two overlapping selected/saved groups in a workspace | The frozen phase group bound to the run controls routing; creation order and discovery order do not. |
 | Two browsers see the same publication; browser switches project, locks, or disconnects | One successor; policy and consumption independent of the viewing selection. |
@@ -141,15 +141,17 @@ Use behavior-based tests and label capability stage. N=3/N>3 model tests preserv
 | More than 30 unrelated recent commands | Active execution still tracked. |
 | Worker interrupted or publication incomplete | No fabricated entry; no replay. |
 | Restart after publication but before observation | Published result recovered without double execution. |
-| Log tampering, multiple new entries, wrong parent, or competing publication | Refused or paused for reconciliation; no force-push or hidden rebase. |
+| Missing, malformed or identity-mismatched result; empty commit; extra commit; tracked-log tampering, mirrored line differing from the result, or a report-only turn without the required mirrored commit | Refused or paused for reconciliation; nothing invalid enters the journal; no force-push or hidden rebase. |
 | Entry `parent` differs from the commit's actual parent | Lineage mismatch; publication refused as competing. |
+| Journal baseline for Relay | The newest first-parent commit at which the journal records the recipient's completed turn; merged side branches, hand-committed tracked-log lines and other agents' entries never advance it. |
+| History export and pre-removal archive | Export returns every run, turn and journal record for a worktree or all; older publications are backfilled at startup; worktree removal archives unarchived handoff commits first and skips commits already gone. |
 | Handoff commit published but staged, unstaged, or non-ignored untracked work remains | Leftover digest is nonempty; run pauses and names the paths. |
-| Final `RELAY-OUTCOME` line contradicts the committed entry | Inconsistent turn; pause; the prose never wins. |
+| Final `RELAY-OUTCOME` line contradicts the published result | Inconsistent turn; pause; the prose never wins. |
 | Source hook notification lost | Artifact can be rediscovered; no ownership transfer until equivalent correlated lifecycle evidence or explicit human reconciliation is available. The required evidence is not tied to one vendor transport. |
 | Commit exists but another writer is active | Snapshot existence is not safe ownership transfer. |
 | Uncommitted (deprecated) run active on a worktree | A commit-relay run on the same index is refused until it is reconciled or taken over. |
 | Task starts in commit relay with a dirty worktree | Refused with the paths shown; nothing staged, stashed, reset, committed, or discarded. |
-| Remote worker receives the task | Fetches exact committed code and log without shared paths or index. |
+| Remote worker receives the task | Fetches exact committed code (and the tracked log when the project keeps one) without shared paths or index; journal transfer remains future work. |
 | No PR configured | Local and remote publication still operate. |
 
 Planning and transition scenarios:
@@ -167,7 +169,7 @@ Planning and transition scenarios:
 | First agent finishes earlier | Its new result remains withheld from all unfinished required planners until the complete-roster barrier opens. |
 | One of N planners fails or is interrupted | Partial work preserved; its required slot remains incomplete; no automatic reduction to N-1. |
 | Duplicate completion from one planner | Cannot fill another required slot, increase the completion cardinality, or create multiple synthesis actions. |
-| Planning turn edits a project file, the index, or the tracked log | Project digest differs at completion; run pauses and names the paths. |
+| Planning turn edits a project file, the index, or a tracked log | Project digest differs at completion; run pauses and names the paths. |
 | Another active planner changes its own draft before A completes | Allowed under that assignment; does not create a false violation at A's completion. |
 | A finalized or unassigned draft changes | Invalidate the affected result or pause; do not silently attribute the change to the completing agent. |
 | A is observed writing B's draft through a mediated output path | Refuse the write or pause under the explicit path permission; snapshots alone do not prove attribution when B is also active. |

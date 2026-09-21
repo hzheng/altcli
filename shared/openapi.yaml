@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: CoderCrew host API
   version: 0.1.0
-  description: Host-resident tmux console with explicit Plan and Implementation phases, captured ignored plans, committed handoffs, and an opt-in deprecated staging relay.
+  description: Host-resident tmux console with explicit Plan and Implementation phases, captured ignored plans, committed handoffs recorded in an app-owned journal, and an opt-in deprecated staging relay.
     Native iOS remains deferred. This contract and the JSON-only TypeScript types are maintained together.
 servers:
 - url: http://127.0.0.1:8787
@@ -39,7 +39,7 @@ paths:
   /api/v1/implementation/preview:
     post:
       operationId: previewCommittedReview
-      description: Read-only preview of an explicit ancestor..HEAD range, or of the commits after the recipient's newest relay-log handoff commit (falling back to the task baseline). Does not create a run, bind agents, send input or mutate Git. Refuses stale HEAD and ranges exceeding 100 commits. With commitPending=true, allows an empty or log-only committed portion and offers HEAD as a baseline for a future snapshot; otherwise requires a project proposal.
+      description: Read-only preview of an explicit ancestor..HEAD range, or of the commits after the newest first-parent commit at which the recipient completed a turn per CoderCrew's handoff journal (falling back to the task baseline). Does not create a run, bind agents, send input or mutate Git. Refuses stale HEAD and ranges exceeding 100 commits. With commitPending=true, allows an empty or log-only committed portion and offers HEAD as a baseline for a future snapshot; otherwise requires a project proposal.
       requestBody:
         required: true
         content:
@@ -53,6 +53,24 @@ paths:
               schema: {$ref: '#/components/schemas/ReviewPreview'}
         '409':
           description: Stale HEAD, unavailable group or invalid range
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ApiError'}
+  /api/v1/history/export:
+    get:
+      operationId: exportHistory
+      summary: Back up CoderCrew's own history, which cloning the repository cannot recover
+      description: Every run and turn (captured plan results and publications included) plus the handoff journal, optionally limited to one worktree root. Read-only; touches no Git state.
+      parameters:
+      - {name: repository, in: query, required: false, schema: {type: string, maxLength: 4096}, description: Absolute worktree root to limit the export to.}
+      responses:
+        '200':
+          description: Complete history for backup or task summaries
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/HistoryExport'}
+        '400':
+          description: Invalid repository filter
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ApiError'}
@@ -1916,12 +1934,12 @@ components:
       properties:
         groupId: {$ref: '#/components/schemas/AgentId'}
         head: {$ref: '#/components/schemas/GitSha'}
-        logPath: {type: string, maxLength: 200}
+        logPath: {type: string, maxLength: 200, description: 'Tracked journal mirror to exclude from project content, when the project keeps one.'}
         base: {$ref: '#/components/schemas/GitSha', description: 'Excluded ancestor. Omit to derive it from recipient and taskBase, which are then required.'}
-        recipient: {$ref: '#/components/schemas/AgentId', description: 'Group member who will review; the baseline is the newest first-parent commit whose relay-log entry they published.'}
-        taskBase: {$ref: '#/components/schemas/GitSha', description: 'Fallback baseline when the recipient has no handoff commit on this branch.'}
+        recipient: {$ref: '#/components/schemas/AgentId', description: 'Group member who will review; the baseline is the newest first-parent commit at which the journal records a completed turn of theirs.'}
+        taskBase: {$ref: '#/components/schemas/GitSha', description: 'Fallback baseline when the recipient has no journal entry on this chain.'}
         commitPending: {type: boolean, default: false, description: 'Preview the committed portion before a pending snapshot; permits HEAD and empty committed ranges.'}
-      required: [groupId, head, logPath]
+      required: [groupId, head]
       additionalProperties: false
     ReviewPreview:
       type: object
@@ -1970,11 +1988,11 @@ components:
         autoContinue: {"type":"boolean"}
         turnLimit: {"type":"integer","minimum":1,"maximum":200}
         pauseOnObjection: {"type":"boolean","description":"Agreement: a reviewer objection pauses for the human instead of routing to the author. Default false."}
-        logPath: {"type":"string","maxLength":200}
+        logPath: {"type":"string","maxLength":200,"description":"Explicit project preference: also mirror every journal entry into this tracked, nonignored JSON-lines file inside the handoff commit, so report-only turns commit too. Absent (default), the journal lives only in CoderCrew and report-only turns publish no commit."}
         branch: {"$ref":"#/components/schemas/BranchConsent"}
         reviewBase: {"$ref":"#/components/schemas/GitSha"}
         confirmReady: {"const":true}
-      required: ["requestId","groupId","groupRevision","registrations","agentId","kind","handoff","policy","autoContinue","turnLimit","logPath","branch","confirmReady"]
+      required: ["requestId","groupId","groupRevision","registrations","agentId","kind","handoff","policy","autoContinue","turnLimit","branch","confirmReady"]
       additionalProperties: false
     PolicyChange:
       type: "object"
@@ -2032,18 +2050,58 @@ components:
       additionalProperties: false
     Publication:
       type: "object"
+      description: HEAD after the validated turn — the handoff commit, or the unchanged parent when a report-only turn published no commit — with the published result.
       properties:
         sha: {"$ref":"#/components/schemas/GitSha"}
         projectChanged: {"type":"boolean"}
         entry: {"$ref":"#/components/schemas/HandoffEntry"}
       required: ["sha","projectChanged","entry"]
       additionalProperties: false
+    HandoffArchive:
+      type: object
+      description: The handoff commit's content kept in the journal so squash integration and branch deletion do not lose intermediate revisions. A complete archive is a git-apply-able patch including binary data; complete=false means only a diffstat was kept because the patch exceeded the size bound or contained text that cannot be stored as UTF-8.
+      properties:
+        patch: {type: string}
+        complete: {type: boolean}
+      required: [patch, complete]
+      additionalProperties: false
+    JournalRecord:
+      type: object
+      description: One completed implementation turn in CoderCrew's durable history, independent of the checkout and its branch.
+      properties:
+        runId: {type: string, format: uuid}
+        commandId: {type: string, format: uuid}
+        repository: {type: string, description: Worktree root the run executed in.}
+        branch: {type: string}
+        agentId: {$ref: '#/components/schemas/AgentId'}
+        turn: {type: integer}
+        action: {enum: [work, review, review_and_improve]}
+        parent: {$ref: '#/components/schemas/GitSha'}
+        sha: {$ref: '#/components/schemas/GitSha'}
+        projectChanged: {type: boolean}
+        entry: {$ref: '#/components/schemas/HandoffEntry'}
+        archive: {oneOf: [{$ref: '#/components/schemas/HandoffArchive'}, {type: 'null'}], description: Null until archived; a report-only turn has nothing to archive.}
+        recordedAt: {type: string, format: date-time}
+      required: [runId, commandId, repository, branch, agentId, turn, action, parent, sha, projectChanged, entry, archive, recordedAt]
+      additionalProperties: false
+    HistoryExport:
+      type: object
+      properties:
+        schema: {const: 1}
+        exportedAt: {type: string, format: date-time}
+        repository: {type: [string, 'null'], description: The worktree root the export was limited to, or null for everything.}
+        runs: {type: array, items: {$ref: '#/components/schemas/RelayRun'}}
+        turns: {type: array, items: {$ref: '#/components/schemas/Execution'}}
+        journal: {type: array, items: {$ref: '#/components/schemas/JournalRecord'}}
+      required: [schema, exportedAt, repository, runs, turns, journal]
+      additionalProperties: false
     ImplementationTurn:
       type: "object"
       properties:
         identity: {"$ref":"#/components/schemas/HandoffIdentity"}
+        resultPath: {"type":"string","description":"External result file the agent writes before finishing; never inside the checkout."}
         published: {"$ref":"#/components/schemas/Publication"}
-      required: ["identity"]
+      required: ["identity","resultPath"]
       additionalProperties: false
     ImplementationRun:
       type: "object"
@@ -2056,7 +2114,7 @@ components:
         branch: {"type":"string"}
         consent: {"$ref":"#/components/schemas/BranchConsent"}
         setup: {"enum":["pending","applying","ready","uncertain"]}
-        logPath: {"type":"string"}
+        logPath: {"type":["string","null"],"description":"Null keeps the journal in CoderCrew only."}
         taskBaseSha: {"$ref":"#/components/schemas/GitSha"}
         acceptedSha: {"$ref":"#/components/schemas/GitSha"}
         candidateSha: {"type":["string","null"]}
@@ -2145,9 +2203,9 @@ components:
         handoff: {"type":"boolean"}
         policy: {"enum":["solo","peer","worker_reviewer"]}
         workerId: {"$ref":"#/components/schemas/AgentId"}
-        logPath: {"type":"string"}
+        logPath: {"type":"string","maxLength":200}
         branch: {"oneOf":[{"$ref":"#/components/schemas/BranchConsent"},{"type":"null"}]}
-      required: ["groupId","groupRevision","registrations","agentId","handoff","policy","logPath","branch"]
+      required: ["groupId","groupRevision","registrations","agentId","handoff","policy","branch"]
       additionalProperties: false
     PlanStart:
       type: object

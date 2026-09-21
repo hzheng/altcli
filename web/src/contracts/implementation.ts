@@ -63,7 +63,9 @@ export interface ImplementationStart {
   turnLimit: number;
   /** Agreement: a reviewer objection pauses for the human instead of being routed to the author. Default false. */
   pauseOnObjection?: boolean;
-  logPath: string;
+  /** Explicit project preference: also mirror every journal entry into this tracked, nonignored JSON-lines file inside the
+   * handoff commit. Absent (the default), the journal lives only in CoderCrew's history and report-only turns publish no commit. */
+  logPath?: string;
   branch: BranchConsent;
   /** Excluded baseline for review, including commit with handoff (defaults to the pre-snapshot HEAD). */
   reviewBase?: string;
@@ -95,7 +97,8 @@ export interface ImplementationRun extends ImplementationPolicy {
   branch: string;
   consent: BranchConsent;
   setup: 'pending' | 'applying' | 'ready' | 'uncertain';
-  logPath: string;
+  /** Null keeps the journal in CoderCrew only. */
+  logPath: string | null;
   taskBaseSha: string;
   acceptedSha: string;
   candidateSha: string | null;
@@ -109,7 +112,7 @@ export interface ImplementationRun extends ImplementationPolicy {
   /** Initial work only: captured input for the first implementation or snapshot turn. */
   initialWorktreeFingerprint?: string;
 }
-/** Copy these assignment fields verbatim into the appended JSON line. */
+/** Copy these assignment fields verbatim into the published result object. */
 export interface HandoffIdentity {
   schema: 1;
   runId: string;
@@ -135,16 +138,44 @@ export interface HandoffEntry extends HandoffIdentity {
 }
 export interface ImplementationTurn {
   identity: HandoffIdentity;
+  /** External result file the agent writes before finishing; never inside the checkout. */
+  resultPath: string;
   published?: Publication;
 }
+/** `sha` is HEAD after the turn: the handoff commit, or the unchanged parent when a report-only turn published no commit. */
 export interface Publication { sha: string; projectChanged: boolean; entry: HandoffEntry }
-export type PublicationResult = { publication: Publication; error?: never } | { error: string; publication?: never };
+/** The handoff commit's content, retained so squash integration and branch deletion do not lose intermediate revisions.
+ * A complete archive is a `git apply`-able patch including binary data; `complete` is false when only a diffstat could be
+ * kept, because the patch exceeded the size bound or contained text that cannot be stored as UTF-8. */
+export interface HandoffArchive { patch: string; complete: boolean }
+export type PublicationResult = { publication: Publication; archive: HandoffArchive | null; error?: never } | { error: string; publication?: never; archive?: never };
+/** One completed implementation turn in CoderCrew's durable history, independent of the checkout and its branch. */
+export interface JournalRecord {
+  runId: string;
+  commandId: string;
+  /** Worktree root the run executed in. */
+  repository: string;
+  branch: string;
+  agentId: string;
+  turn: number;
+  action: ImplementationAction;
+  parent: string;
+  sha: string;
+  projectChanged: boolean;
+  entry: HandoffEntry;
+  /** Null until the commit's content is archived; a report-only turn has nothing to archive. */
+  archive: HandoffArchive | null;
+  recordedAt: string;
+}
 export interface CommitAssignment {
   identity: HandoffIdentity;
   branch: string;
   cwd: string;
   root: string;
-  logPath: string;
+  /** Tracked mirror of the journal when the project prefers one; null means append nothing inside the checkout. */
+  logPath: string | null;
+  /** Write the result object here, outside the checkout, before finishing the turn. */
+  resultPath: string;
   instruction: string;
   task: string;
   findings: string | null;
@@ -156,9 +187,9 @@ export interface CommitAssignment {
   initialWorktreeFingerprint?: string;
 }
 
-/** Read-only preview of `base..head`. Without `base`, the baseline is the newest first-parent commit that
- * `recipient` published (per the tracked relay log), or `taskBase` when the recipient has none on this branch. */
-export interface ReviewPreviewInput { groupId: string; head: string; logPath: string; base?: string; recipient?: string; taskBase?: string; commitPending?: boolean }
+/** Read-only preview of `base..head`. Without `base`, the baseline is the newest first-parent commit at which
+ * `recipient` published a journal entry, or `taskBase` when the recipient has none on this branch. */
+export interface ReviewPreviewInput { groupId: string; head: string; logPath?: string; base?: string; recipient?: string; taskBase?: string; commitPending?: boolean }
 export interface ReviewPreview {
   base: string;
   /** Subject of the baseline commit, so every candidate baseline can be labelled. */

@@ -74,7 +74,7 @@ A clean check is a point-in-time observation. Recheck project content and HEAD b
 │       ├── draft-<agent-c-id>.md      # Present when a third planner is selected
 │       ├── ...                       # One initial draft per selected planner
 │       └── plan.md                   # Unified plan, after the draft barrier
-└── relay-log.md                      # Tracked implementation history
+└── relay-log.md                      # Optional tracked mirror of the implementation journal (ADR-0014, September 20, 2026)
 ```
 
 There are at most **N initial drafts plus one unified working plan**, regardless of refinement-turn count. N=2 uses up to three files; later N=3 uses up to four. Solo uses its one draft and, when promoted to the common editing surface, `plan.md`; it needs no fake second draft or peer report. A controller copy/promotion of already captured text can avoid a needless synthesis model call. File count follows selected membership, not every available agent in the directory. Historical snapshots and result records live in the controller store, not new per-turn files.
@@ -91,7 +91,7 @@ The controller creates all selected assignments from the frozen brief, baseline,
 Read the shared task brief and existing project code.
 Write only your assigned draft; do not implement the change.
 Do not read any other participant's draft or newly generated findings yet.
-Do not modify project files, another draft, plan.md, the index, or the tracked log.
+Do not modify project files, another draft, plan.md, the index, or a tracked log.
 Do not stage, commit, switch branches, or approve a native transition into coding.
 Finish through the assigned completion protocol, identifying your exact output.
 ```

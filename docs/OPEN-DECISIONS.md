@@ -6,7 +6,7 @@ This register preserves unresolved choices and explicitly proposed defaults from
 
 | Topic | Current position |
 | --- | --- |
-| Relay-log path and metadata encoding | Local Implementation uses a configurable nonignored relative path, default `RELAY-LOG.jsonl`, with one append-only JSON line per turn. The earlier `.codercrew/relay-log.md` proposal remains optional; ignore rules are not modified. |
+| Relay-log path and metadata encoding | Decided September 20, 2026: the journal is CoderCrew app data (`handoff_journal`, one schema-1 result per turn, exported through `/api/v1/history/export`). A tracked mirror is an explicit per-start preference with a configurable nonignored relative path (default `RELAY-LOG.jsonl`, one appended JSON line per turn); ignore rules are not modified. |
 | Complete entry schema | Local schema 1 is specified by `HandoffEntry` in the JSON-only contracts and OpenAPI; see ADR-0014's implementation update. Broader schema evolution remains future work. |
 | Git publication owner | Agent/authorized helper publishes; controller validation stays read-only. The narrow confirmed new-branch setup exception is implemented locally and recorded in [ADR-0013](adr/ADR-0013-confirmed-branch-setup.md); it does not authorize controller commits. |
 | Safe completion evidence | Published artifact distinct from process quiescence; CLI-specific background-work policy unresolved. |
@@ -18,7 +18,7 @@ This register preserves unresolved choices and explicitly proposed defaults from
 | Publication uncertainty and restart reconciliation | Never replay blindly; detailed recovery states to implement. |
 | Participant replacement mid-task | Explicit reconciliation, not a pane-ID hot swap. |
 | Automatic-turn budget | The local sequential release shares an explicit default-20 automatic-turn budget across Plan and Implementation, with no phase-transition reset. Larger-roster attempt/refinement/run limits remain open. |
-| Final integration and log retention | How main history and the review archive are preserved. |
+| Final integration and log retention | Journal retention is local: each handoff commit's patch is archived at publication and before worktree removal, and exports are the backup. How exported history travels with a PR or to another host, and any pruning policy, remain open. |
 | Shared remote, hosting provider, PR timing | Optional and separate; local first. |
 | Multi-host worker-control transport | Required beyond Git exchange; not selected. |
 | Per-turn CI and final acceptance gate | Focused versus full validation agreed; mandatory checks open. |
@@ -29,7 +29,7 @@ Planning details still to specify:
 | Topic | Current position |
 | --- | --- |
 | Plan directory and filenames | Local schema 1 uses `.codercrew/plans/<run-UUID>/draft-<agent-id>.md` plus `plan.md`, all ignored/untracked. Solo initially uses its captured draft as the shared version and creates plan.md only for requested refinement. No per-turn project report files. |
-| Ignore-rule setup | Narrow exclusion required and verified read-only; `.gitignore` versus local exclude is the human's choice. This repository's `.gitignore` has excluded `.codercrew/` wholesale since the initial commit, which also hides the proposed `.codercrew/relay-log.md`. Before using that path here, a human must replace the broad rule with a narrow `.codercrew/plans/` exclusion, or select another nonignored log path. The controller does not edit ignore rules. |
+| Ignore-rule setup | Narrow exclusion required and verified read-only; `.gitignore` versus local exclude is the human's choice. This repository's `.gitignore` has excluded `.codercrew/` wholesale since the initial commit, which also hides the once-proposed `.codercrew/relay-log.md`. A tracked mirror there would first need the broad rule narrowed to `.codercrew/plans/`, or another nonignored log path; the default journal needs no ignore change. The controller does not edit ignore rules. |
 | Plan completion API/helper | Local schema 1 uses the strict external `<commandId>.result.json` from the assignment, published before lifecycle completion. Matching hooks, activity evidence and stable artifact capture acknowledge it once. Missing/invalid/late results pause without polling or replay. Native provider result integration remains future work. |
 | Guidance during drafting | Local Request changes is available at a captured, settled plan boundary, with an explicit target and new shared brief revision. Guidance queues during initial drafting, mid-turn supersession and nesting remain deferred. |
 | Native CLI plan-mode integration | Per-adapter host tests for output capture, correlation, allowed writes, activity evidence, and native approval. Gemini is a planned adapter target, not claimed implemented support. |

@@ -14,7 +14,7 @@ import { assertExternalDataDir } from './paths.ts';
 import { isCodexHelper } from './processes.ts';
 import { discoverWorkspaces } from './workspaces.ts';
 import type { CommitAssignment, Group, GroupInput, GroupSelection, ImplementationRun, ImplementationStart, PolicyChange, PublicationResult, ReviewPreviewInput, StandaloneStart } from '../contracts/implementation.ts';
-import { assertClean, assertLogPath, assertWorktreeInput, branchState, gitRead, createConsentedBranch, integrationNames, isAncestor, previewCommittedRange, readPublication, taskBaseline, validateExistingLog, validateNewBranch, validateReviewRange } from './commit-handoff.ts';
+import { archiveCommit, assertClean, assertLogPath, assertWorktreeInput, branchState, gitRead, createConsentedBranch, integrationNames, isAncestor, previewCommittedRange, readPublication, taskBaseline, validateExistingLog, validateNewBranch, validateReviewRange } from './commit-handoff.ts';
 import { classifyAgent } from '../core/workspaces.ts';
 import { messageOf } from '../core/errors.ts';
 import type { PlanCapture, PlanDecision, PlanningAssignment, PlanStart } from '../contracts/planning.ts';
@@ -125,8 +125,20 @@ export class ControlPlane {
     await this.removalGuard(preview.worktree); return preview;
   }
   async removeWorktree(input: WorktreeRemoveInput) {
-    await this.workspaces(); return this.projects.remove(input, (worktree) => this.removalGuard(worktree));
+    await this.workspaces(); return this.projects.remove(input, (worktree) => this.removalGuard(worktree), (worktree) => this.archiveJournal(worktree.root));
   }
+  /** Archive before cleanup: every handoff commit this worktree's runs published keeps its content in the journal, so later
+   * squash integration or branch deletion cannot lose an intermediate revision. A commit already gone has nothing left to keep. */
+  async archiveJournal(root: string): Promise<number> {
+    let archived = 0;
+    for (const record of this.workflow.unarchived(root)) {
+      if (!(await gitRead(root, ['rev-parse', '--verify', '--quiet', `${record.sha}^{commit}`], true)).trim()) continue;
+      this.workflow.saveArchive(record.commandId, await archiveCommit(root, record.sha)); archived++;
+    }
+    return archived;
+  }
+  /** CoderCrew's own history for backup; cloning the repository cannot recover it. */
+  exportHistory(repository?: string) { return this.workflow.exportHistory(repository); }
   private workspaceSessions(discovery: WorkspaceDiscovery): ManagedSession[] {
     const sessions = new Map((this.store.sessions() as ManagedSession[]).map((session) => [session.id, session]));
     for (const workspace of discovery.workspaces) for (const agent of workspace.agents) if (agent.session) sessions.set(agent.session.id, agent.session);
@@ -406,7 +418,7 @@ export class ControlPlane {
     const discovery = await this.workspaces();
     const group = this.workspaceGroups(discovery).find((candidate) => candidate.id === input.groupId);
     if (!group || (input.recipient && !group.members.includes(input.recipient))) throw new AppError('INVALID_GROUP', 'Recheck the selected workspace group and recipient before previewing.', 409);
-    return previewCommittedRange(group.repository, input);
+    return previewCommittedRange(group.repository, input, (agentId, shas) => this.workflow.publishedBy(agentId, shas));
   }
   async submitImplementation(input: ImplementationStart): Promise<CommandRecord> {
     if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'Input is disabled by the host.', 403);
@@ -452,10 +464,12 @@ export class ControlPlane {
     if (input.kind === 'commit' && !input.handoff && input.reviewBase !== undefined) throw new AppError('INVALID_BASELINE', 'A review baseline requires relay.', 409);
     if (input.kind === 'commit' && state.clean) throw new AppError('NO_CHANGES', 'There are no uncommitted changes. Use Relay last commit or Relay recent commits to review committed work.', 409);
     const initialWorktreeFingerprint = !state.clean ? await worktreeFingerprint(worktree.root) : undefined;
-    // Existing log entries stay immutable even when the initial project work is unfinished.
-    if (initialWorktreeFingerprint && await gitRead(worktree.root, ['status', '--porcelain=v1', '--untracked-files=all', '--', `:(literal)${input.logPath}`])) throw new AppError('LOG_CHANGED', 'The relay log has uncommitted changes. Reconcile it or choose a new log path.', 409);
-    await assertLogPath(worktree.root, input.logPath);
-    await validateExistingLog(worktree.root, input.branch.head, input.logPath);
+    // A tracked journal mirror is an explicit project preference; its existing entries stay immutable even when the initial project work is unfinished.
+    if (input.logPath) {
+      if (initialWorktreeFingerprint && await gitRead(worktree.root, ['status', '--porcelain=v1', '--untracked-files=all', '--', `:(literal)${input.logPath}`])) throw new AppError('LOG_CHANGED', 'The relay log has uncommitted changes. Reconcile it or choose a new log path.', 409);
+      await assertLogPath(worktree.root, input.logPath);
+      await validateExistingLog(worktree.root, input.branch.head, input.logPath);
+    }
     // Integration branches are starting points only: task work and its review commits never land on them directly.
     const policy = await taskBaseline(worktree.root, state, this.config.integrationBranches);
     const integration = (name: string) => integrationNames(state.primary, this.config.integrationBranches).includes(name);
@@ -471,12 +485,12 @@ export class ControlPlane {
     if (taskBase !== input.branch.head && !await isAncestor(worktree.root, taskBase, input.branch.head)) throw new AppError('INVALID_BASELINE', 'The task baseline must be the current commit or one of its ancestors.', 409);
     if (input.kind === 'review' || (input.kind === 'commit' && input.handoff)) {
       const reviewBase = input.reviewBase ?? input.branch.head;
-      await validateReviewRange(worktree.root, reviewBase, input.branch.head, input.logPath, input.kind === 'commit');
+      await validateReviewRange(worktree.root, reviewBase, input.branch.head, input.logPath ?? null, input.kind === 'commit');
       if (!await isAncestor(worktree.root, taskBase, reviewBase)) throw new AppError('INVALID_BASELINE', 'The review baseline precedes the task baseline. Both ranges are recorded; keep the review inside the task.', 409);
     }
     const implementation: ImplementationRun = { phase: 'implementation', handoff: 'commit', group: { ...group, cwd }, cwd, worktree,
       policy: input.policy, workerId: input.policy === 'worker_reviewer' ? input.workerId! : null, revision: 1,
-      branch: input.branch.newBranch ?? input.branch.branch!, consent: input.branch, setup: 'pending', logPath: input.logPath,
+      branch: input.branch.newBranch ?? input.branch.branch!, consent: input.branch, setup: 'pending', logPath: input.logPath ?? null,
       taskBaseSha: taskBase, acceptedSha: input.reviewBase ?? input.branch.head,
       candidateSha: input.kind === 'review' ? input.branch.head : null,
       candidateAuthor: input.kind === 'review' ? participants.find((p) => p.id !== input.agentId)!.id : null,
@@ -589,10 +603,10 @@ export class ControlPlane {
           await this.validateMembers(run.participants, run.implementation.cwd, false, 'observe');
           const initialWorktreeFingerprint = turn.implementation.identity.turn === 1 && turn.implementation.identity.action === 'work' ? run.implementation.initialWorktreeFingerprint : undefined;
           await assertWorktreeInput(run.repository, run.implementation.branch, turn.implementation.identity.parent, initialWorktreeFingerprint);
-          await assertLogPath(run.repository, run.implementation.logPath);
+          if (run.implementation.logPath) await assertLogPath(run.repository, run.implementation.logPath);
           if (run.planning) await assertPlanArtifacts(run.planning);
           const assignment: CommitAssignment = { identity: turn.implementation.identity, branch: run.implementation.branch, cwd: run.implementation.cwd,
-            root: run.repository, logPath: run.implementation.logPath, instruction: turn.input.text!, task: run.implementation.request.text ?? (run.implementation.request.kind === 'commit' ? 'Review the current changes; no claim of task completion.' : 'Review the explicitly assigned committed candidate.'), findings: run.implementation.findings,
+            root: run.repository, logPath: run.implementation.logPath, resultPath: turn.implementation.resultPath, instruction: turn.input.text!, task: run.implementation.request.text ?? (run.implementation.request.kind === 'commit' ? 'Review the current changes; no claim of task completion.' : 'Review the explicitly assigned committed candidate.'), findings: run.implementation.findings,
             participant: { agentType: participant.agentType, label: participant.label }, ...(turn.implementation.identity.turn === 1 && run.implementation.request.kind === 'commit' ? { commitOnly: true as const } : {}), ...(initialWorktreeFingerprint ? { initialWorktreeFingerprint } : {}), ...(run.planning?.frozen ? { frozenPlan: run.planning.frozen } : {}) };
           await mkdir(this.workflow.assignmentDirectory, { recursive: true, mode: 0o700 });
           const path = join(this.workflow.assignmentDirectory, `${turn.commandId}.json`);
@@ -652,7 +666,7 @@ export class ControlPlane {
     try {
       await this.validateMembers(run.participants, run.implementation!.cwd, false, 'observe');
       if (run.planning) await assertPlanArtifacts(run.planning);
-      return { publication: await readPublication(run.implementation!, turn.implementation.identity, input.outcome) };
+      return await readPublication(run.implementation!, turn.implementation, input.outcome);
     } catch (error) { return { error: messageOf(error) }; }
   }
   private async planCapture(turn: Execution, input: HookEvent): Promise<PlanCapture | null> {
