@@ -47,6 +47,25 @@ test('Plan and Implementation are explicit readonly choices; Plan collects indep
   expect(starts[0]).toMatchObject({ groupId: group.id, autoContinue: false, requireApproval: true, pauseOnObjection: false, confirmReady: true, implementation: { groupId: group.id, policy: 'peer', handoff: true, branch: null } });
   await page.getByRole('button', { name: 'Lock', exact: true }).click(); expect(starts).toHaveLength(1);
 });
+test('Start Plan explains why it is disabled, including a confirmation cleared by editing the brief', async ({ page, request }) => {
+  const group = await post(request, 'groups', { name: 'Planners', members: ['codex','claude'] }); let starts = 0;
+  await page.route('**/api/v1/planning', async (route) => { starts++; await route.fulfill({ json: { status: 'delivered', error: null } }); });
+  await openGroup(page, group); await page.getByRole('button', { name: '1 · Plan', exact: true }).click();
+  const start = page.getByRole('button', { name: 'Start Plan', exact: true }); const ready = page.getByLabel('Ready for planning');
+  const reason = page.getByRole('region', { name: 'Plan setup' }).getByRole('status');
+  await expect(start).toBeDisabled(); await expect(reason).toHaveText('Enter the shared task brief.');
+  await expect(start).toHaveAccessibleDescription('Enter the shared task brief.');
+  // Ticking Ready first and typing afterwards is the sequence that used to fail silently.
+  await ready.check(); await page.getByLabel('Shared task brief').fill('Plan a scoped feature.');
+  await expect(ready).not.toBeChecked(); await expect(start).toBeDisabled();
+  await expect(reason).toHaveText(/Confirm Ready for planning\. Changing the brief, a setting or the checkout clears an earlier confirmation\./);
+  await expect(start).toHaveAccessibleDescription(/Confirm Ready for planning/); await expect(start).toHaveAttribute('title', /Confirm Ready for planning.*Start document-only planning\./);
+  await ready.check(); await expect(reason).toHaveCount(0); await expect(start).toBeEnabled(); await expect(start).toHaveAttribute('title', 'Start document-only planning.');
+  await page.getByText('Collaboration settings', { exact: true }).click(); await page.getByLabel('Maximum automatic turns across both phases').fill('0');
+  await expect(ready).not.toBeChecked(); await expect(reason).toHaveText('Set the maximum automatic turns to a whole number from 1 to 200.');
+  await page.getByLabel('Maximum automatic turns across both phases').fill('20'); await ready.check(); await expect(reason).toHaveCount(0);
+  await start.click(); await expect.poll(() => starts).toBe(1);
+});
 test('solo Plan can preauthorize automatic Implementation without creating a second planner', async ({ page, request }) => {
   await post(request, 'sessions', { paneId: '%3', label: 'Solo worker' });
   const group = await post(request, 'groups', { name: 'Solo plan', members: ['solo-worker'] }); let start: PlanStart | null = null;

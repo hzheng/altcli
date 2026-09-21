@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { CommandRecord } from '../contracts/api';
 import type { CollaborationPolicy, Group, ReviewPreview } from '../contracts/implementation';
 import type { RelayRun, WorkflowState, Workspace } from '../contracts/workflow';
@@ -93,6 +93,17 @@ export function Implementation({ token, state, group, workspace, workspaceError,
     : needsBaseline && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(taskBase.trim()) ? 'Enter the full task baseline commit before reviewing.'
     : !Number.isInteger(limit) || limit < 1 || limit > 200 ? 'Set the maximum automatic turns to a whole number from 1 to 200.'
     : !ready ? 'Confirm Ready for implementation after checking the review range and all agents.' : null);
+  // Start Plan greys out silently otherwise: the consent key includes the brief, so typing after ticking Ready unticks it.
+  const planBlockedReason = !planning ? '' : blockedReason || (blocked ? 'A run or workspace readiness check blocks new work. See the Console status above.'
+    : busy || checking ? 'Wait for the current request or Recheck to finish.'
+    : workspaceError || !git ? 'Recheck the workspace Git state before planning.'
+    : !git.clean ? 'Plan needs a clean checkout. Commit or separate the changes listed above, then Recheck.'
+    : (branchChoice === 'stay' && (!git.branch || git.integration)) || (branchChoice === 'new' && !branchName.trim()) ? 'Choose the implementation branch and enter its name, or leave the choice for the plan checkpoint.'
+    : needsBaseline && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(taskBase.trim()) ? 'Enter the full task baseline commit.'
+    : !Number.isInteger(limit) || limit < 1 || limit > 200 ? 'Set the maximum automatic turns to a whole number from 1 to 200.'
+    : !text.trim() ? 'Enter the shared task brief.'
+    : !ready ? 'Confirm Ready for planning. Changing the brief, a setting or the checkout clears an earlier confirmation.' : '');
+  const planReasonId = useId();
   async function start(kind: 'work' | 'commit' | 'review', handoff: boolean, review?: ReviewPreview) {
     const standalone = !planning && kind === 'work' && !handoff;
     if ((standalone ? sendDisabled : disabled || (kind === 'review' && !git?.clean)) || !ready || !group || !implementationGroup || !git || !target) return;
@@ -170,7 +181,7 @@ export function Implementation({ token, state, group, workspace, workspaceError,
       <label className="readiness"><input type="checkbox" aria-label={planning ? 'Ready for planning' : 'Ready for implementation'} checked={ready} disabled={planning ? disabled : sendDisabled} onChange={(e) => setConfirmed(e.target.checked ? key : '')} />
         I checked every selected and unselected agent sharing this checkout: all are settled, prompts are empty, and no background writers remain. {planning ? 'I authorize document-only planning and the displayed post-plan settings; any branch choice applies only after Plan finishes.' : 'Send authorizes only this instruction. Commit authorizes one snapshot of all staged, unstaged and nonignored untracked changes as they stand, without completing pending requests or starting a review. Commit current changes & relay also authorizes review from the selected baseline through that snapshot by the named peer. Relay actions authorize the displayed branch choice and scoped handoff commits.'}</label>
       <div className="register-actions">
-        <button className="primary" title={`${blockedReason ? `${blockedReason} ` : ''}${planning ? 'Start document-only planning.' : 'Send one instruction to the selected worker. No automatic commit, branch change, or relay; committing requires an explicit instruction.'}`} disabled={(planning ? disabled : sendDisabled) || !ready || !text.trim()} onClick={() => void start('work', false)}>{planning ? 'Start Plan' : `Send ${targetName}`}</button>
+        <button className="primary" title={`${(planning ? planBlockedReason : blockedReason) ? `${planning ? planBlockedReason : blockedReason} ` : ''}${planning ? 'Start document-only planning.' : 'Send one instruction to the selected worker. No automatic commit, branch change, or relay; committing requires an explicit instruction.'}`} aria-describedby={planBlockedReason ? planReasonId : undefined} disabled={(planning ? disabled : sendDisabled) || !ready || !text.trim()} onClick={() => void start('work', false)}>{planning ? 'Start Plan' : `Send ${targetName}`}</button>
         {!planning && <button title={`${blockedReason || (git?.clean ? 'No uncommitted changes. ' : '')}Commit ${targetName}: snapshot all staged, unstaged and nonignored untracked changes as they stand. No new implementation or automatic relay. One local handoff commit with Git hooks disabled; project checks still run.`} disabled={disabled || !ready || !!git?.clean} onClick={() => void start('commit', false)}>Commit {targetName}</button>}
         {!planning && !solo && <>
           <label className="baseline">Review baseline<select aria-label="Review baseline" value={chosen} disabled={disabled} onChange={(e) => setBaselineChoice(e.target.value)}>
@@ -183,6 +194,7 @@ export function Implementation({ token, state, group, workspace, workspaceError,
         </>}
 
       </div>
+      {planBlockedReason && <p className="fine" role="status" id={planReasonId}>{planBlockedReason}</p>}
       {!planning && !solo && snapshotRelay && <p className="fine">{targetName} commits the current changes; {reviewerName} reviews all changes after the selected baseline through the new snapshot. Choose current HEAD to review only the current changes.</p>}
       {!planning && !solo && last?.error && <p className="fine" role="alert">{last.error}</p>}
       {!planning && !solo && chosen !== 'other' && chosenIndex > 0 && recent?.error && <p className="fine" role="alert">{recent.error}</p>}

@@ -4,6 +4,24 @@
 **Last local validation:** September 21, 2026
 **Scope:** Source scaffold, not a completed release or security certification
 
+## Start Plan explains why it is disabled on September 21, 2026
+
+Clicking Start Plan after filling the brief did nothing: the Plan consent key
+includes the brief text, so ticking "Ready for planning" and then typing unticked
+the box silently, and the disabled button carried only a hover title without the
+cause. No request reached the server (verified in the controller store). The
+consent-revocation behaviour is kept; `Implementation.tsx` now derives one Plan
+blocked reason (identity or run block, request or Recheck in flight, unreadable
+Git state, dirty checkout, incomplete branch choice, missing baseline, turn limit
+out of range, empty brief, or a confirmation to give again because the brief, a
+setting or the checkout changed) and shows it as a status line under the buttons,
+also linked to Start Plan by `aria-describedby` and prefixed to its title. A new
+Playwright case reproduces the tick-then-type sequence and asserts the status
+text, accessible description and title, the turn-limit reason, and one start once
+Ready is confirmed again. `CODERCREW_E2E_PORT=9787 ./scripts/check.sh --e2e`
+exited 0 beside the live console: 30 hook/setup, 41 smoke, 267 workflow, 56 unit,
+type checks, production build, and 146 browser cases across both viewports.
+
 ## Installed hooks and skills follow the main checkout on September 21, 2026
 
 Discarding the `feature/task-mgt` worktree left every CLI hook (`~/.claude/settings.json`
