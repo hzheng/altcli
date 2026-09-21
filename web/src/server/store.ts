@@ -17,7 +17,7 @@ export class Store {
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("busy_timeout = 5000");
     const version = this.db.pragma("user_version", { simple: true }) as number;
-    if (version > 10) throw new Error("Unsupported database version. Do not downgrade this store.");
+    if (version > 12) throw new Error("Unsupported database version. Do not downgrade this store.");
     this.db.transaction(() => {
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -36,7 +36,7 @@ export class Store {
       if (version === 1) this.migrateFromV1();
       if (version < 5) for (const pair of this.pairs()) this.saveGroup({ id: pair.id, name: pair.name, repository: pair.repository,
         cwd: null, members: pair.sessions, revision: 1, createdAt: pair.createdAt, legacyPairId: pair.id });
-      this.db.exec("PRAGMA user_version = 10"); // older servers must not ignore an uncertain squash-integration or discard owner (v9: journal-only runs)
+      this.db.exec("PRAGMA user_version = 12"); // older servers must not reuse retired squash checkpoints
     })();
   }
   /** v1 had one global reservation in `control` and sessions without agentType. */
@@ -77,6 +77,14 @@ export class Store {
   }
   saveWorktreeIntegration(operation: WorktreeIntegration): void {
     this.db.prepare('INSERT INTO worktree_integrations(id,value) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(operation.input.requestId, JSON.stringify(operation));
+  }
+  /** Keep results for deduplication and history, but never reuse a removed worktree's batch boundary. */
+  retireWorktreeIntegrations(projectId: string, worktreeId: string): void {
+    for (const operation of this.worktreeIntegrations()) {
+      if (operation.status === 'integrated' && !operation.retired && operation.input.projectId === projectId && operation.input.worktreeId === worktreeId) {
+        this.saveWorktreeIntegration({ ...operation, retired: true });
+      }
+    }
   }
   worktreeDiscards(): WorktreeDiscard[] {
     return (this.db.prepare('SELECT value FROM worktree_discards ORDER BY rowid').all() as { value: string }[]).map((row) => JSON.parse(row.value));

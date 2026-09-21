@@ -320,7 +320,7 @@ test('checkpoint restart preserves captured text, roster, endorsements and owner
 test('v5 upgrade preserves stored runs and groups and marks phase-aware data as incompatible with older schedulers', async () => {
   const input = request(); await plane.submitPlan(input); const saved = run(input.requestId); const groups = store.groups();
   store.db.pragma('user_version = 5'); store.close(); store = new Store(join(directory, 'metadata'));
-  assert.equal(store.db.pragma('user_version', { simple: true }), 10); assert.deepEqual(store.groups(), groups);
+  assert.equal(store.db.pragma('user_version', { simple: true }), 12); assert.deepEqual(store.groups(), groups);
   const record = store.db.prepare('SELECT value FROM workflow_runs WHERE id=?').get(input.requestId) as { value: string };
   assert.deepEqual(JSON.parse(record.value), saved);
 });

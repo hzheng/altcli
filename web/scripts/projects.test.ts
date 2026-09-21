@@ -323,7 +323,7 @@ async function taskFixture() {
 }
 const noGuard = async () => {};
 /** The compact confirmation the browser sends: consent digest plus the (possibly edited) message, never the preview itself. */
-const confirmSquash = (preview: WorktreeIntegrationPreview, message = preview.message) => ({ projectId: preview.projectId, worktreeId: preview.worktreeId, requestId: preview.requestId, consent: preview.consent, message, confirm: true as const });
+const confirmSquash = (preview: WorktreeIntegrationPreview, message = preview.message) => ({ projectId: preview.projectId, worktreeId: preview.worktreeId, through: preview.through, requestId: preview.requestId, consent: preview.consent, message, confirm: true as const });
 test('squash integration previews the exact merge result, commits once on the main checkout with normal hooks, and is idempotent', async () => {
   const { request, target } = await taskFixture(); const mainHead = git(root, 'rev-parse', 'HEAD'); const base = mainHead;
   const preview = await catalog.previewIntegration(target);
@@ -332,7 +332,7 @@ test('squash integration previews the exact merge result, commits once on the ma
   assert.equal(preview.mergeBase, base); assert.equal(preview.commitCount, 2); assert.deepEqual(preview.commits.map((c) => c.subject), ['second', 'first']);
   assert.notEqual(preview.tree, git(root, 'rev-parse', 'HEAD^{tree}'));
   assert.match(preview.message, /^Squash feature\/finished\n\nSquash of feature\/finished \([0-9a-f]{7}\.\.[0-9a-f]{7}, 2 commits\)\.\n\n- first\n- second\n$/);
-  assert.deepEqual(preview.commands, [`git -C ${root} merge --squash ${preview.head}`, `git -C ${root} commit -m <message>`]);
+  assert.deepEqual(preview.commands, [`git -C ${root} diff --binary --full-index --no-renames --no-ext-diff --no-textconv --ignore-submodules=none --no-relative --src-prefix=a/ --dst-prefix=b/ ${preview.targetHead} ${preview.tree} -- | git -C ${root} apply --index --binary --whitespace=nowarn`, `git -C ${root} commit -m <message>`]);
   assert.equal(git(root, 'status', '--porcelain'), ''); assert.equal(git(root, 'rev-parse', 'HEAD'), mainHead); // preview touched nothing
   let guards = 0;
   assert.match(preview.consent, /^[0-9a-f]{64}$/); assert.equal((await catalog.previewIntegration(target)).consent, preview.consent); // consent is stable for an unchanged operation
@@ -348,7 +348,7 @@ test('squash integration previews the exact merge result, commits once on the ma
   const removal = await catalog.previewRemoval(target); assert.equal(removal.integratedBy, 'squash'); assert.equal(removal.integratedCommit, commit);
   assert.deepEqual(await catalog.integrate(confirmed, async () => { throw new Error('must not retry'); }), result); assert.equal(git(root, 'rev-parse', 'HEAD'), commit);
   await assert.rejects(catalog.integrate({ ...confirmed, message: 'other' }, noGuard), /different request/);
-  await assert.rejects(catalog.previewIntegration(target), /changes nothing in main.*Check removal/);
+  await assert.rejects(catalog.previewIntegration(target), /already integrated.*Check removal/);
 });
 test('squash integration refuses conflicts, dirty or missing integration checkouts, the main worktree, stale consent, busy guards and read-only hosts', async () => {
   const { request, target, mainId } = await taskFixture();
@@ -489,14 +489,14 @@ test('the store version advances for the new operation owners: unresolved integr
   store.saveWorktreeIntegration({ input: integration, status: 'uncertain', message: 'fixture', updatedAt: new Date().toISOString(), commit: null });
   const discard = { ...await catalog.previewDiscard(target), confirmBranch: 'feature/finished', confirm: true as const };
   store.saveWorktreeDiscard({ input: discard, status: 'uncertain', message: 'fixture', updatedAt: new Date().toISOString() });
-  assert.equal(store.db.pragma('user_version', { simple: true }), 10);
+  assert.equal(store.db.pragma('user_version', { simple: true }), 12);
   store.close(); store = new Store(config.dataDir); catalog = new ProjectCatalog(store, config);
-  assert.equal(store.db.pragma('user_version', { simple: true }), 10);
+  assert.equal(store.db.pragma('user_version', { simple: true }), 12);
   assert.deepEqual(store.worktreeIntegrations().map((op) => [op.input.requestId, op.status]), [[integration.requestId, 'uncertain']]);
   assert.deepEqual(store.worktreeDiscards().map((op) => [op.input.requestId, op.status]), [[discard.requestId, 'uncertain']]);
   assert.throws(() => catalog.assertWorktreeReady(root), /squash integration/); assert.throws(() => catalog.assertWorktreeReady(request.path), /discard/);
   await assert.rejects(catalog.create(await input('another')), /owns this project/);
-  store.db.pragma('user_version = 11'); store.close();
+  store.db.pragma('user_version = 13'); store.close();
   assert.throws(() => new Store(config.dataDir), /Unsupported database version/);
   store = new Store(join(directory, 'fresh-metadata')); // afterEach closes this one
 });
@@ -530,4 +530,156 @@ test('a long-history preview confirms unedited within the HTTP body limit, and t
   assert.throws(() => parseIntegrate({ ...confirmSquash(quoted), consent: 'nope' }), /consent digest/);
   assert.throws(() => parseIntegrate({ ...confirmSquash(quoted), projectId: 'p'.repeat(201) }), /identifiers/);
   assert.throws(() => parseIntegrate({ ...quoted, message: quoted.message, confirm: true }), /Unknown worktree field/); // the preview echo is no longer a request
+});
+
+test('three squash batches resume after the selected endpoint, preserve intervening main edits, survive restart and allow removal only at HEAD', async () => {
+  const request = await input('feature/batches'); await catalog.create(request);
+  writeFileSync(join(request.path, 'app.txt'), 'first batch\n'); git(request.path, 'add', '.'); git(request.path, 'commit', '-m', 'first');
+  const first = git(request.path, 'rev-parse', 'HEAD');
+  writeFileSync(join(request.path, 'second.txt'), 'second batch\n'); git(request.path, 'add', '.'); git(request.path, 'commit', '-m', 'second');
+  const second = git(request.path, 'rev-parse', 'HEAD');
+  writeFileSync(join(request.path, 'third.bin'), Buffer.from([0, 255, 128, 1])); git(request.path, 'add', '.'); git(request.path, 'commit', '-m', 'third');
+  const head = git(request.path, 'rev-parse', 'HEAD');
+  const project = (await catalog.discover([await workspace(root)], []))[0]!;
+  const target = { projectId: project.id, worktreeId: project.worktrees.find((w) => w.path === request.path)!.id };
+  const preview = await catalog.previewIntegration({ ...target, through: first.slice(0, 12) });
+  assert.equal(preview.through, first); assert.equal(preview.head, head); assert.equal(preview.commitCount, 1); assert.equal(preview.previousCommit, null);
+  await assert.rejects(catalog.integrate({ ...confirmSquash(preview), through: second }, noGuard), /changed/);
+  assert.equal(store.worktreeIntegrations().length, 0);
+  const one = await catalog.integrate(confirmSquash(preview, 'batch one'), noGuard); assert.equal(one.status, 'integrated', one.message);
+  assert.equal(readFileSync(join(root, 'app.txt'), 'utf8'), 'first batch\n'); assert.equal(existsSync(join(root, 'second.txt')), false);
+  await assert.rejects(catalog.previewRemoval(target), /not an ancestor/);
+  await assert.rejects(catalog.previewIntegration({ ...target, through: first }), /already integrated/);
+  await assert.rejects(catalog.previewIntegration({ ...target, through: preview.mergeBase }), /after the previous squash batch/);
+  assert.deepEqual(await catalog.integrate(confirmSquash(preview, 'batch one'), noGuard), one);
+  await assert.rejects(catalog.integrate({ ...confirmSquash(preview, 'batch one'), through: second }, noGuard), /different request/);
+  // A later main edit to an earlier batch must survive; replaying the original merge base would conflict here.
+  writeFileSync(join(root, 'app.txt'), 'improved on main\n'); git(root, 'add', '.'); git(root, 'commit', '-m', 'main improvement');
+  const twoPreview = await catalog.previewIntegration({ ...target, through: second });
+  assert.equal(twoPreview.mergeBase, first); assert.equal(twoPreview.previousCommit, one.commit); assert.equal(twoPreview.commitCount, 1);
+  const two = await catalog.integrate(confirmSquash(twoPreview, 'batch two'), noGuard); assert.equal(two.status, 'integrated', two.message);
+  assert.equal(readFileSync(join(root, 'app.txt'), 'utf8'), 'improved on main\n'); assert.equal(existsSync(join(root, 'third.bin')), false);
+  store.close(); store = new Store(config.dataDir); catalog = new ProjectCatalog(store, config);
+  const last = await catalog.previewIntegration(target); assert.equal(last.through, head); assert.equal(last.mergeBase, second); assert.equal(last.commitCount, 1);
+  const three = await catalog.integrate(confirmSquash(last, 'batch three'), noGuard); assert.equal(three.status, 'integrated', three.message);
+  assert.deepEqual(readFileSync(join(root, 'third.bin')), Buffer.from([0, 255, 128, 1]));
+  assert.equal(readFileSync(join(root, 'app.txt'), 'utf8'), 'improved on main\n');
+  assert.equal((await catalog.previewRemoval(target)).integratedCommit, three.commit);
+  assert.equal(git(request.path, 'rev-parse', 'HEAD'), head); assert.equal(git(request.path, 'status', '--porcelain'), '');
+  assert.deepEqual(store.worktreeIntegrations().map((op) => op.input.message), ['batch one', 'batch two', 'batch three']);
+});
+test('batch previews reject foreign endpoints and stale consent, and ignore checkpoints outside current history', async () => {
+  const { request, target } = await taskFixture();
+  git(root, 'commit', '--allow-empty', '-m', 'main only'); const foreign = git(root, 'rev-parse', 'HEAD');
+  await assert.rejects(catalog.previewIntegration({ ...target, through: foreign }), /on this task branch/);
+  const first = git(request.path, 'rev-parse', 'HEAD~1');
+  const preview = await catalog.previewIntegration({ ...target, through: first });
+  git(request.path, 'commit', '--allow-empty', '-m', 'task advanced');
+  await assert.rejects(catalog.integrate(confirmSquash(preview), noGuard), /changed/);
+  assert.equal(git(root, 'rev-parse', 'HEAD'), foreign); assert.equal(store.worktreeIntegrations().length, 0);
+  const fresh = await catalog.previewIntegration({ ...target, through: first });
+  const result = await catalog.integrate(confirmSquash(fresh), noGuard); assert.equal(result.status, 'integrated');
+  const taskHead = git(request.path, 'rev-parse', 'HEAD');
+  git(request.path, 'reset', '--hard', fresh.mergeBase);
+  await assert.rejects(catalog.previewIntegration(target), /already integrated/);
+  git(request.path, 'reset', '--hard', taskHead);
+  git(root, 'reset', '--hard', foreign);
+  const reset = await catalog.previewIntegration(target);
+  assert.equal(reset.previousCommit, null); assert.equal(reset.mergeBase, fresh.mergeBase);
+  assert.equal(git(root, 'status', '--porcelain'), '');
+});
+for (const action of ['discard', 'remove'] as const) for (const reconcile of [false, true]) test(`${action} retires squash checkpoints before same-path recreation${reconcile ? ' after uncertain-result inspection' : ''}`, async () => {
+  const { request, target } = await taskFixture();
+  const through = git(request.path, 'rev-parse', action === 'discard' ? 'HEAD~1' : 'HEAD');
+  const preview = await catalog.previewIntegration({ ...target, through });
+  const integrated = await catalog.integrate(confirmSquash(preview), noGuard); assert.equal(integrated.status, 'integrated');
+  if (action === 'discard') {
+    const input = await catalog.previewDiscard(target);
+    const original = catalog['discardedExactly'].bind(catalog);
+    if (reconcile) catalog['discardedExactly'] = async () => false;
+    let result = await catalog.discard({ ...input, confirm: true, confirmBranch: input.branch }, noGuard, noArchive);
+    if (reconcile) {
+      assert.equal(result.status, 'uncertain'); catalog['discardedExactly'] = original;
+      result = await catalog.reconcileDiscard(input.requestId);
+    }
+    assert.equal(result.status, 'discarded');
+  } else {
+    const input = await catalog.previewRemoval(target);
+    const original = catalog['removedExactly'].bind(catalog);
+    if (reconcile) catalog['removedExactly'] = async () => false;
+    let result = await catalog.remove({ ...input, confirm: true }, noGuard, noArchive);
+    if (reconcile) {
+      assert.equal(result.status, 'uncertain'); catalog['removedExactly'] = original;
+      result = await catalog.reconcileRemoval(input.requestId);
+    }
+    assert.equal(result.status, 'removed'); git(root, 'branch', '-D', request.branch);
+  }
+  store.close(); store = new Store(config.dataDir); catalog = new ProjectCatalog(store, config);
+  const historical = store.worktreeIntegrations()[0]!;
+  assert.ok('retired' in historical && historical.retired === true);
+  assert.equal(historical.status, 'integrated'); assert.equal(historical.commit, integrated.commit);
+  assert.deepEqual(await catalog.integrate(confirmSquash(preview), noGuard), historical); // Retain request dedup and audit history.
+  const recreated = await input(request.branch); assert.equal(recreated.path, request.path);
+  assert.equal((await catalog.create(recreated)).status, 'ready');
+  writeFileSync(join(recreated.path, 'fresh.txt'), 'new task\n'); git(recreated.path, 'add', '.'); git(recreated.path, 'commit', '-m', 'new task');
+  const next = await catalog.previewIntegration(target); // Same path-derived worktree ID.
+  assert.equal(next.previousCommit, null); assert.equal(next.mergeBase, recreated.sourceHead);
+  await assert.rejects(catalog.previewRemoval(target), /not an ancestor/);
+  const result = await catalog.integrate(confirmSquash(next), noGuard); assert.equal(result.status, 'integrated', result.message);
+  const removal = await catalog.previewRemoval(target); assert.equal(removal.integratedCommit, result.commit);
+  assert.equal((await catalog.remove({ ...removal, confirm: true }, noGuard, noArchive)).status, 'removed');
+});
+for (const mode of ['confirmed', 'manual', 'manual after pruning'] as const) test(`resetting main permits a fresh ${mode} full squash and removal`, async () => {
+  const { request, target } = await taskFixture(); const base = git(root, 'rev-parse', 'HEAD');
+  const preview = await catalog.previewIntegration({ ...target, through: git(request.path, 'rev-parse', 'HEAD~1') });
+  assert.equal((await catalog.integrate(confirmSquash(preview), noGuard)).status, 'integrated');
+  git(root, 'reset', '--hard', base);
+  if (mode === 'manual after pruning') {
+    const old = store.worktreeIntegrations()[0]!.commit!;
+    git(root, 'reflog', 'expire', '--expire=now', '--all'); git(root, 'gc', '--prune=now');
+    assert.throws(() => git(root, 'cat-file', '-e', old));
+  }
+  await assert.rejects(catalog.previewRemoval(target), /not an ancestor/);
+  const fresh = await catalog.previewIntegration(target);
+  assert.equal(fresh.previousCommit, null); assert.equal(fresh.mergeBase, base); assert.equal(fresh.commitCount, 2);
+  if (mode !== 'confirmed') { git(root, 'merge', '--squash', request.branch); git(root, 'commit', '-m', 'manual full squash'); }
+  else assert.equal((await catalog.integrate(confirmSquash(fresh), noGuard)).status, 'integrated');
+  const removal = await catalog.previewRemoval(target);
+  assert.equal(removal.integratedCommit, git(root, 'rev-parse', 'HEAD'));
+  assert.equal((await catalog.remove({ ...removal, confirm: true }, noGuard, noArchive)).status, 'removed');
+});
+test('a rejecting hook keeps a partial batch uncertain until the exact staged result is committed and inspected', async () => {
+  const { request, target } = await taskFixture(); const first = git(request.path, 'rev-parse', 'HEAD~1');
+  const hooks = join(directory, 'hooks'); mkdirSync(hooks); writeFileSync(join(hooks, 'commit-msg'), '#!/bin/sh\nexit 1\n'); chmodSync(join(hooks, 'commit-msg'), 0o755); git(root, 'config', 'core.hooksPath', hooks);
+  const preview = await catalog.previewIntegration({ ...target, through: first });
+  const result = await catalog.integrate(confirmSquash(preview), noGuard); assert.equal(result.status, 'uncertain');
+  assert.throws(() => catalog.assertWorktreeReady(root), /squash integration/);
+  git(root, 'commit', '-m', 'manually completed first batch');
+  store.close(); store = new Store(config.dataDir); catalog = new ProjectCatalog(store, config);
+  assert.equal((await catalog.reconcileIntegration(preview.requestId)).status, 'integrated');
+  const next = await catalog.previewIntegration(target); assert.equal(next.mergeBase, first); assert.equal(next.commitCount, 1);
+});
+test('staging a batch preserves ignored target files that obstruct its changes', async () => {
+  const { target } = await taskFixture();
+  git(root, 'config', 'core.excludesFile', join(directory, 'ignore')); writeFileSync(join(directory, 'ignore'), 'new.txt\n');
+  writeFileSync(join(root, 'new.txt'), 'local ignored data\n');
+  const preview = await catalog.previewIntegration(target);
+  const result = await catalog.integrate(confirmSquash(preview), noGuard);
+  assert.equal(result.status, 'uncertain');
+  assert.equal(readFileSync(join(root, 'new.txt'), 'utf8'), 'local ignored data\n');
+  assert.equal(git(root, 'rev-parse', 'HEAD'), preview.targetHead);
+});
+test('v10 full-branch squash records remain valid batch boundaries after upgrade', async () => {
+  const { request, target } = await taskFixture();
+  const preview = await catalog.previewIntegration(target);
+  const result = await catalog.integrate(confirmSquash(preview), noGuard); assert.equal(result.status, 'integrated');
+  const legacy = JSON.parse(JSON.stringify(result)); delete legacy.input.through; delete legacy.input.previousCommit;
+  store.saveWorktreeIntegration(legacy); store.db.pragma('user_version = 10'); store.close();
+  store = new Store(config.dataDir); catalog = new ProjectCatalog(store, config);
+  assert.equal(store.db.pragma('user_version', { simple: true }), 12);
+  assert.equal((await catalog.previewRemoval(target)).integratedCommit, result.commit);
+  writeFileSync(join(request.path, 'later.txt'), 'later batch\n'); git(request.path, 'add', '.'); git(request.path, 'commit', '-m', 'later');
+  const next = await catalog.previewIntegration(target);
+  assert.equal(next.mergeBase, preview.head); assert.equal(next.previousCommit, result.commit); assert.equal(next.commitCount, 1);
+  assert.equal((await catalog.integrate(confirmSquash(next), noGuard)).status, 'integrated');
 });

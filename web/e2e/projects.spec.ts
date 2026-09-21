@@ -140,10 +140,10 @@ test('squash into main previews the exact operation and message, requires confir
   const inventory = await fixture(page, request); const project = inventory.projects![0]!;
   const target = tree('/home/fixture/tasks/finished', 'feature/finished'); project.worktrees.push(target);
   const shown = { projectId: project.id, worktreeId: target.id, requestId: crypto.randomUUID(), worktree: target.identity, branch: 'feature/finished', head: target.head, dirty: true,
-    targetRef: 'refs/heads/main', targetHead: 'b'.repeat(40), target: project.worktrees[0]!.identity, mergeBase: 'b'.repeat(40), commitCount: 2,
+    targetRef: 'refs/heads/main', targetHead: 'b'.repeat(40), target: project.worktrees[0]!.identity, mergeBase: 'b'.repeat(40), through: target.head, previousCommit: null, commitCount: 2,
     commits: [{ sha: 'd'.repeat(40), subject: 'second' }, { sha: 'c'.repeat(40), subject: 'first' }], tree: 'e'.repeat(40),
     message: 'Squash feature/finished\n\nSquash of feature/finished (bbbbbbb..aaaaaaa, 2 commits).\n\n- first\n- second\n',
-    commands: ['git -C /demo/project merge --squash ' + target.head, 'git -C /demo/project commit -m <message>'], consent: 'f'.repeat(64) };
+    commands: ['git -C /demo/project diff --binary ' + 'b'.repeat(40) + ' ' + 'e'.repeat(40) + ' | git -C /demo/project apply --index --binary', 'git -C /demo/project commit -m <message>'], consent: 'f'.repeat(64) };
   const posted: unknown[] = [];
   await page.route('**/api/v1/projects/worktrees/integration/preview', (route) => route.fulfill({ json: shown }));
   await page.route('**/api/v1/projects/worktrees/integration', (route) => {
@@ -157,7 +157,7 @@ test('squash into main previews the exact operation and message, requires confir
   await page.getByRole('button', { name: 'Squash feature/finished into main', exact: true }).click();
   const region = page.getByRole('region', { name: 'Squash feature/finished', exact: true });
   await expect(region).toContainText('Squash 2 commits from feature/finished (bbbbbbb..aaaaaaa) into main');
-  await expect(region).toContainText('git -C /demo/project merge --squash'); await expect(region).toContainText('uncommitted changes; they are not part of this squash');
+  await expect(region).toContainText('git -C /demo/project diff --binary'); await expect(region).toContainText('uncommitted changes; they are not part of this squash');
   const message = page.getByLabel('Squash commit message'); await expect(message).toHaveValue(shown.message);
   // The budget shown is the JSON-encoded size the server enforces; an oversized message disables confirmation instead of failing later.
   const confirm = page.getByRole('button', { name: 'Confirm squash', exact: true }); await expect(confirm).toBeEnabled();
@@ -167,7 +167,7 @@ test('squash into main previews the exact operation and message, requires confir
   await page.getByRole('button', { name: 'Confirm squash', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('Squashed feature/finished into main');
   // The confirmation is compact: consent digest plus the edited message, never the (possibly large) preview echoed back.
-  expect(posted).toEqual([{ projectId: project.id, worktreeId: target.id, requestId: shown.requestId, consent: shown.consent, message: 'feat: finished\n\nSquash of feature/finished.\n', confirm: true }]);
+  expect(posted).toEqual([{ projectId: project.id, worktreeId: target.id, through: shown.through, requestId: shown.requestId, consent: shown.consent, message: 'feat: finished\n\nSquash of feature/finished.\n', confirm: true }]);
   await expect(page.getByRole('button', { name: 'Squash feature/finished into main', exact: true })).toBeVisible();
 });
 test('discard warns about the work that would be lost and requires the exact branch name', async ({ page, request }, info) => {
@@ -248,4 +248,62 @@ test('an empty worktree keeps its setup guidance beside a shell pane, while a bl
   await expect(page.getByRole('heading', { name: 'No eligible agents here yet' })).toBeVisible();
   await expect(page.getByText('This pane moved from /demo/project')).toBeVisible();
   await expect(page.getByText('Start coding CLIs in')).toHaveCount(0);
+});
+
+test('idle source agents permit squash while deletion stays disabled; disabled squash explains host and ownership blockers', async ({ page, request }) => {
+  const inventory = await fixture(page, request); const project = inventory.projects![0]!;
+  const target = tree('/home/fixture/tasks/batches', 'feature/batches'); project.worktrees.push(target);
+  inventory.workspaces.push({ ...inventory.workspaces[0]!, cwd: target.path, worktree: target.identity!, branch: target.branch });
+  await page.getByRole('button', { name: 'Recheck', exact: true }).click();
+  const squash = page.getByRole('button', { name: 'Squash feature/batches into main', exact: true });
+  await expect(squash).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Check removal of feature/batches', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Discard feature/batches', exact: true })).toBeDisabled();
+  const state = await (await request.get('/api/v1/state', { headers })).json() as WorkflowState;
+  state.runs = []; state.executions = []; state.reservations = []; state.inputEnabled = false;
+  await page.route('**/api/v1/state', (route) => route.fulfill({ json: state }));
+  await expect(squash).toBeDisabled(); await expect(squash).toHaveAccessibleDescription('The host is read-only. Enable input before squashing.');
+  state.inputEnabled = true; state.reservations = [{ repository: target.path, activeCommandId: crypto.randomUUID() }];
+  await expect(squash).toHaveAccessibleDescription('An unresolved delivery owns this worktree. Inspect it in Console before squashing.');
+  state.reservations = [];
+  project.creations = [{ input: { ...preview(inventory, 'feature/pending'), confirm: true }, status: 'uncertain', message: 'Inspect creation.', updatedAt: new Date().toISOString() }];
+  await page.getByRole('button', { name: 'Recheck', exact: true }).click();
+  await expect(squash).toHaveAccessibleDescription('A worktree operation is applying or uncertain. Inspect its result below before squashing.');
+  project.creations = []; target.branch = null;
+  await page.getByRole('button', { name: 'Recheck', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Squash batches into main', exact: true })).toHaveAccessibleDescription('The task worktree has detached HEAD. Check out its task branch, then Recheck.');
+});
+test('changing the batch endpoint revokes its preview and confirms only the chosen range with an edited message', async ({ page, request }, info) => {
+  const inventory = await fixture(page, request); const project = inventory.projects![0]!;
+  const target = tree('/home/fixture/tasks/batches', 'feature/batches'); project.worktrees.push(target);
+  const previews: unknown[] = []; const confirms: unknown[] = [];
+  const first = 'c'.repeat(40); const base = 'b'.repeat(40);
+  let shown: Record<string, unknown>;
+  await page.route('**/api/v1/projects/worktrees/integration/preview', (route) => {
+    const input = route.request().postDataJSON(); previews.push(input);
+    const through = input.through ?? target.head;
+    shown = { ...input, through, projectId: project.id, worktreeId: target.id, requestId: crypto.randomUUID(), worktree: target.identity, branch: target.branch, head: target.head, dirty: false,
+      targetRef: 'refs/heads/main', targetHead: base, target: project.worktrees[0]!.identity, mergeBase: base, previousCommit: null, commitCount: through === first ? 1 : 2,
+      commits: [{ sha: target.head, subject: 'later change' }, { sha: first, subject: 'first change' }], tree: 'e'.repeat(40), message: through === first ? 'First batch\n' : 'All changes\n', commands: ['Stage previewed changes', 'Commit'], consent: 'f'.repeat(64) };
+    return route.fulfill({ json: shown });
+  });
+  await page.route('**/api/v1/projects/worktrees/integration', (route) => {
+    confirms.push(route.request().postDataJSON());
+    return route.fulfill({ json: { input: { ...shown, confirm: true }, status: 'integrated', message: 'Batch integrated. Preview another batch for remaining commits.', updatedAt: new Date().toISOString(), commit: 'd'.repeat(40) } });
+  });
+  await page.getByRole('button', { name: 'Recheck', exact: true }).click();
+  await page.getByRole('button', { name: 'Squash feature/batches into main', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Confirm squash', exact: true })).toBeEnabled();
+  await page.getByLabel('Squash through commit').fill(first);
+  await expect(page.getByRole('button', { name: 'Confirm squash', exact: true })).toHaveCount(0); expect(confirms).toEqual([]);
+  await page.getByRole('button', { name: 'Preview batch', exact: true }).click();
+  const region = page.getByRole('region', { name: 'Squash feature/batches', exact: true });
+  await expect(region).toContainText('Squash 1 commit from feature/batches (bbbbbbb..ccccccc)');
+  await expect(region).toContainText('Later task commits will remain for another batch.');
+  await page.getByLabel('Squash commit message').fill('feat: batch one');
+  await page.screenshot({ path: info.outputPath('squash-batch.png'), fullPage: true });
+  await page.getByRole('button', { name: 'Confirm squash', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Batch integrated.');
+  expect(previews).toEqual([{ projectId: project.id, worktreeId: target.id }, { projectId: project.id, worktreeId: target.id, through: first }]);
+  expect(confirms).toEqual([{ projectId: project.id, worktreeId: target.id, through: first, requestId: shown!.requestId, consent: 'f'.repeat(64), message: 'feat: batch one', confirm: true }]);
 });

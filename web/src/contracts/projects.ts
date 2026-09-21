@@ -55,13 +55,17 @@ export interface WorktreeRemoval {
 }
 
 /** Squash integration of a task branch into the integration branch, run in the checkout that has that branch checked out. */
-export interface WorktreeIntegrationInput { projectId: string; worktreeId: string }
+export interface WorktreeIntegrationInput { projectId: string; worktreeId: string; /** Inclusive endpoint; omitted means current HEAD. */ through?: string }
 export interface WorktreeIntegrationPreview extends WorktreeIntegrationInput {
   requestId: string;
   /** The task worktree whose branch is integrated; it is not modified. */
   worktree: WorktreeIdentity;
   branch: string;
   head: string;
+  /** Resolved inclusive endpoint of this batch; HEAD remains pinned separately. */
+  through: string;
+  /** Previous verified squash commit on the target, or null for the first batch. */
+  previousCommit: string | null;
   /** Uncommitted changes in the task worktree are not part of the squash. */
   dirty: boolean;
   targetRef: string;
@@ -83,10 +87,12 @@ export interface WorktreeIntegrationPreview extends WorktreeIntegrationInput {
 }
 /** Compact confirmation: the server re-derives the preview and requires its consent digest to match, so the request stays
  * within the HTTP body limit however many commits the preview listed. */
-export interface WorktreeIntegrateRequest { projectId: string; worktreeId: string; requestId: string; consent: string; message: string; confirm: true }
+export interface WorktreeIntegrateRequest { projectId: string; worktreeId: string; through?: string; requestId: string; consent: string; message: string; confirm: true }
 /** The durable consent record: the re-derived preview with the confirmed message. */
 export interface WorktreeIntegrateInput extends WorktreeIntegrationPreview { confirm: true }
 export interface WorktreeIntegration {
+  /** Historical result retained after removal/discard; no longer a batch checkpoint. */
+  retired?: boolean;
   input: WorktreeIntegrateInput;
   status: 'applying' | 'integrated' | 'uncertain' | 'failed';
   message: string;

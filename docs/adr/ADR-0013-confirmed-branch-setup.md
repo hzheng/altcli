@@ -134,11 +134,49 @@ reports the merge base, the commits being squashed (newest first, at most 100
 listed), the merged tree, a default commit message and the exact commands. Dirty
 task-worktree changes are reported, not squashed. An already-integrated branch is
 pointed at Check removal. Run or delivery ownership of either checkout refuses the
-preview; panes in the integration checkout are permitted, so confirmation states
+preview; idle panes in either checkout are permitted, so confirmation states
 that its agents must be idle because the merge changes its files and index.
 
+User requirement, September 21, 2026: squash can run in multiple explicitly
+confirmed batches. The user selects an inclusive **through commit** (a SHA on
+the task branch, default HEAD) and edits the resulting commit message. The
+preview pins the selected endpoint separately from the current task HEAD;
+changing either endpoint or branch tip requires fresh consent. The first batch
+starts at the unique common merge base. Later batches start after the source
+endpoint of the latest recorded, verified squash, whose commit must still be
+an ancestor of the integration tip, with its source endpoint still an ancestor
+of the task HEAD. Inapplicable or unreadable checkpoints fall back to the unique
+current merge base and a fresh full-range preview; removal can still use its
+independent ancestry or exact-patch evidence. Each batch creates one
+single-parent commit and leaves both later task commits and the source checkout
+untouched. These boundaries survive restart in the existing integration records;
+SQLite v11 prevents older servers from treating partial batches as full-branch
+integration. Pre-batch records are interpreted as having integrated their HEAD.
+Confirmed removal or discard (including successful inspection of an uncertain
+result) atomically retires that worktree's checkpoints while retaining their
+results for history and duplicate requests. A recreated worktree cannot inherit
+those boundaries. SQLite v12 prevents older servers from reusing retired records.
+
+[Git 2.40 or newer](https://git-scm.com/docs/git-merge-tree/2.40.0) computes
+the three-way result using the explicit batch base (`git merge-tree --merge-base=<base>`). This preserves intervening main changes
+without replaying previously integrated changes. The exact result is staged
+through `git diff --binary` piped directly to `git apply --index --binary`, with
+argument arrays and both processes awaited, then committed under normal hooks.
+This also refuses ignored files that obstruct incoming paths instead of deleting
+them. Final tree/parent/cleanliness verification and uncertain-owner handling
+remain mandatory. Clean-worktree removal can use the verified batch history only
+when its latest source endpoint equals the current task HEAD.
+
+The UI shows a visible, accessible explanation whenever squash is disabled,
+including host read-only mode, a pending request, discovery errors, detached
+HEAD, run/delivery ownership, unresolved worktree operations, stale previews and
+invalid messages. Pane presence alone disables deletion actions, not squash.
+Git checks remain authoritative and their rejection messages appear beside the
+preview controls. Selecting another SHA clears the old preview and message
+consent; the browser never starts a batch automatically.
+
 The preview carries a consent digest of every pinned field (project/worktree
-identities, branch, HEAD, target ref and HEAD, merge base, commit list, merged
+identities, branch, HEAD, selected endpoint, previous squash, target ref and HEAD, batch base, commit list, merged
 tree, commands). The confirmation is compact: request ID, that digest and the
 final editable commit message. One sizing policy governs the message: at most
 8 KiB once JSON-encoded (escapes count), which together with the bounded
@@ -149,7 +187,8 @@ list cut with a count of omitted commits) so a long history confirms unedited.
 The server re-derives the preview and refuses a changed digest before claiming
 anything. The durable record is the
 re-derived preview with the confirmed message. Persist a project setup owner,
-revalidate the digest and ownership, then execute only `git merge --squash <head>` followed by
+revalidate the digest and ownership, stage the exact previewed tree with a streamed
+binary diff from the pinned target HEAD and `git apply --index --binary`, followed by
 `git commit -m <message>` in the integration checkout, under the repository's
 normal hook policy: only handoff commits bypass hooks, final integration does
 not. Success is exactly one new single-parent commit on the previous tip whose

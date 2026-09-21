@@ -24,6 +24,7 @@ interface Props {
   selectedKey: string | null; onSelectWorkspace: (workspace: Workspace) => void;
   selectedRoot: string | null; onSelectWorktree: (worktree: ProjectWorktree) => void;
   inputEnabled: boolean; runs: RelayRun[];
+  deliveryRepositories?: string[];
   /** Something changed on the server: show the notice and refresh. */
   onChanged: (notice: string) => Promise<void>;
 }
@@ -63,6 +64,12 @@ export function Workspaces(props: Props) {
       <ul className="workspace-cards" aria-label="Available worktrees">{project.worktrees.map((tree) => {
         const groups = workspaces.filter((w) => w.worktree.root === tree.path); const agents = groups.flatMap((w) => w.agents);
         const run = props.runs.find((r) => r.repository === tree.path && ['running', 'waiting', 'paused'].includes(r.status));
+        const squashReason = !props.inputEnabled ? 'The host is read-only. Enable input before squashing.'
+          : props.disabled ? 'Another request is in progress. Wait for it to finish.'
+          : discoveryError || discovery?.error || tree.error || project.error
+          || (!tree.branch ? 'The task worktree has detached HEAD. Check out its task branch, then Recheck.' : '')
+          || (run ? `A ${run.status} run owns this worktree. Finish it or reconcile it in Console before squashing.` : '')
+          || (props.deliveryRepositories?.includes(tree.path) ? 'An unresolved delivery owns this worktree. Inspect it in Console before squashing.' : '');
         const selected = (directoryRoot ?? selectedRoot) === tree.path;
         return <li key={tree.id} className={selected ? 'selected' : ''}><button type="button" className="workspace-card" aria-pressed={selected} aria-label={`Open ${nameOf(tree.path)}`} onClick={() => {
           setDirectoryRoot(tree.path);
@@ -74,7 +81,7 @@ export function Workspaces(props: Props) {
           <span className="muted">{tree.error ?? (run ? `${run.implementation ? 'Implementation' : run.planning ? 'Plan' : 'Staging'} · ${run.status}` : agents.length ? agents.map((a) => a.label).join(', ') : 'No agents · start coding CLIs here, then Recheck')}</span>
           {groups.length > 1 && <span>{groups.length} agent directories · choose a task group</span>}
         </button>{!tree.main && <WorktreeActions project={project} tree={tree} token={props.token}
-          disabled={props.disabled || !props.inputEnabled || !!discoveryError || !!tree.error || !!run || agents.length > 0}
+          disabled={!!squashReason} disabledReason={squashReason} deletionDisabled={agents.length > 0}
           onChanged={props.onChanged} />}</li>;
       })}</ul>
       {directories.length > 1 && <div className="directory-groups"><h3>Choose the task group directory</h3><p className="fine">Collaborators must share a directory. These groups share one checkout; only one may own it at a time.</p>

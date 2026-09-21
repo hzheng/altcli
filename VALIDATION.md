@@ -4,6 +4,63 @@
 **Last local validation:** September 21, 2026
 **Scope:** Source scaffold, not a completed release or security certification
 
+## Stale squash checkpoint recovery on September 21, 2026
+
+Checkpoints outside either current branch history, or with missing Git objects,
+now fall back to a fresh full-range preview and independent removal evidence.
+Successful removal/discard atomically retires checkpoints, including when an
+uncertain result is resolved by inspection. Historical results and duplicate
+request handling remain intact. SQLite v12 prevents downgrade to servers that
+would reuse retired records.
+
+- Seven focused scenarios failed against the prior implementation, then passed
+  after the fix. A further regression covers a pruned historical squash object.
+- `./scripts/check.sh` exited 0: 28 hook/setup, 41 smoke, 263 workflow (including
+  52 real-Git/SQLite project cases), 56 unit tests, type checks and production build.
+- Recovery coverage includes removal/discard followed by same-path recreation,
+  uncertain-result inspection, persisted retirement, duplicate requests, and a
+  main reset followed by either a confirmed or manual full squash and removal.
+- OpenAPI parsed and all 335 internal references resolved.
+
+Browser tests were not rerun for this server-only correction. All Git mutations
+in these checks used disposable fixtures. No installed-agent acceptance or live
+backend restart was performed; restart remains pending until delivery settles.
+
+## Batch squash and disabled explanations on September 21, 2026
+
+Squash now accepts an inclusive task-branch commit SHA (default HEAD), previews
+that range and accepts an edited message for one integration commit per batch.
+Later batches resume after the last verified source endpoint, retaining unrelated
+main changes; rewritten histories are refused. Batch records survive restart,
+SQLite v11 rejects older servers, and v10 full-branch records remain usable as
+boundaries. Removal recognises verified batches through the current task HEAD.
+The previewed merged-tree diff is streamed into `git apply --index --binary`
+without a shell and committed under normal hooks, preserving ignored files that
+obstruct incoming changes. Idle source panes no longer disable squash. Disabled
+buttons show visible, accessible reasons; endpoint edits revoke preview consent.
+
+Executed checks:
+
+- `./scripts/check.sh` exited 0: 28 hook/setup tests, 41 smoke tests, 256 workflow
+  tests, 56 unit tests, TypeScript checks and production build.
+- All 45 real-Git/SQLite project tests passed in disposable repositories. New
+  coverage exercises three batches with intervening main edits and binary data,
+  restart, duplicate/conflicting requests, foreign/stale/rewritten endpoints,
+  partial-hook failure and inspection, obstructing ignored files, removal only
+  after the final batch, and upgrading old full-branch records.
+- `env CODERCREW_E2E_PORT=9787 ./scripts/check.sh --e2e` exited 0, including
+  repeated non-browser checks and all 140 Playwright cases (70 desktop, 70 iPhone;
+  4.7 minutes).
+- Six focused Playwright cases passed on desktop/iPhone: edited squash messages,
+  idle source agents versus deletion, disabled explanations, and endpoint edits
+  requiring a fresh preview. Desktop and iPhone batch screenshots were inspected.
+- OpenAPI parsed with 335 internal references resolved. The diff passed whitespace
+  checking and secret screening (none found).
+
+No live worktree was integrated or deleted, and installed-agent acceptance was
+not performed. The live backend was not restarted while delivering this task;
+restart it after the turn settles before using the new server behavior.
+
 ## Confirmed squash integration and discard on September 21, 2026
 
 Projects now offers three confirmed end-of-task actions per linked task worktree,

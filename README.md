@@ -153,13 +153,18 @@ empty checkouts, and explicitly used/created projects are remembered after resta
 New worktrees have no agents: prepare dependencies/environment and launch coding
 CLIs in the new directory yourself, then Recheck. No automatic cleanup or merge
 follows completion; each linked task worktree instead offers three confirmed
-end-of-task actions in Projects. **Squash into main** previews one squash commit
-of the task branch into local main/default (the exact `git merge --squash` and
+end-of-task actions in Projects. Squash can run in successive batches: choose
+**Squash through commit**, preview the range, edit its message, and confirm. Leave
+the SHA empty for all remaining commits. Later batches resume after the last
+recorded endpoint; idle agent panes are allowed, and disabled squash actions
+explain their blocker. **Squash into main** previews one squash commit of the task
+branch through a chosen SHA into local main/default (the exact staging and
 `git commit` in the checkout that has that branch checked out, the commits
 involved, a conflict-free merged tree and an editable message) and performs it
 on confirmation; the target checkout must be clean and unowned, and the task
 branch and worktree are left as they are. **Check removal** previews and confirms
-non-force removal after ancestry or an exact squash patch verifies integration;
+non-force removal after ancestry, an exact squash patch, or verified batches
+through the current task HEAD prove integration;
 modified and nonignored untracked files, panes and unresolved runs block it,
 ignored files are allowed with a warning, and the branch and history remain.
 **Discard…** force-removes the worktree and deletes its branch without

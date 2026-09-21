@@ -47,8 +47,9 @@ export function parseRemoval(value: unknown): WorktreeRemoveInput {
 }
 const identity = (value: unknown) => { const body = object(value); fields(body, ['root', 'gitDir', 'indexPath']); return { root: text(body.root), gitDir: text(body.gitDir), indexPath: text(body.indexPath) }; };
 export function parseIntegrationPreview(value: unknown): WorktreeIntegrationInput {
-  const body = object(value); fields(body, ['projectId', 'worktreeId']);
-  return { projectId: text(body.projectId), worktreeId: text(body.worktreeId) };
+  const body = object(value); fields(body, ['projectId', 'worktreeId', 'through']);
+  if (body.through !== undefined && (typeof body.through !== 'string' || !/^[0-9a-f]{7,64}$/i.test(body.through))) throw new AppError('INVALID_WORKTREE', 'Enter a commit SHA (at least 7 hexadecimal characters), or leave it empty for HEAD.');
+  return { projectId: text(body.projectId), worktreeId: text(body.worktreeId), ...(body.through === undefined ? {} : { through: (body.through as string).toLowerCase() }) };
 }
 /** The commit message is the one editable field: printable, newlines allowed, and at most 8 KiB once JSON-encoded (core/squash-message.ts). */
 function commitMessage(value: unknown): string {
@@ -59,12 +60,12 @@ function commitMessage(value: unknown): string {
 /** Server-generated identifiers are far shorter; the bound keeps every accepted compact request within the 16 KiB body limit. */
 const MAX_IDENTIFIER = 200;
 export function parseIntegrate(value: unknown): WorktreeIntegrateRequest {
-  const body = object(value); fields(body, ['projectId', 'worktreeId', 'requestId', 'consent', 'message', 'confirm']);
+  const body = object(value); fields(body, ['projectId', 'worktreeId', 'through', 'requestId', 'consent', 'message', 'confirm']);
   if (body.confirm !== true) throw new AppError('CONFIRM_REQUIRED', 'Confirm the exact squash integration.');
   if (typeof body.consent !== 'string' || !/^[0-9a-f]{64}$/.test(body.consent)) throw new AppError('INVALID_WORKTREE', 'Confirm the previewed squash; its consent digest is missing.');
   const projectId = text(body.projectId); const worktreeId = text(body.worktreeId);
   if (projectId.length > MAX_IDENTIFIER || worktreeId.length > MAX_IDENTIFIER) throw new AppError('INVALID_WORKTREE', 'Recheck the project; its identifiers are not ones this host issued.');
-  return { projectId, worktreeId, requestId: requestId(body.requestId), consent: body.consent, message: commitMessage(body.message), confirm: true };
+  return { projectId, worktreeId, ...(body.through === undefined ? {} : { through: sha(body.through) }), requestId: requestId(body.requestId), consent: body.consent, message: commitMessage(body.message), confirm: true };
 }
 export function parseDiscardPreview(value: unknown): WorktreeDiscardInput {
   const body = object(value); fields(body, ['projectId', 'worktreeId']);

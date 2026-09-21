@@ -1,10 +1,10 @@
 'use client';
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import type { Project, ProjectWorktree, WorktreeDiscard, WorktreeDiscardPreview, WorktreeIntegration, WorktreeIntegrationPreview, WorktreeRemoval, WorktreeRemovalPreview } from '../contracts/projects';
 import { api, HttpError } from '../client/api';
 import { MAX_MESSAGE_JSON_BYTES, messageJsonBytes } from '../core/squash-message';
 
-interface ActionProps { project: Project; tree: ProjectWorktree; token: string; disabled: boolean; onChanged: (notice: string) => Promise<void> }
+interface ActionProps { project: Project; tree: ProjectWorktree; token: string; disabled: boolean; disabledReason?: string; onChanged: (notice: string) => Promise<void> }
 const nameFor = (tree: ProjectWorktree) => tree.branch ?? tree.path.split('/').filter(Boolean).pop() ?? tree.path;
 /** Any applying or uncertain operation on the project holds every lifecycle action until it is inspected. */
 const isHeld = (project: Project) => [...project.creations, ...(project.removals ?? []), ...(project.integrations ?? []), ...(project.discards ?? [])].some((op) => ['applying', 'uncertain'].includes(op.status));
@@ -12,25 +12,34 @@ const short = (sha: string) => sha.slice(0, 12);
 const refName = (ref: string) => ref.replace('refs/heads/', '');
 
 /** The three confirmed end-of-task operations on a linked worktree, each with its own server preview and confirmation. */
-export function WorktreeActions(props: ActionProps) {
+export function WorktreeActions(props: ActionProps & { deletionDisabled?: boolean }) {
   return <div className="worktree-actions">
     <IntegrateWorktree {...props} />
-    <RemoveWorktree {...props} />
-    <DiscardWorktree {...props} />
+    <RemoveWorktree {...props} disabled={props.disabled || !!props.deletionDisabled} />
+    <DiscardWorktree {...props} disabled={props.disabled || !!props.deletionDisabled} />
   </div>;
 }
 
 /** One squash commit on the integration branch, made in the checkout that has it checked out. The task worktree is untouched. */
-export function IntegrateWorktree({ project, tree, token, disabled, onChanged }: ActionProps) {
+export function IntegrateWorktree({ project, tree, token, disabled, disabledReason, onChanged }: ActionProps) {
   const [preview, setPreview] = useState<WorktreeIntegrationPreview | null>(null); const [message, setMessage] = useState('');
+  const [choosing, setChoosing] = useState(false); const [through, setThrough] = useState('');
+  const [commits, setCommits] = useState<WorktreeIntegrationPreview['commits']>([]); const controlId = useId();
   const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [unknown, setUnknown] = useState(false);
   const held = isHeld(project); const name = nameFor(tree);
   const current = preview?.head === tree.head && preview?.branch === tree.branch && preview?.worktree.root === tree.path;
   // The same budget the server enforces: the JSON-encoded message, so escapes count and the confirmation always fits.
   const messageBytes = messageJsonBytes(message); const messageValid = !!message.trim() && messageBytes <= MAX_MESSAGE_JSON_BYTES;
+  const blockedReason = disabled ? disabledReason || 'Squash is unavailable. Recheck the worktree.'
+    : held ? 'A worktree operation is applying or uncertain. Inspect its result below before squashing.'
+    : unknown ? 'The last squash response is unknown. Inspect its result before continuing.'
+    : busy ? 'Checking or applying this squash. Wait for it to finish.' : '';
+  const reason = blockedReason || (preview && !current ? 'The worktree changed. Preview this batch again.'
+    : preview && !messageValid ? 'Enter a nonempty commit message within the size limit.' : '');
+  const cancel = () => { setPreview(null); setChoosing(false); setThrough(''); setCommits([]); setError(''); };
   async function inspect() {
-    setBusy(true); setError(''); setPreview(null);
-    try { const shown = await api<WorktreeIntegrationPreview>(token, 'projects/worktrees/integration/preview', { body: { projectId: project.id, worktreeId: tree.id } }); setPreview(shown); setMessage(shown.message); }
+    setChoosing(true); setBusy(true); setError(''); setPreview(null);
+    try { const shown = await api<WorktreeIntegrationPreview>(token, 'projects/worktrees/integration/preview', { body: { projectId: project.id, worktreeId: tree.id, ...(through.trim() ? { through: through.trim() } : {}) } }); setPreview(shown); setMessage(shown.message); setCommits(shown.commits); }
     catch (caught) { setError(caught instanceof Error ? caught.message : 'Squash check failed.'); }
     finally { setBusy(false); }
   }
@@ -39,8 +48,8 @@ export function IntegrateWorktree({ project, tree, token, disabled, onChanged }:
     setBusy(true); setError('');
     try {
       // Compact consent: the digest stands for the previewed operation, so the request stays small however many commits were listed.
-      const result = await api<WorktreeIntegration>(token, 'projects/worktrees/integration', { body: { projectId: project.id, worktreeId: tree.id, requestId: preview.requestId, consent: preview.consent, message, confirm: true } });
-      await onChanged(result.message); setPreview(null);
+      const result = await api<WorktreeIntegration>(token, 'projects/worktrees/integration', { body: { projectId: project.id, worktreeId: tree.id, through: preview.through, requestId: preview.requestId, consent: preview.consent, message, confirm: true } });
+      await onChanged(result.message); cancel();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Squash response is unknown. Inspect the integration checkout; do not resend.');
       if (!(caught instanceof HttpError) || caught.status >= 500) { setUnknown(true); setError('Squash response is unknown. Inspect its result before doing anything else; do not resend.'); }
@@ -52,22 +61,32 @@ export function IntegrateWorktree({ project, tree, token, disabled, onChanged }:
     try {
       const result = await api<WorktreeIntegration>(token, 'projects/worktrees/integration/reconcile', { body: { requestId: preview.requestId } });
       await onChanged(result.message);
-      if (result.status === 'integrated' || result.status === 'failed') { setUnknown(false); setPreview(null); }
+      if (result.status === 'integrated' || result.status === 'failed') { setUnknown(false); cancel(); }
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Inspection failed. Nothing was retried.'); }
     finally { setBusy(false); }
   }
   return <div className="create-worktree">
-    {!preview && <button type="button" className="quiet" aria-label={`Squash ${name} into main`} disabled={disabled || busy || held || unknown} onClick={() => void inspect()}>Squash into main</button>}
+    {!choosing && <button type="button" className="quiet" aria-label={`Squash ${name} into main`} aria-describedby={reason ? `${controlId}-reason` : undefined} disabled={!!blockedReason} onClick={() => void inspect()}>Squash into main</button>}
+    {reason && <p className="fine" id={`${controlId}-reason`} role="status">{reason}</p>}
+    {choosing && <div className="notice">
+      <label>Squash through commit<input aria-label="Squash through commit" placeholder="Leave empty for HEAD, or paste a SHA" list={`${controlId}-commits`} value={through} disabled={busy || unknown}
+        onChange={(event) => { setThrough(event.target.value); setPreview(null); setError(''); }} /></label>
+      <datalist id={`${controlId}-commits`}>{commits.map((commit) => <option key={commit.sha} value={commit.sha}>{commit.subject}</option>)}</datalist>
+      <p className="fine">Leave empty for all remaining commits. A SHA includes that commit and stops this batch there. Each batch creates one commit on main; later batches resume after the last integrated commit.</p>
+      <button type="button" disabled={!!blockedReason} onClick={() => void inspect()}>Preview batch</button>
+      {!preview && <button type="button" className="quiet" disabled={busy || unknown} onClick={cancel}>Cancel</button>}
+    </div>}
     {preview && <div className="notice" role="region" aria-label={`Squash ${name}`}>
-      <p>Squash {preview.commitCount} commit{preview.commitCount === 1 ? '' : 's'} from <span className="mono">{preview.branch}</span> (<span className="mono">{preview.mergeBase.slice(0, 7)}..{preview.head.slice(0, 7)}</span>) into <span className="mono">{refName(preview.targetRef)}</span> at <span className="mono">{short(preview.targetHead)}</span>, in <span className="mono">{preview.target.root}</span>. Merged without conflicts; the new commit's tree will be <span className="mono">{short(preview.tree)}</span>.</p>
+      <p>Squash {preview.commitCount} commit{preview.commitCount === 1 ? '' : 's'} from <span className="mono">{preview.branch}</span> (<span className="mono">{preview.mergeBase.slice(0, 7)}..{preview.through.slice(0, 7)}</span>) into <span className="mono">{refName(preview.targetRef)}</span> at <span className="mono">{short(preview.targetHead)}</span>, in <span className="mono">{preview.target.root}</span>. Merged without conflicts; the new commit's tree will be <span className="mono">{short(preview.tree)}</span>.</p>
+      <p>{preview.previousCommit ? `Continues after squash ${short(preview.previousCommit)}. ` : ''}{preview.through !== preview.head ? 'Later task commits will remain for another batch.' : 'This batch reaches the current task HEAD.'}</p>
       <p className="mono commands">{preview.commands.join('\n')}</p>
       {preview.dirty && <p>The task worktree has uncommitted changes; they are not part of this squash.</p>}
       <p>Agents in <span className="mono">{preview.target.root}</span> must be idle: the merge changes its files and index. The task branch and worktree stay as they are; use Check removal afterwards. This cannot be undone in the app.</p>
       <label>Commit message<textarea aria-label="Squash commit message" value={message} disabled={busy || unknown} rows={6} onChange={(e) => setMessage(e.target.value)} /></label>
       <p className="fine" aria-live="polite">{messageBytes.toLocaleString()} of {MAX_MESSAGE_JSON_BYTES.toLocaleString()} bytes (JSON-encoded, as sent){messageBytes > MAX_MESSAGE_JSON_BYTES ? ' — shorten the message to confirm.' : ''}</p>
       {!current && <p>The worktree changed. Cancel and check again.</p>}
-      <button type="button" disabled={disabled || busy || held || unknown || !current || !messageValid} onClick={() => void integrate()}>Confirm squash</button>
-      <button type="button" className="quiet" disabled={busy || unknown} onClick={() => setPreview(null)}>Cancel</button>
+      <button type="button" aria-describedby={reason ? `${controlId}-reason` : undefined} disabled={!!reason} onClick={() => void integrate()}>Confirm squash</button>
+      <button type="button" className="quiet" disabled={busy || unknown} onClick={cancel}>Cancel</button>
     </div>}
     {unknown && <button type="button" disabled={busy} onClick={() => void inspectUnknown()}>Inspect this squash result</button>}
     {error && <p className="notice error" role="alert">{error}</p>}

@@ -1,6 +1,6 @@
 # Local setup
 
-Use Node 24, tmux and Git 2.36 or newer on the same awake host as Codex and
+Use Node 24, tmux and Git 2.40 or newer on the same awake host as Codex and
 Claude Code; project discovery reads `git worktree list --porcelain -z`, which
 older Git rejects. Run one backend per store, as the user who owns the tmux
 socket. Keep this clone available: installed hooks and skills point into it.
@@ -106,7 +106,10 @@ retried and nothing is rolled back or deleted automatically. A failed operation
 may leave empty parent directories.
 
 When a task is finished, each linked task worktree offers three confirmed
-actions. **Squash into main** shows the exact squash commit that would land on
+actions. Idle panes do not block squash; a disabled button shows its reason.
+Choose a through-commit SHA to integrate a prefix, with one edited commit message
+per batch; leave it empty to integrate the remainder after the last recorded batch.
+**Squash into main** shows the exact squash commit that would land on
 local main/default (in the checkout that has it checked out, which must be clean
 and free of runs), with the commits involved and an editable message; confirm to
 perform it under the repository's normal hook policy. **Check removal** verifies
