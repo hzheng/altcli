@@ -443,6 +443,72 @@ test('discard refuses stale consent, busy guards, read-only hosts and the main c
   assert.equal((await catalog.reconcileDiscard(again.requestId)).status, 'discarded');
   assert.equal(existsSync(request.path), false); assert.equal(git(root, 'branch', '--list', 'feature/finished'), '');
 });
+test('a discard interrupted between worktree removal and branch deletion reports that state, refuses a moved branch, and finishes only on confirmation', async () => {
+  const { request, target } = await taskFixture();
+  const confirmed = { ...await catalog.previewDiscard(target), confirmBranch: 'feature/finished', confirm: true as const };
+  // The backend died after `git worktree remove --force` and before `git branch -D`.
+  store.saveWorktreeDiscard({ input: confirmed, status: 'applying', message: 'interrupted', updatedAt: new Date().toISOString() });
+  git(root, 'worktree', 'remove', '--force', '--', request.path);
+  catalog = new ProjectCatalog(store, config);
+  const inspected = await catalog.reconcileDiscard(confirmed.requestId);
+  assert.equal(inspected.status, 'uncertain'); assert.equal(inspected.branchRemains, true);
+  assert.match(inspected.message, /^The worktree directory is gone, its Git worktree entry is gone and the branch feature\/finished still exists at [0-9a-f]{12}\. Only the branch deletion is left: confirm it below/);
+  assert.equal(git(root, 'rev-parse', 'feature/finished'), confirmed.head); // inspection deleted nothing
+  assert.throws(() => catalog.assertWorktreeReady(request.path), /discard/);
+  await assert.rejects(new ProjectCatalog(store, { ...config, inputEnabled: false }).finishDiscard({ requestId: confirmed.requestId, confirm: true }), /disabled/);
+  await assert.rejects(catalog.finishDiscard({ requestId: randomUUID(), confirm: true }), /not found/);
+  // A branch that moved is not the deletion that was consented to.
+  git(root, 'branch', '-f', 'feature/finished', `${confirmed.head}~1`);
+  await assert.rejects(catalog.finishDiscard({ requestId: confirmed.requestId, confirm: true }), /not at the branch-only step/);
+  const moved = await catalog.reconcileDiscard(confirmed.requestId);
+  assert.equal(moved.status, 'uncertain'); assert.equal(moved.branchRemains, undefined); assert.match(moved.message, /The branch moved from the confirmed [0-9a-f]{12}, so the app will not delete it/);
+  git(root, 'branch', '-f', 'feature/finished', confirmed.head);
+  assert.equal((await catalog.reconcileDiscard(confirmed.requestId)).branchRemains, true);
+  const stored = () => store.worktreeDiscards().find((op) => op.input.requestId === confirmed.requestId)!;
+  const evidence = catalog['discardEvidence'].bind(catalog);
+  // An inspection that read the uncertain record while a finish then took the applying owner leaves that owner alone.
+  catalog['discardEvidence'] = async (op) => { const found = await evidence(op); store.saveWorktreeDiscard({ ...op, status: 'applying', updatedAt: new Date().toISOString() }); return found; };
+  assert.equal((await catalog.reconcileDiscard(confirmed.requestId)).status, 'applying'); assert.equal(stored().status, 'applying');
+  const restored = { ...stored(), status: 'uncertain' as const, updatedAt: new Date().toISOString() }; store.saveWorktreeDiscard(restored);
+  // A finish that lost the owner race after its evidence check records nothing.
+  catalog['discardEvidence'] = async (op) => { const found = await evidence(op); store.saveWorktreeDiscard({ ...op, status: 'applying' }); return found; };
+  await assert.rejects(catalog.finishDiscard({ requestId: confirmed.requestId, confirm: true }), /already being finished/);
+  store.saveWorktreeDiscard(restored); assert.equal(git(root, 'rev-parse', 'feature/finished'), confirmed.head);
+  // An inspection whose evidence predates a concurrent finish must not restore the hold over the finished record.
+  let interleaved = false;
+  catalog['discardEvidence'] = async (op) => { const found = await evidence(op); if (!interleaved) { interleaved = true; await catalog.finishDiscard({ requestId: confirmed.requestId, confirm: true }); } return found; };
+  const finished = await catalog.reconcileDiscard(confirmed.requestId); catalog['discardEvidence'] = evidence;
+  assert.equal(finished.status, 'discarded', finished.message); assert.equal(finished.branchRemains, undefined); assert.match(finished.message, /branch is deleted after the worktree/);
+  assert.deepEqual(stored(), finished); assert.equal(git(root, 'branch', '--list', 'feature/finished'), '');
+  assert.deepEqual(await catalog.finishDiscard({ requestId: confirmed.requestId, confirm: true }), finished);
+  assert.deepEqual(await catalog.reconcileDiscard(confirmed.requestId), finished);
+  assert.doesNotThrow(() => catalog.assertWorktreeReady(request.path));
+});
+test('discard inspection describes a changed worktree, a stale Git entry and an unverified branch deletion instead of returning the record unchanged', async () => {
+  const { request, target } = await taskFixture();
+  const confirmed = { ...await catalog.previewDiscard(target), confirmBranch: 'feature/finished', confirm: true as const };
+  store.saveWorktreeDiscard({ input: confirmed, status: 'uncertain', message: 'interrupted', updatedAt: new Date().toISOString() });
+  writeFileSync(join(request.path, 'late.txt'), 'appeared after the confirmed preview\n');
+  const changed = await catalog.reconcileDiscard(confirmed.requestId);
+  assert.equal(changed.status, 'uncertain'); assert.match(changed.message, /still present but its files or branch changed since the confirmed preview/); assert.equal(changed.branchRemains, undefined);
+  await assert.rejects(catalog.finishDiscard({ requestId: confirmed.requestId, confirm: true }), /not at the branch-only step/);
+  assert.equal(existsSync(join(request.path, 'late.txt')), true);
+  // Directory deleted by hand while Git still lists the worktree: nothing is pruned or deleted by the app.
+  rmSync(request.path, { recursive: true });
+  const stale = await catalog.reconcileDiscard(confirmed.requestId);
+  assert.equal(stale.status, 'uncertain'); assert.equal(stale.branchRemains, undefined);
+  assert.match(stale.message, /^The worktree directory is gone, its Git worktree entry remains and the branch feature\/finished still exists at [0-9a-f]{12}\. Inspect the host by hand \(a stale entry needs `git worktree prune`\)/);
+  await assert.rejects(catalog.finishDiscard({ requestId: confirmed.requestId, confirm: true }), /not at the branch-only step/);
+  git(root, 'worktree', 'prune');
+  assert.equal((await catalog.reconcileDiscard(confirmed.requestId)).branchRemains, true);
+  catalog['discardedExactly'] = async () => false;
+  const unverified = await catalog.finishDiscard({ requestId: confirmed.requestId, confirm: true });
+  assert.equal(unverified.status, 'uncertain'); assert.match(unverified.message, /Branch deletion or its verification is uncertain/); assert.equal(unverified.branchRemains, undefined);
+  assert.equal(git(root, 'branch', '--list', 'feature/finished'), '');
+  store.close(); store = new Store(config.dataDir); catalog = new ProjectCatalog(store, config);
+  const settled = await catalog.reconcileDiscard(confirmed.requestId);
+  assert.equal(settled.status, 'discarded'); assert.match(settled.message, /Discard verified/);
+});
 test('integration and discard recheck run ownership at the HTTP control boundary; discard also requires no pane in the checkout', async () => {
   const { Controller } = await import('../src/server/controller.ts');
   const { ControlPlane } = await import('../src/server/control-plane.ts');

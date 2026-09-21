@@ -205,12 +205,13 @@ export function DiscardWorktree({ project, tree, token, disabled, disabledReason
   </div>;
 }
 
-/** Applying or uncertain lifecycle operations stay visible with read-only inspection until they reach a recorded result. */
+/** Applying or uncertain lifecycle operations stay visible with read-only inspection until they reach a recorded result. A discard whose
+ * inspection found only the branch left, at the confirmed head, also offers the confirmed finish of that same consent. */
 export function LifecycleResults({ project, token, onChanged }: { project: Project; token: string; onChanged: (notice: string) => Promise<void> }) {
   const [busy, setBusy] = useState(false); const [error, setError] = useState('');
-  async function inspect(path: string, requestId: string) {
+  async function send(path: string, body: { requestId: string; confirm?: true }) {
     setBusy(true); setError('');
-    try { const result = await api<{ message: string }>(token, path, { body: { requestId } }); await onChanged(result.message); }
+    try { const result = await api<{ message: string }>(token, path, { body }); await onChanged(result.message); }
     catch (caught) { setError(caught instanceof Error ? caught.message : 'Inspection failed.'); }
     finally { setBusy(false); }
   }
@@ -218,15 +219,16 @@ export function LifecycleResults({ project, token, onChanged }: { project: Proje
   return <>
     {pending(project.removals).map((op) => <div className="notice" key={op.input.requestId}>
       <strong>Worktree removal {op.status}</strong><p>{op.message}</p><p className="mono">{op.input.worktree.root}</p>
-      <button type="button" disabled={busy || op.status === 'applying'} onClick={() => void inspect('projects/worktrees/removal/reconcile', op.input.requestId)}>Inspect removal result</button>
+      <button type="button" disabled={busy || op.status === 'applying'} onClick={() => void send('projects/worktrees/removal/reconcile', { requestId: op.input.requestId })}>Inspect removal result</button>
     </div>)}
     {pending(project.integrations).map((op) => <div className="notice" key={op.input.requestId}>
       <strong>Squash integration {op.status}</strong><p>{op.message}</p><p className="mono">{op.input.branch} → {op.input.target.root}</p>
-      <button type="button" disabled={busy || op.status === 'applying'} onClick={() => void inspect('projects/worktrees/integration/reconcile', op.input.requestId)}>Inspect squash result</button>
+      <button type="button" disabled={busy || op.status === 'applying'} onClick={() => void send('projects/worktrees/integration/reconcile', { requestId: op.input.requestId })}>Inspect squash result</button>
     </div>)}
     {pending(project.discards).map((op) => <div className="notice" key={op.input.requestId}>
       <strong>Worktree discard {op.status}</strong><p>{op.message}</p><p className="mono">{op.input.worktree.root}</p>
-      <button type="button" disabled={busy || op.status === 'applying'} onClick={() => void inspect('projects/worktrees/discard/reconcile', op.input.requestId)}>Inspect discard result</button>
+      <button type="button" disabled={busy || op.status === 'applying'} onClick={() => void send('projects/worktrees/discard/reconcile', { requestId: op.input.requestId })}>Inspect discard result</button>
+      {op.status === 'uncertain' && op.branchRemains && <button type="button" className="danger" disabled={busy} onClick={() => void send('projects/worktrees/discard/finish', { requestId: op.input.requestId, confirm: true })}>Delete branch {op.input.branch} and finish discard</button>}
     </div>)}
     {error && <p className="notice error" role="alert">{error}</p>}
   </>;

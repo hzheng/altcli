@@ -22,7 +22,7 @@ import { newPlanning, planAgreed } from './planning-state.ts';
 import { assertPlanArtifacts, assertPlanBaseline, capturePlanResult } from './planning-documents.ts';
 import { ProjectCatalog } from './projects.ts';
 import { AgentActivityTracker } from './agent-activity.ts';
-import type { WorktreeCreateInput, WorktreeDiscardConfirm, WorktreeDiscardInput, WorktreeIntegrateRequest, WorktreeIntegrationInput, WorktreePreviewInput, WorktreeRemovalInput, WorktreeRemoveInput } from '../contracts/projects.ts';
+import type { WorktreeCreateInput, WorktreeDiscardConfirm, WorktreeDiscardFinish, WorktreeDiscardInput, WorktreeIntegrateRequest, WorktreeIntegrationInput, WorktreePreviewInput, WorktreeRemovalInput, WorktreeRemoveInput } from '../contracts/projects.ts';
 
 /** The only controller exposed to HTTP. The older Controller supplies transport/read-model helpers, not scheduling. */
 export class ControlPlane {
@@ -147,6 +147,10 @@ export class ControlPlane {
   }
   async discardWorktree(input: WorktreeDiscardConfirm) {
     await this.workspaces(); return this.projects.discard(input, (worktree) => this.removalGuard(worktree), (worktree) => this.archiveJournal(worktree.root));
+  }
+  /** No occupancy guard: the checkout is verified gone before the remaining branch deletion, and its pending discard refuses new runs. */
+  async finishDiscard(input: WorktreeDiscardFinish) {
+    await this.workspaces(); return this.projects.finishDiscard(input);
   }
   /** Archive before cleanup: every handoff commit this worktree's runs published keeps its content in the journal, so later
    * squash integration or branch deletion cannot lose an intermediate revision. A commit already gone has nothing left to keep. */

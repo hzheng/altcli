@@ -240,8 +240,21 @@ the fingerprint once more after that archive step, then execute
 entry and the branch records success and clears that checkout's saved
 configuration; run history and the journal are retained. Restart or an ambiguous
 result retains ownership as uncertain; inspection recognises complete absence or
-the unchanged original and never retries. SQLite v10 prevents older servers from
-ignoring an uncertain integration or discard owner.
+the unchanged original and never retries. Every other finding is written into the
+record's message rather than returned silently (September 21, 2026 update:
+previously a discard interrupted between the two Git commands stayed uncertain
+with no visible result and no recovery path). When inspection verifies that the
+directory and the Git worktree entry are gone while the branch still sits at the
+confirmed head, the record is marked `branchRemains` and the card offers
+**Delete branch … and finish discard**: a separate confirmed step under the same
+request ID that re-verifies that exact evidence live, takes the applying owner,
+runs only `git branch -D`, and settles on verified absence. A moved branch, a
+stale worktree entry or a still-present directory refuses the finish without
+touching Git and stays uncertain for human inspection. Every discard record
+write is a compare-and-set on the snapshot it was computed from, so an
+inspection that overlaps a finish (or a finish that overlaps a restart) returns
+the record that moved on instead of overwriting it. SQLite v10 prevents older
+servers from ignoring an uncertain integration or discard owner.
 
 ### Branch consent and Plan approval are separate gates
 

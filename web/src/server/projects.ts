@@ -5,10 +5,10 @@ import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import type { SessionRegistration } from '../contracts/api.ts';
-import type { Project, ProjectRecord, ProjectWorktree, WorktreeCreateInput, WorktreeCreation, WorktreeDiscard, WorktreeDiscardConfirm, WorktreeDiscardInput, WorktreeDiscardPreview, WorktreeIntegrateInput, WorktreeIntegrateRequest, WorktreeIntegration, WorktreeIntegrationInput, WorktreeIntegrationPreview, WorktreePreview, WorktreePreviewInput, WorktreeRemoval, WorktreeRemovalInput, WorktreeRemovalPreview, WorktreeRemoveInput } from '../contracts/projects.ts';
+import type { Project, ProjectRecord, ProjectWorktree, WorktreeCreateInput, WorktreeCreation, WorktreeDiscard, WorktreeDiscardConfirm, WorktreeDiscardFinish, WorktreeDiscardInput, WorktreeDiscardPreview, WorktreeIntegrateInput, WorktreeIntegrateRequest, WorktreeIntegration, WorktreeIntegrationInput, WorktreeIntegrationPreview, WorktreePreview, WorktreePreviewInput, WorktreeRemoval, WorktreeRemovalInput, WorktreeRemovalPreview, WorktreeRemoveInput } from '../contracts/projects.ts';
 import type { Workspace, WorktreeIdentity } from '../contracts/workflow.ts';
 import { AppError, messageOf } from '../core/errors.ts';
-import { parseDiscard, parseDiscardPreview, parseIntegrate, parseIntegrationPreview, parseWorktreeCreate, parseWorktreePreview, parseRemoval, parseRemovalPreview } from '../core/project-validation.ts';
+import { parseDiscard, parseDiscardFinish, parseDiscardPreview, parseIntegrate, parseIntegrationPreview, parseWorktreeCreate, parseWorktreePreview, parseRemoval, parseRemovalPreview } from '../core/project-validation.ts';
 import { defaultSquashMessage } from '../core/squash-message.ts';
 import { branchState, defaultBranch, integrationNames, validateNewBranch } from './commit-handoff.ts';
 import type { Config } from './config.ts';
@@ -511,12 +511,18 @@ export class ProjectCatalog {
     return operation;
   }
 
-  private discardFinish(operation: WorktreeDiscard, status: WorktreeDiscard['status'], message: string): WorktreeDiscard {
-    const updated = { ...operation, status, message, updatedAt: new Date().toISOString() };
-    this.store.db.transaction(() => {
+  /** Compare-and-set on the record `operation` was read as: a result computed from that snapshot, after Git and filesystem reads, never
+   * overwrites a record that moved on meanwhile (an inspection overlapping a finish, or a finish overlapping a restart). The current
+   * record is returned instead, so the caller reports what actually happened. */
+  private discardFinish(operation: WorktreeDiscard, status: WorktreeDiscard['status'], message: string, branchRemains = false): WorktreeDiscard {
+    const { branchRemains: _, ...rest } = operation;
+    const updated: WorktreeDiscard = { ...rest, status, message, updatedAt: new Date().toISOString(), ...(branchRemains ? { branchRemains } : {}) };
+    return this.store.db.transaction(() => {
+      const current = this.store.worktreeDiscards().find((op) => op.input.requestId === operation.input.requestId);
+      if (current && (current.status !== operation.status || current.updatedAt !== operation.updatedAt)) return current;
       if (status === 'discarded') this.store.retireWorktreeIntegrations(operation.input.projectId, operation.input.worktreeId);
-      this.store.saveWorktreeDiscard(updated);
-    })(); return updated;
+      this.store.saveWorktreeDiscard(updated); return updated;
+    })();
   }
   /** Read-only: what a forced discard would lose. Dirty files and unintegrated commits are reported, not refused. */
   async previewDiscard(raw: WorktreeDiscardInput): Promise<WorktreeDiscardPreview> {
@@ -570,23 +576,67 @@ export class ProjectCatalog {
         ? 'Discard or its verification is uncertain. Inspect whether the directory and branch remain; nothing will be retried.' : messageOf(error));
     }
   }
-  private async discardedExactly(operation: WorktreeDiscard): Promise<boolean> {
+  /** Read-only: which of the three things a discard deletes are still there. `branch` is the branch tip, or null once deleted. */
+  private async discardEvidence(operation: WorktreeDiscard): Promise<{ directory: boolean; entry: boolean; branch: string | null }> {
     const { input } = operation; const project = this.known.get(input.projectId);
-    if (!project || await exists(input.worktree.root) || (await worktrees(project)).some((w) => w.path === input.worktree.root || w.id === input.worktreeId)) return false;
-    return !(await git(['--git-dir', project.commonDir, 'for-each-ref', '--format=%(refname)', '--', `refs/heads/${input.branch}`])).trim();
+    if (!project) throw new AppError('PROJECT_CHANGED', 'Recheck this project.', 409);
+    return { directory: await exists(input.worktree.root), entry: (await worktrees(project)).some((w) => w.path === input.worktree.root || w.id === input.worktreeId),
+      branch: (await git(['--git-dir', project.commonDir, 'for-each-ref', '--format=%(objectname)', '--', `refs/heads/${input.branch}`])).trim() || null };
   }
+  private async discardedExactly(operation: WorktreeDiscard): Promise<boolean> {
+    try { const found = await this.discardEvidence(operation); return !found.directory && !found.entry && !found.branch; } catch { return false; }
+  }
+  /** Inspection settles complete absence or the unchanged original; every partial state is reported and keeps the owner. When only the
+   * branch is left at the confirmed head, the record offers a confirmed finish; nothing is deleted by inspection itself. */
   async reconcileDiscard(requestId: string): Promise<WorktreeDiscard> {
     const operation = this.store.worktreeDiscards().find((op) => op.input.requestId === requestId);
     if (!operation) throw new AppError('NOT_FOUND', 'Discard operation not found.', 404);
     if (operation.status !== 'uncertain') return operation;
+    const { input } = operation;
     try {
-      if (await this.discardedExactly(operation)) {
-        this.store.clearRepository(operation.input.worktree.root);
+      const found = await this.discardEvidence(operation);
+      if (!found.directory && !found.entry && !found.branch) {
+        this.store.clearRepository(input.worktree.root);
         return this.discardFinish(operation, 'discarded', 'Discard verified: the worktree and branch are gone. No Git changes were made by inspection.');
       }
-      const checked = await this.previewDiscard({ projectId: operation.input.projectId, worktreeId: operation.input.worktreeId });
-      if (isDeepStrictEqual({ ...checked, requestId, confirmBranch: operation.input.branch, confirm: true }, operation.input)) return this.discardFinish(operation, 'failed', 'The original worktree and branch are still present. Nothing was discarded; use a new preview if needed.');
-    } catch { /* Missing evidence retains ownership. */ }
-    return operation;
+      if (found.directory && found.entry) {
+        const checked = await this.previewDiscard({ projectId: input.projectId, worktreeId: input.worktreeId });
+        if (isDeepStrictEqual({ ...checked, requestId, confirmBranch: input.branch, confirm: true }, input)) return this.discardFinish(operation, 'failed', 'The original worktree and branch are still present. Nothing was discarded; use a new preview if needed.');
+        return this.discardFinish(operation, 'uncertain', `The worktree is still present but its files or branch changed since the confirmed preview${found.branch ? '' : `, and the branch ${input.branch} is gone`}. Inspect the directory by hand; nothing is retried.`);
+      }
+      const state = `${found.directory ? 'The worktree directory still exists' : 'The worktree directory is gone'}, its Git worktree entry ${found.entry ? 'remains' : 'is gone'} and the branch ${input.branch} ${found.branch ? `still exists at ${found.branch.slice(0, 12)}` : 'is deleted'}.`;
+      if (!found.directory && !found.entry && found.branch === input.head) return this.discardFinish(operation, 'uncertain', `${state} Only the branch deletion is left: confirm it below to finish this discard, or delete the branch by hand and inspect again.`, true);
+      if (!found.directory && !found.entry) return this.discardFinish(operation, 'uncertain', `${state} The branch moved from the confirmed ${input.head.slice(0, 12)}, so the app will not delete it. Inspect it by hand; the discard settles once the branch is gone.`);
+      return this.discardFinish(operation, 'uncertain', `${state} Inspect the host by hand (a stale entry needs \`git worktree prune\`); nothing is retried.`);
+    } catch (error) { // Missing evidence retains ownership, but says so.
+      return this.discardFinish(operation, 'uncertain', `Inspection could not settle this discard: ${messageOf(error)} Nothing is retried.`);
+    }
+  }
+  /** The confirmed completion of a discard whose worktree is verified gone while its branch still sits at the confirmed head: the same
+   * consent, re-verified live, and only `git branch -D` runs. Anything else present or a moved branch refuses without touching Git. */
+  async finishDiscard(raw: WorktreeDiscardFinish): Promise<WorktreeDiscard> {
+    const { requestId } = parseDiscardFinish(raw);
+    if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'The host has disabled Git setup and terminal input.', 403);
+    const existing = this.store.worktreeDiscards().find((op) => op.input.requestId === requestId);
+    if (!existing) throw new AppError('NOT_FOUND', 'Discard operation not found.', 404);
+    if (existing.status !== 'uncertain') return existing;
+    const { input } = existing; const project = this.known.get(input.projectId);
+    if (!project) throw new AppError('PROJECT_CHANGED', 'Recheck this project.', 409);
+    const found = await this.discardEvidence(existing);
+    if (found.directory || found.entry || found.branch !== input.head) throw new AppError('WORKTREE_CHANGED', 'This discard is not at the branch-only step. Inspect its result again.', 409);
+    // Take the owner before Git so a concurrent finish or a restart cannot record over the outcome.
+    const operation = this.store.db.transaction(() => {
+      const current = this.store.worktreeDiscards().find((op) => op.input.requestId === requestId);
+      if (current?.status !== 'uncertain') throw new AppError('PROJECT_SETUP_BUSY', 'This discard is already being finished. Inspect its result.', 409);
+      return this.discardFinish(current, 'applying', `Deleting the remaining branch ${input.branch}.`);
+    }).immediate();
+    try {
+      await git(['--git-dir', project.commonDir, 'branch', '-D', '--', input.branch]);
+      if (!await this.discardedExactly(operation)) throw new Error('Discard verification failed');
+      this.store.clearRepository(input.worktree.root);
+      return this.discardFinish(operation, 'discarded', `Discarded ${input.branch}: its branch is deleted after the worktree. Run history is retained.`);
+    } catch {
+      return this.discardFinish(operation, 'uncertain', 'Branch deletion or its verification is uncertain. Inspect whether the branch remains; nothing will be retried.');
+    }
   }
 }

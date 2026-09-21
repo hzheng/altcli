@@ -1,6 +1,6 @@
 import { expect, test, type Page, type APIRequestContext } from '@playwright/test';
 import type { WorkspaceDiscovery, WorkflowState } from '../src/contracts/workflow';
-import type { ProjectWorktree, WorktreeCreateInput, WorktreeCreation, WorktreePreview } from '../src/contracts/projects';
+import type { ProjectWorktree, WorktreeCreateInput, WorktreeCreation, WorktreeDiscard, WorktreePreview } from '../src/contracts/projects';
 
 const token = 'a'.repeat(64); // test fixture only
 const headers = { Authorization: `Bearer ${token}` };
@@ -244,6 +244,37 @@ test('a lost removal response offers inspection and cannot resend or discard its
   await page.getByRole('button', { name: 'Inspect this removal response', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Check removal of feature/finished', exact: true })).toBeEnabled();
   expect(removals).toBe(1);
+});
+
+test('an uncertain discard shows what inspection found and finishes only through the confirmed branch deletion', async ({ page, request }) => {
+  const inventory = await fixture(page, request); const project = inventory.projects![0]!;
+  const target = tree('/home/fixture/tasks/finished', 'feature/finished'); // the worktree itself is already gone
+  const input = { projectId: project.id, worktreeId: target.id, requestId: crypto.randomUUID(), worktree: target.identity!, branch: target.branch!, head: target.head!, targetRef: 'refs/heads/main',
+    targetHead: 'b'.repeat(40), dirty: false, changeCount: 0, fingerprint: 'c'.repeat(64), unmergedCommits: 2, confirmBranch: target.branch!, confirm: true as const };
+  const operation: WorktreeDiscard = { input, status: 'uncertain', message: 'Backend restarted during discard. Inspect its result; nothing is retried.', updatedAt: new Date().toISOString() };
+  project.discards = [operation]; const posted: string[] = [];
+  await page.route('**/api/v1/projects/worktrees/discard/reconcile', (route) => {
+    posted.push('reconcile'); expect(route.request().postDataJSON()).toEqual({ requestId: input.requestId });
+    operation.message = 'The worktree directory is gone, its Git worktree entry is gone and the branch feature/finished still exists at aaaaaaaaaaaa. Only the branch deletion is left: confirm it below to finish this discard, or delete the branch by hand and inspect again.';
+    operation.branchRemains = true; return route.fulfill({ json: operation });
+  });
+  await page.route('**/api/v1/projects/worktrees/discard/finish', (route) => {
+    posted.push('finish'); expect(route.request().postDataJSON()).toEqual({ requestId: input.requestId, confirm: true });
+    operation.status = 'discarded'; operation.message = 'Discarded feature/finished: its branch is deleted after the worktree. Run history is retained.'; delete operation.branchRemains;
+    return route.fulfill({ json: operation });
+  });
+  await page.getByRole('button', { name: 'Recheck', exact: true }).click();
+  await expect(page.getByText('Worktree discard uncertain', { exact: true })).toBeVisible();
+  const finish = page.getByRole('button', { name: 'Delete branch feature/finished and finish discard', exact: true });
+  await expect(finish).toHaveCount(0);
+  await page.getByRole('button', { name: 'Inspect discard result', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Only the branch deletion is left');
+  await expect(page.getByLabel('Project worktrees project').getByText('Only the branch deletion is left')).toBeVisible();
+  await expect(finish).toBeVisible(); expect(posted).toEqual(['reconcile']);
+  await finish.click();
+  await expect(page.getByRole('status')).toContainText('its branch is deleted after the worktree');
+  await expect(page.getByText('Worktree discard uncertain', { exact: true })).toHaveCount(0);
+  expect(posted).toEqual(['reconcile', 'finish']);
 });
 
 test('an empty worktree keeps its setup guidance beside a shell pane, while a blocked coding CLI shows its reason', async ({ page, request }) => {

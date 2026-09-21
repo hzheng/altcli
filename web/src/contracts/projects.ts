@@ -120,9 +120,13 @@ export interface WorktreeDiscardPreview extends WorktreeDiscardInput {
 }
 /** `confirmBranch` must repeat the branch name exactly. */
 export interface WorktreeDiscardConfirm extends WorktreeDiscardPreview { confirmBranch: string; confirm: true }
+/** Completes an uncertain discard whose worktree is verified gone while its branch still sits at the confirmed head. */
+export interface WorktreeDiscardFinish { requestId: string; confirm: true }
 export interface WorktreeDiscard {
   input: WorktreeDiscardConfirm;
   status: 'applying' | 'discarded' | 'uncertain' | 'failed';
   message: string;
   updatedAt: string;
+  /** Set by inspection when only `git branch -D` is left: the directory and Git worktree entry are gone and the branch is at the confirmed head. */
+  branchRemains?: boolean;
 }

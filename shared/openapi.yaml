@@ -694,11 +694,36 @@ paths:
                 requestId: {type: string, format: uuid}
       responses:
         '200':
-          description: Read-only inspection; verified absence of directory, worktree entry and branch completes the discard, the unchanged original releases the hold as failed, otherwise uncertainty remains
+          description: Read-only inspection; verified absence of directory, worktree entry and branch completes the discard, the unchanged original releases the hold as failed, and every other state is described in the message while uncertainty remains. When only the branch is left at the confirmed head, branchRemains marks that a confirmed finish may delete it
           content:
             application/json:
               schema: {$ref: '#/components/schemas/WorktreeDiscard'}
         '404': {description: Unknown discard request}
+  /api/v1/projects/worktrees/discard/finish:
+    post:
+      operationId: finishWorktreeDiscard
+      summary: Confirmed completion of an uncertain discard whose worktree is gone while its branch remains
+      description: Re-verifies live that the directory and Git worktree entry are absent and the branch is at the confirmed head, then runs only `git branch -D`. Any other state, including a moved branch, refuses without touching Git. Nothing is retried.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [requestId, confirm]
+              properties:
+                requestId: {type: string, format: uuid}
+                confirm: {type: boolean, const: true}
+      responses:
+        '200':
+          description: Durable discard result
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorktreeDiscard'}
+        '403': {description: Host input disabled}
+        '404': {description: Unknown discard request}
+        '409': {description: Not at the branch-only step, or already being finished}
   /api/v1/projects/worktrees/reconcile:
     post:
       operationId: reconcileTaskWorktree
@@ -1686,6 +1711,7 @@ components:
         status: {type: string, enum: [applying, discarded, uncertain, failed]}
         message: {type: string}
         updatedAt: {type: string, format: date-time}
+        branchRemains: {type: boolean, description: Set by inspection when the directory and worktree entry are gone and the branch is at the confirmed head; a confirmed finish may delete it.}
     ActivityReset:
       type: object
       required: [agentId, registrationId, expectedUpdatedAt, confirmReady]

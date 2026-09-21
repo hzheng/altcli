@@ -1,4 +1,4 @@
-import type { WorktreeCreateInput, WorktreeDiscardConfirm, WorktreeDiscardInput, WorktreeIntegrateRequest, WorktreeIntegrationInput, WorktreePreviewInput, WorktreeRemovalInput, WorktreeRemoveInput } from '../contracts/projects.ts';
+import type { WorktreeCreateInput, WorktreeDiscardConfirm, WorktreeDiscardFinish, WorktreeDiscardInput, WorktreeIntegrateRequest, WorktreeIntegrationInput, WorktreePreviewInput, WorktreeRemovalInput, WorktreeRemoveInput } from '../contracts/projects.ts';
 import { AppError } from './errors.ts';
 import { object, requestId } from './validation.ts';
 import { sha } from './implementation-validation.ts';
@@ -81,4 +81,9 @@ export function parseDiscard(value: unknown): WorktreeDiscardConfirm {
   return { projectId: text(body.projectId), worktreeId: text(body.worktreeId), requestId: requestId(body.requestId), worktree: identity(body.worktree),
     branch, head: sha(body.head), targetRef: text(body.targetRef), targetHead: sha(body.targetHead), dirty: body.dirty, changeCount: Number(body.changeCount),
     fingerprint: sha(body.fingerprint), unmergedCommits: Number(body.unmergedCommits), confirmBranch: branch, confirm: true };
+}
+export function parseDiscardFinish(value: unknown): WorktreeDiscardFinish {
+  const body = object(value); fields(body, ['requestId', 'confirm']);
+  if (body.confirm !== true) throw new AppError('CONFIRM_REQUIRED', 'Confirm deleting the remaining branch.');
+  return { requestId: requestId(body.requestId), confirm: true };
 }
