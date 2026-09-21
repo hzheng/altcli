@@ -166,3 +166,143 @@ test('worktree creation requires exact confirmation fields, not arbitrary Git ar
   assert.throws(() => parseWorktreeCreate({ ...request, force: true }), /Unknown/);
   assert.throws(() => parseWorktreePreview({ projectId: request.projectId, sourceWorktreeId: request.sourceWorktreeId, branch: 'task;touch file' }));
 });
+
+async function removalFixture(squash = true) {
+  const request = await input('feature/finished'); await catalog.create(request);
+  writeFileSync(join(request.path, 'app.txt'), 'one\n'); git(request.path, 'add', '.'); git(request.path, 'commit', '-m', 'first');
+  writeFileSync(join(request.path, 'app.txt'), 'two\n'); git(request.path, 'add', '.'); git(request.path, 'commit', '-m', 'second');
+  if (squash) { git(root, 'merge', '--squash', request.branch); git(root, 'commit', '-m', 'squashed'); }
+  else git(root, 'merge', '--no-ff', request.branch, '-m', 'merged');
+  const project = (await catalog.discover([await workspace(root)], []))[0]!;
+  const tree = project.worktrees.find((w) => w.path === request.path)!;
+  return { request, tree, target: { projectId: project.id, worktreeId: tree.id } };
+}
+for (const squash of [false, true]) test(`confirmed removal verifies ${squash ? 'squash changes' : 'ancestry'}, retains branch and is idempotent`, async () => {
+  const { request, target } = await removalFixture(squash);
+  const preview = await catalog.previewRemoval(target); assert.equal(preview.integratedBy, squash ? 'squash' : 'ancestry');
+  const branchHead = git(request.path, 'rev-parse', 'HEAD'); const input = { ...preview, confirm: true as const };
+  let checks = 0;
+  const removed = await catalog.remove(input, async () => { checks++; });
+  assert.equal(removed.status, 'removed', removed.message); assert.equal(checks, 2);
+  assert.equal(existsSync(request.path), false); assert.equal(git(root, 'rev-parse', request.branch), branchHead);
+  assert.deepEqual(await catalog.remove(input, async () => { throw new Error('must not retry'); }), removed);
+  assert.equal((await catalog.discover([], []))[0]!.worktrees.length, 1);
+  await assert.rejects(catalog.remove({ ...input, head: 'b'.repeat(40) }, async () => {}), /different request/);
+});
+test('squash detection tolerates unrelated later main commits, but rejects later task changes', async () => {
+  const { request, target } = await removalFixture();
+  writeFileSync(join(root, 'other.txt'), 'later main work\n'); git(root, 'add', '.'); git(root, 'commit', '-m', 'later');
+  assert.equal((await catalog.previewRemoval(target)).integratedBy, 'squash');
+  writeFileSync(join(request.path, 'new.txt'), 'not integrated\n'); git(request.path, 'add', '.'); git(request.path, 'commit', '-m', 'new');
+  await assert.rejects(catalog.previewRemoval(target), /not an ancestor/);
+});
+for (const dirty of ['tracked', 'untracked']) test(`removal blocks ${dirty} local data`, async () => {
+  const { request, target } = await removalFixture();
+  const preview = await catalog.previewRemoval(target);
+  writeFileSync(join(request.path, dirty === 'tracked' ? 'app.txt' : 'local.txt'), 'keep me\n');
+  await assert.rejects(catalog.previewRemoval(target), /modified or untracked/);
+  const result = await catalog.remove({ ...preview, confirm: true }, async () => {});
+  assert.equal(result.status, 'failed'); assert.match(result.message, /modified or untracked/);
+  assert.equal(existsSync(request.path), true);
+});
+test('confirmed non-force removal permits ignored environment files and generated directories', async () => {
+  const { request, target } = await removalFixture();
+  git(request.path, 'config', 'core.excludesFile', join(directory, 'ignore'));
+  writeFileSync(join(directory, 'ignore'), '.env.local\nnode_modules/\n');
+  writeFileSync(join(request.path, '.env.local'), 'FIXTURE=true\n');
+  mkdirSync(join(request.path, 'node_modules'));
+  writeFileSync(join(request.path, 'node_modules', 'fixture.txt'), 'generated\n');
+  const preview = await catalog.previewRemoval(target);
+  assert.equal(readFileSync(join(request.path, '.env.local'), 'utf8'), 'FIXTURE=true\n');
+  const result = await catalog.remove({ ...preview, confirm: true }, async () => {});
+  assert.equal(result.status, 'removed', result.message);
+  assert.equal(existsSync(request.path), false);
+  assert.equal(git(root, 'rev-parse', request.branch), preview.head);
+});
+test('stale removal consent, busy guard, read-only host and main checkout never remove files', async () => {
+  const { request, target } = await removalFixture(); const preview = await catalog.previewRemoval(target);
+  git(root, 'commit', '--allow-empty', '-m', 'advanced main');
+  const stale = await catalog.remove({ ...preview, confirm: true }, async () => {});
+  assert.equal(stale.status, 'failed'); assert.match(stale.message, /changed/);
+  const fresh = { ...await catalog.previewRemoval(target), confirm: true as const };
+  const busy = await catalog.remove(fresh, async () => { throw new Error('run owns checkout'); });
+  assert.equal(busy.status, 'failed'); assert.match(busy.message, /run owns/);
+  await assert.rejects(new ProjectCatalog(store, { ...config, inputEnabled: false }).remove(fresh, async () => {}), /disabled/);
+  const project = (await catalog.discover([], []))[0]!;
+  await assert.rejects(catalog.previewRemoval({ projectId: project.id, worktreeId: project.worktrees.find((w) => w.main)!.id }), /Only an accessible linked/);
+  assert.equal(existsSync(request.path), true);
+});
+test('duplicate concurrent removal dispatches once; project setup holds block creation and binding', async () => {
+  const { target } = await removalFixture(); const preview = { ...await catalog.previewRemoval(target), confirm: true as const };
+  let release!: () => void; let entered!: () => void;
+  const ready = new Promise<void>((resolve) => { entered = resolve; }); const wait = new Promise<void>((resolve) => { release = resolve; });
+  const removing = catalog.remove(preview, async () => { entered(); await wait; }); await ready;
+  assert.equal((await catalog.remove(preview, async () => { throw new Error('duplicate'); })).status, 'applying');
+  assert.throws(() => catalog.assertWorktreeReady(preview.worktree.root), /removal is applying/);
+  await assert.rejects(catalog.create(await input('another')), /owns this project/);
+  release(); assert.equal((await removing).status, 'removed');
+});
+test('uncertain removal survives restart and reconciliation never repeats Git mutation', async () => {
+  const { request, target } = await removalFixture(); const preview = { ...await catalog.previewRemoval(target), confirm: true as const };
+  catalog['removedExactly'] = async () => false;
+  assert.equal((await catalog.remove(preview, async () => {})).status, 'uncertain');
+  store.close(); store = new Store(config.dataDir); catalog = new ProjectCatalog(store, config);
+  assert.throws(() => catalog.assertWorktreeReady(request.path), /uncertain/);
+  assert.equal((await catalog.reconcileRemoval(preview.requestId)).status, 'removed');
+  assert.equal(existsSync(request.path), false); assert.ok(git(root, 'rev-parse', request.branch));
+});
+test('restart during removal retains ownership until original result is inspected', async () => {
+  const { target } = await removalFixture(); const input = { ...await catalog.previewRemoval(target), confirm: true as const };
+  store.saveWorktreeRemoval({ input, status: 'applying', message: 'interrupted', updatedAt: new Date().toISOString() });
+  catalog = new ProjectCatalog(store, config);
+  assert.equal(store.worktreeRemovals()[0]!.status, 'uncertain');
+  assert.equal((await catalog.reconcileRemoval(input.requestId)).status, 'failed');
+  assert.equal(existsSync(input.worktree.root), true);
+});
+
+for (const flag of ['--assume-unchanged', '--skip-worktree']) test(`removal refuses hidden index files (${flag})`, async () => {
+  const { request, target } = await removalFixture();
+  git(request.path, 'update-index', flag, 'app.txt'); writeFileSync(join(request.path, 'app.txt'), 'hidden local work\n');
+  await assert.rejects(catalog.previewRemoval(target), /index hides/);
+  assert.equal(readFileSync(join(request.path, 'app.txt'), 'utf8'), 'hidden local work\n');
+});
+test('removal rechecks pane occupancy and retained run ownership at the HTTP control boundary', async () => {
+  const { Controller } = await import('../src/server/controller.ts');
+  const { ControlPlane } = await import('../src/server/control-plane.ts');
+  const { MockAdapter } = await import('../src/server/adapters/mock.ts');
+  const { request, target } = await removalFixture();
+  const adapter = new MockAdapter(); const list = adapter.listPanes.bind(adapter);
+  adapter.listPanes = async () => (await list()).map((pane) => ({ ...pane, cwd: request.path }));
+  const plane = new ControlPlane(new Controller(config, store, adapter));
+  const preview = { ...await catalog.previewRemoval(target), confirm: true as const };
+  await assert.rejects(plane.previewRemoval(target), /tmux pane/);
+  const result = await plane.removeWorktree(preview); assert.equal(result.status, 'failed'); assert.match(result.message, /tmux pane/);
+  adapter.listPanes = async () => [];
+  const member = { ...mockSessions()[0]!, repository: request.path, cwd: request.path, worktree: await resolveWorktree(request.path), registrationId: randomUUID() } as ManagedSession;
+  plane.workflow.start({ requestId: randomUUID(), agentId: member.id, kind: 'instruction', text: 'fixture', confirmReady: true }, [member], null);
+  await assert.rejects(plane.previewRemoval(target), /run or unresolved delivery/);
+  assert.equal(existsSync(request.path), true);
+  adapter.listPanes = async () => { throw new Error('inventory unavailable'); };
+  await assert.rejects(plane.previewRemoval(target), /inventory unavailable/);
+});
+test('a pane in a deleted directory elsewhere never blocks removal; a deleted subdirectory of the checkout still fails closed', async () => {
+  const { Controller } = await import('../src/server/controller.ts');
+  const { ControlPlane } = await import('../src/server/control-plane.ts');
+  const { MockAdapter } = await import('../src/server/adapters/mock.ts');
+  const { request, target } = await removalFixture();
+  const adapter = new MockAdapter(); const list = adapter.listPanes.bind(adapter);
+  let cwd = join(directory, 'gone'); adapter.listPanes = async () => (await list()).map((pane) => ({ ...pane, cwd }));
+  const plane = new ControlPlane(new Controller(config, store, adapter));
+  assert.equal((await plane.previewRemoval(target)).worktree.root, request.path);
+  cwd = join(request.path, 'deleted-subdirectory');
+  await assert.rejects(plane.previewRemoval(target), /tmux pane/);
+  assert.equal(existsSync(request.path), true);
+});
+test('removal refuses a checkout whose ignored files hold the controller data directory through a symlink', async () => {
+  const { request, target } = await removalFixture();
+  git(request.path, 'config', 'core.excludesFile', join(directory, 'ignore')); writeFileSync(join(directory, 'ignore'), '.data/\n');
+  mkdirSync(join(request.path, '.data')); symlinkSync(join(request.path, '.data'), join(directory, 'data-link'));
+  const linked = new ProjectCatalog(store, { ...config, dataDir: join(directory, 'data-link', 'metadata') });
+  await assert.rejects(linked.previewRemoval(target), /overlaps controller data/);
+  assert.equal(existsSync(request.path), true);
+});

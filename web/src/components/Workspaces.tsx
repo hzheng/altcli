@@ -5,6 +5,7 @@ import type { Group } from '../contracts/implementation';
 import type { ManagedSession, RelayRun, Workspace, WorkspaceDiscovery, WorkspaceResetResult } from '../contracts/workflow';
 import type { ProjectWorktree } from '../contracts/projects';
 import { api } from '../client/api';
+import { RemoveWorktree, RemovalResults } from './RemoveWorktree';
 import { CreateWorktree } from './CreateWorktree';
 export const nameOf = (path: string) => path.split('/').filter(Boolean).pop() ?? path;
 export const workspaceKey = (w: Workspace) => `${w.socketPath}\0${w.cwd}`;
@@ -72,11 +73,14 @@ export function Workspaces(props: Props) {
           <span>Branch: <span className="mono">{tree.branch ?? 'detached HEAD'}</span></span>
           <span className="muted">{tree.error ?? (run ? `${run.implementation ? 'Implementation' : run.planning ? 'Plan' : 'Staging'} · ${run.status}` : agents.length ? agents.map((a) => a.label).join(', ') : 'No agents · start coding CLIs here, then Recheck')}</span>
           {groups.length > 1 && <span>{groups.length} agent directories · choose a task group</span>}
-        </button></li>;
+        </button>{!tree.main && <RemoveWorktree project={project} tree={tree} token={props.token}
+          disabled={props.disabled || !props.inputEnabled || !!discoveryError || !!tree.error || !!run || agents.length > 0}
+          onChanged={props.onChanged} />}</li>;
       })}</ul>
       {directories.length > 1 && <div className="directory-groups"><h3>Choose the task group directory</h3><p className="fine">Collaborators must share a directory. These groups share one checkout; only one may own it at a time.</p>
         {directories.map((w) => <button type="button" key={workspaceKey(w)} className="quiet" onClick={() => onSelectWorkspace(w)}><span className="mono">{w.cwd}</span> · {w.agents.map((a) => a.label).join(', ')}</button>)}
       </div>}
+      <RemovalResults project={project} token={props.token} onChanged={props.onChanged} />
       <CreateWorktree key={project.id} project={project} token={props.token} disabled={props.disabled || !props.inputEnabled || !!discoveryError || !!project.error} onChanged={props.onChanged} />
     </section>}
     {open && <WorkspaceDetail key={selectedKey} workspace={open} {...props} />}

@@ -8,7 +8,10 @@ each has a membership checkbox and inline display name. Workspace cards open the
 console directly. Project navigation now uses shared Git metadata and lists all
 linked worktrees, including empty checkouts. Explicit task-worktree creation has
 preview/consent, durable setup ownership and read-only uncertain-result inspection;
-no environments or agents are moved. Each agent directory has one group, with all eligible agents selected
+no environments or agents are moved. Unowned panes moved by the user are rediscovered
+in their verified current worktree. Projects now previews and confirms non-force
+removal of clean unused linked worktrees after ancestry or exact squash integration;
+branches/history remain and uncertain results retain their owner. Each agent directory has one group, with all eligible agents selected
 by default, including 3+; execution still requires one or two. The same group spans both phases.
 The local Plan increment implements the sequential one/two-member path
 of Steps 4–6: N-shaped assignments, captured results, exact-version endorsements,

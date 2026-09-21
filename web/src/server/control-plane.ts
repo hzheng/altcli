@@ -22,7 +22,7 @@ import { newPlanning, planAgreed } from './planning-state.ts';
 import { assertPlanArtifacts, assertPlanBaseline, capturePlanResult } from './planning-documents.ts';
 import { ProjectCatalog } from './projects.ts';
 import { AgentActivityTracker } from './agent-activity.ts';
-import type { WorktreeCreateInput, WorktreePreviewInput } from '../contracts/projects.ts';
+import type { WorktreeCreateInput, WorktreePreviewInput, WorktreeRemovalInput, WorktreeRemoveInput } from '../contracts/projects.ts';
 
 /** The only controller exposed to HTTP. The older Controller supplies transport/read-model helpers, not scheduling. */
 export class ControlPlane {
@@ -78,19 +78,31 @@ export class ControlPlane {
     await Promise.all(discovery.workspaces.flatMap((workspace) => workspace.agents.map(async (agent) => {
       if (!agent.eligible) return;
       const existing = sessions.find((session) => session.id === agent.registeredAs);
-      if (existing && (this.workflow.owner(workspace.worktree.indexPath) || this.store.activeFor(existing.repository) ||
-        !isDeepStrictEqual(existing.identity, agent.identity) || existing.agentType !== agent.kind || existing.cwd !== workspace.cwd || !sameWorktree(existing.worktree, workspace.worktree))) {
-        agent.session = existing; return;
+      const moved = !!existing && ((existing.cwd ?? existing.repository) !== workspace.cwd ||
+        (existing.worktree ? !sameWorktree(existing.worktree, workspace.worktree) : existing.repository !== workspace.worktree.root));
+      const oldHeld = () => !!existing && !!(this.workflow.owner(existing.worktree?.indexPath ?? existing.repository) || this.store.activeFor(existing.repository));
+      const held = () => oldHeld() || (!!existing && !!(this.workflow.owner(workspace.worktree.indexPath) || this.store.activeFor(workspace.worktree.root)));
+      if (held()) {
+        if (!moved) agent.session = existing;
+        else if (oldHeld()) { agent.eligible = false; agent.reason = `This pane moved from ${existing!.repository}, where a run or delivery still owns it. Open that worktree and Pause / take over after inspecting its work, then Recheck to rebind automatically.`; }
+        else { agent.eligible = false; agent.reason = `This pane moved here from ${existing!.repository}, but a run or delivery already owns this worktree without it. Wait for that work or take it over, then Recheck to rebind automatically.`; }
+        return;
       }
+      if (existing && (!isDeepStrictEqual(existing.identity, agent.identity) || existing.agentType !== agent.kind)) {
+        agent.eligible = false; agent.reason = 'The pane identity or CLI type changed. Inspect and reset its old workspace before rebinding.'; return;
+      }
+      // Legacy registrations without a canonical cwd retain their explicit renewal contract.
+      if (existing && !moved && (!existing.cwd || !existing.worktree)) { agent.session = existing; return; }
       const id = existing?.id ?? `agent-${createHash('sha256').update(JSON.stringify([agent.identity, workspace.cwd])).digest('hex').slice(0, 24)}`;
       const candidate: ManagedSession = { id, label: agent.label, agentType: agent.kind as 'codex' | 'claude', repository: workspace.worktree.root,
         expectedCommand: agent.command, identity: agent.identity, relayPrompt: existing?.relayPrompt ?? 'relay', registeredAt: new Date().toISOString(), registrationId: randomUUID(), worktree: workspace.worktree, cwd: workspace.cwd };
       candidate.cliPid = await this.adapter.foreground(candidate).catch(() => null);
-      if (existing && (this.workflow.owner(workspace.worktree.indexPath) || this.store.activeFor(existing.repository))) { agent.session = existing; return; }
-      if (existing && (!candidate.cliPid || (existing.cliPid === candidate.cliPid && existing.expectedCommand === candidate.expectedCommand))) { agent.session = existing; return; }
+      if (held()) { agent.eligible = false; agent.reason = 'A run claimed the old or new worktree during discovery. Recheck after reconciliation.'; return; }
+      if (existing && !moved && (!candidate.cliPid || (existing.cliPid === candidate.cliPid && existing.expectedCommand === candidate.expectedCommand))) { agent.session = existing; return; }
+      if (moved && !candidate.cliPid) { agent.eligible = false; agent.reason = 'The moved CLI process cannot be verified. Inspect it and Recheck.'; return; }
       if (this.config.mode === 'tmux' && !candidate.cliPid) { agent.eligible = false; agent.reason = 'The host cannot identify this CLI process. Recheck before selecting it.'; return; }
       const prior = this.discovered.get(id);
-      const session = prior && this.renewalBases.get(id) === existing?.registrationId && prior.cliPid === candidate.cliPid && prior.expectedCommand === candidate.expectedCommand && isDeepStrictEqual(prior.identity, candidate.identity) && sameWorktree(prior.worktree, candidate.worktree) ? { ...prior, label: agent.label } : candidate;
+      const session = prior && this.renewalBases.get(id) === existing?.registrationId && prior.cliPid === candidate.cliPid && prior.expectedCommand === candidate.expectedCommand && prior.cwd === candidate.cwd && isDeepStrictEqual(prior.identity, candidate.identity) && sameWorktree(prior.worktree, candidate.worktree) ? { ...prior, label: agent.label } : candidate;
       if (existing) this.renewalBases.set(id, existing.registrationId);
       this.discovered.set(id, session); agent.session = session;
     })));
@@ -98,6 +110,23 @@ export class ControlPlane {
   }
   async previewWorktree(input: WorktreePreviewInput) { await this.workspaces(); return this.projects.preview(input); }
   async createWorktree(input: WorktreeCreateInput) { await this.workspaces(); return this.projects.create(input); }
+  private async removalGuard(worktree: NonNullable<ManagedSession['worktree']>): Promise<void> {
+    const panes = await this.adapter.listPanes(); // An unavailable inventory is not an empty checkout.
+    for (const pane of panes) {
+      // A pane whose directory no longer exists cannot be inside this existing checkout; its raw path still fails closed.
+      const cwd = this.config.mode === 'mock' ? pane.cwd : await realpath(pane.cwd).catch(() => pane.cwd);
+      if (cwd === worktree.root || cwd.startsWith(`${worktree.root}/`)) throw new AppError('WORKTREE_IN_USE', 'A tmux pane is still in this worktree. Move or close it yourself, then Recheck.', 409);
+    }
+    if (this.workflow.owner(worktree.indexPath) || this.store.activeFor(worktree.root)) throw new AppError('WORKTREE_BUSY', 'A run or unresolved delivery owns this worktree. Inspect and take over before removal.', 409);
+  }
+  async previewRemoval(input: WorktreeRemovalInput) {
+    await this.workspaces();
+    const preview = await this.projects.previewRemoval(input);
+    await this.removalGuard(preview.worktree); return preview;
+  }
+  async removeWorktree(input: WorktreeRemoveInput) {
+    await this.workspaces(); return this.projects.remove(input, (worktree) => this.removalGuard(worktree));
+  }
   private workspaceSessions(discovery: WorkspaceDiscovery): ManagedSession[] {
     const sessions = new Map((this.store.sessions() as ManagedSession[]).map((session) => [session.id, session]));
     for (const workspace of discovery.workspaces) for (const agent of workspace.agents) if (agent.session) sessions.set(agent.session.id, agent.session);
@@ -112,11 +141,24 @@ export class ControlPlane {
       this.projects.assertWorktreeReady(member.repository);
       if (this.workflow.owner(member.worktree?.indexPath ?? member.repository)) throw new AppError('WORKTREE_BUSY', 'This worktree already has an execution owner. Inspect and take over before starting different work.', 409);
       const current = this.store.sessions().find((session) => session.id === member.id) as ManagedSession | undefined;
+      if (current) this.unlocked(current);
       if (current && current.registrationId !== member.registrationId && !this.isRenewal(member, current)) throw new AppError('TARGET_CHANGED', 'The agent instance changed. Recheck before continuing.', 409);
       if (this.config.mode === 'tmux') assertExternalDataDir(this.config.dataDir, member.repository);
     }
     this.store.db.transaction(() => {
-      for (const member of members) if (!this.store.sessions().some((session) => session.id === member.id && (session as ManagedSession).registrationId === member.registrationId)) this.store.saveSession(member);
+      for (const member of members) if (!this.store.sessions().some((session) => session.id === member.id && (session as ManagedSession).registrationId === member.registrationId)) {
+        const old = this.store.sessions().find((session) => session.id === member.id) as ManagedSession | undefined;
+        if (old && (old.cwd !== member.cwd || !sameWorktree(old.worktree, member.worktree))) {
+          // Configuration follows verified placement only at an explicit edit/Start; frozen runs keep their snapshots.
+          for (const pair of this.store.pairs().filter((p) => p.sessions.includes(member.id))) this.store.removePair(pair.id);
+          for (const group of this.store.groups().filter((g) => g.members.includes(member.id))) {
+            this.store.removeGroup(group.id);
+            const remaining = group.members.filter((id) => id !== member.id);
+            if (remaining.length) this.store.saveGroup({ ...group, members: remaining, revision: group.revision + 1, legacyPairId: null });
+          }
+        }
+        this.store.saveSession(member);
+      }
       for (const root of new Set(members.map((member) => member.repository))) this.projects.remember(root);
     }).immediate();
   }

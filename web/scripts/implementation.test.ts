@@ -357,7 +357,7 @@ test('v4 migration preserves historical pair IDs and creates versioned groups', 
   store.db.prepare('DELETE FROM groups').run(); store.db.pragma('user_version = 4'); store.close();
   store = new Store(join(directory, 'metadata'));
   assert.equal(store.groups()[0]!.id, group.id); assert.equal(store.groups()[0]!.legacyPairId, group.id);
-  assert.deepEqual(store.groups()[0]!.members, ['codex', 'claude']); assert.equal(store.db.pragma('user_version', { simple: true }), 7);
+  assert.deepEqual(store.groups()[0]!.members, ['codex', 'claude']); assert.equal(store.db.pragma('user_version', { simple: true }), 8);
 });
 test('committed work without handoff and log-only initial work never create a peer review', async () => {
   const first = request({ handoff: false }); await plane.submitImplementation(first); publish(first.requestId, true); await complete(first.requestId);
@@ -512,7 +512,7 @@ test('reconciliation rediscovers a restarted peer without writes or reset; fresh
   assert.equal(run(next.requestId).participants.find((s) => s.id === 'claude')!.cliPid, '900');
   assert.deepEqual(store.groups().find((g) => g.id === group.id), group); assert.equal(sent.length, 2);
 });
-test('a second restart invalidates discovered consent and unknown or moved peers are not rebound', async () => {
+test('a second restart invalidates consent; unknown peers stay pinned and verified moves are rediscovered', async () => {
   const original = store.sessions().find((s) => s.id === 'claude') as ManagedSession;
   adapter.foregrounds.set('claude', '900'); const fresh = await plane.state();
   const stale = request({ registrations: Object.fromEntries(group.members.map((id) => [id, fresh.sessions.find((s) => s.id === id)!.registrationId])) });
@@ -522,7 +522,8 @@ test('a second restart invalidates discovered consent and unknown or moved peers
   assert.equal((await plane.state()).sessions.find((s) => s.id === 'claude')!.registrationId, original.registrationId);
   adapter.foregrounds.set('claude', '902');
   const inspect = adapter.inspect.bind(adapter); adapter.inspect = async (id) => ({ ...await inspect(id), cwd: id === '%1' ? `${root}/elsewhere` : root });
-  assert.equal((await plane.state()).sessions.find((s) => s.id === 'claude')!.registrationId, original.registrationId);
+  const moved = (await plane.state()).sessions.find((s) => s.id === 'claude')!;
+  assert.notEqual(moved.registrationId, original.registrationId); assert.equal(moved.repository, `${root}/elsewhere`);
   assert.deepEqual(store.sessions().find((s) => s.id === 'claude'), original);
   assert.equal(sent.length, 0); assert.deepEqual(plane.workflow.runs(), []);
 });
@@ -1072,4 +1073,34 @@ test('provenance requires a real handoff commit: merged, imported or rewritten j
   appendFileSync(join(root, 'app.txt'), 'later\n'); git('add', 'app.txt'); git('commit', '-m', 'Later'); const later = git('rev-parse', 'HEAD');
   assert.deepEqual(await plane.previewReview({ ...input, head: later }), { base: handoff, baseSubject: 'Claude handoff', head: later, since: 'recipient', commits: [{ sha: later, subject: 'Later' }], candidates: [{ sha: handoff, subject: 'Claude handoff' }] });
   assert.equal(sent.length, 0);
+});
+
+test('moved agents remain blocked by the old run; takeover enables automatic discovery and explicit binding cleans old membership', async () => {
+  const first = request(); await plane.submitImplementation(first);
+  const original = store.sessions().find((s) => s.id === 'claude') as ManagedSession;
+  adapter.foregrounds.set('claude', '900');
+  const inspect = adapter.inspect.bind(adapter); adapter.inspect = async (id) => ({ ...await inspect(id), cwd: id === '%1' ? `${root}/moved` : root });
+  const blocked = (await plane.workspaces()).workspaces.find((w) => w.cwd.endsWith('/moved'))!.agents[0]!;
+  assert.equal(blocked.eligible, false); assert.match(blocked.reason!, /Pause \/ take over/); assert.equal(blocked.session, undefined);
+  plane.workflow.pause(first.requestId, 'fixture'); plane.action({ runId: first.requestId, action: 'takeover', confirmReady: true });
+  const changes = store.db.prepare('SELECT total_changes() AS count').get();
+  const moved = (await plane.workspaces()).workspaces.find((w) => w.cwd.endsWith('/moved'))!.agents[0]!.session!;
+  assert.equal(moved.id, original.id); assert.equal(moved.label, original.label); assert.notEqual(moved.registrationId, original.registrationId);
+  assert.deepEqual(store.db.prepare('SELECT total_changes() AS count').get(), changes);
+  assert.equal((await plane.state()).sessions.find((s) => s.id === moved.id)!.repository, `${root}/moved`);
+  await plane.rename(moved.id, { label: 'Moved peer', expectedLabel: moved.label, expectedRegistrationId: moved.registrationId });
+  assert.equal(store.sessions().find((s) => s.id === moved.id)!.repository, `${root}/moved`);
+  assert.deepEqual(store.groups().find((g) => g.id === group.id)!.members, ['codex']);
+  assert.equal(run(first.requestId).participants.find((s) => s.id === moved.id)!.registrationId, original.registrationId);
+  assert.equal(sent.length, 1);
+});
+test('a pane moved into a worktree owned by other participants names that blocker, not its free old checkout', async () => {
+  const elsewhere = `${root}/elsewhere`; const claude = store.sessions().find((s) => s.id === 'claude') as ManagedSession;
+  plane.removeGroup(group.id); store.saveSession({ ...claude, repository: elsewhere, cwd: elsewhere, worktree: { root: elsewhere, gitDir: `${elsewhere}/.git`, indexPath: `${elsewhere}/.git/index` } } as ManagedSession);
+  const codex = store.sessions().find((s) => s.id === 'codex') as ManagedSession;
+  plane.workflow.start({ requestId: randomUUID(), agentId: codex.id, kind: 'instruction', text: 'fixture', confirmReady: true }, [codex], null);
+  const moved = (await plane.workspaces()).workspaces.find((w) => w.cwd === root)!.agents.find((a) => a.identity.paneId === '%1')!;
+  assert.equal(moved.eligible, false); assert.equal(moved.session, undefined);
+  assert.match(moved.reason!, /owns this worktree without it/); assert.doesNotMatch(moved.reason!, /where a run or delivery still owns it/);
+  assert.deepEqual(store.sessions().find((s) => s.id === 'claude')!.repository, elsewhere);
 });

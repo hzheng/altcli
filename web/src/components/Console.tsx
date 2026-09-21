@@ -134,7 +134,7 @@ export function Console() {
   const card = discovery?.workspaces.find((w) => workspace ? workspaceKey(w) === workspace.key : w.worktree.root === project);
   const selectedProject = discovery?.projects?.find((p) => p.worktrees.some((w) => w.path === project));
   const selectedTree = selectedProject?.worktrees.find((w) => w.path === project);
-  const setupHolds = discovery?.projects?.flatMap((p) => p.creations.filter((op) => ['applying', 'uncertain'].includes(op.status)).map((op) => op.input.path)) ?? [];
+  const setupHolds = discovery?.projects?.flatMap((p) => [...p.creations.filter((op) => ['applying', 'uncertain'].includes(op.status)).map((op) => op.input.path), ...(p.removals ?? []).filter((op) => ['applying', 'uncertain'].includes(op.status)).map((op) => op.input.worktree.root)]) ?? [];
   const setupHeld = !!project && setupHolds.includes(project);
   const groups = state?.groups ?? [];
   const pairs = groups.map((g) => ({ ...g, sessions: g.members }));
@@ -276,9 +276,9 @@ export function Console() {
         <span>{pair ? <>Group <strong>{pair.name}</strong> <span className="muted">{pair.sessions.map((id) => sessions.find((s) => s.id === id)?.label ?? id).join(' ⇄ ')}</span></> : <span className="muted">No group in use</span>}</span>
         <button type="button" className="quiet" onClick={() => setTab('workspaces')}>Projects →</button>
       </div>
-      {setupHeld && <p className="notice">This worktree creation is applying or uncertain. Inspect and reconcile its result in Projects before starting work.</p>}
+      {setupHeld && <p className="notice">This worktree operation is applying or uncertain. Inspect and reconcile its result in Projects before starting work.</p>}
       {!projectSessions.length && <section className="panel empty-console"><h2>No eligible agents here yet</h2>
-        <p className="muted">{selectedTree?.error ?? (project ? <>Start coding CLIs in <span className="mono">{project}</span>, then Recheck in Projects. Collaborators need the same directory. No registration is needed.</> : 'Choose a project and worktree with running coding agents. Nothing is sent until you explicitly start work.')}</p>
+        <p className="muted">{selectedTree?.error ?? card?.agents.find((agent) => agent.reason && (agent.kind === 'codex' || agent.kind === 'claude'))?.reason ?? (project ? <>Start coding CLIs in <span className="mono">{project}</span>, then Recheck in Projects. Collaborators need the same directory. No registration is needed.</> : 'Choose a project and worktree with running coding agents. Nothing is sent until you explicitly start work.')}</p>
         <button type="button" className="primary" onClick={() => setTab('workspaces')}>Open Projects</button></section>}
       {!!projectSessions.length && <>
         <div className="target-row"><nav className="agent-tabs" aria-label="Command target">{visible.map((s) => <button key={s.id} className={s.id === current?.id ? 'selected' : ''} aria-pressed={s.id === current?.id} onClick={() => { select(s.id); setFocusOverride(s.id); }}>

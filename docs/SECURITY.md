@@ -109,6 +109,10 @@ Persist the operation and a project-scoped setup owner before Git. Identical req
 return their recorded result, and restart never replays creation. A failure after
 attempting Git retains uncertain ownership until explicit read-only reconciliation.
 No automatic rollback, branch deletion, worktree removal or cleanup is permitted.
+Explicit worktree removal has its own preview, exact integration evidence, clean
+tracked/nonignored state, occupancy checks and durable uncertainty owner under
+ADR-0013. Ignored files are deleted with the checkout after a confirmation warning;
+removal never uses force and retains the branch and history.
 These checks do not prevent a malicious same-user path race or configured Git
 filters from running during an ordinary checkout; use trusted repository settings.
 

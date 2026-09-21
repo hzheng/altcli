@@ -84,3 +84,18 @@ Branch consent is specified separately in [ADR-0013](ADR-0013-confirmed-branch-s
 ## Consequences and acceptance
 
 The constraints and unresolved choices above are part of this decision, not implied runtime guarantees. Implementation must pass the applicable [acceptance scenarios](../TESTING.md#acceptance-scenarios). Sequence delivery through [ROADMAP](../../ROADMAP.md#migration-and-implementation-sequence); preserve unresolved choices in [OPEN-DECISIONS](../OPEN-DECISIONS.md).
+
+### Moved panes at an unowned boundary
+
+Discovery may automatically propose the same named agent in its newly verified
+canonical cwd/worktree when the tmux identity and supported CLI type match and
+the foreground CLI can be identified. Both the old and new checkout must be free
+of execution/delivery ownership. Old paused or uncertain runs retain their exact
+participants and require explicit takeover; a moved pane displays that blocker
+instead of generic instructions to start another CLI. Missing process evidence
+or changed pane identity is never an automatic rebind.
+
+The live view follows the verified placement without a registration/reset step.
+Discovery stays read-only. The next explicit name/membership edit or Start pins
+the fresh registration, removes the moved member from old saved group/pair
+configuration, and preserves remaining members and all frozen run history.

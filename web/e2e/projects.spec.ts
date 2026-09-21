@@ -34,6 +34,7 @@ test('project navigation keeps linked, detached and empty worktrees visible with
   inventory.projects![0]!.worktrees.push(tree('/home/fixture/.codercrew/project/login', 'fix/login'), tree('/home/fixture/.codercrew/project/inspect', null));
   await page.getByRole('button', { name: 'Recheck', exact: true }).click();
   await expect(page.getByRole('list', { name: 'Available projects' }).getByRole('listitem')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: 'Check removal of inspect', exact: true })).toBeVisible();
   await expect(page.getByRole('list', { name: 'Available worktrees' }).getByRole('listitem')).toHaveCount(3);
   await expect(page.getByRole('button', { name: 'Open inspect', exact: true })).toContainText('detached HEAD');
   await page.screenshot({ path: info.outputPath('project-worktrees.png'), fullPage: true });
@@ -111,4 +112,81 @@ test('a read-only host allows project navigation but disables worktree creation'
   await fixture(page, request, false); await expect(page.getByRole('button', { name: 'Create task worktree', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: 'Open project', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Agent console', exact: true })).toBeVisible();
+});
+
+test('squash removal requires preview and confirmation, removes the card and retains history notice', async ({ page, request }, info) => {
+  const inventory = await fixture(page, request); const project = inventory.projects![0]!;
+  const target = tree('/home/fixture/tasks/finished', 'feature/finished'); project.worktrees.push(target);
+  let removals = 0;
+  const shown = { projectId: project.id, worktreeId: target.id, requestId: crypto.randomUUID(), worktree: target.identity,
+    branch: target.branch, head: target.head, targetRef: 'refs/heads/main', targetHead: 'b'.repeat(40), integratedBy: 'squash', integratedCommit: 'b'.repeat(40) };
+  await page.route('**/api/v1/projects/worktrees/removal/preview', (route) => route.fulfill({ json: shown }));
+  await page.route('**/api/v1/projects/worktrees/removal', (route) => {
+    removals++; expect(route.request().postDataJSON()).toEqual({ ...shown, confirm: true });
+    project.worktrees = project.worktrees.filter((w) => w.id !== target.id);
+    return route.fulfill({ json: { input: route.request().postDataJSON(), status: 'removed', message: 'Worktree removed. Its branch, commits and run history are retained.', updatedAt: new Date().toISOString() } });
+  });
+  await page.getByRole('button', { name: 'Recheck', exact: true }).click();
+  await page.getByRole('button', { name: 'Check removal of feature/finished', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Remove feature/finished', exact: true })).toContainText('Squash integration verified');
+  await expect(page.getByRole('region', { name: 'Remove feature/finished', exact: true })).toContainText('Any ignored files in this directory, including local environment files, dependencies and build output, will also be deleted.');
+  expect(removals).toBe(0);
+  await page.screenshot({ path: info.outputPath('remove-worktree.png'), fullPage: true });
+  await page.getByRole('button', { name: 'Confirm removal', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Open finished', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('status')).toContainText('history are retained'); expect(removals).toBe(1);
+});
+test('removal rejection is shown and stale worktree preview disables confirmation', async ({ page, request }) => {
+  const inventory = await fixture(page, request); const project = inventory.projects![0]!;
+  const target = tree('/home/fixture/tasks/finished', 'feature/finished'); project.worktrees.push(target);
+  await page.route('**/api/v1/projects/worktrees/removal/preview', (route) => route.fulfill({ status: 409, json: { error: { code: 'NOT_INTEGRATED', message: 'Combined changes are not integrated.' } } }));
+  await page.getByRole('button', { name: 'Recheck', exact: true }).click();
+  await page.getByRole('button', { name: 'Check removal of feature/finished', exact: true }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'Combined changes' })).toContainText('not integrated');
+  await page.route('**/api/v1/projects/worktrees/removal/preview', (route) => route.fulfill({ json: { projectId: project.id, worktreeId: target.id,
+    requestId: crypto.randomUUID(), worktree: target.identity, branch: target.branch, head: target.head, targetRef: 'refs/heads/main', targetHead: 'b'.repeat(40), integratedBy: 'ancestry', integratedCommit: target.head } }));
+  await page.getByRole('button', { name: 'Check removal of feature/finished', exact: true }).click();
+  target.head = 'c'.repeat(40); await page.getByRole('button', { name: 'Recheck', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Confirm removal', exact: true })).toBeDisabled();
+});
+
+test('a lost removal response offers inspection and cannot resend or discard its pending confirmation', async ({ page, request }) => {
+  const inventory = await fixture(page, request); const project = inventory.projects![0]!;
+  const target = tree('/home/fixture/tasks/finished', 'feature/finished'); project.worktrees.push(target);
+  const shown = { projectId: project.id, worktreeId: target.id, requestId: crypto.randomUUID(), worktree: target.identity,
+    branch: target.branch, head: target.head, targetRef: 'refs/heads/main', targetHead: 'b'.repeat(40), integratedBy: 'squash', integratedCommit: 'b'.repeat(40) };
+  let removals = 0;
+  await page.route('**/api/v1/projects/worktrees/removal/preview', (route) => route.fulfill({ json: shown }));
+  await page.route('**/api/v1/projects/worktrees/removal', (route) => { removals++; return route.abort(); });
+  await page.route('**/api/v1/projects/worktrees/removal/reconcile', (route) => {
+    expect(route.request().postDataJSON()).toEqual({ requestId: shown.requestId });
+    return route.fulfill({ json: { input: { ...shown, confirm: true }, status: 'failed', message: 'The original worktree remains. Preview again.', updatedAt: new Date().toISOString() } });
+  });
+  await page.getByRole('button', { name: 'Recheck', exact: true }).click();
+  await page.getByRole('button', { name: 'Check removal of feature/finished', exact: true }).click();
+  await page.getByRole('button', { name: 'Confirm removal', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Confirm removal', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Cancel', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Inspect this removal response', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Check removal of feature/finished', exact: true })).toBeEnabled();
+  expect(removals).toBe(1);
+});
+
+test('an empty worktree keeps its setup guidance beside a shell pane, while a blocked coding CLI shows its reason', async ({ page, request }) => {
+  const inventory = await fixture(page, request); const template = inventory.workspaces[0]!;
+  const card = (path: string, agents: WorkspaceDiscovery['workspaces'][number]['agents']) => ({ ...template, cwd: path, agents,
+    worktree: { root: path, gitDir: `/demo/project/.git/worktrees/${path.split('/').pop()}`, indexPath: `/demo/project/.git/worktrees/${path.split('/').pop()}/index` } });
+  const shell = { ...template.agents[0]!, identity: { ...template.agents[0]!.identity, paneId: '%8' }, command: 'zsh', kind: 'shell' as const, eligible: false, label: 'zsh %8', registeredAs: null, session: undefined, reason: '"zsh" is a shell or generic interpreter, not a coding CLI.' };
+  const moved = { ...template.agents[1]!, identity: { ...template.agents[1]!.identity, paneId: '%9' }, eligible: false, session: undefined, reason: 'This pane moved from /demo/project, where a run or delivery still owns it. Open that worktree and Pause / take over after inspecting its work, then Recheck to rebind automatically.' };
+  inventory.projects![0]!.worktrees.push(tree('/home/fixture/.codercrew/project/login', 'fix/login'), tree('/home/fixture/.codercrew/project/moved', 'fix/moved'));
+  inventory.workspaces.push(card('/home/fixture/.codercrew/project/login', [shell]), card('/home/fixture/.codercrew/project/moved', [shell, moved]));
+  await page.getByRole('button', { name: 'Recheck', exact: true }).click();
+  await page.getByRole('button', { name: 'Open login', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'No eligible agents here yet' })).toBeVisible();
+  await expect(page.getByText('Start coding CLIs in')).toBeVisible();
+  await page.getByRole('button', { name: 'Open Projects', exact: true }).click();
+  await page.getByRole('button', { name: 'Open moved', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'No eligible agents here yet' })).toBeVisible();
+  await expect(page.getByText('This pane moved from /demo/project')).toBeVisible();
+  await expect(page.getByText('Start coding CLIs in')).toHaveCount(0);
 });

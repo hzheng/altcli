@@ -5,7 +5,7 @@ import type { AgentId, CommandRecord, RelayPair, Reservation, SessionRegistratio
 import { AppError } from "../core/errors.ts";
 import { sameRequest, suggestAgentType } from "../core/policy.ts";
 import type { Group } from "../contracts/implementation.ts";
-import type { ProjectRecord, WorktreeCreation } from '../contracts/projects.ts';
+import type { ProjectRecord, WorktreeCreation, WorktreeRemoval } from '../contracts/projects.ts';
 export class Store {
   readonly db: Database.Database;
   constructor(directory: string) {
@@ -17,7 +17,7 @@ export class Store {
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("busy_timeout = 5000");
     const version = this.db.pragma("user_version", { simple: true }) as number;
-    if (version > 7) throw new Error("Unsupported database version. Do not downgrade this store.");
+    if (version > 8) throw new Error("Unsupported database version. Do not downgrade this store.");
     this.db.transaction(() => {
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -28,12 +28,13 @@ export class Store {
         CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS worktree_creations (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, status TEXT NOT NULL, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS worktree_removals (id TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE UNIQUE INDEX IF NOT EXISTS worktree_creation_owner ON worktree_creations(project_id) WHERE status IN ('applying', 'uncertain');
       `);
       if (version === 1) this.migrateFromV1();
       if (version < 5) for (const pair of this.pairs()) this.saveGroup({ id: pair.id, name: pair.name, repository: pair.repository,
         cwd: null, members: pair.sessions, revision: 1, createdAt: pair.createdAt, legacyPairId: pair.id });
-      this.db.exec("PRAGMA user_version = 7"); // older servers must not ignore an uncertain worktree-creation owner
+      this.db.exec("PRAGMA user_version = 8"); // older servers must not ignore an uncertain worktree operation owner
     })();
   }
   /** v1 had one global reservation in `control` and sessions without agentType. */
@@ -62,6 +63,12 @@ export class Store {
   saveWorktreeCreation(operation: WorktreeCreation): void {
     this.db.prepare('INSERT INTO worktree_creations(id,project_id,status,value) VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,value=excluded.value')
       .run(operation.input.requestId, operation.input.projectId, operation.status, JSON.stringify(operation));
+  }
+  worktreeRemovals(): WorktreeRemoval[] {
+    return (this.db.prepare('SELECT value FROM worktree_removals ORDER BY rowid').all() as { value: string }[]).map((row) => JSON.parse(row.value));
+  }
+  saveWorktreeRemoval(operation: WorktreeRemoval): void {
+    this.db.prepare('INSERT INTO worktree_removals(id,value) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(operation.input.requestId, JSON.stringify(operation));
   }
   sessions(): SessionRegistration[] {
     // Registration order; an upsert keeps its row, so re-registering a worker does not move it.

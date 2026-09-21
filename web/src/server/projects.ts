@@ -5,10 +5,10 @@ import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import type { SessionRegistration } from '../contracts/api.ts';
-import type { Project, ProjectRecord, ProjectWorktree, WorktreeCreateInput, WorktreeCreation, WorktreePreview, WorktreePreviewInput } from '../contracts/projects.ts';
-import type { Workspace } from '../contracts/workflow.ts';
+import type { Project, ProjectRecord, ProjectWorktree, WorktreeCreateInput, WorktreeCreation, WorktreePreview, WorktreePreviewInput, WorktreeRemoval, WorktreeRemovalInput, WorktreeRemovalPreview, WorktreeRemoveInput } from '../contracts/projects.ts';
+import type { Workspace, WorktreeIdentity } from '../contracts/workflow.ts';
 import { AppError, messageOf } from '../core/errors.ts';
-import { parseWorktreeCreate, parseWorktreePreview } from '../core/project-validation.ts';
+import { parseWorktreeCreate, parseWorktreePreview, parseRemoval, parseRemovalPreview } from '../core/project-validation.ts';
 import { branchState, defaultBranch, integrationNames, validateNewBranch } from './commit-handoff.ts';
 import type { Config } from './config.ts';
 import type { Store } from './store.ts';
@@ -21,7 +21,7 @@ async function exists(path: string): Promise<boolean> {
 }
 /** Bounded Git calls, with no inherited custom index or worktree. Never expose raw stderr (which may contain remote credentials). */
 function git(args: string[]): Promise<string> {
-  return new Promise((done, fail) => execFile('git', args, { encoding: 'utf8', shell: false, timeout: 60000, maxBuffer: 2 * 1024 * 1024, env: gitEnvironment() },
+  return new Promise((done, fail) => execFile('git', ['--no-replace-objects', ...args], { encoding: 'utf8', shell: false, timeout: 60000, maxBuffer: 2 * 1024 * 1024, env: gitEnvironment() },
     (error, stdout) => error ? fail(new AppError('PROJECT_GIT', 'Git could not complete the project operation. Inspect the host; nothing will be retried automatically.', 409)) : done(stdout)));
 }
 export async function commonGitDir(root: string): Promise<string> {
@@ -68,6 +68,7 @@ export class ProjectCatalog {
   constructor(store: Store, config: Config) {
     this.store = store; this.config = config;
     for (const project of store.projects()) this.known.set(project.id, project);
+    for (const operation of store.worktreeRemovals().filter((op) => op.status === 'applying')) this.removalFinish(operation, 'uncertain', 'Backend restarted during removal. Inspect its result; nothing is retried.');
     for (const operation of store.worktreeCreations().filter((op) => op.status === 'applying')) this.finish(operation, 'uncertain', 'Backend restarted during worktree creation. Inspect and reconcile; do not retry.');
   }
   async discover(live: Workspace[], sessions: SessionRegistration[]): Promise<Project[]> {
@@ -92,7 +93,7 @@ export class ProjectCatalog {
           .map((w) => ({ id: idOf('worktree', [project.id, w.worktree.gitDir, w.worktree.indexPath]), path: w.worktree.root,
             identity: w.worktree, branch: w.branch, head: w.git?.head ?? 'a'.repeat(40), main: true, error: null })) : await worktrees(project);
       } catch { error = 'Project Git metadata is unavailable. Its saved identity has been kept; inspect the host and Recheck.'; }
-      return { ...project, worktrees: trees, error, creations: this.store.worktreeCreations().filter((op) => op.input.projectId === project.id) };
+      return { ...project, worktrees: trees, error, removals: this.store.worktreeRemovals().filter((op) => op.input.projectId === project.id), creations: this.store.worktreeCreations().filter((op) => op.input.projectId === project.id) };
     }));
     return this.views;
   }
@@ -102,6 +103,7 @@ export class ProjectCatalog {
     if (project) this.store.saveProject(this.known.get(project.id)!);
   }
   assertWorktreeReady(root: string): void {
+    if (this.store.worktreeRemovals().some((op) => op.input.worktree.root === root && ['applying', 'uncertain'].includes(op.status))) throw new AppError('WORKTREE_SETUP_BUSY', 'This worktree removal is applying or uncertain. Inspect its result in Projects before using it.', 409);
     if (this.store.worktreeCreations().some((op) => op.input.path === root && ['applying', 'uncertain'].includes(op.status))) throw new AppError('WORKTREE_SETUP_BUSY', 'This worktree creation is still applying or uncertain. Inspect and reconcile it in Projects before binding agents or starting work.', 409);
   }
   private async source(input: WorktreePreviewInput) {
@@ -169,7 +171,7 @@ export class ProjectCatalog {
         if (!isDeepStrictEqual(duplicate.input, input)) throw new AppError('ID_CONFLICT', 'This request ID belongs to a different operation.', 409);
         return false;
       }
-      if (this.store.worktreeCreations().some((op) => op.input.projectId === input.projectId && ['applying', 'uncertain'].includes(op.status))) throw new AppError('PROJECT_SETUP_BUSY', 'Another worktree creation owns this project. Inspect and reconcile it before creating another.', 409);
+      if (this.projectHeld(input.projectId)) throw new AppError('PROJECT_SETUP_BUSY', 'Another worktree creation owns this project. Inspect and reconcile it before creating another.', 409);
       this.store.saveProject(project); this.store.saveWorktreeCreation(operation); return true;
     }).immediate();
     if (!claimed) return this.store.worktreeCreations().find((op) => op.input.requestId === input.requestId)!;
@@ -210,6 +212,100 @@ export class ProjectCatalog {
       const refs = await git(['--git-dir', project.commonDir, 'for-each-ref', '--format=%(refname)', '--', `refs/heads/${operation.input.branch}`]);
       if (!await exists(operation.input.path) && !trees.some((w) => w.path === operation.input.path) && !refs.trim()) return this.finish(operation, 'failed', 'No destination, worktree entry or task branch exists. The setup hold is released; a new preview is required.');
     } catch { /* Unknown is still owned. Never infer absence from a failed inspection. */ }
+    return operation;
+  }
+  private removalFinish(operation: WorktreeRemoval, status: WorktreeRemoval['status'], message: string): WorktreeRemoval {
+    const updated = { ...operation, status, message, updatedAt: new Date().toISOString() };
+    this.store.saveWorktreeRemoval(updated); return updated;
+  }
+  private projectHeld(projectId: string): boolean {
+    return [...this.store.worktreeCreations(), ...this.store.worktreeRemovals()].some((op) => op.input.projectId === projectId && ['applying', 'uncertain'].includes(op.status));
+  }
+  async previewRemoval(raw: WorktreeRemovalInput): Promise<WorktreeRemovalPreview> {
+    const input = parseRemovalPreview(raw);
+    if (this.config.mode === 'mock') throw new AppError('MOCK_WORKTREE', 'Simulated panes cannot remove real Git worktrees.', 409);
+    const project = this.known.get(input.projectId);
+    if (!project) throw new AppError('PROJECT_CHANGED', 'Recheck this project.', 409);
+    const tree = (await worktrees(project)).find((w) => w.id === input.worktreeId);
+    if (!tree?.identity || tree.error || !tree.head || !tree.branch || tree.main) throw new AppError('WORKTREE_REMOVAL', 'Only an accessible linked worktree on a task branch can be removed.', 409);
+    if (contains(tree.path, await futurePath(this.config.dataDir)) || await realpath(tree.path) !== tree.path) throw new AppError('WORKTREE_PATH', 'The worktree overlaps controller data or its path changed.', 409);
+    const state = await branchState(tree.path);
+    if (!state.clean || state.head !== tree.head || state.branch !== tree.branch) throw new AppError('WORKTREE_DIRTY', 'The worktree contains modified or untracked files, or changed during inspection.', 409);
+    const primary = state.primary;
+    if (integrationNames(primary, this.config.integrationBranches).includes(tree.branch)) throw new AppError('WORKTREE_REMOVAL', 'An integration branch worktree cannot be removed here.', 409);
+    const refs = (await git(['-C', tree.path, 'for-each-ref', '--format=%(refname)', 'refs/heads/'])).trim().split('\n');
+    const targetRef = refs.includes('refs/heads/main') ? 'refs/heads/main' : primary && refs.includes(`refs/heads/${primary}`) ? `refs/heads/${primary}` : null;
+    if (!targetRef) throw new AppError('INTEGRATION_UNKNOWN', 'No local main/default branch is available to verify integration. Update it yourself, then Recheck.', 409);
+    const targetHead = (await git(['-C', tree.path, 'rev-parse', '--verify', `${targetRef}^{commit}`])).trim();
+    const bases = (await git(['-C', tree.path, 'merge-base', '--all', tree.head, targetHead])).trim().split('\n');
+    if (bases.length !== 1) throw new AppError('INTEGRATION_UNKNOWN', 'The integration baseline is ambiguous.', 409);
+    let integratedBy: WorktreeRemovalPreview['integratedBy'] = 'ancestry'; let integratedCommit = tree.head;
+    if (bases[0] !== tree.head) {
+      const diff = (from: string, to: string) => git(['-C', tree.path, 'diff', '--binary', '--full-index', '--no-renames', '--no-ext-diff', '--no-textconv', '--ignore-submodules=none', '--no-relative', '--src-prefix=a/', '--dst-prefix=b/', from, to, '--']);
+      const combined = await diff(bases[0]!, tree.head);
+      if (!combined) throw new AppError('INTEGRATION_UNKNOWN', 'No exact integrated commit can be established for this branch.', 409);
+      const commits = (await git(['-C', tree.path, 'rev-list', '--first-parent', '--parents', '--max-count=500', `${bases[0]}..${targetHead}`])).trim().split('\n');
+      integratedCommit = '';
+      for (const line of commits) {
+        const [commit, parent, extra] = line.split(' ');
+        if (commit && parent && !extra && await diff(parent, commit) === combined) { integratedCommit = commit; break; }
+      }
+      if (!integratedCommit) throw new AppError('NOT_INTEGRATED', 'The branch is not an ancestor of main and its combined changes do not exactly match a single commit in the latest 500 main/default-branch commits. Removal is unavailable.', 409);
+      integratedBy = 'squash';
+    }
+    return { ...input, requestId: randomUUID(), worktree: tree.identity, branch: tree.branch, head: tree.head, targetRef, targetHead, integratedBy, integratedCommit };
+  }
+  /** One confirmed non-force removal. Guard is supplied by ControlPlane and rechecks live panes and execution ownership. */
+  async remove(raw: WorktreeRemoveInput, guard: (worktree: WorktreeIdentity) => Promise<void>): Promise<WorktreeRemoval> {
+    const input = parseRemoval(raw);
+    if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'The host has disabled Git setup and terminal input.', 403);
+    const existing = this.store.worktreeRemovals().find((op) => op.input.requestId === input.requestId);
+    if (existing) {
+      if (!isDeepStrictEqual(existing.input, input)) throw new AppError('ID_CONFLICT', 'This removal ID belongs to a different request.', 409);
+      return existing;
+    }
+    const project = this.known.get(input.projectId);
+    if (!project) throw new AppError('PROJECT_CHANGED', 'Recheck this project.', 409);
+    const operation: WorktreeRemoval = { input, status: 'applying', message: 'Checking the confirmed worktree removal.', updatedAt: new Date().toISOString() };
+    this.store.db.transaction(() => {
+      if (this.projectHeld(input.projectId)) throw new AppError('PROJECT_SETUP_BUSY', 'Another worktree operation owns this project. Inspect its result first.', 409);
+      this.store.saveProject(project); this.store.saveWorktreeRemoval(operation);
+    }).immediate();
+    let attempted = false;
+    try {
+      const checked = await this.previewRemoval({ projectId: input.projectId, worktreeId: input.worktreeId });
+      if (!isDeepStrictEqual({ ...checked, requestId: input.requestId, confirm: true }, input)) throw new AppError('WORKTREE_CHANGED', 'The worktree or integration evidence changed. Preview and confirm again.', 409);
+      await guard(input.worktree);
+      // Guard awaited host inspection; recheck Git and consent immediately before mutation too.
+      const final = await this.previewRemoval({ projectId: input.projectId, worktreeId: input.worktreeId });
+      if (!isDeepStrictEqual({ ...final, requestId: input.requestId, confirm: true }, input)) throw new AppError('WORKTREE_CHANGED', 'The worktree changed during removal checks.', 409);
+      await guard(input.worktree);
+      attempted = true;
+      await git(['--git-dir', this.known.get(input.projectId)!.commonDir, '-c', 'core.hooksPath=/dev/null', 'worktree', 'remove', '--', input.worktree.root]);
+      if (!await this.removedExactly(operation)) throw new Error('Removal verification failed');
+      this.store.clearRepository(input.worktree.root);
+      return this.removalFinish(operation, 'removed', 'Worktree removed. Its branch, commits and run history are retained.');
+    } catch (error) {
+      return this.removalFinish(operation, attempted ? 'uncertain' : 'failed', attempted
+        ? 'Removal or its verification is uncertain. Inspect the removal result; nothing will be retried or force-removed.' : messageOf(error));
+    }
+  }
+  private async removedExactly(operation: WorktreeRemoval): Promise<boolean> {
+    const project = this.known.get(operation.input.projectId);
+    return !!project && !await exists(operation.input.worktree.root) && !(await worktrees(project)).some((w) => w.path === operation.input.worktree.root || w.id === operation.input.worktreeId);
+  }
+  async reconcileRemoval(requestId: string): Promise<WorktreeRemoval> {
+    const operation = this.store.worktreeRemovals().find((op) => op.input.requestId === requestId);
+    if (!operation) throw new AppError('NOT_FOUND', 'Removal operation not found.', 404);
+    if (operation.status !== 'uncertain') return operation;
+    try {
+      if (await this.removedExactly(operation)) {
+        this.store.clearRepository(operation.input.worktree.root);
+        return this.removalFinish(operation, 'removed', 'Removal verified. The branch and history are retained; no Git changes were made by inspection.');
+      }
+      const checked = await this.previewRemoval({ projectId: operation.input.projectId, worktreeId: operation.input.worktreeId });
+      if (isDeepStrictEqual({ ...checked, requestId, confirm: true }, operation.input)) return this.removalFinish(operation, 'failed', 'The original clean worktree is still present. No removal was retried; use a new preview if needed.');
+    } catch { /* Missing evidence retains ownership. */ }
     return operation;
   }
 }

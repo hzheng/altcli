@@ -152,7 +152,11 @@ names are not project or worktree identities. Git's worktree inventory includes
 empty checkouts, and explicitly used/created projects are remembered after restart.
 New worktrees have no agents: prepare dependencies/environment and launch coding
 CLIs in the new directory yourself, then Recheck. No automatic cleanup or merge
-follows completion. Uncertain creation offers inspection, never automatic retry.
+follows completion. Projects offers **Check removal** for unused linked task
+worktrees: preview and confirm after ancestry or an exact squash patch verifies
+integration into local main/default. Modified and nonignored untracked files, panes,
+and unresolved runs block removal. Ignored files are allowed; confirmation warns
+that they will also be deleted. The branch and history remain. Uncertain creation offers inspection, never automatic retry.
 
 Each assigned agent reads the repository's separate `commit-handoff` skill and
 an immutable assignment file outside the managed checkout. The agent publishes
@@ -222,8 +226,8 @@ does not send Ctrl-C or stop background jobs. After inspecting and stopping writ
 explicit takeover releases ownership without claiming success. No command is
 silently retried. Final task-level tests and review remain your responsibility.
 
-Once ownership is released, a restarted CLI in the same pane and directory is
-rediscovered automatically. Names and group selections are preserved; your next
+Once ownership is released, a restarted CLI in the same pane is
+rediscovered automatically, including a verified move to another worktree. Names and group selections are preserved; your next
 confirmed Send or phase start binds the new instance. A workspace reset is not
 needed for an ordinary CLI restart. Unknown processes and changed pane identities
 still require inspection, and no old command is replayed.

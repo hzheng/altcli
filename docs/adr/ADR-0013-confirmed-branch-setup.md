@@ -63,7 +63,7 @@ Before mutation, establish that:
 
 Afterward verify the actual named branch, unchanged starting commit, and unchanged captured input (or clean state) before implementation dispatch. If the operation's result is uncertain, record the uncertainty and inspect/reconcile; do not blindly repeat it or issue a destructive rollback. Concurrent confirmations must produce one authorized setup transition. A fresh live state, not a reused stale UI card, is the basis for the check.
 
-The create-and-checkout permission does **not** authorize existing-branch switching, worktree removal, stash, reset, clean, add/commit, merge, rebase, force-push, branch deletion, editing `.gitignore`, or changing global/local Git configuration. Agents or their authorized commit helper still publish implementation turns. Worktree creation requires its own consent below.
+The create-and-checkout permission does **not** authorize existing-branch switching, unconfirmed worktree removal, stash, reset, clean, add/commit, merge, rebase, force-push, branch deletion, editing `.gitignore`, or changing global/local Git configuration. Agents or their authorized commit helper still publish implementation turns. Worktree creation requires its own consent below.
 
 ### Explicit task-worktree creation
 
@@ -75,7 +75,47 @@ Persist the exact confirmation and request ID before invoking Git. A project-sco
 
 An attempted Git operation or verification failure is **uncertain**, not automatically retried or rolled back. Restart converts applying setup to uncertain. While applying/uncertain, the destination refuses agent binding/configuration and new runs; this does not lock tasks on other indexes. Explicit **Inspect creation result** performs only read-only Git/filesystem checks: an exact clean result becomes ready; verified absence of the destination, Git worktree entry and branch becomes failed and releases setup; partial, changed or unreadable results retain ownership for human reconciliation. Never delete directories or branches to repair a failed creation. Pre-Git failures may leave newly created empty parent directories; these are not automatically removed.
 
-This operation requires host input enabled and the normal bearer/origin gates. A new worktree has no agents: no tmux launch, relocation, environment installation, secret copying, ignore-rule editing, cleanup or run dispatch is implied. It is cooperative same-user control, not a filesystem sandbox or protection against malicious path races. No cleanup/removal endpoint is introduced.
+This operation requires host input enabled and the normal bearer/origin gates. A new worktree has no agents: no tmux launch, relocation, environment installation, secret copying, ignore-rule editing, cleanup or run dispatch is implied. It is cooperative same-user control, not a filesystem sandbox or protection against malicious path races. Removal has the separate, confirmed authority below.
+
+### Confirmed removal after integration
+
+User requirement, September 20, 2026: Projects supports removing an unused linked
+worktree after its task branch has reached local main (or the locally recorded
+default when main is absent). This is a separate narrow Git-write exception.
+It never runs as a consequence of discovery, task completion or a merge.
+
+A read-only preview requires a named non-integration branch, an accessible linked
+checkout, no hidden index flags, and no modified or nonignored untracked files.
+Ignored files do not block removal. Confirmation warns that ignored local
+environment files, dependencies and generated output will also be deleted.
+No tmux pane (including shells and unselected agents), run owner, unresolved
+delivery, or uncertain setup may use the checkout. Missing inspection evidence
+blocks the operation. Users preserve local environment files and move panes
+themselves; exclusion from a group is not proof a checkout is unused.
+
+Integration evidence is either exact commit ancestry or an exact binary/full-index
+diff match between the branch's combined changes from its single merge base and
+one single-parent commit among the latest 500 first-parent main/default commits
+since that base. This detects a multi-commit task squashed into one commit without
+trusting commit messages or authors. Conflict-resolution edits, larger history,
+or nonidentical patches can produce a conservative refusal. No fetch, merge or
+branch deletion is implied, and the task branch and all historical runs are kept.
+
+The confirmation pins project/worktree/index identity, branch, HEAD, target ref
+and HEAD, integration evidence and request ID. Persist a project setup owner,
+revalidate live occupancy and exact Git evidence, then execute only non-force
+`git worktree remove -- <path>` with hooks disabled. Refuse the main checkout,
+integration branches and controller-data overlap. Never delete files directly or
+use force, prune, reset or automatic cleanup. This remains cooperative same-user
+control; external processes are not isolated by an OS filesystem lock.
+
+Duplicate requests return the recorded result. Restart or an ambiguous Git result
+retains ownership as uncertain and never retries. Read-only inspection can verify
+absence of both checkout and Git worktree entry, or release a failed attempt when
+the exact original clean state is still present; all other results stay uncertain.
+Successful removal clears only that checkout's saved configuration, retaining its
+branch, commits and workflow history. SQLite v8 prevents older servers from
+ignoring a removal owner. Installed-host deletion acceptance remains separate.
 
 ### Branch consent and Plan approval are separate gates
 

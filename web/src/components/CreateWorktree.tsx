@@ -16,7 +16,7 @@ export function CreateWorktree({ project, token, disabled, onChanged }: {
   const sourceKey = JSON.stringify([source?.identity, source?.head, source?.branch, source?.error]);
   useEffect(() => { setPreview(null); setConfirmed(false); }, [sourceKey]);
   const currentPreview = preview && preview.sourceWorktreeId === sourceId && preview.branch === branch && source?.head === preview.sourceHead && source.branch === preview.sourceBranch;
-  const held = project.creations.some((op) => ['applying', 'uncertain'].includes(op.status));
+  const held = [...project.creations, ...(project.removals ?? [])].some((op) => ['applying', 'uncertain'].includes(op.status));
   const blocked = disabled || busy || held || !!uncertain;
   const invalidate = () => { setPreview(null); setConfirmed(false); setError(''); };
   async function inspect() {

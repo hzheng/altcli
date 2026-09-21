@@ -520,6 +520,57 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiError'
+  /api/v1/projects/worktrees/removal/preview:
+    post:
+      operationId: previewWorktreeRemoval
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WorktreeRemovalInput'}
+      responses:
+        '200':
+          description: Read-only exact integration and unused clean worktree check
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorktreeRemovalPreview'}
+        '409': {description: Worktree is occupied, dirty, inaccessible or integration cannot be verified}
+  /api/v1/projects/worktrees/removal:
+    post:
+      operationId: removeWorktree
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WorktreeRemoveInput'}
+      responses:
+        '200':
+          description: Durable removal result; uncertain results retain ownership and are never retried
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorktreeRemoval'}
+        '403': {description: Host input disabled}
+        '409': {description: Conflicting request or project setup owner}
+  /api/v1/projects/worktrees/removal/reconcile:
+    post:
+      operationId: inspectWorktreeRemoval
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [requestId]
+              properties:
+                requestId: {type: string, format: uuid}
+      responses:
+        '200':
+          description: Read-only inspection; verified absence completes removal, unchanged original releases the hold as failed, otherwise uncertainty remains
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorktreeRemoval'}
+        '404': {description: Unknown removal request}
   /api/v1/projects/worktrees/reconcile:
     post:
       operationId: reconcileTaskWorktree
@@ -1293,6 +1344,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/WorktreeCreation'
+        removals:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorktreeRemoval'
     ProjectWorktree:
       type: object
       required: [id, path, branch, head, main, identity, error]
@@ -1345,6 +1400,43 @@ components:
         status: { type: string, enum: [applying, ready, uncertain, failed] }
         message: { type: string }
         updatedAt: { type: string, format: date-time }
+    WorktreeRemovalInput:
+      type: object
+      additionalProperties: false
+      required: [projectId, worktreeId]
+      properties:
+        projectId: {type: string}
+        worktreeId: {type: string}
+    WorktreeRemovalPreview:
+      type: object
+      required: [projectId, worktreeId, requestId, worktree, branch, head, targetRef, targetHead, integratedBy, integratedCommit]
+      properties:
+        projectId: {type: string}
+        worktreeId: {type: string}
+        requestId: {type: string, format: uuid}
+        worktree: {$ref: '#/components/schemas/WorktreeIdentity'}
+        branch: {type: string}
+        head: {type: string, pattern: '^(?:[0-9a-f]{40}|[0-9a-f]{64})$'}
+        targetRef: {type: string}
+        targetHead: {type: string, pattern: '^(?:[0-9a-f]{40}|[0-9a-f]{64})$'}
+        integratedBy: {type: string, enum: [ancestry, squash]}
+        integratedCommit: {type: string, pattern: '^(?:[0-9a-f]{40}|[0-9a-f]{64})$'}
+    WorktreeRemoveInput:
+      allOf:
+      - $ref: '#/components/schemas/WorktreeRemovalPreview'
+      - type: object
+        required: [confirm]
+        properties:
+          confirm: {type: boolean, const: true}
+      unevaluatedProperties: false
+    WorktreeRemoval:
+      type: object
+      required: [input, status, message, updatedAt]
+      properties:
+        input: {$ref: '#/components/schemas/WorktreeRemoveInput'}
+        status: {type: string, enum: [applying, removed, uncertain, failed]}
+        message: {type: string}
+        updatedAt: {type: string, format: date-time}
     ActivityReset:
       type: object
       required: [agentId, registrationId, expectedUpdatedAt, confirmReady]

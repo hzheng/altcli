@@ -1,4 +1,4 @@
-import type { WorktreeCreateInput, WorktreePreviewInput } from '../contracts/projects.ts';
+import type { WorktreeCreateInput, WorktreePreviewInput, WorktreeRemovalInput, WorktreeRemoveInput } from '../contracts/projects.ts';
 import { AppError } from './errors.ts';
 import { object, requestId } from './validation.ts';
 import { sha } from './implementation-validation.ts';
@@ -27,4 +27,20 @@ export function parseWorktreeCreate(value: unknown): WorktreeCreateInput {
 }
 export function parseWorktreeReconcile(value: unknown): string {
   const body = object(value); fields(body, ['requestId']); return requestId(body.requestId);
+}
+
+export function parseRemovalPreview(value: unknown): WorktreeRemovalInput {
+  const body = object(value); fields(body, ['projectId', 'worktreeId']);
+  return { projectId: text(body.projectId), worktreeId: text(body.worktreeId) };
+}
+export function parseRemoval(value: unknown): WorktreeRemoveInput {
+  const body = object(value);
+  fields(body, ['projectId', 'worktreeId', 'requestId', 'worktree', 'branch', 'head', 'targetRef', 'targetHead', 'integratedBy', 'integratedCommit', 'confirm']);
+  if (body.confirm !== true) throw new AppError('CONFIRM_REQUIRED', 'Confirm the exact worktree removal.');
+  const worktree = object(body.worktree); fields(worktree, ['root', 'gitDir', 'indexPath']);
+  if (body.integratedBy !== 'ancestry' && body.integratedBy !== 'squash') throw new AppError('INVALID_WORKTREE', 'Invalid integration evidence.');
+  return { projectId: text(body.projectId), worktreeId: text(body.worktreeId), requestId: requestId(body.requestId),
+    worktree: { root: text(worktree.root), gitDir: text(worktree.gitDir), indexPath: text(worktree.indexPath) },
+    branch: text(body.branch), head: sha(body.head), targetRef: text(body.targetRef), targetHead: sha(body.targetHead),
+    integratedBy: body.integratedBy, integratedCommit: sha(body.integratedCommit), confirm: true };
 }

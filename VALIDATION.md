@@ -4,6 +4,72 @@
 **Last local validation:** September 20, 2026
 **Scope:** Source scaffold, not a completed release or security certification
 
+## Moved sessions and confirmed worktree removal on September 20, 2026
+
+Follow-up: ignored files now permit removal, with an explicit warning before
+confirmation. A real Git fixture verifies deletion of ignored environment files
+and generated directories, while modified/nonignored untracked files still block
+both preview and previously confirmed requests. `npm --prefix web run check`
+passed (41 smoke, 230 workflow, 53 unit tests, type checking and build), as did
+the 28 root hook/setup tests. The full
+`env CODERCREW_E2E_PORT=9787 npm --prefix web run e2e` passed all 126 desktop/iPhone
+viewport cases; both removal-warning screenshots were inspected. Both check
+wrappers still stop at the existing global skill-link mismatch described below.
+After verifying no active runs, executions or reservations, the backend was
+restarted. The real `commit-relay` removal preview returned HTTP 200 with squash
+integration verified despite its ignored files; no real worktree was deleted.
+The follow-up diff was screened for credentials; none were found.
+
+Live read-only inspection reproduced the report: two supported agents were in
+`feature/task-mgt`, while their saved registrations and a paused run still belonged
+to `feature/commit-relay`. Discovery now reports the exact old-owner blocker.
+After explicit takeover, verified moved panes are proposed in their current
+worktree without registration/reset; the next explicit edit or Start persists
+that binding and updates old configuration without rewriting frozen history.
+
+Projects now offers a removal preview and confirmation for a clean unused linked
+task worktree. Verification accepts ancestry or an exact combined-patch match to
+a single squash commit on local main/default. Modified/nonignored untracked
+files, hidden index flags, panes and run/delivery ownership block removal. Ignored
+files are allowed with a warning before confirmation that they will be deleted. The
+non-force operation retains the branch and history; duplicate calls, stale consent,
+restart and uncertain results have durable guards and read-only inspection.
+A lost HTTP response offers inspection without repeating the removal.
+
+Executed checks on this task's final relevant source:
+
+- `npm --prefix web run test:workflow`: all 230 tests passed, including real Git
+  and SQLite in disposable repositories for removal, integration, occupancy,
+  hidden files, concurrent requests and recovery. CLI activity is simulated.
+- `node --test scripts/review-regressions.test.mjs scripts/setup.test.mjs`:
+  28 passed; `npm --prefix web run test:smoke`: 41 passed; `npm --prefix web test`:
+  53 passed. Hook tests use temporary localhost servers and isolated homes.
+- Type checking passed, and the final `npm --prefix web run build` passed,
+  including all three removal routes.
+- The full browser run passed 122 of 124 cases; two new cases had an ambiguous
+  alert selector matching Next's route announcer. After correcting that selector
+  and adding lost-response coverage, the final
+  `env CODERCREW_E2E_PORT=9787 npm --prefix web run e2e -- e2e/projects.spec.ts`
+  passed all 18 desktop/iPhone-viewport Projects cases. The other 108 browser
+  cases passed in the earlier full run. Browser removal responses are fixtures;
+  actual Git removal is exercised only by disposable server tests.
+- Removal confirmation screenshots were inspected; `git diff HEAD --check`
+  passed and the task diff was screened for credentials (synthetic test tokens only).
+
+Both required wrappers, `./scripts/check.sh` and `./scripts/check.sh --e2e`,
+were attempted and stopped at the installed-skill check: global skill links point
+to the task worktree rather than this checkout. Global links were not changed;
+the underlying checks above were run directly. Initial sandboxed hook/smoke calls
+failed on localhost restrictions (including a Node assertion); the unrestricted
+reruns passed. Checks ran on the installed Node 26.0.0, not the recommended Node 24.
+
+The development backend was restarted after observing zero delivery reservations
+and no dispatch in progress. Its authenticated inventory returned HTTP 200 and
+preserved the old paused run, reporting both moved agents' ownership blocker.
+No real worktree was deleted, no live run was taken over, and no CLI command was
+sent as part of acceptance. The user must reconcile the old run before those
+agents become eligible in their new worktree.
+
 ## Exact Codex interruption handling on September 20, 2026
 
 Cancelling a native turn previously left only its start evidence: the installer
