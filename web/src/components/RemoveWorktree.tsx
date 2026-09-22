@@ -1,10 +1,12 @@
 'use client';
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import type { Project, ProjectWorktree, WorktreeDiscard, WorktreeDiscardPreview, WorktreeIntegration, WorktreeIntegrationPreview, WorktreeRemoval, WorktreeRemovalPreview } from '../contracts/projects';
 import { api, HttpError } from '../client/api';
 import { MAX_MESSAGE_JSON_BYTES, messageJsonBytes } from '../core/squash-message';
 
-interface ActionProps { project: Project; tree: ProjectWorktree; token: string; disabled: boolean; disabledReason?: string; onChanged: (notice: string) => Promise<void> }
+interface ActionProps { project: Project; tree: ProjectWorktree; token: string; disabled: boolean; disabledReason?: string; onChanged: (notice: string) => Promise<void>;
+  /** Increases whenever the view changes; hiding a confirmation revokes it. */
+  viewEpoch?: number }
 /** Deletion actions disable only for hard blocks (read-only host, a request in flight, unreadable state); a known soft blocker is shown as a hint
  * and the click still runs the server preview, whose exact refusal (pane inside, dirty files, not integrated) is then displayed. */
 interface DeletionProps extends ActionProps { hint?: string }
@@ -154,8 +156,10 @@ export function RemoveWorktree({ project, tree, token, disabled, disabledReason,
 }
 
 /** Forced deletion of the worktree and its branch without integration evidence: the branch name must be typed to confirm. */
-export function DiscardWorktree({ project, tree, token, disabled, disabledReason, hint, onChanged }: DeletionProps) {
+export function DiscardWorktree({ project, tree, token, disabled, disabledReason, hint, onChanged, viewEpoch }: DeletionProps) {
   const [preview, setPreview] = useState<WorktreeDiscardPreview | null>(null); const [typed, setTyped] = useState('');
+  // The typed branch name is the confirmation: hiding the view clears it, while the preview stays for re-checking.
+  useEffect(() => { setTyped(''); }, [viewEpoch]);
   const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [unknown, setUnknown] = useState(false);
   const controlId = useId();
   const held = isHeld(project); const name = nameFor(tree);

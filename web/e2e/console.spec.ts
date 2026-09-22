@@ -1,5 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import type { WorkflowState, HookEvent } from '../src/contracts/workflow';
+import { editSettings, expand, pane } from './ui';
 const TOKEN = 'a'.repeat(64);
 const headers = { Authorization: `Bearer ${TOKEN}` };
 test.describe.configure({ mode: 'serial' });
@@ -18,8 +19,8 @@ async function unlock(page: Page, token = TOKEN, useFallback = true) {
     await expect(page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { pressed: true })).toHaveCount(1);
     const fallback = page.getByLabel('Staging fallback', { exact: true });
     if (useFallback && await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Console', exact: true }).getAttribute('aria-pressed') === 'true') {
-      // Workspace discovery can arrive after the initial state selects Console.
-      await expect(fallback).toBeVisible(); await expect(fallback).toBeEnabled(); await fallback.check();
+      // Workspace discovery can arrive after the initial state selects Console. The deprecated fallback sits under Advanced.
+      await expand(page, 'Advanced'); await expect(fallback).toBeVisible(); await expect(fallback).toBeEnabled(); await fallback.check();
     }
   }
 }
@@ -64,7 +65,7 @@ test('an interrupted worker displays Interrupted, including durable execution ev
     await route.fulfill({ response, json: body });
   });
   await unlock(page, TOKEN, false);
-  const row = page.locator('details.status tbody tr').filter({ has: page.getByRole('cell', { name: /^Codex\s+codex$/ }) });
+  const row = pane(page, 'Codex').locator('.pane-status');
   await expect(row.locator('.state')).toHaveText('working');
   native = 'interrupted'; interrupted = true;
   await expect(row.locator('.state')).toHaveText('interrupted');
@@ -93,7 +94,9 @@ test('Unknown offers an explicit status reset beside the warning, preserving the
   });
   const before = await state(request);
   await unlock(page, TOKEN, false);
-  const row = page.locator('details.status tbody tr').filter({ hasText: 'Claude Code' });
+  // Reset status sits beside the agent's own status line; choose its pane first so it is shown on narrow screens too.
+  await page.getByRole('navigation', { name: 'Command target' }).getByRole('button', { name: 'Claude Code', exact: true }).click();
+  const row = pane(page, 'Claude Code').locator('.pane-status');
   const reset = row.getByRole('button', { name: 'Reset status', exact: true });
   await expect(reset).toBeEnabled(); await reset.click();
   await expect(page.getByRole('region', { name: 'Reset agent status' })).toContainText('empty prompt with no background writers');
@@ -127,7 +130,7 @@ test('history export downloads this worktree\'s runs and journal as JSON through
   const requests: string[] = [];
   page.on('request', (sent) => { if (sent.url().includes('/api/v1/history/export')) requests.push(sent.url()); });
   const download = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Export history', exact: true }).click();
+  await expand(page, 'Command history'); await page.getByRole('button', { name: 'Export history', exact: true }).click();
   const file = await download; expect(file.suggestedFilename()).toMatch(/^codercrew-history-.*\.json$/);
   const exported = JSON.parse(await (await import('node:fs/promises')).readFile(await file.path(), 'utf8'));
   expect(exported).toMatchObject({ schema: 1, repository: run.repository });
@@ -218,7 +221,7 @@ test('a workspace with one registered eligible agent automatically forms a solo 
   await openTab(page, 'Console');
   await expect(page.locator('.context-bar')).toContainText('Other Codex');
   await expect(page.getByLabel('Other Codex output')).toHaveCount(1); await expect(page.getByLabel('Codex output', { exact: true })).toHaveCount(0);
-  await expect(page.getByLabel('Collaboration', { exact: true })).toHaveValue('solo');
+  await editSettings(page); await expect(page.getByLabel('Collaboration', { exact: true })).toHaveValue('solo');
   await expect(page.getByRole('button', { name: 'Relay Claude', exact: true })).toHaveCount(0);
 });
 test('command history filters by pair and orders by time', async ({ page, request }) => {
@@ -226,7 +229,7 @@ test('command history filters by pair and orders by time', async ({ page, reques
   await post(request, 'commands', { requestId: '11111111-1111-4111-8111-111111111111', agentId: 'codex', kind: 'instruction', text: 'solo first', confirmReady: true });
   await complete(request, '11111111-1111-4111-8111-111111111111'); // a finished instruction releases the worktree for the next start
   await post(request, 'commands', { requestId: '22222222-2222-4222-8222-222222222222', agentId: 'claude', kind: 'instruction', text: 'paired second', confirmReady: true, pairId: main.id });
-  await unlock(page); await page.getByText('Command history').click();
+  await unlock(page); await expand(page, 'Command history');
   await page.getByLabel('History pair filter').selectOption('all');
   // History persists across tests, so assert relative order of these two rows rather than absolute counts.
   const rows = page.locator('details.history tbody tr');
@@ -246,7 +249,7 @@ test('history follows the automatic workspace group and preserves an explicit Al
   await post(request, 'commands', { requestId: '33333333-3333-4333-8333-333333333333', agentId: 'codex', kind: 'instruction', text: 'loop command', confirmReady: true, pairId: loop.id });
   await complete(request, '33333333-3333-4333-8333-333333333333');
   await unlock(page); await openTab(page, 'Projects'); await editWorkspace(page, 'project');
-  await openTab(page, 'Console'); await page.getByText('Command history').click(); const filter = page.getByLabel('History pair filter');
+  await openTab(page, 'Console'); await expand(page, 'Command history'); const filter = page.getByLabel('History pair filter');
   await expect(filter).toHaveValue(`pair:${loop.id}`);
   await expect(filter.locator('option', { hasText: 'Loop (project) *' })).toHaveCount(1);
   await expect(filter.locator('option', { hasText: 'Selected pair' })).toHaveCount(0);
@@ -257,18 +260,18 @@ test('history follows the automatic workspace group and preserves an explicit Al
   await page.getByRole('button', { name: 'Recheck', exact: true }).click();
   await expect(page.getByLabel('Workspace group members')).toHaveText('Replacement');
   const replacement = (await state(request)).groups.find((group) => group.cwd === '/demo/other')!;
-  await openTab(page, 'Console'); await page.getByText('Command history').click();
+  await openTab(page, 'Console'); await expand(page, 'Command history');
   await expect(filter).toHaveValue(`pair:${replacement.id}`);
   await expect(rows.filter({ hasText: 'loop command' })).toHaveCount(0);
   await filter.selectOption('all'); await expect(rows.filter({ hasText: 'loop command' })).toHaveCount(1);
   await openTab(page, 'Projects'); await editWorkspace(page, 'project');
-  await openTab(page, 'Console'); await page.getByText('Command history').click();
+  await openTab(page, 'Console'); await expand(page, 'Command history');
   await expect(filter).toHaveValue('all'); await expect(rows.filter({ hasText: 'loop command' })).toHaveCount(1);
 });
 test('a plain Send leaves partner activity untracked; only a handoff makes it wait', async ({ page, request }) => {
   const main = await post(request, 'pairs', { name: 'Main', sessions: ['codex', 'claude'] });
   await unlock(page);
-  const row = (label: string) => page.locator('details.status tbody tr').filter({ has: page.locator('td:first-child', { hasText: label }) });
+  const row = (label: string) => pane(page, label).locator('.pane-status');
   await post(request, 'commands', { requestId: '44444444-4444-4444-8444-444444444444', agentId: 'codex', kind: 'instruction', text: 'plain work', confirmReady: true, pairId: main.id });
   await expect(row('Codex')).toContainText('waiting'); await expect(row('Codex')).toContainText('Delivered "plain work"');
   await expect(row('Claude Code')).toContainText('unknown'); await expect(row('Claude Code')).toContainText('Not part of this turn');
@@ -285,8 +288,8 @@ test('native inactive agents wait for their relay turn and return to idle after 
     data.activities = Object.entries(activities).map(([agentId, activity]) => ({ agentId, state: activity, updatedAt: new Date().toISOString(), detail: `Native activity: ${activity}.` }));
     await route.fulfill({ json: data });
   });
-  const row = (label: string) => page.locator('details.status tbody tr').filter({ has: page.locator('td:first-child', { hasText: label }) });
-  const badge = (label: string) => row(label).locator('td').nth(1);
+  const row = (label: string) => pane(page, label).locator('.pane-status');
+  const badge = (label: string) => row(label).locator('.state');
   const plain = crypto.randomUUID();
   await post(request, 'commands', { requestId: plain, agentId: 'codex', kind: 'instruction', text: 'plain work', confirmReady: true, pairId: pair.id });
   await unlock(page, TOKEN, false);
@@ -328,15 +331,15 @@ test('a finished response displays idle while background-work safety keeps the c
   const id = crypto.randomUUID();
   await post(request, 'commands', { requestId: id, agentId: 'codex', kind: 'instruction', text: 'Start the development server', handoff: true, confirmReady: true, pairId: pair.id });
   await unlock(page, TOKEN, false);
-  const row = page.locator('details.status tbody tr').filter({ has: page.locator('td:first-child', { hasText: 'Codex' }) });
-  await expect(row.locator('td').nth(1)).toHaveText('working');
+  const row = pane(page, 'Codex').locator('.pane-status');
+  await expect(row.locator('.state')).toHaveText('working');
   const snapshot = await state(request); const execution = snapshot.executions.find((e) => e.commandId === id)!;
   const session = snapshot.sessions.find((s) => s.id === 'codex')!;
   await post(request, 'events', { event: 'turn_complete', source: 'codex', commandId: id, prompt: execution.wireText,
     paneId: session.identity.paneId, socketPath: session.identity.socketPath, identity: session.identity,
     sessionId: 'background-service-session', sourceTurnId: `turn-${id}`, settled: true, backgroundState: 'active' });
   activity = 'idle'; await page.getByRole('button', { name: 'Recheck', exact: true }).click();
-  await expect(row.locator('td').nth(1)).toHaveText('idle'); await expect(row).toContainText('Controller run paused');
+  await expect(row.locator('.state')).toHaveText('idle'); await expect(row).toContainText('Controller run paused');
   await expect(page.getByRole('region', { name: 'Active run' })).toContainText(/background work/i);
   const run = (await state(request)).runs.find((r) => r.id === id)!;
   expect(run.status).toBe('paused'); expect(run.currentCommandId).toBe(id);
@@ -350,7 +353,7 @@ test('takeover does not claim a still-running worker is idle and late completion
     await route.fulfill({ json: data });
   });
   await unlock(page, TOKEN, false);
-  const row = page.locator('details.status tbody tr').filter({ has: page.locator('td:first-child', { hasText: 'Codex' }) });
+  const row = pane(page, 'Codex').locator('.pane-status');
   await expect(row).toContainText('unknown'); await expect(row).not.toContainText('Idle');
   activity = 'ready'; await page.getByRole('button', { name: 'Recheck', exact: true }).click();
   await expect(row).toContainText('ready'); await expect(row).toContainText('No controller-owned turn');
@@ -466,14 +469,13 @@ test('a finished run of forgotten agents leaves the Status headline but stays in
   await page.getByLabel('Ready to send', { exact: true }).check(); await page.getByRole('button', { name: 'Relay Codex ↗', exact: true }).click();
   const run = (await state(request)).runs.find((r) => r.status === 'running')!;
   await complete(request, run.currentCommandId, 'accept_without_improvement');
-  const status = page.locator('details.status');
+  const status = page.getByRole('region', { name: 'Latest run' });
   await expect(status).toContainText('RUN COMPLETED'); await expect(status).toContainText('Codex ⇄ Claude Code');
   // Forgetting the agents does not delete the run; the same live panes come back as new discovered identities.
   await post(request, 'workspaces/reset', { repository: '/demo/project', confirmReady: true });
   await expect(page.getByLabel('demo output').first()).toBeVisible(); await expect(page.locator('.context-bar')).toContainText('/demo/project');
-  await expect(status).toContainText('Earlier runs stay in the history below');
-  await expect(status).not.toContainText('Codex ⇄ Claude Code'); await expect(status.getByText('RUN COMPLETED')).toHaveCount(0);
-  await page.getByText('Command history', { exact: true }).click();
+  await expect(status).toHaveCount(0); await expect(page.getByText(/RUN COMPLETED/)).toHaveCount(0);
+  await expand(page, 'Command history');
   await expect(page.locator('details.history')).toContainText('relay');
 });
 test('reset clears saved names and selection without hiding live agents or touching other workspaces', async ({ page, request }) => {
@@ -532,8 +534,8 @@ test('checkboxes save solo, pair and larger groups without silently truncating s
   await expect.poll(() => saved.length).toBe(1); expect(saved[0]!.members).toEqual(['codex', 'claude', 'third']);
   await expect(detail).toContainText('Group · 3 agents');
   await openTab(page, 'Console');
-  await expect(page.getByRole('region', { name: 'Implementation setup' })).toContainText('larger-group execution is not enabled yet');
-  await expect(page.getByRole('region', { name: 'Implementation setup' }).getByRole('button', { name: /^Send / })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Implementation settings' })).toContainText('larger-group execution is not enabled yet');
+  await expect(page.getByRole('button', { name: /^Send / })).toHaveCount(0);
   await page.getByRole('button', { name: '1 · Plan', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Plan setup' })).toContainText('Your selection is saved');
   await openTab(page, 'Projects');
@@ -553,13 +555,13 @@ test('two live agents can be changed to solo or an empty selection through real 
   const detail = workspace(page, 'project');
   await detail.getByLabel('Include Claude Code', { exact: true }).uncheck();
   await expect(detail).toContainText('Solo · 1 agent');
-  await openTab(page, 'Console');
+  await openTab(page, 'Console'); await editSettings(page);
   await expect(page.getByLabel('Collaboration', { exact: true })).toHaveValue('solo');
   await expect(page.getByLabel('Claude Code output')).toHaveCount(0);
   await openTab(page, 'Projects'); await detail.getByLabel('Include Codex', { exact: true }).uncheck();
   await expect(detail).toContainText('Select at least one agent before starting.');
   await openTab(page, 'Console');
-  await expect(page.getByRole('region', { name: 'Implementation setup' })).toContainText('Select at least one agent');
+  await expect(page.getByRole('region', { name: 'Implementation settings' })).toContainText('Select at least one agent');
   await expect(page.getByRole('button', { name: /^Send / })).toHaveCount(0);
   const current = await state(request); expect(current.groups.find((group) => group.cwd === '/demo/project')!.members).toEqual([]);
   expect(current.executions).toEqual([]);

@@ -2,19 +2,24 @@
 import { useEffect, useState } from 'react';
 import type { Project, WorktreeCreation, WorktreePreview } from '../contracts/projects';
 import { api, HttpError } from '../client/api';
+import { useRemembered } from '../client/memory';
 
 /** Explicit setup only; no effects create worktrees, bind agents, or start runs. */
-export function CreateWorktree({ project, token, disabled, onChanged }: {
+export function CreateWorktree({ project, token, disabled, onChanged, viewEpoch = 0 }: {
   project: Project; token: string; disabled: boolean; onChanged: (notice: string) => Promise<void>;
+  /** Increases whenever the view changes; hiding the form revokes its confirmation but keeps its inputs. */
+  viewEpoch?: number;
 }) {
   const sources = project.worktrees.filter((w) => w.identity && w.head && !w.error);
-  const [open, setOpen] = useState(false); const [sourceId, setSourceId] = useState(sources[0]?.id ?? '');
-  const [branch, setBranch] = useState(''); const [preview, setPreview] = useState<WorktreePreview | null>(null);
+  // Ordinary inputs are remembered per project in page memory; previews and confirmations are not.
+  const [open, setOpen] = useRemembered(`create:${project.id}:open`, false); const [sourceId, setSourceId] = useRemembered(`create:${project.id}:source`, sources[0]?.id ?? '');
+  const [branch, setBranch] = useRemembered(`create:${project.id}:branch`, ''); const [preview, setPreview] = useState<WorktreePreview | null>(null);
   const [confirmed, setConfirmed] = useState(false); const [busy, setBusy] = useState(false); const [error, setError] = useState('');
   const [uncertain, setUncertain] = useState<string | null>(null);
   const source = project.worktrees.find((w) => w.id === sourceId);
   const sourceKey = JSON.stringify([source?.identity, source?.head, source?.branch, source?.error]);
   useEffect(() => { setPreview(null); setConfirmed(false); }, [sourceKey]);
+  useEffect(() => { setConfirmed(false); }, [viewEpoch]);
   const currentPreview = preview && preview.sourceWorktreeId === sourceId && preview.branch === branch && source?.head === preview.sourceHead && source.branch === preview.sourceBranch;
   const held = [...project.creations, ...(project.removals ?? [])].some((op) => ['applying', 'uncertain'].includes(op.status));
   const blocked = disabled || busy || held || !!uncertain;

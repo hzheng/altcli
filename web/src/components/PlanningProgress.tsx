@@ -4,10 +4,12 @@ import type { RelayRun } from '../contracts/workflow';
 import type { WorkspaceGit } from '../contracts/implementation';
 import { api } from '../client/api';
 
-export function PlanningProgress({ token, run, disabled, refresh, onMessage, onStop, git }: {
+export function PlanningProgress({ token, run, disabled, refresh, onMessage, onStop, git, viewEpoch = 0 }: {
   token: string; run: RelayRun; disabled: boolean; refresh: () => Promise<void>; onMessage: (text: string) => void; onStop: () => void;
   /** The workspace's current Git reading, used only while it still matches the planning baseline. */
   git?: WorkspaceGit;
+  /** Increases whenever the view changes; a confirmation given in an earlier view never counts again. */
+  viewEpoch?: number;
 }) {
   const plan = run.planning!; const current = plan.current;
   const [confirmed, setConfirmed] = useState(''); const [busy, setBusy] = useState(false);
@@ -20,7 +22,7 @@ export function PlanningProgress({ token, run, disabled, refresh, onMessage, onS
   const taskBase = baseline ?? live?.taskBase ?? '';
   const agreed = !!current && current.briefRevision === plan.briefRevision && !Object.keys(plan.objections).length && plan.required.every((id) => plan.endorsements[id] === current.revision);
   const settled = run.status === 'waiting' && !run.implementation && !!current;
-  const key = JSON.stringify([run.currentCommandId, run.status, current?.hash, current?.revision, plan.briefRevision, plan.policyRevision, changes, planner, override, branchChoice, branchName, taskBase]);
+  const key = JSON.stringify([viewEpoch, run.currentCommandId, run.status, current?.hash, current?.revision, plan.briefRevision, plan.policyRevision, changes, planner, override, branchChoice, branchName, taskBase]);
   const ready = confirmed === key;
   const needsBranch = !plan.request.implementation.branch;
   const branchValid = !needsBranch || (branchChoice === 'stay' && !!plan.request.baseline.branch && !integration && (!needsBaseline || /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(taskBase.trim()))) || (branchChoice === 'new' && !!branchName.trim());

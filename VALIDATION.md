@@ -4,6 +4,94 @@
 **Last local validation:** September 21, 2026
 **Scope:** Source scaffold, not a completed release or security certification
 
+## Review findings on the contextual pane actions, September 21, 2026
+
+Peer review of `a1305ad` raised two findings, both reproduced and fixed:
+- A refused derived review range ("no project proposal") kept Relay and Commit
+  current changes & relay disabled even after a typed baseline previewed
+  successfully, because the card's blocking hint still returned the stale error.
+  Blocking now follows the selected range, and the derived-range alert is hidden
+  once the typed preview succeeds.
+- Lock cleared the page-memory map but not the values held by hooks that stay
+  mounted above the unlock form, so unlocking in the same document restored the old
+  branch, policy and log settings for the returning workspace. A remembered value
+  now belongs to one memory instance, and Lock replaces the instance.
+
+What ran: `./scripts/check.sh` exited 0 (30 hook/setup, 41 smoke, 268 workflow,
+60 unit, type checks, production build). `CODERCREW_E2E_PORT=9787 npx playwright
+test` per project: desktop 85 passed and 1 skipped; iPhone 85 passed and 1 skipped
+(86 cases each, three of them new). The three new browser cases (a refused derived
+range followed by a typed baseline, for a clean review and a dirty snapshot relay;
+Lock and unlock in the same document with settings and drafts) were also run once
+against the previous source and failed there, on desktop.
+
+Observed but not changed: the hook regression "the real hooks preserve Claude
+prompt pairing and Codex correlation through steering" in
+`scripts/review-regressions.test.mjs` failed intermittently on this host (1 of 6
+isolated runs, and the first `./scripts/check.sh` attempt) with `events.length`
+1 instead of 2 after about 3.17 s, which matches the hook's 3 s POST timeout to
+the test's local server. The hook and the test are untouched by this change; a
+standalone probe of the same hook posted in 456, 120 and 120 ms.
+
+## Contextual pane actions and a compact console on September 21, 2026
+
+The console was one long column with a single composer below every panel. Each
+agent pane now carries its own action group directly under its output. Every
+control's first delivery goes to the agent above it:
+- **Send**, with an **After send** choice of Nothing, Commit, or Commit & relay.
+  The two new choices submit the existing `kind: work` implementation request with
+  `handoff: false` or `true` and never a `reviewBase`.
+- **Current changes**: snapshot Commit and Commit current changes & relay, with a
+  separate handoff note.
+- **Committed review**: existing-commit Relay, in the reviewing agent's own card.
+
+Other layout changes:
+- Settings for the next run sit in a one-line summary bar above the panes, with a
+  collapsed editor and the Plan/Implementation switch.
+- Blockers, the owned run and feedback sit above the panes.
+- Agents, Command history (with Export history), the staging fallback and
+  explanatory text are collapsed.
+
+Console and Projects stay mounted, so switching tabs keeps their state. Drafts,
+settings, disclosures and the chosen pane are kept per workspace and group in page
+memory; Lock clears it. A working agent no longer takes a chosen pane away. That
+also fixes the phone Focus case where no card was visible. Readiness is one slot
+for the page, revoked by any view switch, change, stale reading, Recheck, start or
+run change. No server, contract, OpenAPI or skill file changed.
+
+What ran:
+- `npm ci --prefix web`, with the user's approval (this worktree had no
+  dependencies installed).
+- Before the change, at `29a4874`: `./scripts/check.sh` exited 0 (30 hook/setup, 41
+  smoke, 268 workflow, 56 unit, type checks, production build). The Playwright suite
+  passed 148/148 with `CODERCREW_E2E_PORT=9787`, beside the live console on 8787.
+- After the change:
+  - `./scripts/check.sh` exited 0: 30 hook/setup, 41 smoke, 268 workflow, 60 unit
+    (4 new request-mapping cases), type checks and production build.
+  - `CODERCREW_E2E_PORT=9787 npx playwright test`, run once per project: desktop 83
+    passed and 1 skipped; iPhone 83 passed and 1 skipped. Each project skips the
+    other's viewport-specific test.
+  - The existing browser specs were re-scoped to the agent cards and disclosures
+    with their assertions kept.
+  - A new `layout.spec.ts` covers:
+    - the three After-send requests, and blocking on an integration branch until a
+      task branch is set
+    - the readiness slot and its revocations
+    - drafts kept across tab, layout, phase, section and workspace switches with no
+      mutation requests
+    - Lock, the double-click guard and inline refusals
+    - unique field IDs
+    - both Send buttons fully in a 1440×900 viewport
+    - a chosen pane never being taken away
+    - no horizontal overflow at 390 and 320 px
+- One Projects assertion was flaky, failing 2 of 4 repeats: a page-wide status
+  locator could match both the feedback and the operation's own busy line. Its
+  status assertions now target the feedback text; the squash case then passed 6/6
+  repeats.
+
+Not run: installed-agent acceptance of the new work actions against real CLIs, and
+physical Safari.
+
 ## Plan root links and in-checkout roots are refused on September 21, 2026
 
 Review of the move found that `mkdir -p` accepted an existing `<data directory>/plans`

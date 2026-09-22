@@ -4,6 +4,7 @@ import type { Group } from '../src/contracts/implementation';
 import type { PlanDecision, PlanStart } from '../src/contracts/planning';
 import type { RelayRun, WorkflowState } from '../src/contracts/workflow';
 import { newPlanning } from '../src/server/planning-state';
+import { editSettings, expand } from './ui';
 const headers = { Authorization: `Bearer ${'a'.repeat(64)}` };
 async function post(request: APIRequestContext, path: string, data: unknown) {
   const response = await request.post(`/api/v1/${path}`, { headers, data }); expect(response.ok()).toBe(true); return response.json();
@@ -32,11 +33,11 @@ test('Plan and Implementation are explicit readonly choices; Plan collects indep
   await expect(page.getByRole('region', { name: 'Plan setup' })).toBeVisible();
   await expect(page.getByLabel('Require my approval before implementation')).toBeChecked();
   await page.getByRole('button', { name: '2 · Implementation', exact: true }).click();
-  await expect(page.getByRole('region', { name: 'Implementation setup' })).toBeVisible(); expect(starts).toHaveLength(0);
+  await expect(page.getByRole('region', { name: 'Implementation settings' })).toBeVisible(); expect(starts).toHaveLength(0);
   await page.getByRole('button', { name: '1 · Plan', exact: true }).click();
   await expect(page.getByLabel('After planning: implementation group')).toHaveCount(0);
   await page.getByLabel('Shared task brief').fill('Plan a scoped feature with verifiable acceptance checks.');
-  await page.getByText('Collaboration settings', { exact: true }).click(); // the settings panel is collapsed until opened
+  await editSettings(page); await expand(page, 'Collaboration settings'); // the settings panels are collapsed until opened
   await page.getByLabel('Automatic collaboration across both phases').uncheck();
   await expect(page.getByLabel('Require my approval before implementation')).toBeChecked();
   await expect(page.getByLabel('Pause on a reviewer objection')).not.toBeChecked();
@@ -61,7 +62,7 @@ test('Start Plan explains why it is disabled, including a confirmation cleared b
   await expect(reason).toHaveText(/Confirm Ready for planning\. Changing the brief, a setting or the checkout clears an earlier confirmation\./);
   await expect(start).toHaveAccessibleDescription(/Confirm Ready for planning/); await expect(start).toHaveAttribute('title', /Confirm Ready for planning.*Start document-only planning\./);
   await ready.check(); await expect(reason).toHaveCount(0); await expect(start).toBeEnabled(); await expect(start).toHaveAttribute('title', 'Start document-only planning.');
-  await page.getByText('Collaboration settings', { exact: true }).click(); await page.getByLabel('Maximum automatic turns across both phases').fill('0');
+  await editSettings(page); await expand(page, 'Collaboration settings'); await page.getByLabel('Maximum automatic turns across both phases').fill('0');
   await expect(ready).not.toBeChecked(); await expect(reason).toHaveText('Set the maximum automatic turns to a whole number from 1 to 200.');
   await page.getByLabel('Maximum automatic turns across both phases').fill('20'); await ready.check(); await expect(reason).toHaveCount(0);
   await start.click(); await expect.poll(() => starts).toBe(1);
@@ -84,7 +85,7 @@ test('solo Plan can preauthorize automatic Implementation without creating a sec
   await page.route('**/api/v1/planning', async (route) => { start = route.request().postDataJSON(); await route.fulfill({ json: { status: 'delivered', error: null } }); });
   await openGroup(page, group); await page.getByRole('button', { name: '1 · Plan', exact: true }).click();
   await page.getByLabel('Shared task brief').fill('Plan first, then implement.');
-  await page.getByText('Collaboration settings', { exact: true }).click(); await page.getByLabel('Require my approval before implementation').uncheck();
+  await editSettings(page); await expand(page, 'Collaboration settings'); await page.getByLabel('Require my approval before implementation').uncheck();
   await page.getByLabel('Pause on a reviewer objection').check();
   await page.getByLabel('Implementation branch', { exact: true }).selectOption('new'); await page.getByLabel('New branch name').fill('task/after-plan');
   await page.getByLabel('Ready for planning').check(); await page.getByRole('button', { name: 'Start Plan', exact: true }).click();

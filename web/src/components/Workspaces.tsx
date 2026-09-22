@@ -27,6 +27,8 @@ interface Props {
   deliveryRepositories?: string[];
   /** Something changed on the server: show the notice and refresh. */
   onChanged: (notice: string) => Promise<void>;
+  /** Increases whenever the view changes; confirmations in this section are revoked when it is hidden. */
+  viewEpoch?: number;
 }
 /** Read-only workspace navigation; only explicit name/membership edits persist configuration. */
 export function Workspaces(props: Props) {
@@ -85,13 +87,13 @@ export function Workspaces(props: Props) {
           {groups.length > 1 && <span>{groups.length} agent directories · choose a task group</span>}
         </button>{!tree.main && <WorktreeActions project={project} tree={tree} token={props.token}
           disabled={!!squashReason} disabledReason={squashReason} deletionReason={hardReason} deletionHint={ownerReason || occupied}
-          onChanged={props.onChanged} />}</li>;
+          onChanged={props.onChanged} viewEpoch={props.viewEpoch} />}</li>;
       })}</ul>
       {directories.length > 1 && <div className="directory-groups"><h3>Choose the task group directory</h3><p className="fine">Collaborators must share a directory. These groups share one checkout; only one may own it at a time.</p>
         {directories.map((w) => <button type="button" key={workspaceKey(w)} className="quiet" onClick={() => onSelectWorkspace(w)}><span className="mono">{w.cwd}</span> · {w.agents.map((a) => a.label).join(', ')}</button>)}
       </div>}
       <LifecycleResults project={project} token={props.token} onChanged={props.onChanged} />
-      <CreateWorktree key={project.id} project={project} token={props.token} disabled={props.disabled || !props.inputEnabled || !!discoveryError || !!project.error} onChanged={props.onChanged} />
+      <CreateWorktree key={project.id} project={project} token={props.token} disabled={props.disabled || !props.inputEnabled || !!discoveryError || !!project.error} onChanged={props.onChanged} viewEpoch={props.viewEpoch} />
     </section>}
     {open && <WorkspaceDetail key={selectedKey} workspace={open} {...props} />}
   </>;

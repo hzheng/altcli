@@ -188,15 +188,23 @@ a task. Tracking the full journal in a nonignored file (default `RELAY-LOG.jsonl
 remains an explicit opt-in under **Collaboration settings** for projects that
 need that audit trail; every turn then commits the mirrored line.
 
-Every action names its recipient. **Send [agent]** delivers one standalone
-instruction without an automatic commit, branch change, or relay. **Commit
-[agent]** publishes one snapshot and stops, including in solo mode. Optional text
-is handoff context, not a new instruction. On a dirty checkout, the relay button
-becomes **Commit current changes & relay [peer]**: the selected worker snapshots
-the current changes, then the controller sends the selected baseline through the
-new commit to the peer after validating publication and completion. The baseline
-selector stays available; selecting current HEAD reviews only the current changes.
-Readiness and active-run gates still apply. On a clean checkout, **Relay [peer]** reviews every commit
+The console shows one card per agent pane, with that agent's action group directly
+under its terminal output: every control's first delivery goes to the agent above
+it, and every label names its recipients. **Send [agent]** delivers one standalone
+instruction without an automatic commit, branch change, or relay. Its **After send**
+choice adds a follow-up once the agent finishes that instruction: **Commit** turns it
+into **Send & commit [agent]** (the agent implements the instruction and publishes one
+handoff commit, including the current uncommitted changes, then stops) and **Commit &
+relay** into **Send & commit [agent] → relay [peer]** (the peer then reviews exactly
+that commit). A turn that changes nothing publishes a report and relays nothing.
+Under **Current changes** on a dirty checkout, **Commit [agent]** publishes one
+snapshot and stops, including in solo mode; its optional handoff note is context,
+not a new instruction. **Commit current changes & relay [peer]** snapshots first,
+then the controller sends the selected baseline through the new commit to the peer
+after validating publication and completion. The baseline selector stays available;
+selecting current HEAD reviews only the current changes. Readiness and active-run
+gates still apply. On a clean checkout, **Committed review** in the reviewing agent's
+own card offers **Relay [agent]**, which reviews every commit
 after the **Review baseline** chosen beside it. The selector lists each candidate
 as a short SHA and subject: the earliest (default) is the newest commit on this
 branch at which the journal records a completed turn of the recipient's, or the
@@ -204,17 +212,26 @@ task baseline when it records none; the latest is HEAD's parent (the last commit
 takes a typed SHA with a commit-list preview. The baseline is excluded and the
 displayed HEAD is included; changing it needs fresh readiness. No range is guessed
 from Git author or date. A range with no project content cannot be relayed as a proposal.
-Send and Commit target the selected agent (or fixed worker); Relay targets the
-other member (or fixed reviewer). Local handoff commits use a command-scoped hook
+Send and Commit start with the card's agent (only the fixed worker's card sends);
+Relay asks the card's own agent to review (only the fixed reviewer's card, under
+Worker + reviewer). Local handoff commits use a command-scoped hook
 override; repository hook configuration is unchanged and required checks still run.
 Automatic collaboration governs later turns. Otherwise use Next turn at the
 normal waiting boundary without takeover. Roles and continuation policy can
 change there without resetting the budget. Fixed reviewers publish no project changes.
-The collapsible **Collaboration settings** panel holds the optional tracked relay log,
+The settings bar above the panes summarizes the next run and switches between Plan and
+Implementation; its collapsed **Collaboration settings** panel holds the optional tracked relay log,
 automatic collaboration, the turn budget and **Pause on a reviewer objection**; by default an objection goes
 straight back to the author as the next automatic turn. A result marked `needsHuman`
 pauses for scope or permission decisions. Restart and uncertain publication pause
 without replay. A completed chain still needs final task-level verification.
+
+Switching between Console and Projects, agents, Parallel and Focus, Plan and
+Implementation, or workspaces keeps drafts, choices, open sections and scroll
+positions in page memory only: never browser storage, and Lock clears it.
+Readiness is one confirmation for the whole page and never survives such a switch,
+a changed checkout or setting, Recheck, a start, or a run starting or ending
+anywhere; confirm it again for what is on screen.
 
 ## Using the staging fallback
 

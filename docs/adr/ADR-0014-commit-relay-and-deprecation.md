@@ -6,6 +6,28 @@ Status: Accepted design direction; implementation and host acceptance pending.
 Items explicitly labeled working specification, recommendation, or open choice retain that status.
 This documentation-only change does not enable the described features.
 
+### Contextual pane actions (September 21, 2026)
+
+The console places one action group under each agent pane; every control's first
+delivery goes to the agent above it. **After send** exposes the existing `kind: work`
+contract in the UI. *Commit* submits `kind: work` with `handoff: false` and
+`autoContinue: false`. *Commit & relay* submits `kind: work` with `handoff: true`: the
+server schedules the peer's initial review of the new candidate only after validated
+publication with changed project content, even when later automatic collaboration
+is off. The review range is the pre-send HEAD through the published commit. The UI
+never sends `reviewBase` with `kind: work`; the server does not validate it for new
+work, and whether it should refuse one is an open follow-up. Uncommitted input is
+captured by the initial worktree fingerprint and included in that first commit
+(ADR-0013). A work turn with no project change publishes a report (a journal-only
+commit when the tracked log is mirrored) and relays nothing. Solo offers no relay;
+under Worker + reviewer only the worker's card sends and only the reviewer's card
+reviews. Existing-commit **Relay [agent]** sits in the reviewing agent's own card.
+Snapshot **Commit** and **Commit current changes & relay [peer]** sit under the
+author's **Current changes** with a separate optional handoff note, so a Send
+instruction is never sent as snapshot context. Request bodies for Commit, Commit
+current changes & relay, Relay, Start Plan and Next turn are unchanged; no server
+contract changed.
+
 ### Journal as app data (September 20, 2026)
 
 This update supersedes the tracked-log requirement in [One tracked append-only

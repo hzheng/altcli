@@ -1,12 +1,16 @@
 'use client';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import type { CommandRecord, SessionRegistration } from '../contracts/api';
-import type { ActivityReset, HistoryExport, RelayRun, Workspace, WorkspaceDiscovery, WorkspaceResetResult, WorkflowState } from '../contracts/workflow';
+import type { ActivityReset, HistoryExport, ManagedSession, RelayRun, Workspace, WorkspaceDiscovery, WorkspaceResetResult, WorkflowState } from '../contracts/workflow';
 import type { ProjectWorktree } from '../contracts/projects';
 import { api, HttpError } from '../client/api';
+import { MemoryContext, useRemembered, type PageMemory } from '../client/memory';
 import { nameOf, workspaceKey, Workspaces } from './Workspaces';
-import { Implementation, RunPolicy } from './Implementation';
+import { RunPolicy } from './Implementation';
 import { PlanningProgress } from './PlanningProgress';
+import { PaneActions } from './PaneActions';
+import { PlanSetup } from './PlanSetup';
+import { RunSettingsBar, useRunSettings, type Phase } from './RunSettings';
 const PREFERENCE = 'codercrew.autoRelay';
 const LAYOUT = 'codercrew.paneLayout';
 const TURN_LIMIT = 'codercrew.turnLimit';
@@ -68,33 +72,47 @@ function controllerStatusOf(agent: SessionRegistration, run: RelayRun | undefine
   return { badge: 'unknown', detail: `Last recorded turn: ${result}. Current agent activity is unknown.`, when: last.receivedAt };
 }
 const Icon = ({ badge }: { badge: AgentStatus['badge'] }) => <span className={`state-icon ${badge}`} title={badge} aria-hidden="true" />;
-/** Follows new output while the reader is at the bottom; a reader who scrolled up keeps their place. */
-function Output({ text, label }: { text: string; label: string }) {
-  const ref = useRef<HTMLPreElement>(null); const stick = useRef(true);
-  useEffect(() => { const el = ref.current; if (el && stick.current) el.scrollTop = el.scrollHeight; }, [text]);
-  return <pre ref={ref} tabIndex={0} aria-label={label} onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 8; }}>{text}</pre>;
+/** Follows new output while the reader is at the bottom; a reader who scrolled up keeps their place. A hidden pane (Focus, the narrow
+ * layout or a hidden section) has no layout, so polling never overwrites its saved place; it is restored when the pane is shown again. */
+function Output({ text, label, memoryKey }: { text: string; label: string; memoryKey: string }) {
+  const memory = useContext(MemoryContext);
+  const ref = useRef<HTMLPreElement>(null);
+  const place = useRef((memory.get(memoryKey) as { top: number; stick: boolean } | undefined) ?? { top: 0, stick: true });
+  const restore = useCallback(() => { const el = ref.current; if (!el || !el.clientHeight) return; el.scrollTop = place.current.stick ? el.scrollHeight : place.current.top; }, []);
+  useEffect(restore, [text, restore]);
+  useEffect(() => {
+    const el = ref.current; if (!el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(restore); observer.observe(el); return () => observer.disconnect();
+  }, [restore]);
+  return <pre ref={ref} tabIndex={0} aria-label={label} onScroll={(e) => { const el = e.currentTarget; if (!el.clientHeight) return;
+    place.current = { top: el.scrollTop, stick: el.scrollHeight - el.scrollTop - el.clientHeight < 8 }; memory.set(memoryKey, place.current); }}>{text}</pre>;
 }
 /** A view and command client. There is intentionally no effect that sends another turn. */
 export function Console() {
+  // Page memory for drafts and choices. Lock replaces it: hooks that stay mounted above the unlock form must not keep old values.
+  const [memory, setMemory] = useState<PageMemory>(() => new Map());
   const [token, setToken] = useState(''); const [draftToken, setDraftToken] = useState('');
   const [state, setState] = useState<WorkflowState | null>(null);
   const [discovery, setDiscovery] = useState<WorkspaceDiscovery | null>(null); const [discoveryError, setDiscoveryError] = useState('');
   const [tab, setTab] = useState<Tab | null>(null); const [workspace, setWorkspace] = useState<WorkspaceChoice | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
   const [text, setText] = useState(''); const [ready, setReady] = useState(false);
-  const [autoContinue, setAutoContinue] = useState(true); const [busy, setBusy] = useState(false);
+  const [autoContinue, setAutoContinue] = useState(true); const [busy, setBusy] = useState(false); const [checking, setChecking] = useState(false);
   const [message, setMessage] = useState(''); const [error, setError] = useState(''); const [updated, setUpdated] = useState(0);
   const [clock, setClock] = useState(Date.now()); const [unknownRequest, setUnknownRequest] = useState<string | null>(null);
   const [takeover, setTakeover] = useState<string | null>(null);
   const [resetFor, setResetFor] = useState<string | null>(null);
   const [statusReset, setStatusReset] = useState<Omit<ActivityReset, 'confirmReady'> | null>(null);
-  const [layout, setLayout] = useState<'parallel' | 'focus'>('parallel'); const [focusOverride, setFocusOverride] = useState<string | null>(null);
+  const [layout, setLayout] = useState<'parallel' | 'focus'>('parallel');
   const [turnLimit, setTurnLimit] = useState(String(DEFAULT_TURN_LIMIT));
   const [legacy, setLegacy] = useState(false);
-  const [phase, setPhase] = useState<'plan' | 'implementation'>('implementation');
+  const [phase, setPhase] = useState<Phase>('implementation');
+  // One readiness slot for the whole console: the exact displayed state a confirmation was given for, so at most one card is ready.
+  const [consent, setConsent] = useState('');
+  const [recheckRevision, setRecheckRevision] = useState(0); const [viewEpoch, setViewEpoch] = useState(0);
   // History follows the selected pair by default; "All" or a specific pair is an explicit choice that then sticks.
   const [historyPair, setHistoryPair] = useState<'all' | 'selected' | string>('selected'); const [historyOrder, setHistoryOrder] = useState<'desc' | 'asc'>('desc');
   const submission = useRef(false); const generation = useRef(0); const readNumber = useRef(0); const discoveryRead = useRef(0);
+  const scrolls = useRef<Partial<Record<Tab, number>>>({});
   useEffect(() => { try { if (localStorage.getItem(PREFERENCE) === 'false') setAutoContinue(false); if (localStorage.getItem(LAYOUT) === 'focus') setLayout('focus');
     const limit = localStorage.getItem(TURN_LIMIT); if (limit && /^\d+$/.test(limit)) setTurnLimit(limit);
     // Remembered selections initialize the view only; the server validates every group at start.
@@ -128,6 +146,9 @@ export function Console() {
   }, [token, recheck]);
   // First view: the console when agents are already named, otherwise setup. Later switches are the user's.
   useEffect(() => { if (state && tab === null) setTab(state.sessions.length ? 'console' : 'workspaces'); }, [state, tab]);
+  // Both sections stay mounted; each keeps its own page scroll across switches.
+  useEffect(() => { if (tab) window.scrollTo(0, scrolls.current[tab] ?? 0); }, [tab]);
+  const showTab = (next: Tab) => { if (tab) scrolls.current[tab] = window.scrollY; setTab(next); };
   const sessions = state?.sessions ?? [];
   const project = workspace?.root ?? sessions[0]?.repository;
   const projectSessions = sessions.filter((s) => s.repository === project);
@@ -141,53 +162,91 @@ export function Console() {
   const historicalPairIds = [...new Set((state?.commands ?? []).flatMap((command) => command.groupId ? [command.groupId] : []))]
     .filter((id) => !pairs.some((candidate) => candidate.id === id));
   const pair = pairs.find((p) => p.repository === project && p.cwd === card?.cwd && p.members.length > 0);
+  const members = pair?.members ?? [];
+  const git = card?.git;
+  // Drafts, settings and the displayed pane are remembered per workspace and group, never carried into another workspace.
+  const ws = card ? workspaceKey(card) : project ?? '';
+  const scope = `${ws}\0${pair?.id ?? ''}`;
+  const implementationSettings = useRunSettings(memory, `run:${scope}`, git, members, 'implementation');
+  const planSettings = useRunSettings(memory, `run:${scope}`, git, members, 'plan');
+  const [agentsOpen, setAgentsOpen] = useRemembered(`agents:${ws}`, false, memory);
+  const [historyOpen, setHistoryOpen] = useRemembered(`history:${ws}`, false, memory);
+  const [advancedOpen, setAdvancedOpen] = useRemembered(`advanced:${ws}`, false, memory);
+  const [paneChoice, setPaneChoice] = useRemembered<string | null>(`pane:${ws}`, null, memory);
   const showLegacy = legacy && state?.legacyEnabled && pair?.sessions.length === 2;
   // The internal sentinel follows the active pair while the control shows that pair's single, starred option.
   const historyFilter = historyPair === 'selected' ? pair ? `pair:${pair.id}` : 'all' : historyPair;
   const visible = pair ? projectSessions.filter((s) => pair.sessions.includes(s.id)) : projectSessions;
-  const current = visible.find((s) => s.id === selected) ?? visible[0];
-  const groupInstances = visible.map((s) => [s.id, state?.instances.find((i) => i.agentId === s.id)?.status]);
-  const readinessKey = JSON.stringify([pair, card?.agents, current?.id, current?.registrationId, groupInstances]);
-  useEffect(() => { setReady(false); setResetFor(null); setStatusReset(null); }, [readinessKey, project]);
   const owned = (state?.runs ?? []).filter((r) => r.repository === project && ['running','waiting','paused'].includes(r.status));
   const transportHold = state?.reservations.find((r) => r.repository === project);
   // A finished run is current status only while its frozen participants are the agents shown here; a run of removed or
   // renamed-away agents is history and stays reachable under Command history.
   const latestRun = owned[0] ?? state?.runs.find((r) => r.repository === project && r.participants.every((p) => projectSessions.some((s) => s.id === p.id)));
+  const newest = state?.runs.find((r) => r.repository === project);
+  const runMark = JSON.stringify(newest ? [newest.id, newest.status] : null);
   const statuses = new Map(state ? projectSessions.map((s) => [s.id, statusOf(s, latestRun, state)] as const) : []);
   const working = projectSessions.find((s) => ['working', 'sending'].includes(statuses.get(s.id)?.badge ?? ''))?.id ?? null;
   const lastActive = [...projectSessions].sort((a, b) => (statuses.get(b.id)?.when ?? '').localeCompare(statuses.get(a.id)?.when ?? ''))[0]?.id ?? null;
-  // A new working agent takes the focus back from a manual tab choice.
-  useEffect(() => { if (working) setFocusOverride(null); }, [working]);
-  const preferredFocus = focusOverride ?? working ?? lastActive ?? current?.id;
-  const focused = visible.some((s) => s.id === preferredFocus) ? preferredFocus : visible[0]?.id;
-  const shown = layout === 'focus' ? visible.filter((s) => s.id === focused) : visible;
+  // One displayed pane drives Focus and the narrow layout. An explicit choice sticks; until one is made, the view follows a working agent.
+  const current = visible.find((s) => s.id === paneChoice) ?? visible.find((s) => s.id === working) ?? visible.find((s) => s.id === lastActive) ?? visible[0];
+  const displayed = current?.id;
+  const groupInstances = visible.map((s) => [s.id, state?.instances.find((i) => i.agentId === s.id)?.status]);
+  const readinessKey = JSON.stringify([pair, card?.agents, current?.id, current?.registrationId, groupInstances]);
+  useEffect(() => { setReady(false); setResetFor(null); setStatusReset(null); }, [readinessKey, project]);
+  // Readiness and confirmations attest to what was on screen, so any view switch revokes them. Drafts and choices stay.
+  const viewKey = JSON.stringify([tab, phase, layout, displayed]);
+  useEffect(() => { setConsent(''); setReady(false); setResetFor(null); setStatusReset(null); setViewEpoch((epoch) => epoch + 1); }, [viewKey]);
   const chooseLayout = (next: 'parallel' | 'focus') => { setLayout(next); try { localStorage.setItem(LAYOUT, next); } catch { /* preference only */ } };
   const stale = !!error || clock - updated > 10000;
+  // A reading that is not current cannot back a confirmation; readiness must be given again once it is.
+  useEffect(() => { if (stale) { setConsent(''); setReady(false); } }, [stale]);
   // Every selected collaborator is validated by the server, including a peer that is not the command target.
   const resetAgents = visible.filter((s) => !s.registrationId || state?.instances.find((i) => i.agentId === s.id)?.status === 'replaced');
   const unknownAgents = state?.mode === 'tmux' ? visible.filter((s) => !resetAgents.includes(s) && state.instances.find((i) => i.agentId === s.id)?.status !== 'current') : [];
   const identityBlockedReason = resetAgents.length ? `Reset workspace required for ${resetAgents.map((s) => s.label).join(', ')}. Inspect the panes and use Reset workspace above before sending.`
     : unknownAgents.length ? `The host cannot confirm the CLI process for ${unknownAgents.map((s) => s.label).join(', ')}. Recheck before sending.` : '';
-  const available = state?.snapshots.find((s) => s.agentId === current?.id)?.status === 'available';
-  const blocked = busy || stale || setupHeld || !state?.inputEnabled || !current?.registrationId || !!identityBlockedReason || !available || owned.length > 0 || !!transportHold || !!unknownRequest || (!!pair && !limitValid);
+  // Gates shared by every card of this checkout, then each card's own agent.
+  const sharedReason = identityBlockedReason || (stale ? 'The console is not current. Wait for it to reconnect.' : '')
+    || (setupHeld ? 'A worktree operation is applying or uncertain. Reconcile it in Projects before starting work.' : '')
+    || (!state?.inputEnabled ? 'Read-only console: the host has disabled input.' : '')
+    || (owned.length ? 'A run owns this checkout. Wait for it to finish, or use Pause / take over above.' : '')
+    || (transportHold ? 'An older uncertain delivery holds this workspace. Inspect and acknowledge it above.' : '')
+    || (unknownRequest ? 'A request has an uncertain result. Inspect it above before sending again.' : '')
+    || (checking ? 'Wait for Recheck to finish.' : '')
+    || (!!pair && !limitValid ? 'Set the staging fallback maximum automatic turns to 1–200.' : '');
+  const cardReason = (s?: ManagedSession) => !s ? 'Choose an agent first.' : !s.registrationId ? `Recheck ${s.label} before sending: its identity is not registered.`
+    : state?.snapshots.find((snapshot) => snapshot.agentId === s.id)?.status !== 'available' ? `${s.label}'s pane cannot be captured right now. Recheck before sending.` : '';
+  const blocked = busy || !!sharedReason || !!cardReason(current);
   const resetKey = JSON.stringify([project, readinessKey]);
   const resetBlocked = busy || stale || setupHeld || owned.length > 0 || !!transportHold || !!unknownRequest || !project || !!discoveryError || !!discovery?.error;
-  const select = (id: string) => { setSelected(id); setReady(false); setText(''); setMessage(''); };
+  const workspaceError = discoveryError || discovery?.error || '';
+  const select = (id: string) => { setPaneChoice(id); setReady(false); };
   function chooseWorkspace(chosen: Workspace) {
     const choice = { key: workspaceKey(chosen), root: chosen.worktree.root };
     setWorkspace(choice); try { localStorage.setItem(WORKSPACE, JSON.stringify(choice)); } catch { /* preference only */ }
-    setSelected(null); setFocusOverride(null); setReady(false);
-    setTab('console');
+    setReady(false); scrolls.current.console = 0; showTab('console');
   }
   function chooseWorktree(chosen: ProjectWorktree) {
     const choice = { key: `worktree:${chosen.id}`, root: chosen.path };
     setWorkspace(choice); try { localStorage.setItem(WORKSPACE, JSON.stringify(choice)); } catch { /* preference only */ }
-    setSelected(null); setFocusOverride(null); setReady(false); setTab('console');
+    setReady(false); scrolls.current.console = 0; showTab('console');
   }
   function lock() {
     generation.current++; readNumber.current++; discoveryRead.current++; setToken(''); setDraftToken(''); setState(null); setDiscovery(null); setTab(null); setReady(false);
-    setSelected(null); setMessage(''); setError(''); setDiscoveryError(''); setUnknownRequest(null); setResetFor(null);
+    setMessage(''); setError(''); setDiscoveryError(''); setUnknownRequest(null); setResetFor(null); setConsent('');
+    // Lock forgets drafts and form state; server-owned runs continue and are relearned from the server after unlocking.
+    setMemory(new Map()); scrolls.current = {};
+  }
+  /** Runs one request under the console-wide submission guard, so two rapid clicks cannot create competing starts. */
+  async function guarded(work: () => Promise<void>) {
+    if (submission.current) return;
+    submission.current = true; setBusy(true);
+    try { await work(); } finally { submission.current = false; setBusy(false); }
+  }
+  const recheckAll = () => Promise.all([refresh(), recheck()]).then(() => {});
+  function recheckNow() {
+    setConsent(''); setChecking(true);
+    void recheckAll().finally(() => { setRecheckRevision((revision) => revision + 1); setChecking(false); });
   }
   async function resetWorkspace() {
     if (resetBlocked || resetFor !== resetKey || submission.current || !project) return;
@@ -263,119 +322,125 @@ export function Console() {
       </form><p className="fine">The token stays in page memory. Locking or closing this page does not pause a server-owned run.</p>
     </section></main>;
   const feedback = message && <p className="feedback" role="status">{message}</p>;
-  return <main className="console-shell">
+  const connection = <div className="connection">{stale ? 'Not current' : 'Connected'}<small>{updated ? new Date(updated).toLocaleTimeString() : 'Connecting'}</small></div>;
+  const actionable = !!pair && members.length <= 2;
+  const settings = phase === 'plan' ? planSettings : implementationSettings;
+  const settingsNotice = !pair ? 'Select at least one agent in Projects to start.' : members.length > 2
+    ? `Your group has ${members.length} agents. Plan and Implementation currently execute with one or two agents; larger-group execution is not enabled yet. Your selection is saved. Choose one or two members to start a run.` : '';
+  // Discovery and the saved session share a full pane identity: pane, socket and tmux server.
+  const locationOf = (s: ManagedSession) => card?.agents.find((a) => a.identity.paneId === s.identity.paneId && a.identity.socketPath === s.identity.socketPath
+    && a.identity.serverPid === s.identity.serverPid && a.identity.serverStarted === s.identity.serverStarted)?.location;
+  const common = { token, state: state!, git, workspaceError, agentsKey: JSON.stringify(card?.agents ?? null), busy, submit: guarded, consent, setConsent, runMark,
+    recheck: recheckRevision, refresh, onRecheck: recheckAll, onMessage: setMessage, onUncertain: setUnknownRequest };
+  return <MemoryContext.Provider value={memory}><main className="console-shell">
     <header className="topbar"><div className="wordmark"><span className="brand-mark">C</span> CoderCrew</div>
       <nav className="section-tabs" aria-label="Sections">
-        <button type="button" className={tab === 'console' ? 'selected' : ''} aria-pressed={tab === 'console'} onClick={() => setTab('console')}>Console</button>
-        <button type="button" className={tab === 'workspaces' ? 'selected' : ''} aria-pressed={tab === 'workspaces'} onClick={() => setTab('workspaces')}>Projects</button></nav>
-      <div className="toolbar"><span className="badge">{state?.mode === 'mock' ? 'MOCK MODE' : 'LOCAL HOST'}</span><button className="quiet" onClick={lock} disabled={busy}>Lock</button></div></header>
-    <div className="page-heading"><div><p className="eyebrow">{tab === 'workspaces' ? 'PROJECT · WORKTREE · TASK' : 'SERVER-OWNED RUNS'}</p><h1>{tab === 'workspaces' ? 'Projects and agents' : 'Agent console'}</h1>
-        <p className="muted">{tab === 'workspaces' ? 'Choose an existing worktree or explicitly create one for a new task. Opening a console never starts work.' : 'Viewing another worktree never changes a running relay.'}</p></div>
-      <div className="connection">{stale ? 'Not current' : 'Connected'}<small>{updated ? new Date(updated).toLocaleTimeString() : 'Connecting'}</small></div></div>
+        <button type="button" className={tab === 'console' ? 'selected' : ''} aria-pressed={tab === 'console'} onClick={() => showTab('console')}>Console</button>
+        <button type="button" className={tab === 'workspaces' ? 'selected' : ''} aria-pressed={tab === 'workspaces'} onClick={() => showTab('workspaces')}>Projects</button></nav>
+      <div className="toolbar">{state?.mode === 'mock' && <span className="muted toolbar-note">Simulated panes. No commands reach real terminals.</span>}
+        <span className="badge">{state?.mode === 'mock' ? 'MOCK MODE' : 'LOCAL HOST'}</span><button className="quiet" onClick={lock} disabled={busy}>Lock</button></div></header>
+    {tab === 'workspaces' ? <div className="page-heading"><div><p className="eyebrow">PROJECT · WORKTREE · TASK</p><h1>Projects and agents</h1>
+        <p className="muted">Choose an existing worktree or explicitly create one for a new task. Opening a console never starts work.</p></div>{connection}</div>
+      : <div className="page-heading compact"><h1>Agent console</h1>{connection}</div>}
     {error && <div className="notice error" role="alert">{error} <button onClick={() => void refresh()}>Refresh</button></div>}
-    {state?.mode === 'mock' && <div className="notice">Simulated panes. No commands reach real terminals.</div>}
-    {state && tab === 'workspaces' && <>
+    {state && <>
+    <div className="section-panel" hidden={tab !== 'workspaces'}>
       {feedback}
       <Workspaces token={token} disabled={busy} discovery={discovery} discoveryError={discoveryError} onRecheck={() => recheck()}
         inputEnabled={state.inputEnabled} runs={state.runs} selectedRoot={project ?? null} onSelectWorktree={chooseWorktree}
         deliveryRepositories={state.reservations.map((reservation) => reservation.repository)}
         sessions={sessions} pairs={groups} lockedRepositories={[...setupHolds, ...state.runs.filter((run) => ['running','waiting','paused'].includes(run.status)).map((run) => run.repository)]}
-        selectedKey={workspace?.key ?? null} onSelectWorkspace={chooseWorkspace}
+        selectedKey={workspace?.key ?? null} onSelectWorkspace={chooseWorkspace} viewEpoch={viewEpoch}
         onChanged={async (notice) => { setMessage(notice); await Promise.all([refresh(), recheck()]); }} />
-    </>}
-    {state && tab === 'console' && <>
+    </div>
+    <div className="section-panel" hidden={tab !== 'console'}>
       <div className="context-bar">
-        <span><strong>{selectedProject?.name ?? (project ? nameOf(project) : 'No project')}</strong> {project && <span className="mono muted">{project}</span>}</span>
-        {(card || selectedTree) && <span>Branch <span className="mono">{(card ?? selectedTree)?.branch ?? 'detached HEAD'}</span></span>}
+        <span className="context-project"><strong>{selectedProject?.name ?? (project ? nameOf(project) : 'No project')}</strong> {project && <span className="mono muted" title={project}>{project}</span>}</span>
+        {(card || selectedTree) && <span>Branch <span className="mono">{(card ?? selectedTree)?.branch ?? 'detached HEAD'}</span>{git && <span className="mono muted"> @ {git.head.slice(0, 7)} · {git.clean ? 'clean' : `${git.changeCount} uncommitted`}{git.integration ? ' · integration branch' : ''}</span>}</span>}
         <span>{pair ? <>Group <strong>{pair.name}</strong> <span className="muted">{pair.sessions.map((id) => sessions.find((s) => s.id === id)?.label ?? id).join(' ⇄ ')}</span></> : <span className="muted">No group in use</span>}</span>
-        <button type="button" className="quiet" onClick={() => setTab('workspaces')}>Projects →</button>
+        <span className="context-actions"><button type="button" className="quiet" disabled={busy || checking} onClick={recheckNow}>{checking ? 'Checking…' : 'Recheck'}</button>
+          <button type="button" className="quiet" onClick={() => showTab('workspaces')}>Projects →</button></span>
       </div>
+      {(workspaceError || card?.gitError) && <p className="notice error" role="alert">{workspaceError || card?.gitError} Recheck before starting.</p>}
       {setupHeld && <p className="notice">This worktree operation is applying or uncertain. Inspect and reconcile its result in Projects before starting work.</p>}
+      {unknownRequest && <div className="notice error" role="alert">Request {unknownRequest} has an uncertain HTTP result. Inspect its server run and the terminal; do not resend it.
+        <button onClick={() => setUnknownRequest(null)}>I checked the server and terminal</button></div>}
+      {!!resetAgents.length && <section className="notice" aria-label="Agent identity changed">
+        <p>{owned.length ? 'CLI identity changed for' : 'Workspace reset required for'} {resetAgents.map((s) => s.label).join(', ')}. A saved CLI identity is outdated. Inspect these panes and confirm the intended CLIs are running.</p>
+        {owned.length ? <p>A run still owns this checkout. Use Pause / take over above and inspect every participant before releasing ownership. A restarted CLI in the same pane and directory will then be rediscovered automatically, keeping names and group settings.</p>
+          : <p>No active run owns this checkout, so Pause / take over is not shown. This pane still cannot be matched to its saved identity. Inspect it before resetting the workspace configuration, then confirm readiness before sending again.</p>}
+        {setupHeld && <p>A setup operation still owns this checkout. Reconcile it in Projects before resetting.</p>}
+        {resetFor !== resetKey ? <button type="button" disabled={resetBlocked} onClick={() => setResetFor(resetKey)}>Reset workspace…</button>
+          : <><p>Reset saved names and group selection for every agent on <span className="mono">{project}</span>? Live agents will appear with their default names. Files, commits, running CLIs and command history are kept.</p>
+            <button type="button" disabled={resetBlocked} onClick={() => void resetWorkspace()}>Confirm workspace reset</button>
+            <button type="button" disabled={busy} onClick={() => setResetFor(null)}>Keep configuration</button></>}
+      </section>}
+      {!!unknownAgents.length && <div className="notice">The host cannot confirm the CLI process for {unknownAgents.map((s) => s.label).join(', ')}. Recheck before sending.</div>}
+      {transportHold && !owned.length && <div className="notice">An older uncertain delivery holds this workspace. Inspect its terminals and any partially typed input before acknowledging. Nothing is replayed. <button disabled={busy} onClick={() => void releaseLegacy()}>I checked the legacy delivery</button></div>}
+      {statusReset && <section className="panel" aria-label="Reset agent status">
+        <h2>Reset status for {projectSessions.find((s) => s.id === statusReset.agentId)?.label}</h2>
+        <p>A backend restart can lose activity evidence for a quiet CLI. Inspect this agent’s terminal: it must be at an empty prompt with no background writers. This marks it Ready based on your inspection; it does not restart the CLI or certify a completed turn.</p>
+        <button type="button" disabled={busy || owned.length > 0 || !!transportHold} onClick={() => void resetActivity()}>I checked the terminal — mark Ready</button>{' '}
+        <button type="button" disabled={busy} onClick={() => setStatusReset(null)}>Cancel status reset</button>
+      </section>}
+      {owned.map((run) => <section key={run.id} className="panel run-card" aria-label="Active run">
+        <div className="section-heading"><h2>{run.status === 'paused' ? 'Run paused' : 'Run active'}</h2><span className="badge">{run.automaticTurns}/{run.turnLimit} automatic turns</span></div>
+        <p><span className="badge">{run.implementation ? 'IMPLEMENTATION' : run.planning ? 'PLAN' : run.standalone ? 'STANDALONE' : 'LEGACY STAGING'}</span> {run.participants.map((s) => s.label).join(' ⇄ ')} · {run.implementation?.group.name ?? run.planning?.group.name ?? run.pairId ?? 'single-agent turn'}</p><p>{run.reason}</p>
+        {run.implementation && <p className="mono">{run.implementation.policy} · {run.implementation.branch} · turn {run.implementation.turn} · accepted {run.implementation.acceptedSha.slice(0, 12)}{run.implementation.candidateSha ? ` · candidate ${run.implementation.candidateSha.slice(0, 12)}` : ''}</p>}
+        {run.planning && <PlanningProgress token={token} run={run} git={card?.git} disabled={busy || stale || !state.inputEnabled} refresh={refresh} onMessage={setMessage} onStop={() => void action(run, 'pause')} viewEpoch={viewEpoch} />}
+        {run.status === 'waiting' && (run.implementation || run.planning?.next) && <button disabled={busy || stale || !state.inputEnabled} onClick={() => void action(run, 'continue')}>{run.planning && !run.implementation ? 'I checked readiness — Next planning turn' : 'I checked readiness — Next turn'}</button>}
+        {run.status === 'waiting' && run.implementation && <RunPolicy key={`${run.id}:${run.implementation.revision}`} token={token} run={run} disabled={busy || stale} onChanged={refresh} onMessage={setMessage} />}
+        <button disabled={busy} onClick={() => void action(run, 'pause')}>Pause / take over</button>
+        {takeover === run.id && <div className="notice">Pause does not interrupt any process. Inspect all participants, stop background writers, and resolve any partially typed input before releasing ownership.
+          <button disabled={busy} onClick={() => void action(run, 'takeover')}>I checked every participant; release ownership</button><button onClick={() => setTakeover(null)}>Keep paused</button></div>}
+      </section>)}
+      {latestRun && !owned.some((r) => r.id === latestRun.id) && <section className="panel latest-run" aria-label="Latest run">
+        <p><span className={`badge ${latestRun.status === 'stopped' ? 'warning' : ''}`}>RUN {latestRun.status.toUpperCase()} · {latestRun.automaticTurns}/{latestRun.turnLimit} automatic turns</span>{' '}
+          <span className="muted">{latestRun.participants.map((p) => p.label).join(' ⇄ ')}{latestRun.implementation ? ` (group "${latestRun.implementation.group.name}")` : latestRun.planning ? ` (planning group "${latestRun.planning.group.name}")` : latestRun.pairId ? ` (group "${latestRun.pairId}")` : ' (single-agent turn)'} · {latestRun.reason} · {timeOf(latestRun.updatedAt)}</span></p>
+        {latestRun.implementation?.latestPublication && <p className="muted">{latestRun.implementation.latestPublication.sha === latestRun.implementation.latestPublication.entry.parent ? 'Report only, no commit' : <>Commit <span className="mono">{latestRun.implementation.latestPublication.sha.slice(0, 12)}</span></>} · {latestRun.implementation.latestPublication.entry.summary}<br />
+          Checks reported by the agent: {latestRun.implementation.latestPublication.entry.checks.join('; ') || 'none reported'}</p>}
+        {latestRun.planning && <details><summary>Retained plan and authorization</summary>
+          <PlanningProgress token={token} run={latestRun} disabled refresh={refresh} onMessage={setMessage} onStop={() => {}} /></details>}
+      </section>}
+      {feedback}
       {!projectSessions.length && <section className="panel empty-console"><h2>No eligible agents here yet</h2>
         <p className="muted">{selectedTree?.error ?? card?.agents.find((agent) => agent.reason && (agent.kind === 'codex' || agent.kind === 'claude'))?.reason ?? (project ? <>Start coding CLIs in <span className="mono">{project}</span>, then Recheck in Projects. Collaborators need the same directory. No registration is needed.</> : 'Choose a project and worktree with running coding agents. Nothing is sent until you explicitly start work.')}</p>
-        <button type="button" className="primary" onClick={() => setTab('workspaces')}>Open Projects</button></section>}
+        <button type="button" className="primary" onClick={() => showTab('workspaces')}>Open Projects</button></section>}
       {!!projectSessions.length && <>
-        <div className="target-row"><nav className="agent-tabs" aria-label="Command target">{visible.map((s) => <button key={s.id} className={s.id === current?.id ? 'selected' : ''} aria-pressed={s.id === current?.id} onClick={() => { select(s.id); setFocusOverride(s.id); }}>
+        {!showLegacy && <RunSettingsBar settings={settings} git={git} members={members} sessions={sessions} displayed={displayed} disabled={busy || !!sharedReason} notice={settingsNotice} onPhase={setPhase} />}
+        <div className="target-row"><nav className="agent-tabs" aria-label="Command target">{visible.map((s) => <button key={s.id} className={s.id === current?.id ? 'selected' : ''} aria-pressed={s.id === current?.id} onClick={() => select(s.id)}>
             <Icon badge={statuses.get(s.id)?.badge ?? 'unknown'} />{s.label}</button>)}</nav>
           <div className="row-tools"><div className="segmented" role="group" aria-label="Pane layout">
               <button className={layout === 'parallel' ? 'selected' : 'quiet'} aria-pressed={layout === 'parallel'} onClick={() => chooseLayout('parallel')}>Parallel</button>
               <button className={layout === 'focus' ? 'selected' : 'quiet'} aria-pressed={layout === 'focus'} onClick={() => chooseLayout('focus')}>Focus</button></div></div></div>
-        <section className={`panes ${layout}`} aria-label="Agent output">{shown.map((s) => {
-          const snapshot = state?.snapshots.find((p) => p.agentId === s.id);
-          const execution = state?.executions.find((e) => e.agentId === s.id);
-          const ended = state?.turns.find((t) => t.agentId === s.id && t.receivedAt >= s.registeredAt);
+        <section className={`panes ${layout}`} aria-label="Agent output">{visible.map((s) => {
+          const snapshot = state.snapshots.find((p) => p.agentId === s.id);
+          const execution = state.executions.find((e) => e.agentId === s.id);
+          const ended = state.turns.find((t) => t.agentId === s.id && t.receivedAt >= s.registeredAt);
           // While this pane has a command in flight, an older accepted outcome must not look like that command's result. A
           // participant whose turn is over keeps its label (an objection reason stays readable while the partner corrects).
           const visibleOutcome = !execution || ended?.commandId === execution.commandId ? ended : undefined;
-          return <article key={s.id} className={`pane ${s.id === current?.id ? 'active' : ''}`}>
-            <div className="pane-heading"><h2><Icon badge={statuses.get(s.id)?.badge ?? 'unknown'} />{s.label}</h2><span className="mono muted">{s.agentType} · {s.identity.paneId}</span></div>
-            <div className="pane-meta"><span>{s.repository}</span><span className="badge">{execution ? execution.status.toUpperCase() : 'NO ACTIVE CONTROLLER TURN'}</span></div>
+          const status = statuses.get(s.id)!; const activity = state.activities?.find((a) => a.agentId === s.id);
+          const resetStatusBlocked = busy || owned.length > 0 || !!transportHold || !s.cliPid || state.instances.find((i) => i.agentId === s.id)?.status !== 'current';
+          const location = locationOf(s);
+          return <article key={s.id} aria-label={`${s.label} pane`} hidden={layout === 'focus' && s.id !== displayed} className={`pane ${s.id === displayed ? 'active' : ''}`}>
+            <div className="pane-heading"><h2><Icon badge={status.badge} />{s.label}</h2><span className="mono muted">{s.agentType}{location ? ` · ${location}` : ''} · {s.identity.paneId}</span>
+              <span className="badge">{execution ? execution.status.toUpperCase() : 'NO ACTIVE CONTROLLER TURN'}</span></div>
+            <div className="pane-status"><span className="state"><Icon badge={status.badge} />{status.badge}</span><span className="pane-detail" title={status.detail}>{status.detail}</span>
+              {status.when && <span className="mono muted">{timeOf(status.when)}</span>}
+              {activity?.state === 'unknown' && <button type="button" disabled={resetStatusBlocked}
+                title={owned.length || transportHold ? 'Reconcile the owned run before resetting activity.' : !s.cliPid || state.instances.find((i) => i.agentId === s.id)?.status !== 'current' ? 'Recover the CLI identity before resetting activity.' : 'Restore Ready after inspecting this terminal.'}
+                onClick={() => setStatusReset({ agentId: s.id, registrationId: s.registrationId, expectedUpdatedAt: activity.updatedAt })}>Reset status</button>}</div>
             {visibleOutcome?.outcome && <div className={`outcome ${visibleOutcome.outcome}`}>{visibleOutcome.outcome}: {visibleOutcome.reason}</div>}
-            <Output label={`${s.label} output`} text={(snapshot?.status === 'unavailable' ? snapshot.error : snapshot?.text) || 'Waiting for a capture'} />
+            <Output label={`${s.label} output`} memoryKey={`scroll:${ws}:${s.id}`} text={(snapshot?.status === 'unavailable' ? snapshot.error : snapshot?.text) || 'Waiting for a capture'} />
             <div className="pane-footer"><span>{snapshot ? `Captured ${new Date(snapshot.capturedAt).toLocaleTimeString()}` : ''}</span></div>
+            {actionable && phase === 'implementation' && !showLegacy && <PaneActions {...common} group={pair} agent={s} settings={implementationSettings}
+              blockedReason={sharedReason || cardReason(s)} draftKey={`draft:${scope}:${s.id}`} />}
+            {actionable && showLegacy && s.id === current?.id && <p className="fine pane-hint">The staging fallback is on: use its composer below.</p>}
           </article>;
         })}</section>
-        {state && <details className="panel status" open>
-          <summary><h2>Status</h2>
-            {latestRun && <span className={`badge ${latestRun.status === 'paused' ? 'warning' : ''}`}>{latestRun.status === 'running' ? 'RUN ACTIVE' : `RUN ${latestRun.status.toUpperCase()}`} · {latestRun.automaticTurns}/{latestRun.turnLimit} automatic turns</span>}</summary>
-          {latestRun ? <p className="muted">{latestRun.participants.map((p) => p.label).join(' ⇄ ')}{latestRun.implementation ? ` (group "${latestRun.implementation.group.name}")` : latestRun.planning ? ` (planning group "${latestRun.planning.group.name}")` : latestRun.pairId ? ` (group "${latestRun.pairId}")` : ' (single-agent turn)'} · {latestRun.reason} · {timeOf(latestRun.updatedAt)}</p>
-            : <p className="muted">No run with the current agents in this workspace. Earlier runs stay in the history below.</p>}
-          {latestRun?.implementation?.latestPublication && <p className="muted">{latestRun.implementation.latestPublication.sha === latestRun.implementation.latestPublication.entry.parent ? 'Report only, no commit' : <>Commit <span className="mono">{latestRun.implementation.latestPublication.sha.slice(0, 12)}</span></>} · {latestRun.implementation.latestPublication.entry.summary}<br />
-            Checks reported by the agent: {latestRun.implementation.latestPublication.entry.checks.join('; ') || 'none reported'}</p>}
-          <p className="muted"><button type="button" disabled={busy || !project} onClick={() => void exportHistory()}>Export history</button> Download this worktree’s runs, turns and handoff journal (reviewed ranges, findings, plans, reported checks, archived handoff patches) as JSON. Cloning the repository does not recover it.</p>
-          <table><thead><tr><th>Agent</th><th>State</th><th>Detail</th><th>When</th></tr></thead>
-            <tbody>{projectSessions.map((s) => { const status = statuses.get(s.id)!;
-              const activity = state.activities?.find((a) => a.agentId === s.id);
-              const resetBlocked = busy || owned.length > 0 || !!transportHold || !s.cliPid || state.instances.find((i) => i.agentId === s.id)?.status !== 'current';
-              return <tr key={s.id}><td>{s.label} <small className="mono muted">{s.agentType}</small></td>
-                <td><span className="state"><Icon badge={status.badge} />{status.badge}</span></td>
-                <td className="command-text">{status.detail}
-                  {activity?.state === 'unknown' && <div><button type="button" disabled={resetBlocked}
-                    title={owned.length || transportHold ? 'Reconcile the owned run before resetting activity.' : !s.cliPid || state.instances.find((i) => i.agentId === s.id)?.status !== 'current' ? 'Recover the CLI identity before resetting activity.' : 'Restore Ready after inspecting this terminal.'}
-                    onClick={() => setStatusReset({ agentId: s.id, registrationId: s.registrationId, expectedUpdatedAt: activity.updatedAt })}>Reset status</button></div>}
-                </td><td className="mono muted">{status.when ? timeOf(status.when) : ''}</td></tr>; })}</tbody></table>
-        </details>}
-        {statusReset && <section className="panel" aria-label="Reset agent status">
-          <h2>Reset status for {projectSessions.find((s) => s.id === statusReset.agentId)?.label}</h2>
-          <p>A backend restart can lose activity evidence for a quiet CLI. Inspect this agent’s terminal: it must be at an empty prompt with no background writers. This marks it Ready based on your inspection; it does not restart the CLI or certify a completed turn.</p>
-          <button type="button" disabled={busy || owned.length > 0 || !!transportHold} onClick={() => void resetActivity()}>I checked the terminal — mark Ready</button>{' '}
-          <button type="button" disabled={busy} onClick={() => setStatusReset(null)}>Cancel status reset</button>
-        </section>}
-        {owned.map((run) => <section key={run.id} className="panel" aria-label="Active run">
-          <div className="section-heading"><h2>{run.status === 'paused' ? 'Run paused' : 'Run active'}</h2><span className="badge">{run.automaticTurns}/{run.turnLimit} automatic turns</span></div>
-          <p><span className="badge">{run.implementation ? 'IMPLEMENTATION' : run.planning ? 'PLAN' : run.standalone ? 'STANDALONE' : 'LEGACY STAGING'}</span> {run.participants.map((s) => s.label).join(' ⇄ ')} · {run.implementation?.group.name ?? run.planning?.group.name ?? run.pairId ?? 'single-agent turn'}</p><p>{run.reason}</p>
-          {run.implementation && <p className="mono">{run.implementation.policy} · {run.implementation.branch} · turn {run.implementation.turn} · accepted {run.implementation.acceptedSha.slice(0, 12)}{run.implementation.candidateSha ? ` · candidate ${run.implementation.candidateSha.slice(0, 12)}` : ''}</p>}
-          {run.planning && <PlanningProgress token={token} run={run} git={card?.git} disabled={busy || stale || !state.inputEnabled} refresh={refresh} onMessage={setMessage} onStop={() => void action(run, 'pause')} />}
-          {run.status === 'waiting' && (run.implementation || run.planning?.next) && <button disabled={busy || stale || !state.inputEnabled} onClick={() => void action(run, 'continue')}>{run.planning && !run.implementation ? 'I checked readiness — Next planning turn' : 'I checked readiness — Next turn'}</button>}
-          {run.status === 'waiting' && run.implementation && <RunPolicy key={`${run.id}:${run.implementation.revision}`} token={token} run={run} disabled={busy || stale} onChanged={refresh} onMessage={setMessage} />}
-          <button disabled={busy} onClick={() => void action(run, 'pause')}>Pause / take over</button>
-          {takeover === run.id && <div className="notice">Pause does not interrupt any process. Inspect all participants, stop background writers, and resolve any partially typed input before releasing ownership.
-            <button disabled={busy} onClick={() => void action(run, 'takeover')}>I checked every participant; release ownership</button><button onClick={() => setTakeover(null)}>Keep paused</button></div>}
-        </section>)}
-        {latestRun?.planning && !owned.some((r) => r.id === latestRun.id) && <details className="panel"><summary>Retained plan and authorization</summary>
-          <PlanningProgress token={token} run={latestRun} disabled refresh={refresh} onMessage={setMessage} onStop={() => {}} /></details>}
-        {unknownRequest && <div className="notice error" role="alert">Request {unknownRequest} has an uncertain HTTP result. Inspect its server run and the terminal; do not resend it.
-          <button onClick={() => setUnknownRequest(null)}>I checked the server and terminal</button></div>}
-        {!!resetAgents.length && <section className="notice" aria-label="Agent identity changed">
-          <p>{owned.length ? 'CLI identity changed for' : 'Workspace reset required for'} {resetAgents.map((s) => s.label).join(', ')}. A saved CLI identity is outdated. Inspect these panes and confirm the intended CLIs are running.</p>
-          {owned.length ? <p>A run still owns this checkout. Use Pause / take over above and inspect every participant before releasing ownership. A restarted CLI in the same pane and directory will then be rediscovered automatically, keeping names and group settings.</p>
-            : <p>No active run owns this checkout, so Pause / take over is not shown. This pane still cannot be matched to its saved identity. Inspect it before resetting the workspace configuration, then confirm readiness before sending again.</p>}
-          {setupHeld && <p>A setup operation still owns this checkout. Reconcile it in Projects before resetting.</p>}
-          {resetFor !== resetKey ? <button type="button" disabled={resetBlocked} onClick={() => setResetFor(resetKey)}>Reset workspace…</button>
-            : <><p>Reset saved names and group selection for every agent on <span className="mono">{project}</span>? Live agents will appear with their default names. Files, commits, running CLIs and command history are kept.</p>
-              <button type="button" disabled={resetBlocked} onClick={() => void resetWorkspace()}>Confirm workspace reset</button>
-              <button type="button" disabled={busy} onClick={() => setResetFor(null)}>Keep configuration</button></>}
-        </section>}
-        {!!unknownAgents.length && <div className="notice">The host cannot confirm the CLI process for {unknownAgents.map((s) => s.label).join(', ')}. Recheck before sending.</div>}
-        {transportHold && !owned.length && <div className="notice">An older uncertain delivery holds this workspace. Inspect its terminals and any partially typed input before acknowledging. Nothing is replayed. <button disabled={busy} onClick={() => void releaseLegacy()}>I checked the legacy delivery</button></div>}
-        {!showLegacy && <><section className="panel phase-choice" aria-label="Task phases"><h2>Choose a starting phase</h2><div className="segmented" role="group" aria-label="Start phase">
-          <button className={phase === 'plan' ? 'selected' : 'quiet'} aria-pressed={phase === 'plan'} onClick={() => setPhase('plan')}>1 · Plan</button>
-          <button className={phase === 'implementation' ? 'selected' : 'quiet'} aria-pressed={phase === 'implementation'} onClick={() => setPhase('implementation')}>2 · Implementation</button></div>
-          <p className="fine">Plan is optional. Plan produces documents and an approval checkpoint; Implementation supports standalone instructions and committed relay. This choice only configures a new run.</p></section>
-          <Implementation key={`${card?.cwd}:${pair?.id}:${phase}`} token={token} state={state} group={groups.find((g) => g.id === pair?.id)} workspace={card} selectedAgent={current?.id}
-            phase={phase} blocked={blocked} blockedReason={identityBlockedReason} workspaceError={discoveryError || discovery?.error || ''} refresh={refresh} onRecheck={() => Promise.all([refresh(), recheck()]).then(() => {})} onMessage={setMessage} onUncertain={setUnknownRequest} /></>}
-        {state.legacyEnabled ? <label className="readiness"><input type="checkbox" aria-label="Staging fallback" checked={!!showLegacy} disabled={pair?.sessions.length !== 2} onChange={(e) => setLegacy(e.target.checked)} />Show deprecated staging fallback (supervised two-agent relay; no branch handoffs or fixed roles)</label>
-          : <p className="fine">Deprecated staging fallback is temporarily disabled by the host.</p>}
+        {phase === 'plan' && !showLegacy && <PlanSetup {...common} group={pair && members.length ? pair : undefined} settings={planSettings} displayed={displayed}
+          blockedReason={sharedReason || cardReason(current)} draftKey={`plan:${scope}`} />}
         {showLegacy && <section className="composer"><div className="section-heading"><h2>Legacy staging: send to {current?.label}</h2><span className="badge">{owned.length ? 'EXECUTION OWNED' : 'MANUAL START'}</span></div>
           {!state?.inputEnabled && <p>Read-only console: the host has disabled input.</p>}
           <form onSubmit={(e) => { e.preventDefault(); void send('instruction'); }}>
@@ -389,15 +454,28 @@ export function Console() {
               I checked that all participants are at empty prompts, have no background writers, use their standard Git index, and will remain under controller ownership for this run.</label>
           </form>
           {pair && <label className="readiness auto"><input type="checkbox" aria-label="Auto-relay" checked={autoContinue} disabled={busy || owned.length > 0} onChange={(e) => { setAutoContinue(e.target.checked); try { localStorage.setItem(PREFERENCE, String(e.target.checked)); } catch { /* preference only */ } }} />
-            Prefer automatic continuation for the next explicitly started run of group "{pair.name}". Plain Send never relays; Send &amp; relay requests one review even when this preference is off, and only if the worker changed the worktree.</label>}
+            Prefer automatic continuation for the next explicitly started run of group &quot;{pair.name}&quot;. Plain Send never relays; Send &amp; relay requests one review even when this preference is off, and only if the worker changed the worktree.</label>}
           {pair && <label className="readiness turn-limit">Maximum automatic turns per run
             <input type="number" inputMode="numeric" aria-label="Maximum automatic turns" min={1} max={200} step={1} value={turnLimit} disabled={busy || owned.length > 0} aria-invalid={!limitValid}
               onChange={(e) => { setTurnLimit(e.target.value); try { localStorage.setItem(TURN_LIMIT, e.target.value); } catch { /* preference only */ } }} />
             <span className="muted">1–200, default {DEFAULT_TURN_LIMIT}; frozen into the run when it starts.</span></label>}
           {!pair && <p className="fine">No group in use: Send &amp; relay is unavailable and Relay reviews without a partner. Choose a group in Projects to relay between two agents.</p>}
-          <p className="fine">The server validates and deduplicates correlated completions. Unknown background-work state pauses a run. No fresh-event effect in this page sends commands.</p>
         </section>}
-        <details className="history"><summary>Command history</summary>
+        <details className="panel status" open={agentsOpen} onToggle={(e) => setAgentsOpen(e.currentTarget.open)}>
+          <summary><h2>Agents in this checkout</h2><span className="muted">{projectSessions.length}</span></summary>
+          <table><thead><tr><th>Agent</th><th>State</th><th>Detail</th><th>When</th></tr></thead>
+            <tbody>{projectSessions.map((s) => { const status = statuses.get(s.id)!;
+              const activity = state.activities?.find((a) => a.agentId === s.id);
+              const resetStatusBlocked = busy || owned.length > 0 || !!transportHold || !s.cliPid || state.instances.find((i) => i.agentId === s.id)?.status !== 'current';
+              return <tr key={s.id}><td>{s.label} <small className="mono muted">{s.agentType}</small></td>
+                <td><span className="state"><Icon badge={status.badge} />{status.badge}</span></td>
+                <td className="command-text">{status.detail}
+                  {/* Each control exists once: an agent shown as a card resets its status there. */}
+                  {activity?.state === 'unknown' && !visible.some((v) => v.id === s.id) && <div><button type="button" disabled={resetStatusBlocked}
+                    onClick={() => setStatusReset({ agentId: s.id, registrationId: s.registrationId, expectedUpdatedAt: activity.updatedAt })}>Reset status</button></div>}
+                </td><td className="mono muted">{status.when ? timeOf(status.when) : ''}</td></tr>; })}</tbody></table>
+        </details>
+        <details className="history" open={historyOpen} onToggle={(e) => setHistoryOpen(e.currentTarget.open)}><summary>Command history</summary>
           <div className="history-tools">
             <label>Group <select aria-label="History pair filter" value={historyFilter} onChange={(e) => setHistoryPair(pair && e.target.value === `pair:${pair.id}` ? 'selected' : e.target.value)}>
               <option value="all">All</option>
@@ -405,6 +483,7 @@ export function Console() {
               {historicalPairIds.map((id) => <option key={id} value={`pair:${id}`}>{id} (removed)</option>)}
             </select></label>
             <button type="button" className="quiet" aria-label="Toggle history order" onClick={() => setHistoryOrder((o) => o === 'desc' ? 'asc' : 'desc')}>{historyOrder === 'desc' ? 'Newest first ↓' : 'Oldest first ↑'}</button>
+            <button type="button" className="quiet" disabled={busy || !project} title="Download this worktree’s runs, turns and handoff journal (reviewed ranges, findings, plans, reported checks, archived handoff patches) as JSON. Cloning the repository does not recover it." onClick={() => void exportHistory()}>Export history</button>
           </div>
           {(() => {
             const wanted = historyFilter.startsWith('pair:') ? historyFilter.slice(5) : undefined;
@@ -415,9 +494,17 @@ export function Console() {
                 <td className="muted">{c.groupId ? groups.find((p) => p.id === c.groupId)?.name ?? c.groupId : ''}</td><td className="command-text">{c.text}</td><td>{c.status}</td></tr>)}</tbody></table>
               : <p className="empty-history">No commands match this filter.</p>;
           })()}</details>
+        <details className="advanced" open={advancedOpen} onToggle={(e) => setAdvancedOpen(e.currentTarget.open)}><summary>Advanced</summary>
+          {state.legacyEnabled ? <label className="readiness"><input type="checkbox" aria-label="Staging fallback" checked={!!showLegacy} disabled={pair?.sessions.length !== 2} onChange={(e) => setLegacy(e.target.checked)} />Show deprecated staging fallback (supervised two-agent relay; no branch handoffs or fixed roles)</label>
+            : <p className="fine">Deprecated staging fallback is temporarily disabled by the host.</p>}
+        </details>
       </>}
-      {feedback}
-      <p className="fine">Pause a run before manual terminal takeover. Locking this view or disconnecting your phone does not interrupt workers.</p>
+      <details className="advanced"><summary>How this works</summary>
+        <p className="fine">Each card acts on the agent above it. Send delivers an instruction; After send can add one handoff commit, or a commit and one review by the named peer. Current changes snapshots work as it stands, and Committed review asks this agent to review a committed range. Every action names its recipients and needs a fresh readiness confirmation.</p>
+        <p className="fine">The server owns every run, validates and deduplicates correlated completions, and pauses on unknown background work. No effect in this page sends commands. A completed chain is not final task acceptance.</p>
+        <p className="fine">Viewing another worktree never changes a running relay. Pause a run before manual terminal takeover. Locking this view or disconnecting your phone does not interrupt workers.</p>
+      </details>
+    </div>
     </>}
-  </main>;
+  </main></MemoryContext.Provider>;
 }

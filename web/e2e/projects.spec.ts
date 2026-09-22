@@ -27,6 +27,8 @@ async function openForm(page: Page, branch = 'feature/login') {
   await page.getByRole('button', { name: 'Create task worktree', exact: true }).click();
   await page.getByLabel('New task branch', { exact: true }).fill(branch);
 }
+/** The console feedback carrying `text`. An operation's own busy line is also a status region, and both can be shown at once. */
+const notice = (page: Page, text: string) => page.getByRole('status').filter({ hasText: text });
 test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'wait' }); });
 
 test('project navigation keeps linked, detached and empty worktrees visible without starting a task', async ({ page, request }, info) => {
@@ -61,7 +63,7 @@ test('creation previews its exact path and baseline, requires confirmation, and 
   await page.getByLabel('Confirm worktree creation').check();
   await page.screenshot({ path: info.outputPath('create-worktree.png'), fullPage: true });
   await create.click();
-  await expect(page.getByRole('status')).toContainText('Worktree created'); expect(creates).toEqual([{ ...shown!, confirm: true }]);
+  await expect(notice(page, 'Worktree created')).toBeVisible(); expect(creates).toEqual([{ ...shown!, confirm: true }]);
   await expect(page.getByRole('button', { name: 'Open login', exact: true })).toContainText('No agents');
   await page.getByRole('button', { name: 'Open login', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'No eligible agents here yet' })).toBeVisible();
@@ -93,7 +95,7 @@ test('uncertain creation stays owned and offers inspection instead of resending'
   await expect(page.getByText('Worktree creation uncertain', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Create confirmed worktree' })).toBeDisabled();
   await page.getByRole('button', { name: 'Inspect creation result', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('Exact clean result verified'); expect(count).toBe(1);
+  await expect(notice(page, 'Exact clean result verified')).toBeVisible(); expect(count).toBe(1);
 });
 test('different agent directories remain task groups under one shared checkout', async ({ page, request }) => {
   const inventory = await fixture(page, request); const initial = inventory.workspaces[0]!;
@@ -134,7 +136,7 @@ test('squash removal requires preview and confirmation, removes the card and ret
   await page.screenshot({ path: info.outputPath('remove-worktree.png'), fullPage: true });
   await page.getByRole('button', { name: 'Confirm removal', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Open finished', exact: true })).toHaveCount(0);
-  await expect(page.getByRole('status')).toContainText('history are retained'); expect(removals).toBe(1);
+  await expect(notice(page, 'history are retained')).toBeVisible(); expect(removals).toBe(1);
 });
 test('squash into main previews the exact operation and message, requires confirmation, and posts the edited message once', async ({ page, request }, info) => {
   const inventory = await fixture(page, request); const project = inventory.projects![0]!;
@@ -165,7 +167,7 @@ test('squash into main previews the exact operation and message, requires confir
   await message.fill('feat: finished\n\nSquash of feature/finished.\n'); await expect(region).toContainText('49 of 8,192 bytes'); await expect(confirm).toBeEnabled(); expect(posted).toEqual([]);
   await page.screenshot({ path: info.outputPath('squash-worktree.png'), fullPage: true });
   await page.getByRole('button', { name: 'Confirm squash', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('Squashed feature/finished into main');
+  await expect(notice(page, 'Squashed feature/finished into main')).toBeVisible();
   // The confirmation is compact: consent digest plus the edited message, never the (possibly large) preview echoed back.
   expect(posted).toEqual([{ projectId: project.id, worktreeId: target.id, through: shown.through, requestId: shown.requestId, consent: shown.consent, message: 'feat: finished\n\nSquash of feature/finished.\n', confirm: true }]);
   await expect(page.getByRole('button', { name: 'Squash feature/finished into main', exact: true })).toBeVisible();
@@ -192,7 +194,7 @@ test('discard warns about the work that would be lost and requires the exact bra
   await page.screenshot({ path: info.outputPath('discard-worktree.png'), fullPage: true });
   await confirm.click();
   await expect(page.getByRole('button', { name: 'Open finished', exact: true })).toHaveCount(0);
-  await expect(page.getByRole('status')).toContainText('worktree and branch are deleted');
+  await expect(notice(page, 'worktree and branch are deleted')).toBeVisible();
   expect(posted).toEqual([{ ...shown, confirmBranch: 'feature/finished', confirm: true }]);
 });
 test('deletion actions stay clickable while agents occupy a worktree: the hint names them and the click shows the server refusal', async ({ page, request }) => {
@@ -268,11 +270,11 @@ test('an uncertain discard shows what inspection found and finishes only through
   const finish = page.getByRole('button', { name: 'Delete branch feature/finished and finish discard', exact: true });
   await expect(finish).toHaveCount(0);
   await page.getByRole('button', { name: 'Inspect discard result', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('Only the branch deletion is left');
+  await expect(notice(page, 'Only the branch deletion is left')).toBeVisible();
   await expect(page.getByLabel('Project worktrees project').getByText('Only the branch deletion is left')).toBeVisible();
   await expect(finish).toBeVisible(); expect(posted).toEqual(['reconcile']);
   await finish.click();
-  await expect(page.getByRole('status')).toContainText('its branch is deleted after the worktree');
+  await expect(notice(page, 'its branch is deleted after the worktree')).toBeVisible();
   await expect(page.getByText('Worktree discard uncertain', { exact: true })).toHaveCount(0);
   expect(posted).toEqual(['reconcile', 'finish']);
 });
@@ -292,7 +294,8 @@ test('an empty worktree keeps its setup guidance beside a shell pane, while a bl
   await page.getByRole('button', { name: 'Open Projects', exact: true }).click();
   await page.getByRole('button', { name: 'Open moved', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'No eligible agents here yet' })).toBeVisible();
-  await expect(page.getByText('This pane moved from /demo/project')).toBeVisible();
+  // The Projects section stays mounted while hidden and lists the same reason, so assert the text the Console shows.
+  await expect(page.getByText('This pane moved from /demo/project').filter({ visible: true })).toBeVisible();
   await expect(page.getByText('Start coding CLIs in')).toHaveCount(0);
 });
 
@@ -352,7 +355,7 @@ test('changing the batch endpoint revokes its preview and confirms only the chos
   await page.getByLabel('Squash commit message').fill('feat: batch one');
   await page.screenshot({ path: info.outputPath('squash-batch.png'), fullPage: true });
   await page.getByRole('button', { name: 'Confirm squash', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('Batch integrated.');
+  await expect(notice(page, 'Batch integrated.')).toBeVisible();
   expect(previews).toEqual([{ projectId: project.id, worktreeId: target.id }, { projectId: project.id, worktreeId: target.id, through: first }]);
   expect(confirms).toEqual([{ projectId: project.id, worktreeId: target.id, through: first, requestId: shown!.requestId, consent: 'f'.repeat(64), message: 'feat: batch one', confirm: true }]);
 });

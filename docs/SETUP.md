@@ -195,11 +195,14 @@ your work.
 
 The assigned agent uses `commit-handoff` to publish one result per completed turn
 to CoderCrew's handoff journal, plus one commit when it changed project content;
-report-only turns commit nothing. **Send** performs
-one standalone instruction without an automatic commit, branch change, or relay.
-**Commit [agent]** snapshots all current staged, unstaged and nonignored untracked
-changes as they stand, then stops. It does not finish pending requests; text is
-optional handoff context. **Relay [peer]** reviews every commit after the selected
+report-only turns commit nothing. Each agent card under its pane holds that
+agent's actions. **Send** performs one standalone instruction without an automatic
+commit, branch change, or relay; its **After send** choice can instead ask the agent
+to publish its result as one handoff commit (**Send & commit**) and, in a pair, to have
+the peer review exactly that commit (**Send & commit → relay**).
+**Commit [agent]** under **Current changes** snapshots all current staged, unstaged
+and nonignored untracked changes as they stand, then stops. It does not finish
+pending requests; its optional handoff note is context. **Relay [peer]** reviews every commit after the selected
 **Review baseline**: the earliest candidate (default) is the newest commit on this
 branch at which the journal records a completed turn of the recipient's, or the
 task baseline when it records none; the latest is the last commit only; **Another commit…** previews a typed
@@ -210,9 +213,10 @@ after validating its commit and settled completion. The baseline selector remain
 available; current HEAD selects only the current changes. No instruction text is
 required for this action; readiness and active-run gates still apply. Clean
 checkout review requires project changes in the selected range.
-Send and Commit name the selected worker; Relay names the receiving
-peer or designated reviewer.
-The collapsible **Collaboration settings** panel holds the agreement for
+Send and Commit name the worker whose card they sit in; Relay sits in the
+receiving peer's or designated reviewer's own card.
+The collapsible **Collaboration settings** panel, under **Edit settings** in the
+settings bar above the panes, holds the agreement for
 subsequent turns: automatic collaboration, the turn budget, and whether a reviewer
 objection pauses for you (by default it is routed straight back to the author).
 It also offers **Also track the journal in the repository**: an explicit project
@@ -223,7 +227,7 @@ A completed chain still needs final task-level verification.
 
 The handoff journal (turns, reviewed ranges, findings, reported checks, archived
 handoff patches) is CoderCrew data under the controller data directory, not part
-of the repository. **Export history** in the Status panel downloads the current
+of the repository. **Export history** in Command history downloads the current
 worktree's runs, turns and journal as JSON; keep such exports with your backups,
 because cloning the repository cannot recover them. Removing a task worktree in
 Projects archives any handoff commit the journal has not archived yet before the
