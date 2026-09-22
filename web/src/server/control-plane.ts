@@ -2,7 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { access, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import type { CommandRecord, PairInput, RegistrationInput, RegistrationResult, RenameSession, SessionRegistration } from '../contracts/api.ts';
+import type { CommandRecord, HostConfig, PairInput, RegistrationInput, RegistrationResult, RenameSession, SessionRegistration } from '../contracts/api.ts';
+import { describeConfig } from './config.ts';
 import type { ActivityReset, BackgroundEvidence, Execution, HookEvent, HookReceipt, InstanceState, ManagedSession, ProcessRecord, RunAction, StartInput, WorkflowState, WorkspaceDiscovery, WorkspaceReset, WorkspaceResetResult } from '../contracts/workflow.ts';
 import { AppError } from '../core/errors.ts';
 import { singleLine, slugify } from '../core/validation.ts';
@@ -54,13 +55,15 @@ export class ControlPlane {
     }
     this.workflow.recover();
   }
+  /** The effective host configuration for the Settings tab; read-only and without the token. */
+  hostConfig(): HostConfig { return describeConfig(this.config); }
   async state(): Promise<WorkflowState> {
     const discovery = await this.workspaces();
     const sessions = this.workspaceSessions(discovery);
     const instances = await Promise.all(sessions.map((s) => this.instance(s)));
     const base = await this.transport.state(sessions);
     const runsOf = this.workflow.runsOf(base.commands.map((c) => c.id));
-    const commands = base.commands.map((c) => ({ ...c, runId: runsOf.get(c.id)?.runId ?? null, pairId: runsOf.get(c.id)?.pairId ?? null, groupId: runsOf.get(c.id)?.groupId ?? null }));
+    const commands = base.commands.map((c) => ({ ...c, runId: runsOf.get(c.id)?.runId ?? null, pairId: runsOf.get(c.id)?.pairId ?? null, groupId: runsOf.get(c.id)?.groupId ?? null, repository: runsOf.get(c.id)?.repository ?? null }));
     const activities = sessions.map((session) => instances.find((i) => i.agentId === session.id)?.status === 'current' ? this.activity.read(session)
       : { agentId: session.id, state: 'unknown' as const, updatedAt: null, detail: 'The current CLI instance cannot be verified.' });
     return { ...base, commands, sessions, groups: this.workspaceGroups(discovery), legacyEnabled: this.config.legacyEnabled === true, runs: this.workflow.runs(), executions: this.workflow.activeExecutions(), instances, activities };
@@ -85,7 +88,7 @@ export class ControlPlane {
       const held = () => oldHeld() || (!!existing && !!(this.workflow.owner(workspace.worktree.indexPath) || this.store.activeFor(workspace.worktree.root)));
       if (held()) {
         if (!moved) agent.session = existing;
-        else if (oldHeld()) { agent.eligible = false; agent.reason = `This pane moved from ${existing!.repository}, where a run or delivery still owns it. Open that worktree and Pause / take over after inspecting its work, then Recheck to rebind automatically.`; }
+        else if (oldHeld()) { agent.eligible = false; agent.reason = `This pane moved from ${existing!.repository}, where a run or delivery still owns it. Open that worktree, pause and take over the run after inspecting its work, then Recheck to rebind automatically.`; }
         else { agent.eligible = false; agent.reason = `This pane moved here from ${existing!.repository}, but a run or delivery already owns this worktree without it. Wait for that work or take it over, then Recheck to rebind automatically.`; }
         return;
       }
@@ -637,6 +640,7 @@ export class ControlPlane {
           if (run.planning) await assertPlanArtifacts(run.planning);
           const assignment: CommitAssignment = { identity: turn.implementation.identity, branch: run.implementation.branch, cwd: run.implementation.cwd,
             root: run.repository, logPath: run.implementation.logPath, resultPath: turn.implementation.resultPath, instruction: turn.input.text!, task: run.implementation.request.text ?? (run.implementation.request.kind === 'commit' ? 'Review the current changes; no claim of task completion.' : 'Review the explicitly assigned committed candidate.'), findings: run.implementation.findings,
+            note: turn.agentId !== run.implementation.request.agentId ? run.implementation.request.reviewNote ?? null : null,
             participant: { agentType: participant.agentType, label: participant.label }, ...(turn.implementation.identity.turn === 1 && run.implementation.request.kind === 'commit' ? { commitOnly: true as const } : {}), ...(initialWorktreeFingerprint ? { initialWorktreeFingerprint } : {}), ...(run.planning?.frozen ? { frozenPlan: run.planning.frozen } : {}) };
           await mkdir(this.workflow.assignmentDirectory, { recursive: true, mode: 0o700 });
           const path = join(this.workflow.assignmentDirectory, `${turn.commandId}.json`);

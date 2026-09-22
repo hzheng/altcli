@@ -73,7 +73,7 @@ export function PlanSetup(p: {
       {git.changeCount > git.changes.length && <p>Showing {git.changes.length} of {git.changeCount} changed paths. Inspect the full list locally with <code>git status</code>.</p>}
       <p>Plain Send can continue without a handoff commit. Commit snapshots the current changes without finishing pending requests. Then choose a Review baseline and use Relay in Implementation to request peer review.</p>
       <p>Keep unrelated work separate, or prepare another clean worktree yourself. Staged and unstaged changes may be different tasks; CoderCrew will not combine, stage, commit, stash or discard them.</p>
-      {p.state.legacyEnabled && members.length === 2 && <p>To keep changes uncommitted, use the <strong>Staging fallback</strong> option under Advanced for supervised two-agent review.</p>}
+      {p.state.legacyEnabled && members.length === 2 && <p>To keep changes uncommitted, use the <strong>Staging fallback</strong> preference in Settings for supervised two-agent review.</p>}
     </section>}
     {!group ? <p>Select at least one agent in Projects to start.</p> : members.length > 2 ? <p className="notice" role="status">Your group has {members.length} agents. Plan and Implementation currently execute with one or two agents; larger-group execution is not enabled yet. Your selection is saved. Choose one or two members to start a run.</p> : <>
       <p className="fine">Plan documents are kept in CoderCrew’s data directory, not in this checkout. No branch is created during Plan. Output permissions are cooperative and validated, not native CLI sandbox isolation.</p>

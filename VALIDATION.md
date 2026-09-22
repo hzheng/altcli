@@ -4,6 +4,112 @@
 **Last local validation:** September 21, 2026
 **Scope:** Source scaffold, not a completed release or security certification
 
+## Review finding on intermediate widths, September 22, 2026
+
+Peer review of `d30ddf8` found the one-line settings row overflowing between the
+phone breakpoint and about 1100 px (Settings toggle at x=835 in an 800 px window
+with 35 px of horizontal overflow) precisely when its warning badge asks the user
+to open Settings. The row now wraps instead of overflowing: the summary text
+shrinks first, down to a short minimum, so at desktop widths everything still sits
+on one line, while at intermediate widths the Controller and Settings toggles move
+to a second line inside the panel and the badge may shrink with an ellipsis. The
+same investigation found the mock-mode top-bar note ("Simulated panes…")
+overflowing between 761 and 785 px; it now shrinks with an ellipsis and is hidden
+below 1000 px. A new browser case resizes a two-agent console on an integration
+branch to 1100, 900, 800 and 761 px and checks no horizontal overflow, both toggles
+fully inside the settings panel and the viewport, and that Settings opens; the
+1440×900 Send-button assertion is unchanged.
+
+What ran: `./scripts/check.sh` exited 0 (30 hook/setup, 42 smoke, 269 workflow, 61
+unit, type checks, production build). `CODERCREW_E2E_PORT=9787 npx playwright test`
+per project: desktop 88 passed and 1 skipped; iPhone 87 passed and 2 skipped (89
+cases each; the new case runs on desktop only). Not run: installed-agent acceptance
+and physical Safari.
+
+## Review finding on the compact layout, September 22, 2026
+
+Peer review of `58502ec` found that the two-agent console at 1440×900 clipped both
+Send buttons (`layout.spec.ts` viewport case failing at 0.45 visible): the settings
+row wrapped its Controller and Settings toggles onto a second line, and the visible
+reason beside a blocked Reset status added a line above each fixed-height output.
+Fixed by keeping the settings row on one line (the summary text truncates with its
+full text on hover; the toggles stay together), by letting each output area give up
+24 px, and by placing the reason inside the status row rather than below it. The
+explanation and the viewport assertion are retained; the Send buttons end 54 px
+above the bottom of a 900 px viewport in mock mode.
+
+What ran: `./scripts/check.sh` exited 0 (30 hook/setup, 42 smoke, 269 workflow, 61
+unit, type checks, production build). `CODERCREW_E2E_PORT=9787 npx playwright test`
+per project on the committed tree: desktop 87 passed and 1 skipped; iPhone 87 passed
+and 1 skipped (88 cases each). Not run: installed-agent acceptance and physical
+Safari.
+
+## Settings and About tabs, per-checkout history, September 21, 2026
+
+Follow-up UI requests after the contextual pane actions:
+- **Command history** lists only the selected checkout's commands (by the run's
+  worktree root, or the agent's checkout for commands older than the run ledger);
+  the group dropdown is gone. `HistoryCommand` gained `repository`.
+- **How this works** moved from the Console into an **About** tab; the deprecated
+  staging-fallback toggle moved from a Console "Advanced" disclosure into a
+  **Settings** tab as a console preference.
+- **Settings** shows the host's effective global configuration from a new read-only
+  `GET /api/v1/config` (`HostConfig` in the contracts and `shared/openapi.yaml`):
+  tmux binary and where PATH resolves it, tmux socket, data store, task worktree
+  root, integration branches, adapter, input, staging relay, allowed origins, Claude
+  config directory and Codex home, each with its environment variable and whether
+  it was set. The token is never included. Values are read at start; the page says
+  a change needs `web/.env.local` and a restart. Editing them from the UI was not
+  built: the store, adapter and tmux runner are constructed from the configuration
+  at process start, and an executable path set over HTTP would be a new decision.
+- When an agent's unknown status cannot be reset (the controller still holds a
+  paused command, an uncertain delivery, or an unverified CLI instance), the reason
+  is shown beside the disabled Reset status button instead of only in a hover title.
+- Each card has one instruction box and, with a relay follow-up, one **Relay note
+  for [peer]** box; the separate Current changes disclosure, handoff note and second
+  pair of buttons are gone. An empty instruction with a commit follow-up on a dirty
+  checkout turns the primary button into **Commit current changes [agent]** or
+  **… & relay [peer]** (the baseline picker appears only then). The note travels as a
+  new optional `reviewNote` on the implementation start (validated like text;
+  requires handoff; refused for `kind: review`) and reaches the peer's review
+  assignment as `note`, never the author's turn; `skills/commit-handoff/SKILL.md`
+  names the field, and `shared/openapi.yaml` documents it. A workflow test follows
+  a relay note into the peer's assignment and checks the refusals.
+- The controller's card sits behind a **Controller · driving / waiting for you /
+  paused / idle** toggle in the settings row, next to **Settings**, above the
+  Parallel/Focus row; it starts collapsed, the toggle always shows the state, and
+  the open state is remembered per workspace. When idle, the panel holds the last
+  command the controller drove.
+- The card says who controls the agents instead of "Run": headings
+  **Controller is driving the agents**, **Controller waiting for your Next turn** and
+  **Controller paused · take over to drive the agents yourself** (region "Who
+  controls the agents"), one line saying the controller is this server deciding what
+  the agents are sent next, the owned command's target and text, and each
+  participant's live status. Its single **Pause / take over** button became **Pause
+  the controller** while running or waiting and **Take over from the controller…**
+  once paused (confirmation: "I checked every participant; give me control"), since
+  pausing a paused run did nothing. The finished-run section is **Last command the
+  controller drove**, and agent status text says whether the controller is driving,
+  paused but still holding, or not driving that agent's turns.
+- **Stay unlocked on this device** (Settings › Console preferences, off by default)
+  keeps the token in the browser's local storage so reopening the page skips the
+  token form; Lock always forgets the token, and a token the host refuses is dropped.
+  The server's bearer check is unchanged.
+- Earlier in the same session: the After-send option reads "Commit & relay"; the
+  finished run became a collapsed section below the panes (now **Last ownership**); the
+  settings toggle is a fixed **Settings** button with the editor opening below;
+  the Reset status confirmation appears inline beside its button.
+
+What ran: `./scripts/check.sh` exited 0 (30 hook/setup, 42 smoke including the
+configuration description, 268 workflow, 60 unit, type checks, production build).
+`CODERCREW_E2E_PORT=9787 npx playwright test` per project: desktop 87 passed and 1
+skipped; iPhone 87 passed and 1 skipped (88 cases each). New browser coverage: the
+Settings rows and the About tab, no Advanced or How this works in the Console,
+history limited to the checkout and following the selected checkout, Pause versus
+Take over… with the owned command on the card, and the stay-unlocked preference
+(reload skips the token, Lock forgets it, a refused token is dropped). Not run: installed-agent acceptance
+and physical Safari.
+
 ## Review findings on the contextual pane actions, September 21, 2026
 
 Peer review of `a1305ad` raised two findings, both reproduced and fixed:

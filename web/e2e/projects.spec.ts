@@ -284,7 +284,7 @@ test('an empty worktree keeps its setup guidance beside a shell pane, while a bl
   const card = (path: string, agents: WorkspaceDiscovery['workspaces'][number]['agents']) => ({ ...template, cwd: path, agents,
     worktree: { root: path, gitDir: `/demo/project/.git/worktrees/${path.split('/').pop()}`, indexPath: `/demo/project/.git/worktrees/${path.split('/').pop()}/index` } });
   const shell = { ...template.agents[0]!, identity: { ...template.agents[0]!.identity, paneId: '%8' }, command: 'zsh', kind: 'shell' as const, eligible: false, label: 'zsh %8', registeredAs: null, session: undefined, reason: '"zsh" is a shell or generic interpreter, not a coding CLI.' };
-  const moved = { ...template.agents[1]!, identity: { ...template.agents[1]!.identity, paneId: '%9' }, eligible: false, session: undefined, reason: 'This pane moved from /demo/project, where a run or delivery still owns it. Open that worktree and Pause / take over after inspecting its work, then Recheck to rebind automatically.' };
+  const moved = { ...template.agents[1]!, identity: { ...template.agents[1]!.identity, paneId: '%9' }, eligible: false, session: undefined, reason: 'This pane moved from /demo/project, where a run or delivery still owns it. Open that worktree, pause and take over the run after inspecting its work, then Recheck to rebind automatically.' };
   inventory.projects![0]!.worktrees.push(tree('/home/fixture/.codercrew/project/login', 'fix/login'), tree('/home/fixture/.codercrew/project/moved', 'fix/moved'));
   inventory.workspaces.push(card('/home/fixture/.codercrew/project/login', [shell]), card('/home/fixture/.codercrew/project/moved', [shell, moved]));
   await page.getByRole('button', { name: 'Recheck', exact: true }).click();

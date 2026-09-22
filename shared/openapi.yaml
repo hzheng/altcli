@@ -56,6 +56,22 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/ApiError'}
+  /api/v1/config:
+    get:
+      operationId: getHostConfig
+      summary: Read the host's effective global configuration for the Settings tab
+      description: The values read from environment variables when the host started, the environment variables that were set, and where the tmux binary resolves. Read-only; the access token is never included. Changing a value requires restarting the host.
+      responses:
+        '200':
+          description: Effective configuration
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/HostConfig'}
+        '401':
+          description: Token missing or invalid
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ApiError'}
   /api/v1/history/export:
     get:
       operationId: exportHistory
@@ -1892,10 +1908,14 @@ components:
           groupId:
             type: [string, 'null']
             description: Implementation group identity, or the preserved legacy pair identity.
+          repository:
+            type: [string, 'null']
+            description: The worktree root the command's run executed in, so the console shows one checkout's history; null when it predates the ledger.
         required:
         - runId
         - pairId
         - groupId
+        - repository
     ConsoleState:
       type: object
       properties:
@@ -2248,6 +2268,7 @@ components:
         logPath: {"type":"string","maxLength":200,"description":"Explicit project preference: also mirror every journal entry into this tracked, nonignored JSON-lines file inside the handoff commit, so report-only turns commit too. Absent (default), the journal lives only in CoderCrew and report-only turns publish no commit."}
         branch: {"$ref":"#/components/schemas/BranchConsent"}
         reviewBase: {"$ref":"#/components/schemas/GitSha"}
+        reviewNote: {type: string, maxLength: 1900, description: A note from the human for the peer that reviews this handoff, delivered with the review assignment as its note. Requires handoff and is not accepted for kind review, whose text is the review context.}
         confirmReady: {"const":true}
       required: ["requestId","groupId","groupRevision","registrations","agentId","kind","handoff","policy","autoContinue","turnLimit","branch","confirmReady"]
       additionalProperties: false
@@ -2341,6 +2362,24 @@ components:
         recordedAt: {type: string, format: date-time}
       required: [runId, commandId, repository, branch, agentId, turn, action, parent, sha, projectChanged, entry, archive, recordedAt]
       additionalProperties: false
+    HostConfig:
+      type: object
+      description: The host's effective global configuration as read at startup. Read-only; the access token is never included.
+      properties:
+        mode: {$ref: '#/components/schemas/AdapterMode'}
+        inputEnabled: {type: boolean}
+        legacyEnabled: {type: boolean, description: Whether the deprecated staging relay may be shown as a console preference.}
+        dataDir: {type: string, description: Controller data (SQLite store, journal, plans, assignments); the adapter mode is appended to the configured base.}
+        worktreeDir: {type: string, description: Where task worktrees are created by default.}
+        tmuxBin: {type: string}
+        tmuxPath: {type: [string, 'null'], description: Where PATH resolves tmuxBin, or the configured absolute path when it exists; null when no executable was found.}
+        tmuxSocket: {type: [string, 'null']}
+        integrationBranches: {type: array, items: {type: string}, description: Creation bases, never implementation branches; each project's detected default branch is always added.}
+        allowedOrigins: {type: array, items: {type: string}}
+        claudeConfigDir: {type: string}
+        codexHome: {type: string}
+        environment: {type: array, items: {type: string}, description: The environment variables that were set when the host started; a setting not listed uses its default.}
+      required: [mode, inputEnabled, legacyEnabled, dataDir, worktreeDir, tmuxBin, tmuxPath, tmuxSocket, integrationBranches, allowedOrigins, claudeConfigDir, codexHome, environment]
     HistoryExport:
       type: object
       properties:

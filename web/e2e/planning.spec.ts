@@ -4,7 +4,7 @@ import type { Group } from '../src/contracts/implementation';
 import type { PlanDecision, PlanStart } from '../src/contracts/planning';
 import type { RelayRun, WorkflowState } from '../src/contracts/workflow';
 import { newPlanning } from '../src/server/planning-state';
-import { editSettings, expand } from './ui';
+import { editSettings, expand, openController } from './ui';
 const headers = { Authorization: `Bearer ${'a'.repeat(64)}` };
 async function post(request: APIRequestContext, path: string, data: unknown) {
   const response = await request.post(`/api/v1/${path}`, { headers, data }); expect(response.ok()).toBe(true); return response.json();
@@ -106,7 +106,9 @@ async function checkpoint(page: Page, request: APIRequestContext, consent: 'upfr
   const run: RelayRun = { id, repository: '/demo/project', lockKey: '/demo/project/.git/index', pairId: null, participants, planning: plan, status: 'waiting', reason: 'Plan agreed. Awaiting your approval before Implementation.',
     autoContinue: true, pauseOnObjection: false, pauseRequested: false, currentCommandId: id, automaticTurns: 3, turnLimit: 20, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
   await page.route('**/api/v1/state', async (route) => { const response = await route.fetch(); const data = await response.json(); await route.fulfill({ json: { ...data, runs: [run], executions: [] } }); });
-  await openGroup(page, group); return run;
+  await openGroup(page, group);
+  // The checkpoint sits on the controller's card; its toggle announces that the controller is waiting for the human.
+  await expect(page.getByRole('button', { name: 'Controller · waiting for you' })).toBeVisible(); await openController(page); return run;
 }
 test('deferred checkpoint consent on an integration branch offers only a new task branch', async ({ page, request }) => {
   await checkpoint(page, request, 'deferred'); const decisions: PlanDecision[] = [];

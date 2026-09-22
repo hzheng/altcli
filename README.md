@@ -70,7 +70,8 @@ cd web && npm run dev
 ```
 
 Open `http://127.0.0.1:8787` and enter the token from `web/.env.local`. The token
-stays in page memory. For first use set `CODERCREW_ENABLE_INPUT=false`, restart the
+stays in page memory unless you turn on **Stay unlocked on this device** in
+Settings, which keeps it in that browser; Lock always forgets it. For first use set `CODERCREW_ENABLE_INPUT=false`, restart the
 backend, and verify captures before enabling input. `mock` is a test adapter;
 `tmux` remains the normal product path.
 
@@ -197,13 +198,15 @@ into **Send & commit [agent]** (the agent implements the instruction and publish
 handoff commit, including the current uncommitted changes, then stops) and **Commit &
 relay** into **Send & commit [agent] → relay [peer]** (the peer then reviews exactly
 that commit). A turn that changes nothing publishes a report and relays nothing.
-Under **Current changes** on a dirty checkout, **Commit [agent]** publishes one
-snapshot and stops, including in solo mode; its optional handoff note is context,
-not a new instruction. **Commit current changes & relay [peer]** snapshots first,
+With a relay follow-up, a second box, **Relay note for [peer]**, carries the human's
+note to the reviewer with its assignment. Leave the instruction empty on a dirty
+checkout and the same button hands off the current changes as they stand instead of
+doing new work: **Commit current changes [agent]** publishes one snapshot and stops,
+including in solo mode; **Commit current changes & relay [peer]** snapshots first,
 then the controller sends the selected baseline through the new commit to the peer
-after validating publication and completion. The baseline selector stays available;
-selecting current HEAD reviews only the current changes. Readiness and active-run
-gates still apply. On a clean checkout, **Committed review** in the reviewing agent's
+after validating publication and completion. The baseline selector appears for that
+case; selecting current HEAD reviews only the current changes. Readiness and
+active-run gates still apply. On a clean checkout, **Committed review** in the reviewing agent's
 own card offers **Relay [agent]**, which reviews every commit
 after the **Review baseline** chosen beside it. The selector lists each candidate
 as a short SHA and subject: the earliest (default) is the newest commit on this
@@ -226,7 +229,17 @@ straight back to the author as the next automatic turn. A result marked `needsHu
 pauses for scope or permission decisions. Restart and uncertain publication pause
 without replay. A completed chain still needs final task-level verification.
 
-Switching between Console and Projects, agents, Parallel and Focus, Plan and
+The page has four tabs. **Console** holds the agent cards for the selected
+checkout, and its **Command history** lists only that checkout's commands.
+**Projects** chooses the project, worktree and group. **Settings** shows the host's
+effective global configuration (tmux binary and where it resolves, data store, task
+worktree root, integration branches, adapter, input, allowed origins) with the
+environment variable behind each value; values are read when the host starts, so a
+change means editing `web/.env.local` or the shell and restarting. Settings also
+holds this page's console preferences, such as the deprecated staging fallback.
+**About** explains how the console works.
+
+Switching between tabs, agents, Parallel and Focus, Plan and
 Implementation, or workspaces keeps drafts, choices, open sections and scroll
 positions in page memory only: never browser storage, and Lock clears it.
 Readiness is one confirmation for the whole page and never survives such a switch,
@@ -261,9 +274,15 @@ borrow each other's completion. Relay commands use the `relay:` prefix. The glob
 instruction rule must recognize that prefix as documented in [SKILLS](docs/SKILLS.md).
 The marker is bookkeeping, not a new task. The skill defines its Git staging contract.
 
-Use **Pause / take over** before desktop intervention. Pause keeps ownership and
-does not send Ctrl-C or stop background jobs. After inspecting and stopping writers,
-explicit takeover releases ownership without claiming success. No command is
+The **Controller · …** toggle beside Settings shows whether the controller is
+driving the agents in this checkout, waiting for you, paused, or idle; open it for
+the command it holds and its actions. Use **Pause the controller** before desktop
+intervention. Pause keeps the controller
+in charge of the checkout and does not send Ctrl-C or stop background jobs; a
+command the controller paused itself (uncertain delivery, background work, an
+uncorrelated prompt) offers only **Take over from the controller…**. After
+inspecting and stopping writers, the confirmed takeover gives you control of the
+agents without claiming success. No command is
 silently retried. Final task-level tests and review remain your responsibility.
 
 Once ownership is released, a restarted CLI in the same pane is

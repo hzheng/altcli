@@ -394,6 +394,18 @@ test('v4 migration preserves historical pair IDs and creates versioned groups', 
   assert.equal(store.groups()[0]!.id, group.id); assert.equal(store.groups()[0]!.legacyPairId, group.id);
   assert.deepEqual(store.groups()[0]!.members, ['codex', 'claude']); assert.equal(store.db.pragma('user_version', { simple: true }), 12);
 });
+test('a relay note reaches only the peer\'s review assignment and needs a relay', async () => {
+  const input = request({ reviewNote: 'Please check the retry path first.' }); await plane.submitImplementation(input);
+  const work = JSON.parse(readFileSync(join(plane.workflow.assignmentDirectory, `${input.requestId}.json`), 'utf8'));
+  assert.equal(work.note, null); // the author's own turn never carries the note meant for the reviewer
+  publish(input.requestId, true); await complete(input.requestId);
+  const review = run(input.requestId).currentCommandId;
+  const assignment = JSON.parse(readFileSync(join(plane.workflow.assignmentDirectory, `${review}.json`), 'utf8'));
+  assert.equal(assignment.identity.agentId, 'claude'); assert.equal(assignment.note, 'Please check the retry path first.');
+  assert.throws(() => parseImplementation(request({ handoff: false, autoContinue: false, reviewNote: 'no relay' })), /relay note needs a relay/);
+  assert.throws(() => parseImplementation({ ...request({ kind: 'review', reviewBase: input.branch.head, reviewNote: 'context' }), agentId: 'claude' }), /review context goes in text/);
+  assert.equal(parseImplementation(request({ reviewNote: '' })).reviewNote, undefined);
+});
 test('committed work without handoff and log-only initial work never create a peer review', async () => {
   const first = request({ handoff: false }); await plane.submitImplementation(first); publish(first.requestId, true); await complete(first.requestId);
   assert.equal(run(first.requestId).status, 'completed'); assert.equal(sent.length, 1);
@@ -1190,7 +1202,7 @@ test('moved agents remain blocked by the old run; takeover enables automatic dis
   adapter.foregrounds.set('claude', '900');
   const inspect = adapter.inspect.bind(adapter); adapter.inspect = async (id) => ({ ...await inspect(id), cwd: id === '%1' ? `${root}/moved` : root });
   const blocked = (await plane.workspaces()).workspaces.find((w) => w.cwd.endsWith('/moved'))!.agents[0]!;
-  assert.equal(blocked.eligible, false); assert.match(blocked.reason!, /Pause \/ take over/); assert.equal(blocked.session, undefined);
+  assert.equal(blocked.eligible, false); assert.match(blocked.reason!, /pause and take over the run/); assert.equal(blocked.session, undefined);
   plane.workflow.pause(first.requestId, 'fixture'); plane.action({ runId: first.requestId, action: 'takeover', confirmReady: true });
   const changes = store.db.prepare('SELECT total_changes() AS count').get();
   const moved = (await plane.workspaces()).workspaces.find((w) => w.cwd.endsWith('/moved'))!.agents[0]!.session!;

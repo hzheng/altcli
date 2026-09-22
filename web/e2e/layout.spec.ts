@@ -68,14 +68,16 @@ test('each pane has its own action group; After send maps to a plain Send, work 
   const codex = await openCard(page, 'Codex');
   await codex.getByLabel('Instruction for Codex').fill('Add the retry.');
   await codex.getByLabel('After send').selectOption('commit_relay');
+  await codex.getByLabel('Relay note for Claude').fill('Check the retry path first.');
   // New work is reviewed from the pre-send HEAD; no existing-commit baseline is attached to it.
   await expect(codex.getByLabel('Review baseline')).toBeHidden();
   await expect(codex.locator('.pane-line')).toContainText('Claude reviews only what Codex commits');
   await codex.getByLabel('Ready for implementation').check();
   await codex.getByRole('button', { name: 'Send & commit Codex → relay Claude', exact: true }).click();
   await expect.poll(() => starts.length).toBe(2);
-  expect(starts[1]).toMatchObject({ agentId: 'codex', kind: 'work', text: 'Add the retry.', handoff: true, autoContinue: true, policy: 'peer' });
+  expect(starts[1]).toMatchObject({ agentId: 'codex', kind: 'work', text: 'Add the retry.', handoff: true, autoContinue: true, policy: 'peer', reviewNote: 'Check the retry path first.' });
   expect(starts[1]).not.toHaveProperty('reviewBase');
+  await expect(codex.getByLabel('Relay note for Claude')).toHaveValue(''); // consumed with the start
   await codex.getByLabel('Instruction for Codex').fill('Only explain.'); await codex.getByLabel('After send').selectOption('nothing');
   await codex.getByLabel('Ready for implementation').check(); await codex.getByRole('button', { name: 'Send Codex', exact: true }).click();
   await expect.poll(() => sent.length).toBe(1);
@@ -106,11 +108,16 @@ test('on an integration branch Send & commit waits for a task branch while plain
   const commit = codex.getByRole('button', { name: 'Send & commit Codex', exact: true });
   await expect(commit).toBeDisabled(); await expect(codex.locator('.pane-line')).toContainText('Choose the implementation branch in settings.');
   await expect(page.getByRole('region', { name: 'Implementation settings' })).toContainText('Choose the implementation branch in settings.');
+  // The Settings toggle stays where it is when the editor opens below the summary row.
+  const toggle = page.getByRole('region', { name: 'Implementation settings' }).getByRole('button', { name: 'Settings', exact: true });
+  const place = () => toggle.evaluate((element) => { const box = element.getBoundingClientRect(); return [Math.round(box.left + window.scrollX), Math.round(box.top + window.scrollY)]; });
+  const before = await place(); await toggle.click(); await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  expect(await place()).toEqual(before); await toggle.click(); await expect(toggle).toHaveAttribute('aria-expanded', 'false');
   await codex.getByLabel('After send').selectOption('nothing'); await expect(ready).not.toBeChecked();
   await ready.check(); await expect(codex.getByRole('button', { name: 'Send Codex', exact: true })).toBeEnabled();
   await codex.getByLabel('After send').selectOption('commit');
   // The reason names a settings gap, so the card links straight to the settings editor.
-  await codex.getByRole('button', { name: 'Edit settings', exact: true }).click();
+  await codex.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.getByLabel('Implementation branch').selectOption('new'); await page.getByLabel('New branch name').fill('task/from-send');
   await ready.check(); await commit.click();
   await expect.poll(() => starts.length).toBe(1);
@@ -195,6 +202,54 @@ test('Lock forgets drafts and settings within the same document, and sends nothi
   await expand(page, 'Collaboration settings'); await expect(page.getByLabel('Pause on a reviewer objection')).not.toBeChecked();
   expect(sent).toEqual([]);
 });
+test('Settings shows the effective host configuration and the console preference; About holds the general explanation', async ({ page, request }) => {
+  const group = await post(request, 'groups', { name: 'Tabs', members: ['codex','claude'] });
+  await openGroup(page, group);
+  // Neither the deprecated toggle nor the general explanation belongs in the Console.
+  await expect(page.locator('summary').filter({ hasText: /^(Advanced|How this works)$/ })).toHaveCount(0);
+  const sections = page.getByRole('navigation', { name: 'Sections' });
+  await sections.getByRole('button', { name: 'Settings', exact: true }).click();
+  const host = page.getByRole('region', { name: 'Host configuration' });
+  await expect(host).toContainText('READ AT START'); await expect(host).toContainText('restart the host');
+  const row = (name: string) => host.getByRole('row').filter({ has: page.getByRole('cell', { name, exact: true }) });
+  await expect(row('Adapter')).toContainText('mock (simulated panes)'); await expect(row('Adapter')).toContainText('CODERCREW_ADAPTER (set)');
+  await expect(row('Data store')).toContainText(/codercrew-e2e-\d+-\d+\/mock/); await expect(row('Data store')).toContainText('CODERCREW_DATA_DIR (set)');
+  await expect(row('tmux binary')).toContainText('CODERCREW_TMUX_BIN · default tmux from PATH');
+  await expect(row('Integration branches')).toContainText(`main, master + each project's default branch`);
+  await expect(row('Deprecated staging relay')).toContainText('allowed');
+  await expect(host).not.toContainText('a'.repeat(64)); // the token never reaches the page
+  const preferences = page.getByRole('region', { name: 'Console preferences' });
+  await expect(preferences.getByLabel('Staging fallback', { exact: true })).toBeEnabled();
+  await sections.getByRole('button', { name: 'About', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'About CoderCrew', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'How this works' })).toContainText('No effect in this page sends commands');
+  await sections.getByRole('button', { name: 'Console', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Actions for Codex' })).toBeVisible();
+});
+test('Stay unlocked is an explicit preference: reopening skips the token, Lock forgets it, a refused token is dropped', async ({ page, request }) => {
+  const group = await post(request, 'groups', { name: 'Stay unlocked', members: ['codex','claude'] });
+  await openGroup(page, group);
+  // Off by default: a reload asks for the token.
+  await page.reload(); await expect(page.getByLabel('Host access token')).toBeVisible();
+  await page.getByLabel('Host access token').fill('a'.repeat(64)); await page.getByRole('button', { name: 'Open console' }).click();
+  const sections = page.getByRole('navigation', { name: 'Sections' });
+  await sections.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByLabel('Stay unlocked on this device').check();
+  await page.reload(); await expect(page.getByRole('heading', { name: 'Agent console', exact: true })).toBeVisible();
+  await expect(page.getByLabel('Host access token')).toHaveCount(0);
+  // Lock always forgets the token; the preference itself stays on for the next unlock.
+  await page.getByRole('button', { name: 'Lock', exact: true }).click();
+  await expect(page.getByLabel('Host access token')).toBeVisible(); await expect(page.getByText(/This device stays unlocked until you press Lock/)).toBeVisible();
+  await page.reload(); await expect(page.getByLabel('Host access token')).toBeVisible();
+  await page.getByLabel('Host access token').fill('a'.repeat(64)); await page.getByRole('button', { name: 'Open console' }).click();
+  await page.reload(); await expect(page.getByRole('heading', { name: 'Agent console', exact: true })).toBeVisible();
+  // A remembered token the host refuses is dropped rather than retried on every load.
+  await page.evaluate(() => localStorage.setItem('codercrew.token', 'b'.repeat(64)));
+  await page.reload(); await expect(page.getByRole('alert').filter({ hasText: /access token/ })).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem('codercrew.token'))).toBeNull();
+  await page.reload(); await expect(page.getByLabel('Host access token')).toBeVisible();
+  await page.evaluate(() => localStorage.removeItem('codercrew.stayUnlocked'));
+});
 test('a double click starts once, and a refused start stays in its own card with the text kept', async ({ page, request }) => {
   const group = await post(request, 'groups', { name: 'Refusal', members: ['codex','claude'] });
   let calls = 0;
@@ -214,7 +269,7 @@ test('every field ID is unique and every label points to exactly one control', a
   const group = await post(request, 'groups', { name: 'Unique IDs', members: ['codex','claude'] });
   await taskBranch(page, 1);
   await openGroup(page, group); await editSettings(page);
-  for (const name of ['Codex', 'Claude']) await expand(await openCard(page, name), 'Current changes');
+  for (const name of ['Codex', 'Claude']) await (await openCard(page, name)).getByLabel('After send').selectOption('commit_relay');
   const problems = await page.evaluate(() => {
     const ids = [...document.querySelectorAll('[id]')].map((element) => element.id);
     const duplicates = ids.filter((id, index) => ids.indexOf(id) !== index);
@@ -233,6 +288,26 @@ test('both Send buttons are in the first desktop viewport, directly under their 
     await expect(pane(page, name).locator('.pane-footer + .pane-actions')).toHaveCount(1);
   }
   await page.screenshot({ path: info.outputPath('console-1440x900.png') });
+});
+test('the settings row wraps inside its panel at intermediate widths, with the Settings toggle reachable', async ({ page, request }, info) => {
+  test.skip(info.project.name !== 'desktop', 'Intermediate widths are resized from the desktop project.');
+  const group = await post(request, 'groups', { name: 'Narrow desktop', members: ['codex','claude'] });
+  // On the integration branch with no implementation branch chosen, the row also carries its warning badge.
+  await openGroup(page, group);
+  const settings = page.getByRole('region', { name: 'Implementation settings' });
+  await expect(settings).toContainText('Choose the implementation branch in settings.');
+  for (const width of [1100, 900, 800, 761]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), { message: `overflow at ${width}` }).toBeLessThanOrEqual(0);
+    for (const name of ['Settings', /^Controller · /]) {
+      const toggle = settings.getByRole('button', { name, exact: name === 'Settings' });
+      await expect(toggle).toBeInViewport({ ratio: 1 });
+      const box = (await toggle.boundingBox())!; const panel = (await settings.boundingBox())!;
+      expect(box.x + box.width, `${String(name)} inside the panel at ${width}`).toBeLessThanOrEqual(panel.x + panel.width);
+    }
+    await settings.getByRole('button', { name: 'Settings', exact: true }).click();
+    await expect(page.getByLabel('Implementation branch')).toBeVisible(); await settings.getByRole('button', { name: 'Settings', exact: true }).click();
+  }
 });
 test('a newly working agent never takes the chosen pane away', async ({ page, request }) => {
   const group = await post(request, 'groups', { name: 'Chosen pane', members: ['codex','claude'] });
@@ -255,7 +330,7 @@ test('the console has no horizontal overflow at phone widths', async ({ page, re
   const group = await post(request, 'groups', { name: 'Narrow', members: ['codex','claude'] });
   await taskBranch(page, 1);
   await openGroup(page, group); await editSettings(page);
-  const codex = await openCard(page, 'Codex'); await codex.getByLabel('After send').selectOption('commit_relay'); await expand(codex, 'Current changes');
+  const codex = await openCard(page, 'Codex'); await codex.getByLabel('After send').selectOption('commit_relay');
   for (const width of [390, 320]) {
     await page.setViewportSize({ width, height: 800 });
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);

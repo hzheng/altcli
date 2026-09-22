@@ -71,7 +71,7 @@ export function Workspaces(props: Props) {
           : props.disabled ? 'Another request is in progress. Wait for it to finish.'
           : discoveryError || discovery?.error || tree.error || project.error || '';
         const ownerReason = (!tree.branch ? 'The task worktree has detached HEAD. Check out its task branch, then Recheck.' : '')
-          || (run ? `A ${run.status} run owns this worktree. Finish it or reconcile it in Console first.` : '')
+          || (run ? `The controller is ${run.status} on this worktree. Let it finish or take over in Console first.` : '')
           || (props.deliveryRepositories?.includes(tree.path) ? 'An unresolved delivery owns this worktree. Inspect it in Console first.' : '');
         const squashReason = hardReason || ownerReason;
         const occupied = agents.length ? `${agents.map((a) => a.label).join(', ')} ${agents.length === 1 ? 'is' : 'are'} still in this worktree; the server refuses removal while a pane is inside it. Close or move the pane, then Recheck.` : '';

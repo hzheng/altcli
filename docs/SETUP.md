@@ -54,12 +54,23 @@ the CoderCrew UserPromptSubmit, SessionStart and Interrupt hooks before the next
 changed native hooks until trusted; see [hook trust](https://learn.chatgpt.com/docs/hooks#review-and-trust-hooks).
 A turn that
 started without this native binding cannot be completed by searching notification
-history; reconcile any old owned run through Pause / take over.
+history; reconcile any old owned run through Pause and Take over.
 
 Open http://127.0.0.1:8787 and enter the token from `web/.env.local`. Verify pane
 captures before setting `CODERCREW_ENABLE_INPUT=true` and restarting the backend.
 After configuration or server-code changes, settle active deliveries before
 restarting; hot reload retains the running controller.
+
+The **Settings** tab shows the configuration in effect and the variable behind each
+value: `CODERCREW_TMUX_BIN` (default `tmux`, resolved through PATH; the tab shows
+where), `CODERCREW_TMUX_SOCKET`, `CODERCREW_DATA_DIR` (default
+`~/.local/share/codercrew`, with the adapter mode appended), the task worktree root
+`~/.codercrew/<repo>/<branch>`, `CODERCREW_INTEGRATION_BRANCHES` (default
+`main,master`; each project's detected default branch is always added),
+`CODERCREW_ADAPTER`, `CODERCREW_ENABLE_INPUT`, `CODERCREW_ENABLE_LEGACY_RELAY`,
+`CODERCREW_ALLOWED_ORIGINS`, `CLAUDE_CONFIG_DIR` and `CODEX_HOME`. They are read
+once at start; edit `web/.env.local` (or the shell) and restart the host to change
+one. The tab never shows the access token.
 
 ## Select a project, worktree and group
 
@@ -200,9 +211,12 @@ agent's actions. **Send** performs one standalone instruction without an automat
 commit, branch change, or relay; its **After send** choice can instead ask the agent
 to publish its result as one handoff commit (**Send & commit**) and, in a pair, to have
 the peer review exactly that commit (**Send & commit → relay**).
-**Commit [agent]** under **Current changes** snapshots all current staged, unstaged
-and nonignored untracked changes as they stand, then stops. It does not finish
-pending requests; its optional handoff note is context. **Relay [peer]** reviews every commit after the selected
+With a relay follow-up, **Relay note for [peer]** carries your note to the reviewer.
+Leave the instruction empty on a dirty checkout and the button becomes **Commit
+current changes [agent]**: it snapshots all staged, unstaged and nonignored
+untracked changes as they stand, then stops, without finishing pending requests;
+with the relay follow-up it becomes **Commit current changes & relay [peer]**.
+**Relay [peer]** reviews every commit after the selected
 **Review baseline**: the earliest candidate (default) is the newest commit on this
 branch at which the journal records a completed turn of the recipient's, or the
 task baseline when it records none; the latest is the last commit only; **Another commit…** previews a typed
@@ -215,7 +229,7 @@ required for this action; readiness and active-run gates still apply. Clean
 checkout review requires project changes in the selected range.
 Send and Commit name the worker whose card they sit in; Relay sits in the
 receiving peer's or designated reviewer's own card.
-The collapsible **Collaboration settings** panel, under **Edit settings** in the
+The collapsible **Collaboration settings** panel, under **Settings** in the
 settings bar above the panes, holds the agreement for
 subsequent turns: automatic collaboration, the turn budget, and whether a reviewer
 objection pauses for you (by default it is routed straight back to the author).
@@ -237,7 +251,7 @@ documents as part of finishing a task.
 ## Pause and recovery
 
 Unknown completion, background work or changed agent identity pauses the run.
-Inspect the agents and use **Pause / take over** before manual intervention.
+Inspect the agents and use **Pause the controller**, then **Take over from the controller…**, before manual intervention.
 Pause prevents further scheduling but does not interrupt workers or retract input;
 explicit takeover releases ownership after inspection. Never send a replacement
 command just because an HTTP response failed.

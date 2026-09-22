@@ -16,8 +16,10 @@ export interface PaneRequestInput {
   agentId: string;
   policy: CollaborationPolicy;
   workerId?: string;
-  /** The instruction for a Send; the optional handoff note or review context otherwise. */
+  /** The instruction for a Send, or the review context for a clean review; empty for a snapshot. */
   text: string;
+  /** The human's note for the peer when a relay is involved; delivered with the peer's review assignment. */
+  reviewNote?: string;
   branch: BranchConsent;
   automatic: boolean;
   turnLimit: number;
@@ -40,5 +42,6 @@ export function paneRequest(input: PaneRequestInput): PaneRequest {
   return { path: "implementation", body: { requestId, groupId, groupRevision, registrations, agentId, kind, ...(text ? { text } : {}), handoff, policy, ...worker,
     autoContinue: !solo && handoff && input.automatic, turnLimit: input.turnLimit, pauseOnObjection: !solo && input.pauseOnObjection,
     ...(input.logPath ? { logPath: input.logPath } : {}), branch: input.branch,
-    ...(kind !== "work" && handoff && input.reviewBase ? { reviewBase: input.reviewBase } : {}), confirmReady: true } };
+    ...(kind !== "work" && handoff && input.reviewBase ? { reviewBase: input.reviewBase } : {}),
+    ...(kind !== "review" && handoff && input.reviewNote?.trim() ? { reviewNote: input.reviewNote.trim() } : {}), confirmReady: true } };
 }

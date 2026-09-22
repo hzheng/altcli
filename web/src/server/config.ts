@@ -1,6 +1,7 @@
+import { accessSync, constants } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
-import type { AdapterMode } from "../contracts/api.ts";
+import { delimiter, isAbsolute, join, resolve } from "node:path";
+import type { AdapterMode, HostConfig } from "../contracts/api.ts";
 import { AppError } from "../core/errors.ts";
 export interface Config {
   mode: AdapterMode;
@@ -48,4 +49,18 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     claudeConfigDir: env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), codexHome: env.CODEX_HOME ?? join(homedir(), '.codex'),
     dataDir: resolve(base, mode), tmuxBin: env.CODERCREW_TMUX_BIN ?? "tmux",
     ...(env.CODERCREW_TMUX_SOCKET ? { tmuxSocket: env.CODERCREW_TMUX_SOCKET } : {}) };
+}
+const SETTINGS = ["CODERCREW_ADAPTER", "CODERCREW_ENABLE_INPUT", "CODERCREW_ENABLE_LEGACY_RELAY", "CODERCREW_DATA_DIR", "CODERCREW_TMUX_BIN", "CODERCREW_TMUX_SOCKET",
+  "CODERCREW_INTEGRATION_BRANCHES", "CODERCREW_ALLOWED_ORIGINS", "CLAUDE_CONFIG_DIR", "CODEX_HOME"];
+/** Where an executable name resolves through PATH, or the configured absolute path when it is executable; null otherwise. */
+export function resolveExecutable(binary: string, env: Record<string, string | undefined> = process.env): string | null {
+  const candidates = isAbsolute(binary) || binary.includes("/") ? [resolve(binary)] : (env.PATH ?? "").split(delimiter).filter(Boolean).map((dir) => join(dir, binary));
+  for (const candidate of candidates) { try { accessSync(candidate, constants.X_OK); return candidate; } catch { /* keep looking */ } }
+  return null;
+}
+/** The effective configuration for display. The token never leaves the server. */
+export function describeConfig(config: Config, env: Record<string, string | undefined> = process.env): HostConfig {
+  return { mode: config.mode, inputEnabled: config.inputEnabled, legacyEnabled: config.legacyEnabled === true, dataDir: config.dataDir, worktreeDir: config.worktreeDir ?? join(homedir(), ".codercrew"),
+    tmuxBin: config.tmuxBin, tmuxPath: resolveExecutable(config.tmuxBin, env), tmuxSocket: config.tmuxSocket ?? null, integrationBranches: config.integrationBranches,
+    allowedOrigins: config.allowedOrigins, claudeConfigDir: config.claudeConfigDir, codexHome: config.codexHome, environment: SETTINGS.filter((name) => env[name] !== undefined) };
 }

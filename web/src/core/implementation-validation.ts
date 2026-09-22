@@ -34,7 +34,7 @@ export function parseGroupSelection(value: unknown): GroupSelection {
 }
 export function parseImplementation(value: unknown): ImplementationStart {
   const b = object(value);
-  if (Object.keys(b).some((k) => !['requestId','groupId','groupRevision','registrations','agentId','kind','text','handoff','policy','workerId','autoContinue','turnLimit','pauseOnObjection','logPath','branch','reviewBase','confirmReady'].includes(k))) return invalid('Unknown implementation field.');
+  if (Object.keys(b).some((k) => !['requestId','groupId','groupRevision','registrations','agentId','kind','text','handoff','policy','workerId','autoContinue','turnLimit','pauseOnObjection','logPath','branch','reviewBase','reviewNote','confirmReady'].includes(k))) return invalid('Unknown implementation field.');
   if (!Number.isInteger(b.groupRevision) || Number(b.groupRevision) < 1) return invalid('Confirm the current group revision.');
   const registrations = object(b.registrations);
   if (Object.keys(registrations).length < 1 || Object.keys(registrations).length > 2) return invalid('Confirm the exact selected registrations.');
@@ -52,11 +52,13 @@ export function parseImplementation(value: unknown): ImplementationStart {
   if (b.kind === 'commit' && !b.handoff && b.reviewBase !== undefined) return invalid('A review baseline requires relay.');
   if (b.kind === 'work' && !text) return invalid('Work needs an instruction.');
   if (b.kind === 'review' && b.reviewBase === undefined) return invalid('An existing-candidate review needs an explicit baseline.');
+  const reviewNote = b.reviewNote === undefined || b.reviewNote === '' ? undefined : promptText(b.reviewNote);
+  if (reviewNote && (!b.handoff || b.kind === 'review')) return invalid('A relay note needs a relay to a peer; review context goes in text.');
   return { requestId: requestId(b.requestId), groupId: agentId(b.groupId), groupRevision: Number(b.groupRevision), registrations: instances, agentId: agentId(b.agentId), kind: b.kind as ImplementationStart['kind'],
     ...(text ? { text } : {}), handoff: b.handoff, policy: b.policy as ImplementationStart['policy'], ...(b.workerId !== undefined ? { workerId: agentId(b.workerId) } : {}),
     autoContinue: b.autoContinue, turnLimit: Number(b.turnLimit), ...(b.pauseOnObjection !== undefined ? { pauseOnObjection: b.pauseOnObjection } : {}), ...(b.logPath !== undefined ? { logPath: logPath(b.logPath) } : {}),
     branch: { branch: branch.branch as string | null, head: sha(branch.head), ...(branch.newBranch !== undefined ? { newBranch: branch.newBranch as string } : {}), ...(branch.taskBase !== undefined ? { taskBase: sha(branch.taskBase) } : {}) },
-    ...(b.reviewBase !== undefined ? { reviewBase: sha(b.reviewBase) } : {}), confirmReady: true };
+    ...(b.reviewBase !== undefined ? { reviewBase: sha(b.reviewBase) } : {}), ...(reviewNote ? { reviewNote } : {}), confirmReady: true };
 }
 export function parseStandalone(value: unknown): StandaloneStart {
   const b = object(value);

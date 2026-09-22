@@ -106,12 +106,12 @@ export class WorkflowStore {
       OR id IN (SELECT id FROM workflow_runs ORDER BY rowid DESC LIMIT 30) ORDER BY rowid DESC`).all() as {value:string}[]).map((r) => JSON.parse(r.value));
   }
   /** Run and pair for each listed command id, from the durable ledger, in one query. */
-  runsOf(commandIds: string[]): Map<string, { runId: string; pairId: string | null; groupId: string | null }> {
+  runsOf(commandIds: string[]): Map<string, { runId: string; pairId: string | null; groupId: string | null; repository: string }> {
     if (!commandIds.length) return new Map();
-    const rows = this.store.db.prepare(`SELECT t.id AS id, t.run_id AS runId, json_extract(r.value, '$.pairId') AS pairId,
+    const rows = this.store.db.prepare(`SELECT t.id AS id, t.run_id AS runId, json_extract(r.value, '$.repository') AS repository, json_extract(r.value, '$.pairId') AS pairId,
       COALESCE(json_extract(r.value, '$.implementation.group.id'), json_extract(r.value, '$.planning.group.id'), json_extract(r.value, '$.standalone.groupId'), json_extract(r.value, '$.pairId')) AS groupId
-      FROM workflow_turns t JOIN workflow_runs r ON r.id = t.run_id WHERE t.id IN (${commandIds.map(() => '?').join(',')})`).all(...commandIds) as {id:string;runId:string;pairId:string|null;groupId:string|null}[];
-    return new Map(rows.map((row) => [row.id, { runId: row.runId, pairId: row.pairId, groupId: row.groupId }]));
+      FROM workflow_turns t JOIN workflow_runs r ON r.id = t.run_id WHERE t.id IN (${commandIds.map(() => '?').join(',')})`).all(...commandIds) as {id:string;runId:string;repository:string;pairId:string|null;groupId:string|null}[];
+    return new Map(rows.map((row) => [row.id, { runId: row.runId, pairId: row.pairId, groupId: row.groupId, repository: row.repository }]));
   }
   activeExecutions(): Execution[] {
     return this.runs().filter((r) => ['running','waiting','paused'].includes(r.status)).map((r) => this.execution(r.currentCommandId)!).filter(Boolean);

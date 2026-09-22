@@ -77,7 +77,7 @@ small { display:block; font-size:11px; color:var(--muted); font-weight:400; }
 .outcome.strong_objection { background:#332624; color:#f1bbb0; }
 .outcome.accept_without_improvement, .outcome.no_incoming_handoff { background:#28251d; color:#d8c398; }
 .outcome.pending { background:#1c2327; color:var(--muted); font-style:italic; }
-.pane pre { height:260px; overflow:auto; margin:0; padding:20px; line-height:1.65; font-size:12px; white-space:pre-wrap; overflow-wrap:anywhere; color:#d5e0dd; tab-size:4; }
+.pane pre { height:236px; overflow:auto; margin:0; padding:20px; line-height:1.65; font-size:12px; white-space:pre-wrap; overflow-wrap:anywhere; color:#d5e0dd; tab-size:4; }
 .pane-footer { display:flex; justify-content:space-between; align-items:center; gap:10px; color:var(--muted); padding:6px 18px; border-top:1px solid var(--line); font-size:10px; }
 .pane-footer button { margin-left:auto; font-size:10px; padding:5px 9px; }
 .confirm-inline { margin-left:auto; display:inline-flex; align-items:center; gap:6px; }
@@ -216,17 +216,24 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
 .context-actions button { font-size:11px; }
 .run-settings { border:1px solid var(--line); border-radius:10px; background:var(--panel); padding:8px 14px; margin-bottom:12px; font-size:12px; }
 .run-summary { display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; }
-.run-summary .summary-text { color:var(--muted); min-width:0; overflow-wrap:anywhere; }
-.settings-editor { margin-left:auto; }
-.settings-editor[open] { flex-basis:100%; margin-left:0; }
-.settings-editor > summary { cursor:pointer; color:var(--muted); list-style:none; }
-.settings-editor > summary::before { content:"▸ "; color:var(--accent); }
-.settings-editor[open] > summary::before { content:"▾ "; }
-.settings-editor[open] > summary { margin-bottom:10px; }
+.run-summary .summary-text { color:var(--muted); flex:1 1 160px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.run-summary > .muted, .run-summary .segmented { flex-shrink:0; }
+.run-summary .badge.warning { flex:0 1 auto; min-width:0; max-width:100%; overflow:hidden; text-overflow:ellipsis; }
+.row-toggles { margin-left:auto; display:flex; gap:6px; flex-shrink:0; }
+.controller-toggle { font-size:12px; color:var(--muted); font-weight:400; white-space:nowrap; }
+.controller-toggle span { color:var(--accent); }
+.controller-toggle.attention { color:#e7c793; border-color:#61543e; }
+.controller-panel { margin-top:10px; }
+.controller-panel > .panel { margin-top:0; }
+.controller-panel > .panel + .panel { margin-top:10px; }
+.controller-panel .latest-run { margin-top:0; }
+.settings-toggle { font-size:12px; color:var(--muted); font-weight:400; white-space:nowrap; }
+.settings-toggle span { color:var(--accent); }
+.settings-editor { margin-top:10px; padding-top:10px; border-top:1px dashed var(--line); }
 .settings-editor details.agreement { margin-top:12px; }
 .pane-heading { flex-wrap:wrap; gap:4px 10px; }
 .pane-heading h2 { margin-right:auto; }
-.pane-status { display:flex; align-items:center; gap:10px; padding:0 18px 10px; border-bottom:1px solid var(--line); font-size:11px; color:var(--muted); }
+.pane-status { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; padding:0 18px 10px; border-bottom:1px solid var(--line); font-size:11px; color:var(--muted); }
 .pane-status .state { display:inline-flex; align-items:center; text-transform:uppercase; font-size:10px; letter-spacing:.4px; color:var(--text); white-space:nowrap; }
 .pane-detail { flex:1; min-width:0; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow-wrap:anywhere; }
 .pane-status button { font-size:10px; padding:4px 9px; flex-shrink:0; }
@@ -244,7 +251,9 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
 .ready-row { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px 12px; }
 .ready-row .readiness { flex:1 1 260px; }
 .ready-row > button { padding:8px 14px; }
-.toolbar-note { font-size:11px; }
+.toolbar { min-width:0; }
+.toolbar-note { font-size:11px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+@media(max-width:1000px) { .toolbar-note { display:none; } }
 .inline-link { padding:0 0 0 8px; border:0; font-size:12px; color:var(--accent); font-weight:600; }
 .pane-buttons button { padding:8px 14px; }
 .pane-disclosure { display:grid; gap:8px; border-top:1px dashed var(--line); padding-top:8px; }
@@ -255,9 +264,25 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
 .pane-disclosure .notice { margin-bottom:0; }
 .baseline { display:flex; align-items:center; gap:8px; min-width:0; color:var(--muted); }
 .baseline select { width:auto; flex:1; min-width:0; padding:8px 12px; font-size:12px; text-overflow:ellipsis; }
-.latest-run { padding:10px 16px; margin:0 0 12px; font-size:12px; }
+.settings-panel td:first-child { white-space:nowrap; }
+.about p + p { margin-top:10px; }
+.about p { font-size:13px; }
+.run-command { font-size:12px; color:var(--muted); margin:6px 0; }
+.notice.takeover { display:grid; gap:10px; margin-top:12px; }
+.notice.takeover button { margin-left:0; }
+.run-meaning { margin:6px 0 10px; }
+.run-command .command-text { display:inline; white-space:pre-line; }
+.latest-run { margin-top:16px; padding:12px 16px; font-size:12px; }
+.latest-run > summary { display:flex; align-items:center; gap:14px; cursor:pointer; list-style:none; }
+.latest-run > summary h2 { display:inline; font-size:14px; }
+.latest-run > summary::before { content:"▸ "; color:var(--accent); }
+.latest-run[open] > summary::before { content:"▾ "; }
+.latest-run[open] > summary { margin-bottom:8px; }
 .latest-run p + p { margin-top:6px; }
 .latest-run details { margin-top:8px; }
+.reset-reason { flex-basis:100%; font-size:11px; color:#e7c793; }
+.reset-status { margin:0 18px 10px; display:grid; gap:8px; justify-items:start; }
+.reset-status button { margin-left:0; }
 .status:not([open]) { padding-bottom:14px; }
 .status summary .muted { font-size:12px; }
 @media(max-width:760px) {
@@ -269,10 +294,10 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
   .connection small { max-width:100px; }.agent-tabs button { flex:1; min-width:0; padding:10px 12px; display:block; text-align:left; }
   .agent-tabs small { margin-top:4px; }.panes { grid-template-columns:1fr; }.pane:not(.active) { display:none; }
   .pane pre { height:320px; }.toolbar-note { display:none; }
-  .context-actions { margin-left:0; }.pane-actions { padding:12px 14px 14px; }.pane-status { padding:0 14px 10px; }.baseline { flex-wrap:wrap; }.composer,.panel { padding:16px; }.command-line { flex-wrap:wrap; }.register-grid { grid-template-columns:1fr; }
+  .context-actions { margin-left:0; }.run-summary .summary-text { flex-basis:100%; white-space:normal; overflow-wrap:anywhere; }.run-summary .badge.warning { white-space:normal; }.row-toggles { margin-left:0; width:100%; }.pane-actions { padding:12px 14px 14px; }.pane-status { padding:0 14px 10px; }.baseline { flex-wrap:wrap; }.composer,.panel { padding:16px; }.command-line { flex-wrap:wrap; }.register-grid { grid-template-columns:1fr; }
   .workspace-cards { grid-template-columns:1fr; }.workspaces .section-heading { flex-wrap:wrap; }
   /* The section tabs take their own full-width row; an overflowing top bar would make mobile browsers zoom the whole page out. */
-  .topbar { flex-wrap:wrap; gap:8px 12px; padding:10px 0; }.section-tabs { order:3; width:100%; margin-left:0; }.section-tabs button { flex:1; padding:8px 10px; font-size:13px; }
+  .topbar { flex-wrap:wrap; gap:8px 12px; padding:10px 0; }.section-tabs { order:3; width:100%; margin-left:0; flex-wrap:wrap; }.section-tabs button { flex:1; padding:8px 10px; font-size:13px; }
   .context-bar > button { margin-left:0; }.groups li { flex-direction:column; align-items:flex-start; }.agent-actions { white-space:normal; }
   .target-row { flex-direction:column; }.target-row > button, .row-tools { align-self:flex-end; }
   .command-line input, .command-line textarea { flex-basis:calc(100% - 24px); }.command-line button { flex:1; margin-top:3px; }

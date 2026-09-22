@@ -22,11 +22,14 @@ captured by the initial worktree fingerprint and included in that first commit
 commit when the tracked log is mirrored) and relays nothing. Solo offers no relay;
 under Worker + reviewer only the worker's card sends and only the reviewer's card
 reviews. Existing-commit **Relay [agent]** sits in the reviewing agent's own card.
-Snapshot **Commit** and **Commit current changes & relay [peer]** sit under the
-author's **Current changes** with a separate optional handoff note, so a Send
-instruction is never sent as snapshot context. Request bodies for Commit, Commit
-current changes & relay, Relay, Start Plan and Next turn are unchanged; no server
-contract changed.
+The same primary button hands off the current changes as they stand when the
+instruction is empty (**Commit current changes [agent]**, or **… & relay [peer]**
+with the relay follow-up), so an instruction is never sent as snapshot context and a
+snapshot never carries one. A relay follow-up shows **Relay note for [peer]**: the
+human's note travels as the optional `reviewNote` on the start request (requires
+`handoff`, refused for `kind: review`, whose `text` is the review context) and
+reaches the peer's review assignment as `note`; the author's own turn never
+carries it. Request bodies for Relay, Start Plan and Next turn are unchanged.
 
 ### Journal as app data (September 20, 2026)
 

@@ -163,3 +163,25 @@ export interface ConsoleState {
   serverTime: string;
 }
 export interface ApiError { error: { code: string; message: string } }
+/** The host's effective global configuration as read at startup. Read-only; the access token is never included. */
+export interface HostConfig {
+  mode: AdapterMode;
+  inputEnabled: boolean;
+  /** Whether the deprecated staging relay may be shown as a console preference. */
+  legacyEnabled: boolean;
+  /** Controller data (SQLite store, journal, plans, assignments); the adapter mode is appended to the configured base. */
+  dataDir: string;
+  /** Where task worktrees are created by default. */
+  worktreeDir: string;
+  tmuxBin: string;
+  /** Where PATH resolves tmuxBin, or the configured absolute path when it exists; null when no executable was found. */
+  tmuxPath: string | null;
+  tmuxSocket: string | null;
+  /** Creation bases, never implementation branches; each project's detected default branch is always added. */
+  integrationBranches: string[];
+  allowedOrigins: string[];
+  claudeConfigDir: string;
+  codexHome: string;
+  /** The environment variables that were set when the host started; a setting not listed here uses its default. */
+  environment: string[];
+}

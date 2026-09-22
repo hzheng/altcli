@@ -16,7 +16,11 @@ shell-execution endpoint. The token grants read access to all pane previews on t
 configured tmux server, even panes not registered as workers.
 
 Keep token/config/store backups private. Setup uses restrictive file modes; browser
-tokens remain only in memory. Never use NEXT_PUBLIC_* for a secret. Hook posting is
+tokens remain only in memory unless the user turns on **Stay unlocked on this
+device** in Settings, which keeps the token in that browser's local storage so the
+page reopens without it (anyone using that browser profile can then open the
+console; the host still checks the token on every request, a refused token is
+dropped, and Lock always forgets it). Never use NEXT_PUBLIC_* for a secret. Hook posting is
 restricted to loopback; ordinary remote access uses private Tailscale Serve, not
 public Funnel. Production CSP, device pairing/revocation and rate-limit hardening
 remain acceptance work, not claimed protections.

@@ -69,6 +69,8 @@ export interface ImplementationStart {
   branch: BranchConsent;
   /** Excluded baseline for review, including commit with handoff (defaults to the pre-snapshot HEAD). */
   reviewBase?: string;
+  /** A note from the human for the peer that reviews this handoff; delivered with the review assignment. Requires handoff. */
+  reviewNote?: string;
   confirmReady: true;
 }
 /** Plain Send: no branch setup, publication contract, or automatic successor. */
@@ -179,6 +181,8 @@ export interface CommitAssignment {
   instruction: string;
   task: string;
   findings: string | null;
+  /** The human's relay note for the peer, on review turns of a handoff that carried one; null otherwise. */
+  note: string | null;
   participant: Pick<ManagedSession, 'agentType' | 'label'>;
   /** Snapshot current changes without implementing pending requests; first work turn only. */
   commitOnly?: true;

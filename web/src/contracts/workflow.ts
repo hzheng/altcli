@@ -78,7 +78,9 @@ export interface HookEvent extends Omit<EventInput, 'event'> {
   startedAt?: string;
 }
 /** A recent command with the run and pair it belonged to, for history filtering. Null when it predates the run ledger. */
-export interface HistoryCommand extends CommandRecord { runId: string | null; pairId: string | null; groupId: string | null }
+export interface HistoryCommand extends CommandRecord { runId: string | null; pairId: string | null; groupId: string | null;
+  /** The worktree root its run executed in, so the console shows one checkout's history. */
+  repository: string | null }
 export interface WorkflowState extends ConsoleState {
   groups: Group[];
   legacyEnabled: boolean;

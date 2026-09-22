@@ -29,3 +29,11 @@ test("solo never continues or pauses on objections, and only worker/reviewer nam
   expect(request("commit", { logPath: "docs/log.jsonl" }).body).toMatchObject({ logPath: "docs/log.jsonl" });
   expect(request("commit").body).not.toHaveProperty("logPath");
 });
+test("a relay note rides with relays to a peer only, trimmed, never with plain sends, commits or clean reviews", () => {
+  expect(request("send_commit_relay", { reviewNote: "  look at retries " }).body).toMatchObject({ reviewNote: "look at retries" });
+  expect(request("commit_relay", { text: "", reviewNote: "context for the peer" }).body).toMatchObject({ kind: "commit", reviewNote: "context for the peer" });
+  expect(request("commit_relay", { text: "", reviewNote: "context for the peer" }).body).not.toHaveProperty("text");
+  for (const action of ["send", "send_commit", "commit"] as const) expect(request(action, { reviewNote: "dropped" }).body).not.toHaveProperty("reviewNote");
+  expect(request("relay", { agentId: "claude", reviewNote: "dropped" }).body).not.toHaveProperty("reviewNote");
+  expect(request("send_commit_relay", { reviewNote: "   " }).body).not.toHaveProperty("reviewNote");
+});
