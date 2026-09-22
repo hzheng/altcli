@@ -10,7 +10,7 @@ import { singleLine, slugify } from '../core/validation.ts';
 import { assertAgentCommand, assertIdentity, suggestAgentType } from '../core/policy.ts';
 import { Controller } from './controller.ts';
 import { WorkflowStore, wireText } from './workflow-store.ts';
-import { resolveWorktree, sameWorktree, worktreeFingerprint } from './worktree.ts';
+import { currentBranch, resolveWorktree, sameWorktree, worktreeFingerprint } from './worktree.ts';
 import { assertExternalDataDir } from './paths.ts';
 import { isCodexHelper } from './processes.ts';
 import { discoverWorkspaces } from './workspaces.ts';
@@ -25,16 +25,23 @@ import { ProjectCatalog } from './projects.ts';
 import { installedInside } from './cli-install.ts';
 import { AgentActivityTracker } from './agent-activity.ts';
 import type { WorktreeCreateInput, WorktreeDiscardConfirm, WorktreeDiscardFinish, WorktreeDiscardInput, WorktreeIntegrateRequest, WorktreeIntegrationInput, WorktreePreviewInput, WorktreeRemovalInput, WorktreeRemoveInput } from '../contracts/projects.ts';
+import type { Checkpoint, CheckpointInput, InteractionInput, InteractionRecord } from '../contracts/interactions.ts';
+import type { RelayRun } from '../contracts/workflow.ts';
+import { InteractionStore } from './interaction-store.ts';
+import { parseCheckpoint, parseInteraction } from '../core/interaction-validation.ts';
 
 /** The only controller exposed to HTTP. The older Controller supplies transport/read-model helpers, not scheduling. */
 export class ControlPlane {
   readonly workflow: WorkflowStore;
+  readonly interactions: InteractionStore;
   get store() { return this.transport.store; }
   get config() { return this.transport.config; }
   get adapter() { return this.transport.adapter; }
   readonly transport: Controller;
   readonly projects: ProjectCatalog;
   private readonly activity: AgentActivityTracker;
+  private nativeRevision = 0;
+  private nativeObservations = 0;
   /** Ephemeral identity proposals. Discovery never writes registrations or starts work. */
   private readonly discovered = new Map<string, ManagedSession>();
   /** Stored generation replaced by an idle discovery candidate; checked again before an explicit action binds it. */
@@ -46,6 +53,8 @@ export class ControlPlane {
     this.activity = new AgentActivityTracker(this.adapter);
     this.readWorktree = readWorktree ?? (transport.config.mode === 'mock' ? async () => 'mock-worktree' : worktreeFingerprint);
     this.workflow = new WorkflowStore(this.store, join(this.config.dataDir, 'assignments'));
+    this.interactions = new InteractionStore(this.store);
+    this.interactions.recover();
     this.projects = new ProjectCatalog(this.store, this.config);
     // Mock fixtures have no real filesystem. Real registrations must be renewed explicitly after this upgrade.
     if (this.config.mode === 'mock') for (const raw of this.store.sessions()) {
@@ -66,7 +75,8 @@ export class ControlPlane {
     const commands = base.commands.map((c) => ({ ...c, runId: runsOf.get(c.id)?.runId ?? null, pairId: runsOf.get(c.id)?.pairId ?? null, groupId: runsOf.get(c.id)?.groupId ?? null, repository: runsOf.get(c.id)?.repository ?? null }));
     const activities = sessions.map((session) => instances.find((i) => i.agentId === session.id)?.status === 'current' ? this.activity.read(session)
       : { agentId: session.id, state: 'unknown' as const, updatedAt: null, detail: 'The current CLI instance cannot be verified.' });
-    return { ...base, commands, sessions, groups: this.workspaceGroups(discovery), legacyEnabled: this.config.legacyEnabled === true, runs: this.workflow.runs(), executions: this.workflow.activeExecutions(), instances, activities };
+    return { ...base, commands, sessions, groups: this.workspaceGroups(discovery), legacyEnabled: this.config.legacyEnabled === true, runs: this.workflow.runs(), executions: this.workflow.activeExecutions(), instances, activities,
+      interactions: this.interactions.recent(), checkpoints: this.interactions.activeCheckpoints() };
   }
   /** Same CLI process as at registration? A registration made before pids were recorded stays unknown until renewed. */
   private async instance(session: ManagedSession): Promise<InstanceState> {
@@ -170,7 +180,7 @@ export class ControlPlane {
     return archived;
   }
   /** CoderCrew's own history for backup; cloning the repository cannot recover it. */
-  exportHistory(repository?: string) { return this.workflow.exportHistory(repository); }
+  exportHistory(repository?: string) { return { ...this.workflow.exportHistory(repository), interactions: this.interactions.records(repository) }; }
   private workspaceSessions(discovery: WorkspaceDiscovery): ManagedSession[] {
     const sessions = new Map((this.store.sessions() as ManagedSession[]).map((session) => [session.id, session]));
     for (const workspace of discovery.workspaces) for (const agent of workspace.agents) if (agent.session) sessions.set(agent.session.id, agent.session);
@@ -607,7 +617,7 @@ export class ControlPlane {
   /** Exactly one caller can claim a planned turn; browsers never create continuation commands. */
   private async pump(runId: string): Promise<void> {
     const run = this.workflow.run(runId); if (!run) return;
-    if (run.planning && !run.implementation && run.status === 'waiting' && !run.planning.next && run.autoContinue && !run.planning.request.requireApproval && planAgreed(run.planning)) {
+    if (run.planning && !run.implementation && run.status === 'waiting' && !run.restoredCheckpoint && !run.planning.next && run.autoContinue && !run.planning.request.requireApproval && planAgreed(run.planning)) {
       const plan = run.planning;
       if (!plan.request.implementation.branch) return; // Approval waiver never supplies branch consent.
       try { await this.decidePlan({ runId, expectedCommandId: run.currentCommandId, expectedRevision: plan.current!.revision, expectedHash: plan.current!.hash,
@@ -622,6 +632,7 @@ export class ControlPlane {
       const evidence = pending.event === 'turn_complete' && pending.backgroundState === 'unknown' ? await this.evidence(delivered, pending.reporterPid) : null;
       this.workflow.receive(pending, evidence, pending.event === 'turn_complete' ? await this.worktreeDigest(delivered) : null, await this.publication(delivered, pending), await this.planCapture(delivered, pending));
     }
+    await this.captureCheckpoint(runId);
     const next = this.workflow.run(runId);
     if (next && (next.currentCommandId !== turn.commandId || (next.planning && next.status === 'waiting'))) await this.pump(runId);
   }
@@ -721,7 +732,11 @@ export class ControlPlane {
 
   async recordEvent(input: HookEvent): Promise<HookReceipt> {
     const observed = [...this.store.sessions() as ManagedSession[], ...this.discovered.values()].find((s) => s.identity.socketPath === input.socketPath && s.identity.paneId === input.paneId);
-    await this.activity.record(input, observed);
+    this.nativeRevision++; this.nativeObservations++;
+    try {
+      await this.observeCheckpointActivity(input);
+      await this.activity.record(input, observed);
+    } finally { this.nativeRevision++; this.nativeObservations--; }
     if (input.event === 'turn_interrupted' && input.commandId) {
       try {
         const pane = await this.adapter.inspect(input.paneId);
@@ -731,7 +746,7 @@ export class ControlPlane {
       } catch { return { accepted: false, reason: 'The interrupted CLI instance could not be verified.', event: null }; }
     }
     if (input.event === 'turn_started' && input.identity) {
-      const session = this.store.sessions().find((s) => s.identity.socketPath === input.identity!.socketPath && s.identity.paneId === input.identity!.paneId) as ManagedSession | undefined;
+      const session = observed;
       for (const run of this.workflow.runs().filter((r) => (r.implementation || r.planning) && ['running','waiting'].includes(r.status))) {
         const previous = input.commandId ? this.workflow.execution(input.commandId) : undefined;
         if (session?.worktree?.indexPath === run.lockKey && input.commandId !== run.currentCommandId && previous?.status !== 'finished') this.workflow.pause(run.id, 'Another prompt started on this checkout outside its current assignment. Reconcile all writers.');
@@ -749,17 +764,191 @@ export class ControlPlane {
     const evidence = turn && input.event === 'turn_complete' && input.backgroundState === 'unknown' ? await this.evidence(turn, input.reporterPid) : null;
     const worktree = turn && input.event === 'turn_complete' ? await this.worktreeDigest(turn) : null;
     const receipt = this.workflow.receive(input, evidence, worktree, turn ? await this.publication(turn, input) : null, turn ? await this.planCapture(turn, input) : null);
-    if (turn) await this.pump(turn.runId);
+    if (turn) { await this.captureCheckpoint(turn.runId); await this.pump(turn.runId); }
     return receipt;
   }
+  async submitInteraction(value: InteractionInput): Promise<InteractionRecord> {
+    const input = parseInteraction(value);
+    if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'Input is disabled by the host.', 403);
+    const duplicate = this.interactions.duplicate(input); if (duplicate) return duplicate;
+    const run = this.workflow.run(input.runId);
+    const participant = run?.participants.find((p) => p.id === input.agentId);
+    if (!run || !participant) throw new AppError('INTERACTION_CHANGED', 'The current worker is no longer bound.', 409);
+    const prior = run.interaction;
+    let record: InteractionRecord = { input, repository: run.repository, status: 'recorded', error: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    this.store.db.transaction(() => {
+      if (this.interactions.pending(run.id) || this.store.activeFor(run.repository)) throw new AppError('DELIVERY_PENDING', 'Inspect the unresolved input before sending again.', 409);
+      this.workflow.beginInteraction(input); this.interactions.save(record);
+    }).immediate();
+    try {
+      await this.validateMembers([participant], participant.cwd);
+      const current = this.workflow.run(run.id)!; const turn = this.workflow.execution(input.commandId);
+      if (current.status !== 'running' || current.pauseRequested || current.interaction?.fault || turn?.status !== 'delivered') throw new AppError('INTERACTION_CHANGED', 'The assignment changed before typing.', 409);
+    } catch (error) {
+      record = { ...record, status: 'rejected', error: messageOf(error), updatedAt: new Date().toISOString() };
+      this.store.db.transaction(() => { this.interactions.save(record); this.workflow.rejectInteraction(run.id, prior); }).immediate();
+      await this.captureCheckpoint(run.id); await this.pump(run.id);
+      return record;
+    }
+    record = { ...record, status: 'sending', updatedAt: new Date().toISOString() }; this.interactions.save(record);
+    try {
+      if (input.purpose === 'key') await this.adapter.press(participant, input.key!);
+      else await this.adapter.send(participant, input.text!);
+      record = { ...record, status: 'delivered', updatedAt: new Date().toISOString() };
+    } catch (error) {
+      record = { ...record, status: 'uncertain', error: messageOf(error), updatedAt: new Date().toISOString() };
+      this.workflow.pause(run.id, 'Terminal input may have occurred. Inspect it; it will never be replayed.');
+    }
+    this.interactions.save(record);
+    await this.captureCheckpoint(run.id);
+    return record;
+  }
+  /** Only an actually validated original result can establish a checkpoint. */
+  private checkpointResult(run: RelayRun): string | null {
+    const turn = this.workflow.execution(run.currentCommandId);
+    if (turn?.status !== 'finished') return null;
+    const result = run.implementation ? turn.implementation?.published : run.planning ? turn.planning?.captured : run.standalone ? { commandId: turn.commandId } : null;
+    return result ? JSON.stringify({ result, next: run.implementation?.next ?? run.planning?.next, plan: run.planning?.current, brief: run.planning?.briefRevision, policy: run.implementation?.revision ?? run.planning?.policyRevision }) : null;
+  }
+  private async checkpointMembers(run: RelayRun): Promise<ManagedSession[]> {
+    const discovery = await this.workspaces();
+    if (discovery.error) throw new AppError('UNKNOWN_ACTIVITY', 'Pane inventory is unavailable.', 409);
+    const workspaces = discovery.workspaces.filter((w) => w.worktree.indexPath === run.lockKey);
+    if (workspaces.some((w) => w.agents.some((a) => !a.eligible || !a.session))) throw new AppError('UNKNOWN_ACTIVITY', 'Every checkout pane must have a verified agent identity.', 409);
+    const sessions = workspaces.flatMap((w) => w.agents.map((a) => a.session!));
+    if (!run.participants.every((p) => sessions.some((s) => s.id === p.id && s.registrationId === p.registrationId))) throw new AppError('TARGET_CHANGED', 'A participant is missing or changed.', 409);
+    for (const s of sessions) {
+      await this.validateMembers([s], s.cwd, true, 'observe');
+      if (this.config.mode !== 'mock' && !['idle','ready'].includes(this.activity.read(s).state)) throw new AppError('UNKNOWN_ACTIVITY', 'Every checkout agent must have current settled native activity.', 409);
+    }
+    return sessions.sort((a, b) => a.id.localeCompare(b.id));
+  }
+  private async captureCheckpoint(id: string): Promise<void> {
+    const revision = this.nativeRevision;
+    const run = this.workflow.run(id); if (!run || this.nativeObservations || this.interactions.pending(id)) return;
+    const kind = run.status === 'waiting' && !run.interaction?.active ? 'waiting' : run.interaction?.active && !run.interaction.fault && run.interaction.disposition ? 'interaction' : null;
+    const result = kind && this.checkpointResult(run); if (!kind || !result) return;
+    const existing = this.interactions.checkpoint(id);
+    if (existing?.commandId === run.currentCommandId && existing.result === result && existing.kind === kind) return; // Never refresh away intervening work or faults.
+    const expected = JSON.stringify(run);
+    try {
+      const sessions = await this.checkpointMembers(run);
+      await this.assertCheckpointResult(run);
+      if (run.planning) await assertPlanArtifacts(run.planning);
+      const processes = Object.fromEntries(await Promise.all(sessions.map(async (s) => [s.id, await this.adapter.processes(s)] as const)));
+      const fingerprint = await this.readWorktree(run.repository);
+      const branch = this.config.mode === 'mock' ? null : await currentBranch(run.repository);
+      if (this.nativeObservations || this.nativeRevision !== revision || JSON.stringify(this.workflow.run(id)) !== expected || this.interactions.pending(id)) return;
+      this.interactions.saveCheckpoint({ runId: id, commandId: run.currentCommandId, revision: (existing?.revision ?? 0) + 1, capturedAt: new Date().toISOString(), kind, fingerprint, branch, result, sessions, processes, external: {}, fault: false, reason: null });
+    } catch { /* Missing evidence never creates a recoverable boundary. */ }
+  }
+  private async assertCheckpointResult(run: RelayRun): Promise<void> {
+    const turn = this.workflow.execution(run.currentCommandId)!;
+    if (run.implementation && turn.implementation) {
+      const { publication } = await readPublication(run.implementation, turn.implementation);
+      if (!isDeepStrictEqual(publication, turn.implementation.published)) throw new AppError('CHECKPOINT_CHANGED', 'The published result changed.', 409);
+    } else if (run.planning && turn.planning) {
+      const captured = await capturePlanResult(run.planning, turn.planning);
+      if (!isDeepStrictEqual(captured, turn.planning.captured)) throw new AppError('CHECKPOINT_CHANGED', 'The captured plan result changed.', 409);
+    }
+  }
+  /** Track external native evidence independently; never identify input by its text or reservation. */
+  private async observeCheckpointActivity(input: HookEvent): Promise<void> {
+    if (!['turn_started','turn_complete','turn_interrupted'].includes(input.event) || !input.identity) return;
+    for (const saved of this.interactions.activeCheckpoints()) {
+      const run = this.workflow.run(saved.runId);
+      if (!run || !['waiting','paused','running'].includes(run.status) || run.currentCommandId !== saved.commandId) continue;
+      const session = saved.sessions.find((s) => isDeepStrictEqual(s.identity, input.identity));
+      if (!session) continue;
+      if (input.commandId === saved.commandId) {
+        const original = this.workflow.execution(saved.commandId)!;
+        if (original.agentId === session.id && original.sessionId === input.sessionId && original.sourceTurnId === input.sourceTurnId) continue;
+        this.interactions.invalidate(run.id, 'Another native turn reused the finished command marker. Inspect it and take over.');
+        this.workflow.pause(run.id, 'A command marker cannot attribute another native turn to a finished assignment.'); continue;
+      }
+      if (saved.kind !== 'waiting') { this.interactions.invalidate(run.id, 'Another native turn requires takeover.'); continue; }
+      if (!input.sessionId || !input.sourceTurnId || !input.cliPid || !input.startedAt || input.cliPid !== session.cliPid || input.source !== session.agentType) {
+        this.interactions.invalidate(run.id, 'External native activity is not exactly identifiable.'); continue;
+      }
+      if (!(Date.parse(input.startedAt) > Date.parse(saved.capturedAt))) {
+        this.interactions.invalidate(run.id, 'Native activity does not establish work started after this checkpoint.'); continue;
+      }
+      const key = JSON.stringify([session.id, input.sessionId, input.sourceTurnId, input.startedAt]);
+      const prior = saved.external[key];
+      const evidence = createHash('sha256').update(JSON.stringify([input.commandId ?? null, input.prompt ?? null, input.event, input.backgroundState, input.settled, input.outcome ?? null])).digest('hex');
+      if (input.event === 'turn_started' && prior) {
+        if (prior.startEvidence !== evidence) this.interactions.invalidate(run.id, 'Conflicting native start evidence requires takeover.');
+        continue;
+      }
+      // Invalidate pending confirmations before any asynchronous inspection.
+      const cp: Checkpoint = { ...saved, revision: saved.revision + 1, external: { ...saved.external } };
+      if (input.event === 'turn_started') {
+        if (Object.values(cp.external).some((e) => e.agentId === session.id && e.state !== 'clear')) cp.fault = true;
+        cp.external[key] = { agentId: session.id, sessionId: input.sessionId, sourceTurnId: input.sourceTurnId, cliPid: input.cliPid, startedAt: input.startedAt, state: 'working', startEvidence: evidence };
+        cp.reason = 'External native work must settle before this checkpoint can be restored.';
+        this.interactions.saveCheckpoint(cp);
+        this.workflow.pause(run.id, 'External native activity paused the settled checkpoint. Restore it only after exact settlement and inspection.'); continue;
+      }
+      if (!prior || input.event === 'turn_interrupted' || input.settled !== true) { this.interactions.invalidate(run.id, 'External native completion is missing or interrupted.'); continue; }
+      if (prior.finishEvidence) {
+        if (prior.finishEvidence !== evidence) this.interactions.invalidate(run.id, 'Conflicting native completion evidence requires takeover.');
+        continue;
+      }
+      cp.external[key] = { ...prior, state: 'unknown', finishEvidence: evidence }; this.interactions.saveCheckpoint(cp);
+      try {
+        await this.validateMembers([session], session.cwd, true, 'observe');
+        const live = await this.adapter.processes(session);
+        const clear = session.agentType === 'claude' ? input.backgroundState === 'clear' : input.backgroundState !== 'active' && live.every((p) => p.pid === input.reporterPid || isCodexHelper(p.command) || cp.processes[session.id]?.some((b) => b.pid === p.pid && b.command === p.command));
+        const current = this.interactions.checkpoint(run.id)!;
+        // Another checkout agent can finish concurrently. Merge only this exact observation;
+        // a fault, replaced checkpoint or conflicting finish still invalidates the evidence.
+        if (!current.fault && current.commandId === cp.commandId && current.capturedAt === cp.capturedAt && current.external[key]?.finishEvidence === evidence && clear) {
+          this.interactions.saveCheckpoint({ ...current, revision: current.revision + 1, external: { ...current.external, [key]: { ...prior, state: 'clear', finishEvidence: evidence } } });
+        }
+      } catch { /* Unknown remains a blocker. */ }
+    }
+  }
+  async reconcileCheckpoint(value: CheckpointInput): Promise<void> {
+    const input = parseCheckpoint(value);
+    if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'Input is disabled by the host.', 403);
+    if (this.interactions.duplicateDecision(input)) return;
+    const cp = this.interactions.checkpoint(input.runId); const run = this.workflow.run(input.runId);
+    if (!cp || !run || cp.fault || cp.commandId !== input.commandId || run.currentCommandId !== input.commandId || cp.revision !== input.expectedRevision ||
+      (input.action === 'restore' ? cp.kind !== 'waiting' || !Object.keys(cp.external).length : cp.kind !== 'interaction') ||
+      Object.values(cp.external).some((e) => e.state !== 'clear') || this.interactions.pending(run.id) || this.store.activeFor(run.repository) || this.checkpointResult(run) !== cp.result) throw new AppError('CHECKPOINT_CHANGED', 'This checkpoint is incomplete, changed or uncertain. Inspect it; takeover may be required.', 409);
+    const expected = JSON.stringify(run);
+    const nativeRevision = this.nativeRevision;
+    if (this.nativeObservations) throw new AppError('CHECKPOINT_CHANGED', 'Native activity is still being observed.', 409);
+    const sessions = await this.checkpointMembers(run);
+    if (!isDeepStrictEqual(sessions, cp.sessions)) throw new AppError('TARGET_CHANGED', 'Checkout agent identities changed.', 409);
+    if (run.planning) { await assertPlanArtifacts(run.planning); if (!run.implementation) await assertPlanBaseline(run.planning); }
+    await this.assertCheckpointResult(run);
+    for (const s of sessions) {
+      const processes = await this.adapter.processes(s);
+      if (processes.some((p) => !(s.agentType === 'codex' && isCodexHelper(p.command)) && !cp.processes[s.id]?.some((b) => b.pid === p.pid && b.command === p.command))) throw new AppError('BACKGROUND_ACTIVE', 'New background processes remain. Inspect all checkout writers.', 409);
+    }
+    if (await this.readWorktree(run.repository) !== cp.fingerprint || (this.config.mode !== 'mock' && await currentBranch(run.repository) !== cp.branch)) throw new AppError('CHECKPOINT_CHANGED', 'The checkout changed after the validated result.', 409);
+    this.store.db.transaction(() => {
+      if (this.interactions.duplicateDecision(input)) return;
+      if (this.nativeObservations || this.nativeRevision !== nativeRevision || JSON.stringify(this.workflow.run(run.id)) !== expected || this.interactions.checkpoint(run.id)?.revision !== cp.revision || this.interactions.pending(run.id)) throw new AppError('CHECKPOINT_CHANGED', 'New activity invalidated this confirmation.', 409);
+      if (input.action === 'restore') this.workflow.restoreCheckpoint(run.id, input.commandId);
+      else this.workflow.reconcileInput(run.id, input.commandId);
+      this.interactions.decide(input);
+    }).immediate();
+    if (input.action === 'review_input') { await this.captureCheckpoint(run.id); await this.pump(run.id); }
+  }
   action(input: RunAction): void | Promise<void> {
-    if (input.action === 'pause') this.workflow.pause(input.runId);
+    if (input.action === 'pause') { this.interactions.invalidate(input.runId, 'Explicit human pause requires takeover.'); this.workflow.pause(input.runId); }
     else if (input.action === 'continue') {
       if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'Input is disabled by the host.', 403);
       if (input.confirmReady !== true || !input.expectedCommandId) throw new AppError('READINESS_REQUIRED', 'Confirm readiness for the current manual handoff.');
       this.workflow.continue(input.runId, input.expectedCommandId); return this.pump(input.runId);
     }
-    else { if (input.confirmReady !== true) throw new AppError('READINESS_REQUIRED', 'Confirm every writer has stopped.'); this.workflow.takeover(input.runId); }
+    else {
+      if (input.confirmReady !== true) throw new AppError('READINESS_REQUIRED', 'Confirm every writer has stopped.');
+      if (this.interactions.records().some((r) => r.input.runId === input.runId && ['recorded','sending'].includes(r.status))) throw new AppError('DELIVERY_PENDING', 'Wait for terminal input to finish before taking over.', 409);
+      this.interactions.invalidate(input.runId, 'Human takeover ended this checkpoint.'); this.workflow.takeover(input.runId);
+    }
   }
   changePolicy(input: PolicyChange): void { this.workflow.changePolicy(input); }
 }

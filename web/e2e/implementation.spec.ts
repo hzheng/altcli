@@ -569,10 +569,11 @@ test('an active plain Send may dirty the checkout without displaying a clean-che
   dirty = true; await page.getByRole('button', { name: 'Recheck', exact: true }).click();
   await expect(page.locator('.context-bar')).toContainText('· 1 uncommitted');
   await expect(page.getByRole('region', { name: 'Uncommitted changes', exact: true })).toHaveCount(0);
-  // The sent instruction was consumed, so the empty box plus a relay follow-up reads as a hand-off; inputs stay disabled while the controller drives.
-  await codex.getByLabel('After send').selectOption('commit_relay');
-  const relay = codex.getByRole('button', { name: 'Commit current changes & relay Claude', exact: true });
-  await expect(relay).toBeDisabled(); await expect(relay).toHaveAttribute('title', /controller is driving/);
+  // Owned work has a contextual draft; starting a second assignment or changing follow-up is unavailable.
+  const update = page.getByRole('region', { name: 'Input for Codex', exact: true });
+  await update.getByLabel('Add detail for Codex').fill('Keep this draft while native acknowledgment is pending.');
+  await expect(update.getByRole('button', { name: 'Send update to Codex' })).toBeDisabled();
+  await expect(update.getByLabel('After send')).toHaveCount(0);
   await page.screenshot({ path: info.outputPath('send-in-progress.png'), fullPage: true });
   await page.getByRole('button', { name: '1 · Plan', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Uncommitted changes', exact: true })).toHaveCount(0);
@@ -662,4 +663,38 @@ for (const policy of ['peer', 'worker_reviewer'] as const) test(`dirty Commit sn
   await send.click(); await expect.poll(() => starts.length).toBe(1);
   expect(starts[0]!.text).toBeUndefined();
   expect(starts[0]).toMatchObject({ kind: 'commit', handoff: false, autoContinue: false, policy, branch: { branch: 'task/current' } });
+});
+
+test('owned composer sends literal input only to the acknowledged holder and checkpoints final release', async ({ page, request }, info) => {
+  const group = await post(request, 'groups', { name: 'Input controls', members: ['codex','claude'] });
+  await openGroup(page, group); const initial = await openCard(page, 'Codex');
+  await initial.getByLabel('Instruction for Codex').fill('Explain the current task.');
+  await initial.getByLabel('Ready for implementation').check(); await initial.getByRole('button', { name: 'Send Codex', exact: true }).click();
+  const update = page.getByRole('region', { name: 'Input for Codex', exact: true });
+  await update.getByLabel('Add detail for Codex').fill('Explain empty input.');
+  await expect(update.getByRole('button', { name: 'Send update to Codex' })).toBeDisabled();
+  const state: WorkflowState = await (await request.get('/api/v1/state', { headers })).json();
+  const run = state.runs.find((r) => r.status === 'running' && r.standalone)!;
+  const turn = state.executions.find((e) => e.commandId === run.currentCommandId)!; const agent = run.participants.find((p) => p.id === turn.agentId)!;
+  const lifecycle = { commandId: turn.commandId, source: agent.agentType, paneId: agent.identity.paneId, socketPath: agent.identity.socketPath, identity: agent.identity,
+    sessionId: 'fixture-input', sourceTurnId: 'fixture-input-turn', prompt: turn.wireText, settled: true, backgroundState: 'clear' };
+  await post(request, 'events', { ...lifecycle, event: 'turn_started' });
+  const inspected = update.getByRole('checkbox', { name: /I inspected Codex/ }); await expect(inspected).toBeEnabled({ timeout: 8000 });
+  await inspected.check(); await update.getByRole('button', { name: 'Send update to Codex' }).click();
+  await expect(update.getByLabel('Add detail for Codex')).toHaveValue('');
+  await expand(update, 'Terminal controls'); await update.getByLabel('Literal answer for Codex').fill('1');
+  await inspected.check(); await update.getByRole('button', { name: 'Send answer', exact: true }).click();
+  await expect(update.getByLabel('Literal answer for Codex')).toHaveValue('');
+  await inspected.check(); await update.getByRole('button', { name: 'Esc…', exact: true }).click();
+  await expect(update.getByRole('button', { name: 'Send Escape', exact: true })).toBeVisible();
+  await update.getByRole('button', { name: 'Cancel', exact: true }).click();
+  const current: WorkflowState = await (await request.get('/api/v1/state', { headers })).json();
+  expect(current.interactions!.filter((r) => r.input.runId === run.id).map((r) => r.input.text)).toEqual(['Explain empty input.', '1']);
+  await post(request, 'events', { ...lifecycle, event: 'turn_complete' }); await openController(page);
+  const checkpoint = page.getByRole('region', { name: 'Input checkpoint' });
+  await expect(checkpoint.getByRole('button', { name: 'Review input and continue' })).toBeDisabled();
+  await checkpoint.getByRole('checkbox').check();
+  await page.screenshot({ path: info.outputPath('input-checkpoint.png'), fullPage: true });
+  await checkpoint.getByRole('button', { name: 'Review input and continue' }).click();
+  await expect(page.getByRole('button', { name: 'Controller · idle', exact: true })).toBeVisible();
 });

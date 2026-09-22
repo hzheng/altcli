@@ -10,6 +10,10 @@ servers:
 security:
 - ownerToken: []
 paths:
+  /api/v1/interactions:
+    post: {"operationId":"sendTerminalInput","description":"Literal input to the exact current worker; delivery is not completion. Unknown transport is never replayed.","requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/InteractionInput"}}}},"responses":{"200":{"description":"Recorded decision or delivery","content":{"application/json":{"schema":{"$ref":"#/components/schemas/InteractionRecord"}}}},"409":{"description":"Stale, uncertain or unsafe state; inspect without retrying input","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}}}
+  /api/v1/checkpoints:
+    post: {"operationId":"reconcileCheckpoint","description":"Review delivered input only after its original valid result, or restore a previously settled checkpoint after exact external settlement. Restore sends nothing.","requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/CheckpointInput"}}}},"responses":{"200":{"description":"Recorded decision or delivery","content":{"application/json":{"schema":{"type":"object","properties":{"reconciled":{"const":true}},"required":["reconciled"],"additionalProperties":false}}}},"409":{"description":"Stale, uncertain or unsafe state; inspect without retrying input","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}}}
   /api/v1/planning:
     post: {"operationId":"startPlan","requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/PlanStart"}}}},"responses":{"200":{"description":"Planning delivery recorded; not plan completion","content":{"application/json":{"schema":{"$ref":"#/components/schemas/CommandRecord"}}}},"409":{"description":"Planning readiness, ignore, ownership or identity conflict","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}}}
   /api/v1/planning/decision:
@@ -1919,6 +1923,8 @@ components:
     ConsoleState:
       type: object
       properties:
+        interactions: {"type":"array","items":{"$ref":"#/components/schemas/InteractionRecord"}}
+        checkpoints: {"type":"array","items":{"$ref":"#/components/schemas/InputCheckpoint"}}
         groups:
           type: array
           items:
@@ -2383,6 +2389,7 @@ components:
     HistoryExport:
       type: object
       properties:
+        interactions: {"type":"array","items":{"$ref":"#/components/schemas/InteractionRecord"}}
         schema: {const: 1}
         exportedAt: {type: string, format: date-time}
         repository: {type: [string, 'null'], description: The worktree root the export was limited to, or null for everything.}
@@ -2430,6 +2437,8 @@ components:
     RelayRun:
       type: "object"
       properties:
+        interaction: {"$ref":"#/components/schemas/InteractionHold"}
+        restoredCheckpoint: {"type":"boolean"}
         id: {"type":"string","format":"uuid"}
         repository: {"type":"string"}
         lockKey: {"type":"string"}
@@ -2700,3 +2709,10 @@ components:
       required:
       - agentId
       - status
+    InteractionInput: {"type":"object","properties":{"requestId":{"type":"string","format":"uuid"},"runId":{"type":"string","format":"uuid"},"commandId":{"type":"string","format":"uuid"},"agentId":{"$ref":"#/components/schemas/AgentId"},"registrationId":{"type":"string","format":"uuid"},"sessionId":{"type":"string"},"sourceTurnId":{"type":"string"},"expectedRevision":{"type":"integer","minimum":0},"confirmPresent":{"const":true},"purpose":{"enum":["detail","answer","key"]},"text":{"type":"string","description":"Literal text, at most 2000 UTF-8 bytes; no command markers or terminal controls."},"key":{"enum":["Enter","Escape"]},"confirmInterrupt":{"const":true}},"required":["requestId","runId","commandId","agentId","registrationId","sessionId","sourceTurnId","expectedRevision","confirmPresent","purpose"],"additionalProperties":false,"description":"detail/answer require text and forbid key/confirmInterrupt. key forbids text; Escape requires confirmInterrupt=true. Reserves the whole-run hold before terminal bytes; does not grant new work or commit authority."}
+    InteractionRecord: {"type":"object","properties":{"input":{"$ref":"#/components/schemas/InteractionInput"},"repository":{"type":"string"},"status":{"enum":["recorded","sending","delivered","rejected","uncertain"]},"createdAt":{"type":"string"},"updatedAt":{"type":"string"},"error":{"type":["string","null"]}},"required":["input","repository","status","createdAt","updatedAt","error"],"additionalProperties":false}
+    InteractionHold: {"type":"object","properties":{"revision":{"type":"integer","minimum":0},"active":{"type":"boolean"},"fault":{"type":"boolean"},"disposition":{"enum":["complete","automatic","waiting","plan"]}},"required":["revision","active","fault"],"additionalProperties":false}
+    CheckpointInput: {"type":"object","properties":{"requestId":{"type":"string","format":"uuid"},"runId":{"type":"string","format":"uuid"},"commandId":{"type":"string","format":"uuid"},"expectedRevision":{"type":"integer","minimum":0},"action":{"enum":["review_input","restore"]},"confirmReady":{"const":true}},"required":["requestId","runId","commandId","expectedRevision","action","confirmReady"],"additionalProperties":false}
+    ExternalActivity: {"type":"object","properties":{"agentId":{"$ref":"#/components/schemas/AgentId"},"sessionId":{"type":"string"},"sourceTurnId":{"type":"string"},"cliPid":{"type":"string"},"startedAt":{"type":"string"},"state":{"enum":["working","clear","unknown"]},"startEvidence":{"type":"string"},"finishEvidence":{"type":"string"}},"required":["agentId","sessionId","sourceTurnId","cliPid","startedAt","state","startEvidence"],"additionalProperties":false}
+    InputCheckpoint: {"type":"object","properties":{"runId":{"type":"string","format":"uuid"},"commandId":{"type":"string","format":"uuid"},"revision":{"type":"integer","minimum":0},"kind":{"enum":["interaction","waiting"]},"fingerprint":{"type":"string"},"branch":{"type":["string","null"]},"result":{"type":"string"},"sessions":{"type":"array","items":{"$ref":"#/components/schemas/SessionRegistration"}},"processes":{"type":"object","additionalProperties":{"type":"array","items":{"$ref":"#/components/schemas/ProcessRecord"}}},"external":{"type":"object","additionalProperties":{"$ref":"#/components/schemas/ExternalActivity"}},"fault":{"type":"boolean"},"reason":{"type":["string","null"]},"capturedAt":{"type":"string","format":"date-time"}},"required":["runId","commandId","revision","kind","fingerprint","branch","result","sessions","processes","external","fault","reason","capturedAt"],"additionalProperties":false}
+    ProcessRecord: {type: object, properties: {pid: {type: string}, command: {type: string}}, required: [pid, command], additionalProperties: false}

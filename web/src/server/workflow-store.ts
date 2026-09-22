@@ -8,6 +8,7 @@ import { join, resolve } from 'node:path';
 import type { HandoffArchive, ImplementationAction, ImplementationRun, JournalRecord, PolicyChange, Publication, PublicationResult, StandaloneStart } from '../contracts/implementation.ts';
 import type { FrozenPlan, PlanCapture, PlanDecision, PlanningRun } from '../contracts/planning.ts';
 import { consumePlan, planAgreed } from './planning-state.ts';
+import type { InteractionHold, InteractionInput } from '../contracts/interactions.ts';
 
 const json = JSON.stringify;
 export const DEFAULT_TURN_LIMIT = 20;
@@ -127,8 +128,60 @@ export class WorkflowStore {
     this.store.db.prepare('INSERT INTO workflow_turns(id,run_id,value) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(turn.commandId, turn.runId, json(turn));
   }
   private stop(run: RelayRun, reason: string, complete = false): void {
+    if (run.interaction?.active) {
+      if (complete && !run.interaction.fault) { this.holdDisposition(run, 'complete'); return; }
+      run.interaction.fault = true;
+      complete = false;
+    }
     run.status = complete ? 'completed' : 'paused'; run.reason = reason; this.saveRun(run);
     if (complete) this.store.db.prepare('DELETE FROM workflow_owners WHERE run_id=?').run(run.id);
+  }
+  private holdDisposition(run: RelayRun, disposition: NonNullable<InteractionHold['disposition']>): void {
+    run.interaction!.disposition = disposition;
+    run.status = 'paused'; run.reason = 'Original turn validated. Review the terminal input before continuing.';
+    this.saveRun(run);
+  }
+  /** Called in the interaction reservation transaction, before any terminal side effect. */
+  beginInteraction(input: InteractionInput): void {
+    const run = this.run(input.runId); const turn = this.execution(input.commandId);
+    if (!run || (!run.implementation && !run.planning && !run.standalone) || run.status !== 'running' || run.pauseRequested || run.interaction?.fault ||
+      run.currentCommandId !== input.commandId || turn?.status !== 'delivered' || turn.agentId !== input.agentId ||
+      turn.sessionId !== input.sessionId || turn.sourceTurnId !== input.sourceTurnId || (run.interaction?.revision ?? 0) !== input.expectedRevision ||
+      run.participants.find((p) => p.id === input.agentId)?.registrationId !== input.registrationId) throw new AppError('INTERACTION_CHANGED', 'The current assignment or input revision changed. Refresh; nothing was sent.', 409);
+    run.interaction = { revision: input.expectedRevision + 1, active: true, fault: false };
+    this.saveRun(run);
+  }
+  rejectInteraction(id: string, prior: InteractionHold | undefined): void {
+    const run = this.run(id)!;
+    if (run.interaction?.fault) return;
+    if (run.interaction?.disposition) {
+      // A preflight refusal wrote no bytes. Only an earlier delivered input can retain this hold.
+      if (!prior?.active && !run.pauseRequested) this.reconcileInput(id, run.currentCommandId);
+      return;
+    }
+    run.interaction = prior ? { ...prior, revision: run.interaction!.revision } : { revision: run.interaction!.revision, active: false, fault: false };
+    this.saveRun(run);
+  }
+  reconcileInput(id: string, commandId: string): void {
+    const run = this.run(id)!; const hold = run.interaction;
+    if (run.currentCommandId !== commandId || run.status !== 'paused' || run.pauseRequested || !hold?.active || hold.fault || !hold.disposition) throw new AppError('CHECKPOINT_CHANGED', 'Input is not at a validated checkpoint.', 409);
+    const disposition = hold.disposition; hold.active = false; delete hold.disposition;
+    if (disposition === 'complete') { this.stop(run, 'Input reviewed; validated task finished.', true); return; }
+    if (disposition === 'automatic') {
+      if (run.automaticTurns >= run.turnLimit) { this.stop(run, 'Automatic turn budget reached.'); return; }
+      this.scheduleCommit(run, true); return;
+    }
+    if (disposition === 'plan' && run.planning?.next && run.autoContinue) {
+      if (run.automaticTurns >= run.turnLimit) { this.stop(run, 'Automatic turn budget reached.'); return; }
+      this.schedulePlan(run, true); return;
+    }
+    run.status = 'waiting'; run.reason = 'Input reviewed. The saved checkpoint is ready for its next decision.'; this.saveRun(run);
+  }
+  restoreCheckpoint(id: string, commandId: string): void {
+    const run = this.run(id)!;
+    if (run.currentCommandId !== commandId || run.status !== 'paused' || run.interaction?.active || this.execution(commandId)?.status !== 'finished') throw new AppError('CHECKPOINT_CHANGED', 'This settled checkpoint cannot be restored.', 409);
+    run.pauseRequested = false; run.restoredCheckpoint = true; run.status = 'waiting';
+    run.reason = 'Settled checkpoint restored. Choose Next turn or a plan decision explicitly; nothing was sent.'; this.saveRun(run);
   }
   start(input: StartInput, participants: ManagedSession[], pairId: string | null, implementation?: ImplementationRun, planning?: PlanningRun, standalone?: StandaloneStart): Execution {
     const first = participants.find((s) => s.id === input.agentId)!;
@@ -170,7 +223,7 @@ export class WorkflowStore {
   claim(id: string): Execution | null {
     return this.store.db.transaction(() => {
       const turn = this.execution(id); const run = turn && this.run(turn.runId);
-      if (!turn || !run || run.status !== 'running' || run.currentCommandId !== id || turn.status !== 'planned' || (run.implementation && run.implementation.setup !== 'ready')) return null;
+      if (!turn || !run || run.interaction?.active || run.status !== 'running' || run.currentCommandId !== id || turn.status !== 'planned' || (run.implementation && run.implementation.setup !== 'ready')) return null;
       turn.status = 'dispatching'; this.saveExecution(turn); return turn;
     }).immediate();
   }
@@ -236,12 +289,16 @@ export class WorkflowStore {
     if (turn.status === 'finished') return done('This command already has a completion.');
     if (turn.status === 'interrupted') return done('This command was interrupted; completion cannot resume it.');
     if (flat(input.prompt) !== flat(turn.wireText)) {
-      if (flat(input.prompt).includes(flat(turn.wireText))) {
+      if (input.event === 'turn_complete' && flat(input.prompt).includes(flat(turn.wireText))) {
         // Codex also notifies for auxiliary turns (thread-title generation) whose prompt quotes the user prompt, marker
         // included. That is not this command's completion; keep waiting for the exact one. The same shape arises when
-        // leftover input preceded the delivered text, and then no exact completion will come: say so for the human.
-        run.reason = 'A turn quoting this command finished with a different prompt; still waiting for the exact completion. If the pane held leftover input before delivery, pause and take over.';
-        this.saveRun(run); return done('A prompt that only quotes the delivered command is not its completion.');
+        // leftover input preceded the delivered text; a mismatched native start must pause instead of waiting.
+        // Preserve an existing pause reason when its rejected completion arrives later.
+        if (run.status !== 'paused') {
+          run.reason = 'A turn quoting this command finished with a different prompt; still waiting for the exact completion. If the pane held leftover input before delivery, pause and take over.';
+          this.saveRun(run);
+        }
+        return done('A prompt that only quotes the delivered command is not its completion.');
       }
       this.stop(run, 'The CLI prompt differs from the delivered command. Check for leftover or queued input.'); return done(run.reason);
     }
@@ -279,6 +336,7 @@ export class WorkflowStore {
       consumePlan(run.planning, planCapture.captured);
       if (run.pauseRequested || run.status === 'paused') this.stop(run, 'Planning result recorded; the run remains paused until reconciliation.');
       else if (planCapture.captured.result.outcome === 'blocked') this.stop(run, `Planner blocked: ${planCapture.captured.result.reason}`);
+      else if (run.interaction?.active) this.holdDisposition(run, 'plan');
       else if (run.planning.next && run.autoContinue) {
         if (run.automaticTurns >= run.turnLimit) this.stop(run, 'Automatic turn budget reached during planning.');
         else this.schedulePlan(run, true);
@@ -368,6 +426,7 @@ export class WorkflowStore {
       const run = this.planBoundary(input); const plan = run.planning!;
       if (!input.text?.trim() || !input.agentId || !plan.required.includes(input.agentId)) throw new AppError('INVALID_GUIDANCE', 'Choose a required planner and describe the requested changes.', 409);
       if (plan.brief.length + input.text.length > 32000) throw new AppError('BRIEF_LIMIT', 'The accumulated brief is full. Stop and begin a new scoped planning task.', 409);
+      run.restoredCheckpoint = false;
       plan.brief += `\n\nHuman changes (brief revision ${plan.briefRevision + 1}):\n${input.text}`;
       plan.briefRevision++; plan.endorsements = {}; plan.step = 'refinement'; plan.next = { agentId: input.agentId, action: 'revise' };
       this.schedulePlan(run, false);
@@ -377,7 +436,7 @@ export class WorkflowStore {
   beginImplementation(input: PlanDecision, implementation: ImplementationRun, authority: FrozenPlan['authority']): Execution {
     return this.store.db.transaction(() => {
       const run = this.planBoundary(input); const plan = run.planning!;
-      if (authority === 'automatic' && (!run.autoContinue || plan.request.requireApproval || !planAgreed(plan))) throw new AppError('APPROVAL_REQUIRED', 'This transition is not preauthorized.', 409);
+      if (authority === 'automatic' && (run.restoredCheckpoint || !run.autoContinue || plan.request.requireApproval || !planAgreed(plan))) throw new AppError('APPROVAL_REQUIRED', 'This transition is not preauthorized.', 409);
       if (!planAgreed(plan) && !input.overrideReason?.trim()) throw new AppError('PLAN_DISAGREEMENT', 'Explicitly acknowledge the missing endorsements or objections before overriding plan judgment.', 409);
       if (authority === 'automatic' && run.automaticTurns >= run.turnLimit) throw new AppError('TURN_LIMIT', 'Automatic turn budget reached before Implementation.', 409);
       plan.frozen = { transitionId: implementation.request.requestId, authorizedAt: now(), authority, overrideReason: input.overrideReason ?? null,
@@ -439,10 +498,12 @@ export class WorkflowStore {
     const automatic = entry.action === 'work' ? turn.input.handoff === true && (turn.implementation!.identity.turn === 1 || run.autoContinue) : run.autoContinue;
     // An objection routes back to the author like any other turn unless the agreement says it pauses for the human.
     if (!automatic || (entry.decision === 'object' && run.pauseOnObjection === true)) {
+      if (run.interaction?.active) { this.holdDisposition(run, 'waiting'); return; }
       run.status = 'waiting'; run.reason = entry.decision === 'object' ? `${run.reason} Next turn sends these findings to the author.` : 'Publication validated. Ready for the next manual handoff.';
       this.saveRun(run); return;
     }
     if (run.automaticTurns >= run.turnLimit) { this.stop(run, 'Automatic turn budget reached.'); return; }
+    if (run.interaction?.active) { this.holdDisposition(run, 'automatic'); return; }
     this.scheduleCommit(run, true);
   }
   private scheduleCommit(run: RelayRun, automatic: boolean): void {
@@ -456,9 +517,9 @@ export class WorkflowStore {
   continue(id: string, expectedCommandId: string): void {
     this.store.db.transaction(() => {
       const run = this.run(id);
-      if (run?.planning && !run.implementation && run.status === 'waiting' && run.currentCommandId === expectedCommandId && run.planning.next) { this.schedulePlan(run, false); return; }
+      if (run?.planning && !run.implementation && run.status === 'waiting' && run.currentCommandId === expectedCommandId && run.planning.next) { run.restoredCheckpoint = false; this.schedulePlan(run, false); return; }
       if (!run?.implementation || run.status !== 'waiting' || run.currentCommandId !== expectedCommandId || !run.implementation.next) throw new AppError('HANDOFF_CHANGED', 'This manual handoff is no longer current. Refresh the run.', 409);
-      this.scheduleCommit(run, false);
+      run.restoredCheckpoint = false; this.scheduleCommit(run, false);
     }).immediate();
   }
   changePolicy(input: PolicyChange): void {

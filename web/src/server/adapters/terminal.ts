@@ -11,6 +11,7 @@ export interface TerminalAdapter {
   preflight(session: SessionRegistration): Promise<void>;
   /** Any failure after this method begins must be treated as uncertain delivery. */
   send(session: SessionRegistration, text: string): Promise<void>;
+  press(session: SessionRegistration, key: 'Enter' | 'Escape'): Promise<void>;
   /** Live processes under or attached to the pane, read-only, as current background-work evidence. */
   processes(session: SessionRegistration): Promise<ProcessRecord[]>;
   /** Pid of the process in the foreground of the pane right now; null when unknown. Cheap enough for every state read. */

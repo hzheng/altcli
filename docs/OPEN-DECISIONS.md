@@ -67,3 +67,7 @@ None of this reopens the central choice: lightweight planning documents kept out
 | Solo self-review | Plain solo work is in scope. A separately requested, clearly labeled self-review is optional; no autonomous self-revision loop or fake independent approval is selected. |
 | N-agent release gate | Keep N-capable assignments/endorsements now; the user-facing planning cap is lifted only with explicit acceptance. Gemini adapter eligibility is independent of group size. |
 | External writers | Detect known conflicting runs and expose unselected same-worktree agents. Exact external activity evidence remains adapter/host-specific; do not claim OS isolation. |
+
+### Terminal input follow-ups
+
+[ADR-0019](adr/ADR-0019-terminal-input-and-checkpoints.md) defines manual literal input and the whole-run checkpoint. Native input acknowledgments, permission-dialog semantics, portable capability/version records, safe automatic consumption of queued prompts, and autonomous app control remain deferred. Prompt equality, recent history and a pending reservation cannot resolve native attribution. Installed-provider compatibility must be observed; the manual controls do not certify same-turn steering or dialog semantics.

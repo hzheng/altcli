@@ -373,6 +373,23 @@ test('a prompt that does not contain the delivered command still pauses the run'
   await plane.recordEvent(event(command.requestId, { prompt: `something else [codercrew-command:${command.requestId}]` }));
   assert.equal(plane.workflow.run(command.requestId)!.status, 'paused'); assert.equal(sent.length, 1);
 });
+for (const agentId of ['codex', 'claude']) test(`${agentId} native start with leftover input pauses and retains ownership`, async () => {
+  const command = start({ agentId, pairId: pair().id, autoContinue: true }); await plane.submit(command);
+  const prompt = `jjjj${plane.workflow.execution(command.requestId)!.wireText}`;
+  const receipt = await plane.recordEvent(event(command.requestId, { event: 'turn_started', prompt, outcome: undefined }));
+  assert.equal(receipt.accepted, false);
+  assert.match(receipt.reason, /CLI prompt differs.*leftover or queued input/);
+  assert.equal(plane.workflow.run(command.requestId)!.status, 'paused');
+  assert.equal(plane.workflow.execution(command.requestId)!.sessionId, null);
+  const completion = event(command.requestId, { prompt });
+  assert.equal((await plane.recordEvent(completion)).accepted, false);
+  assert.equal((await plane.recordEvent(completion)).accepted, false);
+  assert.equal(plane.workflow.run(command.requestId)!.status, 'paused');
+  assert.equal(plane.workflow.run(command.requestId)!.reason, receipt.reason);
+  assert.equal(plane.workflow.execution(command.requestId)!.status, 'delivered');
+  assert.equal(sent.length, 1);
+  await assert.rejects(plane.submit(start({ requestId: randomUUID(), agentId })), /execution owner/);
+});
 test('history commands carry the run and pair they belonged to, including server continuations', async () => {
   const paired = start({ pairId: pair().id, autoContinue: true }); await plane.submit(paired); await complete(paired.requestId);
   const run = plane.workflow.run(paired.requestId)!; stopped(run.id);

@@ -17,7 +17,7 @@ export class Store {
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("busy_timeout = 5000");
     const version = this.db.pragma("user_version", { simple: true }) as number;
-    if (version > 12) throw new Error("Unsupported database version. Do not downgrade this store.");
+    if (version > 13) throw new Error("Unsupported database version. Do not downgrade this store.");
     this.db.transaction(() => {
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -26,17 +26,22 @@ export class Store {
         CREATE TABLE IF NOT EXISTS groups (id TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS reservations (repository TEXT PRIMARY KEY, active_id TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS interactions (id TEXT PRIMARY KEY, repository TEXT NOT NULL, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS checkpoints (run_id TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS checkpoint_decisions (id TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS worktree_creations (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, status TEXT NOT NULL, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS worktree_removals (id TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS worktree_integrations (id TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS worktree_discards (id TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE UNIQUE INDEX IF NOT EXISTS worktree_creation_owner ON worktree_creations(project_id) WHERE status IN ('applying', 'uncertain');
+        CREATE INDEX IF NOT EXISTS interactions_repository ON interactions(repository);
+        CREATE INDEX IF NOT EXISTS interactions_run ON interactions(json_extract(value, '$.input.runId'));
       `);
       if (version === 1) this.migrateFromV1();
       if (version < 5) for (const pair of this.pairs()) this.saveGroup({ id: pair.id, name: pair.name, repository: pair.repository,
         cwd: null, members: pair.sessions, revision: 1, createdAt: pair.createdAt, legacyPairId: pair.id });
-      this.db.exec("PRAGMA user_version = 12"); // older servers must not reuse retired squash checkpoints
+      this.db.exec("PRAGMA user_version = 13"); // older servers must not ignore interaction ownership
     })();
   }
   /** v1 had one global reservation in `control` and sessions without agentType. */

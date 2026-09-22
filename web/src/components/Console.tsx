@@ -10,6 +10,7 @@ import { RunPolicy } from './Implementation';
 import { PlanningProgress } from './PlanningProgress';
 import { PaneActions } from './PaneActions';
 import { PlanSetup } from './PlanSetup';
+import { CheckpointControls, InteractionComposer } from './InteractionControls';
 import { RunSettingsBar, useRunSettings, type Phase } from './RunSettings';
 const PREFERENCE = 'codercrew.autoRelay';
 const LAYOUT = 'codercrew.paneLayout';
@@ -213,6 +214,7 @@ export function Console() {
   useEffect(() => { setConsent(''); setReady(false); setResetFor(null); setStatusReset(null); setViewEpoch((epoch) => epoch + 1); }, [viewKey]);
   const chooseLayout = (next: 'parallel' | 'focus') => { setLayout(next); try { localStorage.setItem(LAYOUT, next); } catch { /* preference only */ } };
   const stale = !!error || clock - updated > 10000;
+  const inputRun = owned[0] && (owned[0].implementation || owned[0].planning || owned[0].standalone) ? owned[0] : null;
   // A reading that is not current cannot back a confirmation; readiness must be given again once it is.
   useEffect(() => { if (stale) { setConsent(''); setReady(false); } }, [stale]);
   // Every selected collaborator is validated by the server, including a peer that is not the command target.
@@ -426,7 +428,7 @@ export function Console() {
           controller={{ state: owned[0] ? owned[0].status === 'paused' ? 'paused' : owned[0].status === 'waiting' ? 'waiting for you' : 'driving' : 'idle', attention: ['paused', 'waiting'].includes(owned[0]?.status ?? ''),
             open: controllerOpen, onToggle: () => setControllerOpen(!controllerOpen), content: <>
       {owned.map((run) => <section key={run.id} className="panel run-card" aria-label="Who controls the agents">
-        <div className="section-heading"><h2>{run.status === 'paused' ? 'Controller paused · take over to drive the agents yourself' : run.status === 'waiting' ? 'Controller waiting for your Next turn' : 'Controller is driving the agents'}</h2><span className="badge">{run.automaticTurns}/{run.turnLimit} automatic turns</span></div>
+        <div className="section-heading"><h2>{run.status === 'paused' ? 'Controller paused · inspect the checkpoint' : run.status === 'waiting' ? 'Controller waiting for your Next turn' : 'Controller is driving the agents'}</h2><span className="badge">{run.automaticTurns}/{run.turnLimit} automatic turns</span></div>
         <p><span className="badge">{run.implementation ? 'IMPLEMENTATION' : run.planning ? 'PLAN' : run.standalone ? 'STANDALONE' : 'LEGACY STAGING'}</span> {run.participants.map((s) => s.label).join(' ⇄ ')} · {run.implementation?.group.name ?? run.planning?.group.name ?? run.pairId ?? 'single-agent turn'}</p>
         {(() => { // Which command this run owns: the current turn's target and its text, so a paused run is recognisable.
           const turn = state.executions.find((e) => e.commandId === run.currentCommandId);
@@ -440,6 +442,7 @@ export function Console() {
         {run.planning && <PlanningProgress token={token} run={run} git={card?.git} disabled={busy || stale || !state.inputEnabled} refresh={refresh} onMessage={setMessage} onStop={() => void action(run, 'pause')} viewEpoch={viewEpoch} />}
         {run.status === 'waiting' && (run.implementation || run.planning?.next) && <button disabled={busy || stale || !state.inputEnabled} onClick={() => void action(run, 'continue')}>{run.planning && !run.implementation ? 'I checked readiness — Next planning turn' : 'I checked readiness — Next turn'}</button>}
         {run.status === 'waiting' && run.implementation && <RunPolicy key={`${run.id}:${run.implementation.revision}`} token={token} run={run} disabled={busy || stale} onChanged={refresh} onMessage={setMessage} />}
+        {run.status === 'paused' && state.checkpoints?.filter((cp) => cp.runId === run.id && cp.commandId === run.currentCommandId).map((cp) => <CheckpointControls key={cp.runId} token={token} checkpoint={cp} disabled={busy || stale || !state.inputEnabled} viewEpoch={viewEpoch} refresh={refresh} />)}
         {run.status === 'paused' ? <button disabled={busy} title="Take control of these agents back from the controller after inspecting every participant. Nothing is interrupted, replayed or marked successful." onClick={() => setTakeover(run.id)}>Take over from the controller…</button>
           : <button disabled={busy} title="Stop the controller from sending further turns. The current agent is not interrupted; the controller keeps this checkout until you take over." onClick={() => void action(run, 'pause')}>Pause the controller</button>}
         {takeover === run.id && <div className="notice takeover"><p>Pause does not interrupt any process. Inspect all participants, stop background writers, and resolve any partially typed input before taking control back from the controller.</p>
@@ -482,12 +485,13 @@ export function Console() {
             {visibleOutcome?.outcome && <div className={`outcome ${visibleOutcome.outcome}`}>{visibleOutcome.outcome}: {visibleOutcome.reason}</div>}
             <Output label={`${s.label} output`} memoryKey={`scroll:${ws}:${s.id}`} text={(snapshot?.status === 'unavailable' ? snapshot.error : snapshot?.text) || 'Waiting for a capture'} />
             <div className="pane-footer"><span>{snapshot ? `Captured ${new Date(snapshot.capturedAt).toLocaleTimeString()}` : ''}</span></div>
-            {actionable && phase === 'implementation' && !showLegacy && <PaneActions {...common} group={pair} agent={s} settings={implementationSettings}
+            {inputRun && !showLegacy && <InteractionComposer token={token} state={state} run={inputRun} agent={s} draftKey={`draft:${scope}:${s.id}`} disabled={busy || stale || setupHeld || !state.inputEnabled || !!identityBlockedReason || !!cardReason(s)} viewEpoch={viewEpoch} refresh={refresh} />}
+            {actionable && !inputRun && phase === 'implementation' && !showLegacy && <PaneActions {...common} group={pair} agent={s} settings={implementationSettings}
               blockedReason={sharedReason || cardReason(s)} draftKey={`draft:${scope}:${s.id}`} />}
             {actionable && showLegacy && s.id === current?.id && <p className="fine pane-hint">The staging fallback is on: use its composer below.</p>}
           </article>;
         })}</section>
-        {phase === 'plan' && !showLegacy && <PlanSetup {...common} group={pair && members.length ? pair : undefined} settings={planSettings} displayed={displayed}
+        {phase === 'plan' && !inputRun && !showLegacy && <PlanSetup {...common} group={pair && members.length ? pair : undefined} settings={planSettings} displayed={displayed}
           blockedReason={sharedReason || cardReason(current)} draftKey={`plan:${scope}`} />}
         {showLegacy && <section className="composer"><div className="section-heading"><h2>Legacy staging: send to {current?.label}</h2><span className="badge">{owned.length ? 'EXECUTION OWNED' : 'MANUAL START'}</span></div>
           {!state?.inputEnabled && <p>Read-only console: the host has disabled input.</p>}
@@ -537,7 +541,9 @@ export function Console() {
               <tbody>{rows.map((c) => <tr key={c.id}><td className="mono muted">{new Date(c.createdAt).toLocaleString()}</td><td>{sessions.find((s) => s.id === c.agentId)?.label ?? c.agentId}</td>
                 <td className="muted">{c.groupId ? groups.find((p) => p.id === c.groupId)?.name ?? c.groupId : ''}</td><td className="command-text">{c.text}</td><td>{c.status}</td></tr>)}</tbody></table>
               : <p className="empty-history">No commands on this checkout yet.</p>;
-          })()}</details>
+          })()}
+          {!!state.interactions?.some((r) => r.repository === project) && <details><summary>Terminal input history</summary><ul>{state.interactions.filter((r) => r.repository === project).map((r) => <li key={r.input.requestId}>{r.input.agentId} · {r.input.purpose} · {r.status}: <span className="command-text">{r.input.text ?? r.input.key}</span>{r.error && ` — ${r.error}`}</li>)}</ul></details>}
+          </details>
       </>}
     </div>
     <div className="section-panel" hidden={tab !== 'settings'}>

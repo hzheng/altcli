@@ -359,3 +359,36 @@ test('changing the batch endpoint revokes its preview and confirms only the chos
   expect(previews).toEqual([{ projectId: project.id, worktreeId: target.id }, { projectId: project.id, worktreeId: target.id, through: first }]);
   expect(confirms).toEqual([{ projectId: project.id, worktreeId: target.id, through: first, requestId: shown!.requestId, consent: 'f'.repeat(64), message: 'feat: batch one', confirm: true }]);
 });
+
+test('batch advice sends exact revisions as a read-only instruction without confirming integration', async ({ page, request }) => {
+  const inventory = await fixture(page, request); const project = inventory.projects![0]!;
+  const target = tree('/home/fixture/tasks/advice', 'feature/advice'); project.worktrees.push(target);
+  const state: WorkflowState = await (await request.get('/api/v1/state', { headers })).json();
+  state.runs = []; state.executions = []; state.reservations = [];
+  state.instances = state.sessions.map((s) => ({ agentId: s.id, status: 'current' }));
+  state.activities = state.sessions.map((s) => ({ agentId: s.id, state: 'ready', updatedAt: null, detail: 'Fixture ready' }));
+  await page.route('**/api/v1/state', (route) => route.fulfill({ json: state }));
+  const selected = state.groups.find((g) => g.members.length > 0 && g.members.length <= 2)!; const agentId = selected.members[0]!;
+  const base = 'b'.repeat(40); const previous = 'c'.repeat(40);
+  const shown = { projectId: project.id, worktreeId: target.id, requestId: crypto.randomUUID(), worktree: target.identity, branch: target.branch, head: target.head, dirty: false,
+    targetRef: 'refs/heads/main', targetHead: base, target: project.worktrees[0]!.identity, mergeBase: previous, through: target.head, previousCommit: previous,
+    commitCount: 1, commits: [{ sha: target.head, subject: 'Remaining change' }], tree: 'e'.repeat(40), message: 'Batch suggestion', commands: [], consent: 'f'.repeat(64) };
+  await page.route('**/api/v1/projects/worktrees/integration/preview', (route) => route.fulfill({ json: shown }));
+  const advice: Record<string, unknown>[] = []; let integrations = 0;
+  await page.route('**/api/v1/instructions', (route) => { advice.push(route.request().postDataJSON()); return route.fulfill({ json: { status: 'delivered', error: null } }); });
+  await page.route('**/api/v1/projects/worktrees/integration', (route) => { integrations++; return route.fulfill({ json: {} }); });
+  await page.getByRole('button', { name: 'Recheck', exact: true }).click();
+  await page.getByRole('button', { name: 'Squash feature/advice into main', exact: true }).click();
+  await page.getByText('Ask an agent to suggest batches', { exact: true }).click();
+  await page.getByRole('button', { name: 'Choose a settled agent' }).click();
+  await page.getByRole('combobox', { name: 'Agent', exact: true }).selectOption(agentId);
+  await page.getByLabel('Grouping preference').fill('Keep tests with their behavior.');
+  await expect(page.getByRole('button', { name: 'Ask for read-only batch suggestions' })).toBeDisabled();
+  await page.getByRole('checkbox', { name: /I checked every writer in the selected agent/ }).check();
+  await page.getByRole('button', { name: 'Ask for read-only batch suggestions' }).click();
+  await expect.poll(() => advice.length).toBe(1); expect(integrations).toBe(0);
+  expect(advice[0]!.agentId).toBe(agentId); expect(advice[0]!.handoff).toBeUndefined();
+  const text = String(advice[0]!.text);
+  for (const literal of [target.head!, base, previous, target.path, 'Do not modify files, commit, merge', 'Keep tests with their behavior.']) expect(text).toContain(literal);
+  await expect(page.getByRole('button', { name: 'Confirm squash', exact: true })).toBeVisible();
+});

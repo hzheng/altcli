@@ -3,6 +3,7 @@ import { useEffect, useId, useState } from 'react';
 import type { Project, ProjectWorktree, WorktreeDiscard, WorktreeDiscardPreview, WorktreeIntegration, WorktreeIntegrationPreview, WorktreeRemoval, WorktreeRemovalPreview } from '../contracts/projects';
 import { api, HttpError } from '../client/api';
 import { MAX_MESSAGE_JSON_BYTES, messageJsonBytes } from '../core/squash-message';
+import { SquashAdvice } from './SquashAdvice';
 
 interface ActionProps { project: Project; tree: ProjectWorktree; token: string; disabled: boolean; disabledReason?: string; onChanged: (notice: string) => Promise<void>;
   /** Increases whenever the view changes; hiding a confirmation revokes it. */
@@ -92,6 +93,7 @@ export function IntegrateWorktree({ project, tree, token, disabled, disabledReas
       <p className="mono commands">{preview.commands.join('\n')}</p>
       {preview.dirty && <p>The task worktree has uncommitted changes; they are not part of this squash.</p>}
       <p>Agents in <span className="mono">{preview.target.root}</span> must be idle: the merge changes its files and index. The task branch and worktree stay as they are; use Check removal afterwards. This cannot be undone in the app.</p>
+      <SquashAdvice key={preview.consent} token={token} preview={preview} disabled={!!reason || busy || unknown} />
       <label>Commit message<textarea aria-label="Squash commit message" value={message} disabled={busy || unknown} rows={6} onChange={(e) => setMessage(e.target.value)} /></label>
       <p className="fine" aria-live="polite">{messageBytes.toLocaleString()} of {MAX_MESSAGE_JSON_BYTES.toLocaleString()} bytes (JSON-encoded, as sent){messageBytes > MAX_MESSAGE_JSON_BYTES ? ' — shorten the message to confirm.' : ''}</p>
       {!current && <p>The worktree changed. Cancel and check again.</p>}

@@ -38,6 +38,9 @@ export class MockAdapter implements TerminalAdapter {
     this.output.set(session.id, `${await this.capture(session)}${text}\n\n[MOCK] Input received. No review or code change was performed.\n> `);
   }
   async processes(session: SessionRegistration): Promise<ProcessRecord[]> { return [...(this.trees.get(session.id) ?? [])]; }
+  async press(session: SessionRegistration, key: 'Enter' | 'Escape'): Promise<void> {
+    this.output.set(session.id, `${await this.capture(session)}\n[MOCK key: ${key}]\n`);
+  }
   async foreground(session: SessionRegistration): Promise<string | null> { return this.foregrounds.get(session.id) ?? null; }
 }
 export function mockSessions(): SessionRegistration[] {

@@ -10,6 +10,7 @@
     "build": "next build",
     "start": "next start --hostname 127.0.0.1 --port 8787",
     "typecheck": "next typegen && tsc --noEmit",
+    "test:terminal": "node --experimental-strip-types --test scripts/terminal-input.test.ts",
     "test:smoke": "node --experimental-strip-types --test scripts/smoke.test.ts",
     "test": "vitest run",
     "test:watch": "vitest",

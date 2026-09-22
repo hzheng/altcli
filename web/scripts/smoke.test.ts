@@ -347,3 +347,18 @@ test("the host configuration description resolves the tmux binary, names the var
   assert.equal(resolveExecutable("node", { PATH: dirname(process.execPath) }), join(dirname(process.execPath), "node"));
   assert.equal(resolveExecutable("/no/such/tmux", env), null);
 });
+
+test('key-only transport has a closed enum, checks modes and sends Escape without a following Enter', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codercrew-key-'));
+  try {
+    const calls: string[][] = []; let mode = '0';
+    const run = async (args: string[]) => { calls.push(args); return args[0] === 'display-message' ? `%1\t11\t22\t123\t/tmp/tmux-test\tcodex\t${directory}\t0\t${mode}\t0\n` : ''; };
+    const adapter = new TmuxAdapter(run); const target = { ...session, repository: directory };
+    await adapter.press(target, 'Escape');
+    assert.deepEqual(calls.map((c) => c[0]), ['display-message','send-keys']);
+    assert.deepEqual(calls[1], ['send-keys','-t','%1','Escape']);
+    calls.length = 0; mode = '1'; await assert.rejects(adapter.press(target, 'Enter'), /copy mode/);
+    assert.equal(calls.length, 1); calls.length = 0;
+    await assert.rejects(adapter.press(target, 'C-c' as 'Enter'), /Unsupported terminal key/); assert.equal(calls.length, 0);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});

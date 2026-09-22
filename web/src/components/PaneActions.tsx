@@ -199,7 +199,7 @@ export function PaneActions(p: PaneActionsProps) {
   return <section className="pane-actions" aria-label={`Actions for ${name}`}>
     {canSend && <>
       <label className="sr-only" htmlFor={`${ids}-text`}>Instruction for {name}</label>
-      <textarea id={`${ids}-text`} rows={2} value={text} disabled={inputOff} maxLength={1900} placeholder={dirty && after !== 'nothing' ? `Instruction for ${name} — leave empty to hand off the ${git!.changeCount} uncommitted ${git!.changeCount === 1 ? 'path' : 'paths'} as they stand` : `Instruction for ${name}`} onChange={(e) => setText(e.target.value)} />
+      <textarea id={`${ids}-text`} rows={2} value={text} maxLength={1900} placeholder={dirty && after !== 'nothing' ? `Instruction for ${name} — leave empty to hand off the ${git!.changeCount} uncommitted ${git!.changeCount === 1 ? 'path' : 'paths'} as they stand` : `Instruction for ${name}`} onChange={(e) => setText(e.target.value)} />
       <div className="after-send"><label htmlFor={`${ids}-after`}>After send</label>
         <select id={`${ids}-after`} value={after} disabled={p.busy} onChange={(e) => setAfter(e.target.value as AfterSend)}>
           <option value="nothing">Nothing</option><option value="commit">Commit</option>{pair && <option value="commit_relay">Commit &amp; relay</option>}</select>

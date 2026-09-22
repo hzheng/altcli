@@ -334,7 +334,7 @@ test('checkpoint restart preserves captured text, roster, endorsements and owner
 test('v5 upgrade preserves stored runs and groups and marks phase-aware data as incompatible with older schedulers', async () => {
   const input = request(); await plane.submitPlan(input); const saved = run(input.requestId); const groups = store.groups();
   store.db.pragma('user_version = 5'); store.close(); store = new Store(join(directory, 'metadata'));
-  assert.equal(store.db.pragma('user_version', { simple: true }), 12); assert.deepEqual(store.groups(), groups);
+  assert.equal(store.db.pragma('user_version', { simple: true }), 13); assert.deepEqual(store.groups(), groups);
   const record = store.db.prepare('SELECT value FROM workflow_runs WHERE id=?').get(input.requestId) as { value: string };
   assert.deepEqual(JSON.parse(record.value), saved);
 });
@@ -378,4 +378,36 @@ test('copy mode in the completed planner does not discard its document or block 
   assert.ok(run(input.requestId).planning!.drafts.codex!.document);
   assert.equal(sent.length, 2); assert.equal(run(input.requestId).status, 'running');
   assert.equal(plane.workflow.execution(run(input.requestId).currentCommandId)!.agentId, 'claude');
+});
+
+test('input at final Plan turn holds preauthorized Implementation until checkpoint review', async () => {
+  plane.removeGroup(group.id); group = await plane.createGroup({ name: 'Solo', members: ['codex'] });
+  const list = adapter.listPanes.bind(adapter); adapter.listPanes = async () => (await list()).filter((p) => p.identity.paneId === '%0');
+  const input = request({ requireApproval: false }); await plane.submitPlan(input);
+  const commandId = run(input.requestId).currentCommandId; const p = run(input.requestId).participants[0]!;
+  await plane.recordEvent(event(commandId, { event: 'turn_started' }));
+  await plane.submitInteraction({ requestId: randomUUID(), runId: input.requestId, commandId, agentId: p.id, registrationId: p.registrationId,
+    sessionId: `session-${p.id}`, sourceTurnId: `turn-${commandId}`, expectedRevision: 0, confirmPresent: true, purpose: 'detail', text: 'Include the validation steps.' });
+  publish(commandId); await complete(commandId);
+  assert.equal(run(input.requestId).status, 'paused'); assert.equal(run(input.requestId).implementation, undefined); assert.equal(sent.length, 2);
+  await assert.rejects(plane.decidePlan(decision(input.requestId)), /settled planning boundary/i);
+  const cp = plane.interactions.checkpoint(input.requestId)!; assert.ok(cp);
+  await plane.reconcileCheckpoint({ requestId: randomUUID(), runId: input.requestId, commandId, expectedRevision: cp.revision, action: 'review_input', confirmReady: true });
+  assert.ok(run(input.requestId).implementation); assert.equal(sent.length, 3);
+});
+
+test('restoring a waiting Plan sends nothing and blocks even an already pending automatic approval', async () => {
+  plane.removeGroup(group.id); group = await plane.createGroup({ name: 'Solo', members: ['codex'] });
+  const list = adapter.listPanes.bind(adapter); adapter.listPanes = async () => (await list()).filter((p) => p.identity.paneId === '%0');
+  const input = request({ requireApproval: false }); input.implementation.branch = null;
+  await plane.submitPlan(input); publish(input.requestId); await complete(input.requestId);
+  assert.equal(run(input.requestId).status, 'waiting'); const cp = plane.interactions.checkpoint(input.requestId)!; assert.ok(cp);
+  const external = event(input.requestId, { commandId: undefined, sourceTurnId: 'outside', prompt: 'Read the plan', cliPid: '100', startedAt: new Date(Date.parse(cp.capturedAt) + 1).toISOString(), event: 'turn_started' });
+  await plane.recordEvent(external); await plane.recordEvent({ ...external, event: 'turn_complete' });
+  const settled = plane.interactions.checkpoint(input.requestId)!;
+  await plane.reconcileCheckpoint({ requestId: randomUUID(), runId: input.requestId, commandId: input.requestId, expectedRevision: settled.revision, action: 'restore', confirmReady: true });
+  assert.equal(run(input.requestId).status, 'waiting'); assert.equal(sent.length, 1); assert.equal(run(input.requestId).automaticTurns, 0);
+  const approve = decision(input.requestId, { branch: { branch: 'task/fixture', head: input.baseline.head } });
+  await assert.rejects(plane.decidePlan(approve, 'automatic'), /not preauthorized/); assert.equal(sent.length, 1);
+  await plane.decidePlan(approve); assert.ok(run(input.requestId).implementation); assert.equal(sent.length, 2);
 });

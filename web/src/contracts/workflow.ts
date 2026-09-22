@@ -2,6 +2,7 @@ import type { AgentId, AgentType, CommandInput, CommandRecord, ConsoleState, Eve
 import type { Group, ImplementationRun, ImplementationTurn, JournalRecord, StandaloneStart, WorkspaceGit } from './implementation.ts';
 import type { PlanningRun, PlanTurn } from './planning.ts';
 import type { Project } from './projects.ts';
+import type { Checkpoint, InteractionHold, InteractionRecord } from './interactions.ts';
 
 export interface WorktreeIdentity { root: string; gitDir: string; indexPath: string }
 export interface ManagedSession extends SessionRegistration {
@@ -42,6 +43,9 @@ export interface RelayRun {
   implementation?: ImplementationRun;
   planning?: PlanningRun;
   standalone?: StandaloneStart;
+  interaction?: InteractionHold;
+  /** Restoring a checkpoint never automatically starts a successor or a phase. */
+  restoredCheckpoint?: boolean;
 }
 /** A live process under a registered pane, as the host reported it. */
 export interface ProcessRecord { pid: string; command: string }
@@ -91,6 +95,8 @@ export interface WorkflowState extends ConsoleState {
   executions: Execution[];
   instances: InstanceState[];
   activities?: AgentActivity[];
+  interactions?: InteractionRecord[];
+  checkpoints?: Checkpoint[];
 }
 export interface HookReceipt { accepted: boolean; reason: string; event: TurnEvent | null }
 export interface RunAction { runId: string; action: 'pause' | 'takeover' | 'continue'; confirmReady?: true; expectedCommandId?: string }
@@ -151,4 +157,5 @@ export interface HistoryExport {
   runs: RelayRun[];
   turns: Execution[];
   journal: JournalRecord[];
+  interactions?: InteractionRecord[];
 }

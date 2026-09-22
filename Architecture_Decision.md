@@ -53,6 +53,7 @@ The historical staging compatibility baseline remains `46f228b16658cd120515e7175
 | [ADR-0016](docs/adr/ADR-0016-plan-phase-and-approval.md) | Optional Plan phase and explicit implementation approval |
 | [ADR-0017](docs/adr/ADR-0017-phase-orchestration-and-evidence.md) | Phase-aware orchestration, evidence, and recovery |
 | [ADR-0018](docs/adr/ADR-0018-remote-publication-and-history.md) | Optional remote publication and deliberate history retention |
+| [ADR-0019](docs/adr/ADR-0019-terminal-input-and-checkpoints.md) | Explicit terminal input, whole-run holds and evidence-bound checkpoint recovery |
 
 Read [WORKFLOWS](docs/WORKFLOWS.md) for vocabulary and UI; [ROADMAP](ROADMAP.md#migration-and-implementation-sequence) for delivery order; [TESTING](docs/TESTING.md#acceptance-scenarios) for the complete acceptance catalog; [SECURITY](docs/SECURITY.md#validation-and-permissions) for validation boundaries; and [OPEN-DECISIONS](docs/OPEN-DECISIONS.md) for unresolved choices. [DESIGN-MIGRATION](docs/DESIGN-MIGRATION.md) maps the retired draft's sections and decision IDs to their maintained homes.
 

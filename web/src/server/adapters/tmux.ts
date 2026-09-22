@@ -92,5 +92,10 @@ export class TmuxAdapter implements TerminalAdapter {
     assertIdentity(session, { ...pane, inMode: false, synchronized: false });
     return paneProcesses(session.identity.panePid);
   }
+  async press(session: SessionRegistration, key: 'Enter' | 'Escape'): Promise<void> {
+    if (key !== 'Enter' && key !== 'Escape') throw new AppError('INVALID_KEY', 'Unsupported terminal key.');
+    await this.preflight(session);
+    await this.run(['send-keys', '-t', validPaneId(session.identity.paneId), key]);
+  }
   foreground(session: SessionRegistration): Promise<string | null> { return foregroundPid(session.identity.panePid); }
 }

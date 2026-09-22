@@ -1470,3 +1470,29 @@ tmux dry run against a harmless `cat` pane, and only then real coding CLIs with
 
 Update this record with actual results and versions as you proceed. Do not check
 off roadmap acceptance merely because a corresponding source file now exists.
+
+## Terminal input and checkpoint proposal — 2026-09-22
+
+Scope: [ADR-0019](docs/adr/ADR-0019-terminal-input-and-checkpoints.md), based on `ec7fc49`. Validation used macOS 26.6.2, Node 26.0.0, tmux 3.6a and the locked Next.js 16.3.4 toolchain. This linked checkout had no dependencies installed. Checks ran on a disposable copy of the source with the existing main checkout's dependency tree, whose lockfile matched exactly. No dependency install or global CLI configuration change was made. Installer checks used isolated Claude/Codex configuration directories. Browser servers used ports 9787/9788 and disposable SQLite stores.
+
+The first check exposed a mistaken solo-Plan test fixture; correcting it verified that a final Plan input hold also gates preauthorized Implementation. Browser regression testing exposed the hidden disabled legacy composer; its behavior was restored. The advice test's picker selector was corrected to use its accessible combobox role. These failures were not counted as passes.
+
+`node --experimental-strip-types --test web/scripts/terminal-input.test.ts` passed against a private tmux socket and a harmless `cat` byte reader. It verified exact UTF-8/numeric text, bracketed multiline paste, key-only Enter and Escape (no extra Enter after Escape), and copy-mode refusal. It did not launch a coding agent. Fake-runner smoke cases also cover the closed key enum, preflight and partial-send uncertainty. Git/SQLite fixtures cover current-holder/revision checks, two-client reservations, duplicates, completion/input races, final ownership release, invalid/changed publication, restart, Plan approval, exact external settlement, stale events and restoration without dispatch. These simulated lifecycle events do not certify an installed CLI.
+
+| Installed provider / layer | Detail during work and queued prompts | Numeric answers, Enter and Escape | Same-turn completion and recovery |
+| --- | --- | --- | --- |
+| Codex CLI 0.155.1 (`codex --version`) | Live behavior unverified; manual inspection required | Live dialog semantics unverified | Existing exact-binding/steering hook fixtures pass; no new live CLI acceptance claim |
+| Claude Code 2.1.278 (`claude --version`) | Live behavior unverified; new native turns fail closed | Live dialog semantics unverified; no generic permission-answer interpretation | Prompt pairing/background fixtures pass; no new live CLI acceptance claim |
+| Private tmux + harmless byte reader | Literal bytes and multiline transport observed | Exact bytes observed, no semantic interpretation | No agent lifecycle involved |
+| Mock browser and disposable controller fixtures | Explicit actions, immutable follow-up and whole-run holds exercised | Literal input and separate Escape confirmation exercised | Validated input/restore checkpoints and failure cases exercised |
+
+Real-provider tests of detail while working, queued next prompts, permission dialogs and interrupted work remain a release acceptance step in supervised isolated sessions. The controls therefore expose manual input and fail-closed reconciliation; they do not advertise verified provider semantics. Physical iPhone/Safari and multi-host acceptance remain untested. The active development backend was not restarted: the controller-issued assignment still owns work during this handoff. Restart only at a verified settled boundary, then perform installed-host acceptance; browser test servers were separately started and stopped.
+
+Final automated results for this proposal:
+
+- `./scripts/check.sh`: passed on the final source, including 30 hook/setup regressions, 43 smoke tests, 287 workflow/implementation/planning/project tests, 66 unit tests, type generation/type checking and production build.
+- `./scripts/check.sh --e2e`: passed, including the backend/build checks and 179 Chromium browser cases across desktop and iPhone emulation; three desktop-only layout cases were intentionally skipped on the phone project. The final additional copied-command-marker guard was then covered by the full backend/build check above. UI source did not change after this browser pass.
+- The private-tmux byte test passed separately (one case). New input-checkpoint screenshots were inspected at desktop and iPhone dimensions; existing intermediate-width layout coverage also passed.
+- New inline OpenAPI JSON schemas parsed and all schema references resolved. `git diff --check` passed. Task files and the handoff report were screened for credentials; only dummy test fixtures were retained.
+
+No live-provider or physical-mobile acceptance is inferred from these results.

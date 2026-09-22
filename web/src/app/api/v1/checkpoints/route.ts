@@ -1,0 +1,8 @@
+import { parseCheckpoint } from '../../../../core/interaction-validation.ts';
+import { endpoint, jsonBody } from '../../../../server/http.ts';
+import { controller } from '../../../../server/runtime.ts';
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+export async function POST(request: Request) {
+  return endpoint(request, async () => { await controller().reconcileCheckpoint(parseCheckpoint(await jsonBody(request))); return { reconciled: true }; });
+}

@@ -392,7 +392,7 @@ test('v4 migration preserves historical pair IDs and creates versioned groups', 
   store.db.prepare('DELETE FROM groups').run(); store.db.pragma('user_version = 4'); store.close();
   store = new Store(join(directory, 'metadata'));
   assert.equal(store.groups()[0]!.id, group.id); assert.equal(store.groups()[0]!.legacyPairId, group.id);
-  assert.deepEqual(store.groups()[0]!.members, ['codex', 'claude']); assert.equal(store.db.pragma('user_version', { simple: true }), 12);
+  assert.deepEqual(store.groups()[0]!.members, ['codex', 'claude']); assert.equal(store.db.pragma('user_version', { simple: true }), 13);
 });
 test('a relay note reaches only the peer\'s review assignment and needs a relay', async () => {
   const input = request({ reviewNote: 'Please check the retry path first.' }); await plane.submitImplementation(input);
@@ -1224,4 +1224,199 @@ test('a pane moved into a worktree owned by other participants names that blocke
   assert.equal(moved.eligible, false); assert.equal(moved.session, undefined);
   assert.match(moved.reason!, /owns this worktree without it/); assert.doesNotMatch(moved.reason!, /where a run or delivery still owns it/);
   assert.deepEqual(store.sessions().find((s) => s.id === 'claude')!.repository, elsewhere);
+});
+
+// Terminal interactions are simulated here. These cases do not certify installed provider behavior.
+function checkpointPanes() {
+  const list = adapter.listPanes.bind(adapter);
+  adapter.listPanes = async () => (await list()).filter((p) => ['%0','%1'].includes(p.identity.paneId));
+}
+async function interactionStart(more: Partial<ImplementationStart> = {}) {
+  checkpointPanes(); const input = request(more); await plane.submitImplementation(input);
+  await plane.recordEvent(event(input.requestId, { event: 'turn_started' }));
+  const p = run(input.requestId).participants[0]!;
+  return { requestId: randomUUID(), runId: input.requestId, commandId: input.requestId, agentId: p.id, registrationId: p.registrationId,
+    sessionId: `session-${p.id}`, sourceTurnId: `turn-${input.requestId}`, expectedRevision: 0, confirmPresent: true as const, purpose: 'detail' as const, text: 'Handle empty input too.' };
+}
+function checkpointDecision(id: string, action: 'review_input' | 'restore' = 'review_input') {
+  const cp = plane.interactions.checkpoint(id)!; assert.ok(cp, 'a validated checkpoint must be captured');
+  return { requestId: randomUUID(), runId: id, commandId: cp.commandId, expectedRevision: cp.revision, action, confirmReady: true as const };
+}
+function externalEvent(id: string, more: Partial<HookEvent> = {}): HookEvent {
+  const p = run(id).participants[0]!;
+  return { ...event(id), commandId: undefined, event: 'turn_started', sourceTurnId: 'external-turn', prompt: 'Explain the result', cliPid: p.cliPid!, startedAt: new Date(Math.max(Date.now(), Date.parse(plane.interactions.checkpoint(id)?.capturedAt ?? '') + 1) || Date.now()).toISOString(), ...more };
+}
+test('literal update reserves a whole-run hold; validated completion relays once only after explicit reconciliation', async () => {
+  const input = await interactionStart(); const first = await plane.submitInteraction(input);
+  assert.equal(first.status, 'delivered'); assert.equal(sent.at(-1), input.text);
+  assert.equal((await plane.submitInteraction(input)).status, 'delivered'); assert.equal(sent.length, 2);
+  await assert.rejects(plane.submitInteraction({ ...input, text: 'different' }), /different input/);
+  publish(input.runId, true); await complete(input.runId);
+  assert.equal(run(input.runId).status, 'paused'); assert.equal(sent.length, 2);
+  assert.equal(plane.workflow.owner(`${root}/.git/index`), input.runId);
+  const decision = checkpointDecision(input.runId); await plane.reconcileCheckpoint(decision);
+  assert.equal(sent.length, 3); assert.equal(run(input.runId).automaticTurns, 1);
+  await plane.reconcileCheckpoint(decision); assert.equal(sent.length, 3);
+});
+test('input holds final ownership release as well as peer dispatch', async () => {
+  const input = await interactionStart({ handoff: false }); await plane.submitInteraction(input);
+  publish(input.runId); await complete(input.runId);
+  assert.equal(run(input.runId).status, 'paused'); assert.equal(run(input.runId).interaction?.disposition, 'complete');
+  await plane.reconcileCheckpoint(checkpointDecision(input.runId));
+  assert.equal(run(input.runId).status, 'completed'); assert.equal(plane.workflow.owner(`${root}/.git/index`), null); assert.equal(sent.length, 2);
+});
+test('nonholder and stale revision cannot type; sequential updates keep the original native binding', async () => {
+  const input = await interactionStart(); const peer = run(input.runId).participants[1]!;
+  await assert.rejects(plane.submitInteraction({ ...input, agentId: peer.id, registrationId: peer.registrationId }), /assignment or input revision/);
+  await plane.submitInteraction(input);
+  await assert.rejects(plane.submitInteraction({ ...input, requestId: randomUUID() }), /assignment or input revision/);
+  await plane.submitInteraction({ ...input, requestId: randomUUID(), expectedRevision: 1, text: 'Preserve whitespace.' });
+  assert.equal(plane.workflow.execution(input.commandId)!.sourceTurnId, input.sourceTurnId); assert.equal(sent.length, 3);
+});
+test('unknown transport input is never replayed and blocks release after completion', async () => {
+  const input = await interactionStart(); adapter.send = async () => { throw new Error('transport disconnected'); };
+  assert.equal((await plane.submitInteraction(input)).status, 'uncertain');
+  assert.equal((await plane.submitInteraction(input)).status, 'uncertain');
+  publish(input.runId); await complete(input.runId);
+  assert.equal(run(input.runId).status, 'paused'); assert.equal(plane.interactions.checkpoint(input.runId), undefined);
+  assert.equal(plane.workflow.owner(`${root}/.git/index`), input.runId);
+});
+test('preflight refusal sends no bytes and does not strand a hold', async () => {
+  const input = await interactionStart(); adapter.preflight = async () => { throw new Error('copy mode'); };
+  assert.equal((await plane.submitInteraction(input)).status, 'rejected'); assert.equal(sent.length, 1); assert.equal(run(input.runId).interaction?.active, false);
+});
+test('completion wins the preflight race: rejected input restores the saved disposition without typing', async () => {
+  const input = await interactionStart({ handoff: false }); let release!: () => void; let entered!: () => void;
+  const started = new Promise<void>((r) => { entered = r; }); const gate = new Promise<void>((r) => { release = r; });
+  adapter.preflight = async () => { entered(); await gate; };
+  const pending = plane.submitInteraction(input); await started;
+  publish(input.runId); await complete(input.runId); assert.equal(run(input.runId).status, 'paused'); release();
+  assert.equal((await pending).status, 'rejected'); assert.equal(run(input.runId).status, 'completed'); assert.equal(sent.length, 1);
+});
+test('an uncorrelated native start cannot be attributed to even identical reserved text', async () => {
+  const input = await interactionStart(); await plane.submitInteraction(input);
+  await plane.recordEvent(externalEvent(input.runId, { prompt: input.text }));
+  publish(input.runId); await complete(input.runId);
+  assert.equal(run(input.runId).status, 'paused'); assert.equal(run(input.runId).interaction?.fault, true);
+  assert.equal(plane.interactions.checkpoint(input.runId), undefined); assert.equal(sent.length, 2);
+});
+test('checkpoint rejects changed checkout, changed publication and stale confirmations', async () => {
+  const input = await interactionStart(); await plane.submitInteraction(input); publish(input.runId, true); await complete(input.runId);
+  const decision = checkpointDecision(input.runId);
+  appendFileSync(join(root, 'app.txt'), 'unexpected writer\n');
+  await assert.rejects(plane.reconcileCheckpoint(decision), /leftovers|checkout changed/i);
+  git('restore', 'app.txt');
+  const path = plane.workflow.execution(input.runId)!.implementation!.resultPath;
+  const raw = readFileSync(path, 'utf8'); const changed = JSON.parse(raw); changed.summary = 'Changed after capture'; writeFileSync(path, JSON.stringify(changed));
+  await assert.rejects(plane.reconcileCheckpoint(decision), /result changed/); writeFileSync(path, raw);
+  await plane.action({ action: 'pause', runId: input.runId });
+  await assert.rejects(plane.reconcileCheckpoint(decision), /checkpoint is incomplete/); assert.equal(sent.length, 2);
+});
+test('restore requires a pre-existing validated boundary and exact external finish; it never dispatches', async () => {
+  checkpointPanes(); const input = request({ autoContinue: false }); await plane.submitImplementation(input); publish(input.requestId, true); await complete(input.requestId);
+  const review = run(input.requestId).currentCommandId; publish(review, true); await complete(review);
+  assert.equal(run(input.requestId).status, 'waiting'); const external = externalEvent(input.requestId);
+  await plane.recordEvent(external); assert.equal(run(input.requestId).status, 'paused');
+  await assert.rejects(plane.reconcileCheckpoint(checkpointDecision(input.requestId, 'restore')), /checkpoint is incomplete/);
+  await plane.recordEvent({ ...external, event: 'turn_complete' });
+  const decision = checkpointDecision(input.requestId, 'restore'); await plane.reconcileCheckpoint(decision); await plane.reconcileCheckpoint(decision);
+  assert.equal(run(input.requestId).status, 'waiting'); assert.equal(run(input.requestId).automaticTurns, 1); assert.equal(sent.length, 2);
+  await plane.action({ action: 'continue', runId: input.requestId, expectedCommandId: review, confirmReady: true }); assert.equal(sent.length, 3);
+});
+test('external completion without start cannot restore a paused checkpoint', async () => {
+  checkpointPanes(); const input = request({ autoContinue: false }); await plane.submitImplementation(input); publish(input.requestId, true); await complete(input.requestId);
+  const review = run(input.requestId).currentCommandId; publish(review, true); await complete(review);
+  await plane.recordEvent(externalEvent(input.requestId, { event: 'turn_complete' }));
+  assert.equal(plane.interactions.checkpoint(input.requestId)!.fault, true);
+  await assert.rejects(plane.reconcileCheckpoint(checkpointDecision(input.requestId, 'restore')), /checkpoint is incomplete/); assert.equal(sent.length, 2);
+});
+test('restart preserves unresolved input and invalidates checkpoint recovery', async () => {
+  const input = await interactionStart(); await plane.submitInteraction(input); publish(input.runId, true); await complete(input.runId);
+  const decision = checkpointDecision(input.runId);
+  plane = new ControlPlane(new Controller(config(), store, adapter));
+  assert.equal(plane.interactions.records().length, 1); assert.equal(plane.interactions.checkpoint(input.runId)!.fault, true);
+  await assert.rejects(plane.reconcileCheckpoint(decision), /checkpoint is incomplete/); assert.equal(sent.length, 2);
+});
+
+test('two clients share one pending input reservation, including key-only transport', async () => {
+  const base = await interactionStart(); let release!: () => void; let entered!: () => void; const keys: string[] = [];
+  const gate = new Promise<void>((r) => { release = r; }); const began = new Promise<void>((r) => { entered = r; });
+  adapter.press = async (_session, key) => { keys.push(key); entered(); await gate; };
+  const input = { ...base, text: undefined, purpose: 'key' as const, key: 'Escape' as const, confirmInterrupt: true as const };
+  const first = plane.submitInteraction(input); await began;
+  assert.equal((await plane.submitInteraction(input)).status, 'sending');
+  await assert.rejects(plane.submitInteraction({ ...input, requestId: randomUUID(), expectedRevision: 1 }), /unresolved input/);
+  assert.throws(() => plane.action({ action: 'takeover', runId: input.runId, confirmReady: true }), /terminal input to finish/);
+  assert.equal(plane.workflow.activeExecutions().filter((t) => t.runId === input.runId).length, 1);
+  release(); assert.equal((await first).status, 'delivered'); assert.deepEqual(keys, ['Escape']); assert.equal(sent.length, 1);
+});
+
+test('delayed external native evidence from before a checkpoint cannot restore it', async () => {
+  checkpointPanes(); const input = request({ autoContinue: false }); await plane.submitImplementation(input); publish(input.requestId, true); await complete(input.requestId);
+  const review = run(input.requestId).currentCommandId; publish(review, true); await complete(review);
+  const external = externalEvent(input.requestId, { startedAt: '2020-01-01T00:00:00.000Z' });
+  await plane.recordEvent(external); await plane.recordEvent({ ...external, event: 'turn_complete' });
+  await assert.rejects(plane.reconcileCheckpoint(checkpointDecision(input.requestId, 'restore')), /checkpoint is incomplete/);
+  assert.equal(plane.interactions.checkpoint(input.requestId)!.fault, true); assert.equal(sent.length, 2);
+});
+
+test('native work in an unselected discovered checkout agent faults an unfinished input hold', async () => {
+  const first = request(); await plane.submitImplementation(first); await plane.recordEvent(event(first.requestId, { event: 'turn_started' }));
+  const foreground = adapter.foreground.bind(adapter);
+  adapter.foreground = async (s) => s.identity.paneId === '%3' ? '103' : foreground(s);
+  const discovered = (await plane.state()).sessions.find((s) => s.identity.paneId === '%3')!; assert.ok(discovered);
+  assert.equal(store.sessions().some((s) => s.id === discovered.id), false);
+  const holder = run(first.requestId).participants[0]!;
+  await plane.submitInteraction({ requestId: randomUUID(), runId: first.requestId, commandId: first.requestId, agentId: holder.id, registrationId: holder.registrationId,
+    sessionId: 'session-codex', sourceTurnId: `turn-${first.requestId}`, expectedRevision: 0, confirmPresent: true, purpose: 'detail', text: 'Explain edge cases.' });
+  await plane.recordEvent({ event: 'turn_started', source: 'codex', identity: discovered.identity, paneId: '%3', socketPath: discovered.identity.socketPath,
+    cliPid: '103', startedAt: new Date().toISOString(), sessionId: 'discovered-session', sourceTurnId: 'outside', prompt: 'Other work' });
+  assert.equal(run(first.requestId).status, 'paused'); assert.equal(run(first.requestId).interaction?.fault, true);
+  assert.equal(plane.workflow.owner(`${root}/.git/index`), first.requestId); assert.equal(sent.length, 2);
+});
+
+test('concurrent external completions retain settlement evidence for both checkout agents', async () => {
+  checkpointPanes(); const input = request({ autoContinue: false }); await plane.submitImplementation(input); publish(input.requestId, true); await complete(input.requestId);
+  const review = run(input.requestId).currentCommandId; publish(review, true); await complete(review);
+  const cp = plane.interactions.checkpoint(input.requestId)!; const first = externalEvent(input.requestId);
+  const second = event(review, { commandId: undefined, sourceTurnId: 'peer-external', cliPid: '101', startedAt: new Date(Date.parse(cp.capturedAt) + 2).toISOString(), event: 'turn_started', prompt: 'Explain the review' });
+  await Promise.all([plane.recordEvent(first), plane.recordEvent(second)]);
+  await Promise.all([plane.recordEvent({ ...first, event: 'turn_complete' }), plane.recordEvent({ ...second, event: 'turn_complete' })]);
+  assert.deepEqual(Object.values(plane.interactions.checkpoint(input.requestId)!.external).map((e) => e.state), ['clear','clear']);
+  await plane.reconcileCheckpoint(checkpointDecision(input.requestId, 'restore')); assert.equal(run(input.requestId).status, 'waiting'); assert.equal(sent.length, 2);
+});
+
+test('a copied finished-command marker never exempts a different native turn from checkpoint faults', async () => {
+  checkpointPanes(); const input = request({ autoContinue: false }); await plane.submitImplementation(input); publish(input.requestId, true); await complete(input.requestId);
+  const review = run(input.requestId).currentCommandId; publish(review, true); await complete(review);
+  await plane.recordEvent(event(review, { event: 'turn_started', sourceTurnId: 'copied-marker-new-turn', cliPid: '101', startedAt: new Date().toISOString() }));
+  assert.equal(run(input.requestId).status, 'paused'); assert.equal(plane.interactions.checkpoint(input.requestId)!.fault, true);
+  await assert.rejects(plane.reconcileCheckpoint(checkpointDecision(input.requestId, 'restore')), /checkpoint is incomplete/); assert.equal(sent.length, 2);
+});
+
+test('the console view bounds terminal input like recent commands but never hides unresolved input', async () => {
+  const template = await interactionStart();
+  const record = (status: 'delivered' | 'uncertain') => {
+    const at = new Date().toISOString();
+    plane.interactions.save({ input: { ...template, requestId: randomUUID() }, repository: root, status, createdAt: at, updatedAt: at, error: null });
+  };
+  record('uncertain'); // The oldest record still owns the run, so truncation must not drop it.
+  for (let i = 0; i < 35; i++) record('delivered');
+  const view = plane.interactions.recent();
+  assert.equal(view.length, 31); assert.equal(view[0]!.status, 'uncertain');
+  assert.equal(view.filter((r) => r.status === 'uncertain').length, 1);
+  assert.equal(plane.interactions.records().length, 36); // export and reconciliation still see everything
+  assert.equal((await plane.state()).interactions!.length, 31);
+  assert.equal(plane.interactions.pending(template.runId), true);
+});
+
+test('a released run leaves no checkpoint to scan or restore', async () => {
+  checkpointPanes(); const input = request({ autoContinue: false }); await plane.submitImplementation(input); publish(input.requestId, true); await complete(input.requestId);
+  const review = run(input.requestId).currentCommandId; publish(review, true); await complete(review);
+  assert.ok(plane.interactions.checkpoint(input.requestId)); assert.equal(plane.interactions.activeCheckpoints().length, 1);
+  await plane.action({ runId: input.requestId, action: 'takeover', confirmReady: true });
+  assert.equal(plane.workflow.owner(`${root}/.git/index`), null);
+  assert.equal(plane.interactions.activeCheckpoints().length, 0);
+  assert.equal((await plane.state()).checkpoints!.length, 0);
+  plane.interactions.prune(); assert.equal(plane.interactions.checkpoint(input.requestId), undefined);
 });

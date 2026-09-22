@@ -17,6 +17,8 @@ exact-version endorsements, and a separate human approval checkpoint. The [ADR i
 and [workflow guide](docs/WORKFLOWS.md) describe the broader design; source support
 does not imply installed-host acceptance.
 
+Owned modern assignments expose **Add detail to this task** and literal terminal controls. Input holds the whole run until its original result validates and you review the checkpoint. A separately saved waiting checkpoint can be restored after exactly observed external work settles; restoration sends nothing. Projects can request read-only squash-batch advice, with a fresh human preview and confirmation for every integration. See [ADR-0019](docs/adr/ADR-0019-terminal-input-and-checkpoints.md) and the installed-provider limits in [VALIDATION](VALIDATION.md).
+
 The supervised staging fallback is off by default. Set
 `CODERCREW_ENABLE_LEGACY_RELAY=true` and restart the backend to expose the supervised
 fallback. Its staging contract remains unchanged.
@@ -337,9 +339,13 @@ ios/                     Reserved future host-API client
 
 `WorkflowStore` owns execution independently of `Store`'s short-lived delivery
 reservation. All active runs and commands remain visible even when the history
-panel shows only the latest 30 deliveries. One backend process per database is
-supported. Restart the development backend after server-code changes; hot reload
-must not replace a live scheduler or close its database during delivery.
+panel shows only the latest 30 deliveries. Terminal input is bounded the same
+way, except that unresolved input always stays visible because it still holds
+its run; **Export history** remains complete. A checkpoint belongs to a run that
+still holds execution ownership, so released runs keep none. One backend process
+per database is supported. Restart the development backend after server-code
+changes; hot reload must not replace a live scheduler or close its database
+during delivery.
 
 ## Checks and documentation
 
