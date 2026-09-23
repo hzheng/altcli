@@ -25,7 +25,7 @@ export function parseInteraction(value: unknown): InteractionInput {
   } else {
     if (b.key !== undefined || b.confirmInterrupt !== undefined) throw new AppError('INVALID_KEY', 'Text input cannot include a key.');
     result.text = promptText(b.text);
-    if (/\[codercrew-command:/i.test(result.text)) throw new AppError('INVALID_TEXT', 'An update cannot contain a controller command marker.');
+    if (/\[altcli-command:/i.test(result.text)) throw new AppError('INVALID_TEXT', 'An update cannot contain a controller command marker.');
   }
   return result;
 }

@@ -212,16 +212,16 @@ test('Settings shows the effective host configuration and the console preference
   const host = page.getByRole('region', { name: 'Host configuration' });
   await expect(host).toContainText('READ AT START'); await expect(host).toContainText('restart the host');
   const row = (name: string) => host.getByRole('row').filter({ has: page.getByRole('cell', { name, exact: true }) });
-  await expect(row('Adapter')).toContainText('mock (simulated panes)'); await expect(row('Adapter')).toContainText('CODERCREW_ADAPTER (set)');
-  await expect(row('Data store')).toContainText(/codercrew-e2e-\d+-\d+\/mock/); await expect(row('Data store')).toContainText('CODERCREW_DATA_DIR (set)');
-  await expect(row('tmux binary')).toContainText('CODERCREW_TMUX_BIN · default tmux from PATH');
+  await expect(row('Adapter')).toContainText('mock (simulated panes)'); await expect(row('Adapter')).toContainText('ALTCLI_ADAPTER (set)');
+  await expect(row('Data store')).toContainText(/altcli-e2e-\d+-\d+\/mock/); await expect(row('Data store')).toContainText('ALTCLI_DATA_DIR (set)');
+  await expect(row('tmux binary')).toContainText('ALTCLI_TMUX_BIN · default tmux from PATH');
   await expect(row('Integration branches')).toContainText(`main, master + each project's default branch`);
   await expect(row('Deprecated staging relay')).toContainText('allowed');
   await expect(host).not.toContainText('a'.repeat(64)); // the token never reaches the page
   const preferences = page.getByRole('region', { name: 'Console preferences' });
   await expect(preferences.getByLabel('Staging fallback', { exact: true })).toBeEnabled();
   await sections.getByRole('button', { name: 'About', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'About CoderCrew', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'About AltCLI', exact: true })).toBeVisible();
   await expect(page.getByRole('region', { name: 'How this works' })).toContainText('No effect in this page sends commands');
   await sections.getByRole('button', { name: 'Console', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Actions for Codex' })).toBeVisible();
@@ -244,11 +244,11 @@ test('Stay unlocked is an explicit preference: reopening skips the token, Lock f
   await page.getByLabel('Host access token').fill('a'.repeat(64)); await page.getByRole('button', { name: 'Open console' }).click();
   await page.reload(); await expect(page.getByRole('heading', { name: 'Agent console', exact: true })).toBeVisible();
   // A remembered token the host refuses is dropped rather than retried on every load.
-  await page.evaluate(() => localStorage.setItem('codercrew.token', 'b'.repeat(64)));
+  await page.evaluate(() => localStorage.setItem('altcli.token', 'b'.repeat(64)));
   await page.reload(); await expect(page.getByRole('alert').filter({ hasText: /access token/ })).toBeVisible();
-  expect(await page.evaluate(() => localStorage.getItem('codercrew.token'))).toBeNull();
+  expect(await page.evaluate(() => localStorage.getItem('altcli.token'))).toBeNull();
   await page.reload(); await expect(page.getByLabel('Host access token')).toBeVisible();
-  await page.evaluate(() => localStorage.removeItem('codercrew.stayUnlocked'));
+  await page.evaluate(() => localStorage.removeItem('altcli.stayUnlocked'));
 });
 test('a double click starts once, and a refused start stays in its own card with the text kept', async ({ page, request }) => {
   const group = await post(request, 'groups', { name: 'Refusal', members: ['codex','claude'] });

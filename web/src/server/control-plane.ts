@@ -179,7 +179,7 @@ export class ControlPlane {
     }
     return archived;
   }
-  /** CoderCrew's own history for backup; cloning the repository cannot recover it. */
+  /** AltCLI's own history for backup; cloning the repository cannot recover it. */
   exportHistory(repository?: string) { return { ...this.workflow.exportHistory(repository), interactions: this.interactions.records(repository) }; }
   private workspaceSessions(discovery: WorkspaceDiscovery): ManagedSession[] {
     const sessions = new Map((this.store.sessions() as ManagedSession[]).map((session) => [session.id, session]));
@@ -413,7 +413,7 @@ export class ControlPlane {
     this.store.removeGroup(id);
   }
   async submit(input: StartInput): Promise<CommandRecord> {
-    if (!this.config.legacyEnabled && !this.workflow.execution(input.requestId)) throw new AppError('LEGACY_DISABLED', 'The deprecated staging relay is disabled. Start a committed implementation run, or explicitly enable CODERCREW_ENABLE_LEGACY_RELAY on the host for supervised fallback.', 409);
+    if (!this.config.legacyEnabled && !this.workflow.execution(input.requestId)) throw new AppError('LEGACY_DISABLED', 'The deprecated staging relay is disabled. Start a committed implementation run, or explicitly enable ALTCLI_ENABLE_LEGACY_RELAY on the host for supervised fallback.', 409);
     if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'Input is disabled by the host.', 403);
     const session = this.store.sessions().find((s) => s.id === input.agentId) as ManagedSession | undefined;
     if (!session?.registrationId) throw new AppError('REGISTRATION_REQUIRED', 'Register or re-register this worker before issuing commands.', 409);
@@ -575,7 +575,7 @@ export class ControlPlane {
     const implementationInput: ImplementationStart = { ...input.implementation, branch: input.implementation.branch ?? input.baseline, requestId: input.requestId, kind: 'work', text: input.text, autoContinue: false, turnLimit: input.turnLimit, confirmReady: true };
     const implementation = await this.implementationGroup(implementationInput);
     if (implementation.cwd !== cwd || !sameWorktree(implementation.participants[0]!.worktree, participants[0]!.worktree)) throw new AppError('DIFFERENT_WORKTREE', 'Both phases must use the same prepared workspace.', 409);
-    // Plan documents belong to CoderCrew, not the project: they live beside the assignments, outside every checkout.
+    // Plan documents belong to AltCLI, not the project: they live beside the assignments, outside every checkout.
     const plan = newPlanning(input, group, participants, implementation.participants, cwd, await planRoot(this.config.dataDir, participants[0]!.worktree!.root));
     await access(resolve(process.cwd(), '../skills/plan-handoff/SKILL.md')).catch(() => { throw new AppError('SKILL_MISSING', 'The repository plan-handoff skill is required.', 409); });
     await assertPlanArtifacts(plan); await assertPlanBaseline(plan);

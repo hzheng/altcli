@@ -133,7 +133,7 @@ test('history export downloads this worktree\'s runs and journal as JSON through
   page.on('request', (sent) => { if (sent.url().includes('/api/v1/history/export')) requests.push(sent.url()); });
   const download = page.waitForEvent('download');
   await expand(page, 'Command history'); await page.getByRole('button', { name: 'Export history', exact: true }).click();
-  const file = await download; expect(file.suggestedFilename()).toMatch(/^codercrew-history-.*\.json$/);
+  const file = await download; expect(file.suggestedFilename()).toMatch(/^altcli-history-.*\.json$/);
   const exported = JSON.parse(await (await import('node:fs/promises')).readFile(await file.path(), 'utf8'));
   expect(exported).toMatchObject({ schema: 1, repository: run.repository });
   expect(exported.runs.map((r: { id: string }) => r.id)).toContain(run.id);

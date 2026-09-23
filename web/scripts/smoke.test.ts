@@ -145,7 +145,7 @@ test("prompt text keeps line breaks, normalizes CRLF, and refuses other controls
   assert.throws(() => promptText("x".repeat(2001)), /2,000/);
 });
 test("a multi-line prompt is delivered as one bracketed paste, then Enter; a single line is still typed", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "codercrew-smoke-"));
+  const directory = await mkdtemp(join(tmpdir(), "altcli-smoke-"));
   try {
     const calls: { args: string[]; input?: string }[] = [];
     const run = async (args: string[], input?: string) => { calls.push({ args, input }); return args[0] === "display-message" ? `%1\t11\t22\t123\t/tmp/tmux-test\tcodex\t${directory}\t0\t0\t0\n` : ""; };
@@ -211,16 +211,16 @@ test("native-style Origin omission still requires the bearer token", () => {
   assert.doesNotThrow(() => authorize(request(), token, origins));
 });
 test("configuration rejects invalid tokens, relative data paths and public HTTP origins", () => {
-  const env = { CODERCREW_TOKEN: token };
+  const env = { ALTCLI_TOKEN: token };
   assert.equal(loadConfig(env).mode, "tmux");
   assert.equal(loadConfig(env).inputEnabled, true);
-  assert.equal(loadConfig({ ...env, CODERCREW_ENABLE_INPUT: "false" }).inputEnabled, false);
-  assert.equal(loadConfig({ ...env, CODERCREW_ADAPTER: "mock" }).mode, "mock");
-  assert.throws(() => loadConfig({ ...env, CODERCREW_ADAPTER: "ssh" }));
-  assert.throws(() => loadConfig({ ...env, CODERCREW_TOKEN: "secret" }));
-  assert.throws(() => loadConfig({ ...env, CODERCREW_DATA_DIR: "./data" }));
-  assert.throws(() => loadConfig({ ...env, CODERCREW_ALLOWED_ORIGINS: "http://public.example" }));
-  assert.throws(() => loadConfig({ ...env, CODERCREW_ALLOWED_ORIGINS: "https://host.example/path" }));
+  assert.equal(loadConfig({ ...env, ALTCLI_ENABLE_INPUT: "false" }).inputEnabled, false);
+  assert.equal(loadConfig({ ...env, ALTCLI_ADAPTER: "mock" }).mode, "mock");
+  assert.throws(() => loadConfig({ ...env, ALTCLI_ADAPTER: "ssh" }));
+  assert.throws(() => loadConfig({ ...env, ALTCLI_TOKEN: "secret" }));
+  assert.throws(() => loadConfig({ ...env, ALTCLI_DATA_DIR: "./data" }));
+  assert.throws(() => loadConfig({ ...env, ALTCLI_ALLOWED_ORIGINS: "http://public.example" }));
+  assert.throws(() => loadConfig({ ...env, ALTCLI_ALLOWED_ORIGINS: "https://host.example/path" }));
 });
 test("directory boundaries are not string-prefix comparisons", () => {
   assert.equal(isWithin("/tmp/repo", "/tmp/repo/data"), true);
@@ -256,7 +256,7 @@ test("pane preview is a bounded capture with a validated pane id and no identity
   await assert.rejects(new TmuxAdapter(async () => "").peek("agent:0"), /exact pane ID/);
 });
 test("tmux send revalidates and sends text, waits out Codex's paste window, then presses Enter", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "codercrew-smoke-"));
+  const directory = await mkdtemp(join(tmpdir(), "altcli-smoke-"));
   try {
     const calls: { args: string[]; at: number }[] = [];
     const testSession = { ...session, repository: directory };
@@ -268,7 +268,7 @@ test("tmux send revalidates and sends text, waits out Codex's paste window, then
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 test("tmux send stops before Enter if foreground ownership changes", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "codercrew-smoke-"));
+  const directory = await mkdtemp(join(tmpdir(), "altcli-smoke-"));
   try {
     let reads = 0; const calls: string[][] = [];
     const run = async (args: string[]) => { calls.push(args); if (args[0] !== "display-message") return "";
@@ -278,7 +278,7 @@ test("tmux send stops before Enter if foreground ownership changes", async () =>
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 test("wrong repository is refused even when the process matches", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "codercrew-smoke-"));
+  const directory = await mkdtemp(join(tmpdir(), "altcli-smoke-"));
   try {
     await mkdir(join(directory, "repo"));
     const run = async () => `%1\t11\t22\t123\t/tmp/tmux-test\tcodex\t${directory}\t0\t0\t0\n`;
@@ -303,31 +303,31 @@ test("Claude hooks bind the actual prompt and current Stop response without read
   const { createServer } = await import("node:http");
   const { execFile } = await import("node:child_process");
   const { writeFile } = await import("node:fs/promises");
-  const directory = await mkdtemp(join(tmpdir(), "codercrew-hook-"));
+  const directory = await mkdtemp(join(tmpdir(), "altcli-hook-"));
   const posts: Record<string, unknown>[] = [];
   const server = createServer((req, res) => { let body = ""; req.on("data", (c) => { body += c; }); req.on("end", () => { posts.push(JSON.parse(body)); res.end("{}"); }); });
   try {
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const port = (server.address() as { port: number }).port;
     await writeFile(join(directory, "tmux"), "#!/bin/sh\nprintf '%s\\n' '%7\t11\t12\t13\t/tmp/tmux-fixture'\n", { mode: 0o700 });
-    await writeFile(join(directory, "env"), `CODERCREW_TOKEN=${token}\n`);
+    await writeFile(join(directory, "env"), `ALTCLI_TOKEN=${token}\n`);
     const transcript = join(directory, "lagging.jsonl");
     await writeFile(transcript, JSON.stringify({ type: "assistant", message: { stop_reason: "end_turn", content: "RELAY-OUTCOME: accept_and_improve" } }));
     const invoke = (payload: Record<string, unknown>) => new Promise<void>((resolve, reject) => {
-      const child = execFile(process.execPath, [fileURLToPath(new URL("../../hooks/codercrew-turn-complete.mjs", import.meta.url)), "claude"],
+      const child = execFile(process.execPath, [fileURLToPath(new URL("../../hooks/altcli-turn-complete.mjs", import.meta.url)), "claude"],
         { env: { ...process.env, HOME: directory, PATH: `${directory}:${process.env.PATH}`, TMUX: "/tmp/tmux-fixture,12,0", TMUX_PANE: "%7",
-          CODERCREW_ENV: join(directory, "env"), CODERCREW_URL: `http://127.0.0.1:${port}` }, timeout: 5000 },
+          ALTCLI_ENV: join(directory, "env"), ALTCLI_URL: `http://127.0.0.1:${port}` }, timeout: 5000 },
         (error) => error ? reject(error) : resolve());
       child.stdin!.end(JSON.stringify({ session_id: "test-session", ...payload }));
     });
-    await invoke({ hook_event_name: "UserPromptSubmit", prompt: `relay: [codercrew-command:${id}]` });
+    await invoke({ hook_event_name: "UserPromptSubmit", prompt: `relay: [altcli-command:${id}]` });
     await invoke({ hook_event_name: "Stop", transcript_path: transcript, last_assistant_message: "RELAY-OUTCOME: strong_objection - Current rejection.", background_tasks: [], session_crons: [] });
     assert.equal(posts.length, 2); assert.equal(posts[0]!.event, "turn_started");
     assert.equal(posts[1]!.outcome, "strong_objection"); assert.equal(posts[1]!.commandId, id);
     assert.equal(posts[0]!.sourceTurnId, posts[1]!.sourceTurnId); assert.equal(posts[1]!.backgroundState, "clear");
     await invoke({ hook_event_name: "Stop", transcript_path: transcript }); assert.equal(posts.length, 2);
-    await invoke({ hook_event_name: "UserPromptSubmit", prompt: `relay: [codercrew-command:${id}]` });
-    await invoke({ hook_event_name: "UserPromptSubmit", prompt: `relay: [codercrew-command:${id}]` });
+    await invoke({ hook_event_name: "UserPromptSubmit", prompt: `relay: [altcli-command:${id}]` });
+    await invoke({ hook_event_name: "UserPromptSubmit", prompt: `relay: [altcli-command:${id}]` });
     assert.equal(posts.at(-1)!.commandId, undefined);
   } finally { await new Promise<void>((resolve) => server.close(() => resolve())); await rm(directory, { recursive: true, force: true }); }
 });
@@ -337,19 +337,19 @@ test("JSON boundary rejects wrong media type and oversized request bodies", asyn
   assert.deepEqual(await jsonBody(new Request("http://localhost", { method: "POST", headers: { "content-type": "application/json" }, body: '{"ok":true}' })), { ok: true });
 });
 test("the host configuration description resolves the tmux binary, names the variables that were set and never carries the token", () => {
-  const env = { CODERCREW_TOKEN: token, CODERCREW_ADAPTER: "mock", CODERCREW_DATA_DIR: "/tmp/codercrew-smoke", CODERCREW_TMUX_BIN: process.execPath, PATH: process.env.PATH };
+  const env = { ALTCLI_TOKEN: token, ALTCLI_ADAPTER: "mock", ALTCLI_DATA_DIR: "/tmp/altcli-smoke", ALTCLI_TMUX_BIN: process.execPath, PATH: process.env.PATH };
   const described = describeConfig(loadConfig(env), env);
   assert.equal(described.tmuxBin, process.execPath); assert.equal(described.tmuxPath, process.execPath);
-  assert.equal(described.dataDir, "/tmp/codercrew-smoke/mock"); assert.equal(described.tmuxSocket, null); assert.deepEqual(described.integrationBranches, ["main", "master"]);
-  assert.deepEqual(described.environment, ["CODERCREW_ADAPTER", "CODERCREW_DATA_DIR", "CODERCREW_TMUX_BIN"]);
+  assert.equal(described.dataDir, "/tmp/altcli-smoke/mock"); assert.equal(described.tmuxSocket, null); assert.deepEqual(described.integrationBranches, ["main", "master"]);
+  assert.deepEqual(described.environment, ["ALTCLI_ADAPTER", "ALTCLI_DATA_DIR", "ALTCLI_TMUX_BIN"]);
   assert.ok(!JSON.stringify(described).includes(token));
-  assert.equal(resolveExecutable("no-such-binary-for-codercrew", { PATH: dirname(process.execPath) }), null);
+  assert.equal(resolveExecutable("no-such-binary-for-altcli", { PATH: dirname(process.execPath) }), null);
   assert.equal(resolveExecutable("node", { PATH: dirname(process.execPath) }), join(dirname(process.execPath), "node"));
   assert.equal(resolveExecutable("/no/such/tmux", env), null);
 });
 
 test('key-only transport has a closed enum, checks modes and sends Escape without a following Enter', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'codercrew-key-'));
+  const directory = await mkdtemp(join(tmpdir(), 'altcli-key-'));
   try {
     const calls: string[][] = []; let mode = '0';
     const run = async (args: string[]) => { calls.push(args); return args[0] === 'display-message' ? `%1\t11\t22\t123\t/tmp/tmux-test\tcodex\t${directory}\t0\t${mode}\t0\n` : ''; };

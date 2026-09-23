@@ -64,7 +64,7 @@ export interface ImplementationStart {
   /** Agreement: a reviewer objection pauses for the human instead of being routed to the author. Default false. */
   pauseOnObjection?: boolean;
   /** Explicit project preference: also mirror every journal entry into this tracked, nonignored JSON-lines file inside the
-   * handoff commit. Absent (the default), the journal lives only in CoderCrew's history and report-only turns publish no commit. */
+   * handoff commit. Absent (the default), the journal lives only in AltCLI's history and report-only turns publish no commit. */
   logPath?: string;
   branch: BranchConsent;
   /** Excluded baseline for review, including commit with handoff (defaults to the pre-snapshot HEAD). */
@@ -99,7 +99,7 @@ export interface ImplementationRun extends ImplementationPolicy {
   branch: string;
   consent: BranchConsent;
   setup: 'pending' | 'applying' | 'ready' | 'uncertain';
-  /** Null keeps the journal in CoderCrew only. */
+  /** Null keeps the journal in AltCLI only. */
   logPath: string | null;
   taskBaseSha: string;
   acceptedSha: string;
@@ -151,7 +151,7 @@ export interface Publication { sha: string; projectChanged: boolean; entry: Hand
  * kept, because the patch exceeded the size bound or contained text that cannot be stored as UTF-8. */
 export interface HandoffArchive { patch: string; complete: boolean }
 export type PublicationResult = { publication: Publication; archive: HandoffArchive | null; error?: never } | { error: string; publication?: never; archive?: never };
-/** One completed implementation turn in CoderCrew's durable history, independent of the checkout and its branch. */
+/** One completed implementation turn in AltCLI's durable history, independent of the checkout and its branch. */
 export interface JournalRecord {
   runId: string;
   commandId: string;

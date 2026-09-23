@@ -16,7 +16,7 @@ interface Observation {
   humanConfirmed?: true;
 }
 /** A fresh completion can recover its exact native start after a backend restart. Never scan history. */
-export async function hasCurrentNativeBinding(input: HookEvent, directory = join(homedir(), '.local', 'share', 'codercrew', 'hook-turns')): Promise<boolean> {
+export async function hasCurrentNativeBinding(input: HookEvent, directory = join(homedir(), '.local', 'share', 'altcli', 'hook-turns')): Promise<boolean> {
   if (!input.identity || !input.sessionId || !input.sourceTurnId || !input.cliPid || !input.startedAt) return false;
   try {
     // Same private slot key as hooks/protocol.mjs; no directory scan or prompt lookup.

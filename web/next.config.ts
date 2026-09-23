@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 const config: NextConfig = {
   // Next locks the dist dir per dev server; the e2e suite runs one server per viewport from this workspace.
-  ...(process.env.CODERCREW_DIST_DIR ? { distDir: process.env.CODERCREW_DIST_DIR } : {}),
+  ...(process.env.ALTCLI_DIST_DIR ? { distDir: process.env.ALTCLI_DIST_DIR } : {}),
   poweredByHeader: false,
   serverExternalPackages: ["better-sqlite3"],
   async headers() {

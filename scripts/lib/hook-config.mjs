@@ -1,5 +1,5 @@
 /** Conservative, dependency-free configuration editing. Unsupported TOML is refused before any write. */
-const ours = (value) => typeof value === 'string' && /(?:^|[\\/])codercrew-turn-complete\.(?:sh|mjs)(?:['"\s]|$)/.test(value);
+const ours = (value) => typeof value === 'string' && /(?:^|[\\/])altcli-turn-complete\.(?:sh|mjs)(?:['"\s]|$)/.test(value);
 const quote = (value) => `'${value.replace(/'/g, `'"'"'`)}'`;
 export function claudeSettings(text, hook) {
   const settings = text === null ? {} : JSON.parse(text);

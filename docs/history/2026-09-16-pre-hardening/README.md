@@ -1,4 +1,4 @@
-# CoderCrew
+# AltCLI
 
 **A self-hosted control center for AI coding agents.**
 
@@ -18,7 +18,7 @@ optional AI supervisor. A native iOS client is reserved for a future phase.
 Use Node 24 (`.nvmrc`), or another compatible Node version >=22.18.0.
 
 ```bash
-cd codercrew
+cd altcli
 nvm use                         # Optional when the right Node version is already active
 node scripts/setup.mjs          # Creates web/.env.local with a random local token
 npm --prefix web ci
@@ -49,8 +49,8 @@ box pre-ticked; an objection comes back with its reason and a prefilled instruct
 the author. **Auto-relay** (on by default) keeps a chain going on `accept_and_improve`
 only; on anything else it waits for you and says why.
 
-`CODERCREW_ENABLE_INPUT=false` in `web/.env.local` turns the console read-only. The
-`mock` adapter (`CODERCREW_ADAPTER=mock`) drives the automated tests with simulated
+`ALTCLI_ENABLE_INPUT=false` in `web/.env.local` turns the console read-only. The
+`mock` adapter (`ALTCLI_ADAPTER=mock`) drives the automated tests with simulated
 panes; it is not part of the product flow.
 
 ## Technology and layout
@@ -61,7 +61,7 @@ better-sqlite3/raw SQL, Vitest, and Playwright**. This is one host-resident Next
 application, not a Vite frontend plus a separate Express server.
 
 ```text
-codercrew/
+altcli/
   README.md                     Start here
   ROADMAP.md                    Current phases and completion criteria
   Architecture_Decision.md      ADR index
@@ -115,7 +115,7 @@ at registration, repository location, copy mode, and synchronized input before
 every capture and send. Shells and generic interpreters can never be registered.
 It never creates or kills an agent. These checks do **not** establish semantic
 readiness or eliminate the race between inspecting a terminal and typing into it.
-A read-only switch (`CODERCREW_ENABLE_INPUT=false`) disables Send and Relay.
+A read-only switch (`ALTCLI_ENABLE_INPUT=false`) disables Send and Relay.
 
 Automatic turn-taking, permission-dialog handling, full terminal emulation,
 notifications, third-agent supervision, and native iOS implementation are **not
@@ -126,8 +126,8 @@ they suggest the next target and pre-tick readiness but never send anything.
 
 Follow [docs/SETUP.md](docs/SETUP.md). In outline:
 
-1. Run the coding CLIs in tmux on the same host as CoderCrew.
-2. Set `CODERCREW_ADAPTER=tmux`, leaving input disabled initially.
+1. Run the coding CLIs in tmux on the same host as AltCLI.
+2. Set `ALTCLI_ADAPTER=tmux`, leaving input disabled initially.
 3. In the console, pick each CLI's pane from the live list, check its preview, and register it with a label and type.
    Sessions on the same repository form a project; name the two that alternate as a relay pair.
 4. Verify read-only captures, target checks, and the local manual acceptance list.
@@ -169,7 +169,7 @@ sharing, local coding-agent execution on iOS, or a standalone data model.
 ## Documentation and license
 
 The original `ROADMAP.md` and ADR are archived under `docs/history/2026-09-13/`.
-The active roadmap reflects CoderCrew's name and the newly confirmed TypeScript
+The active roadmap reflects AltCLI's name and the newly confirmed TypeScript
 backend. The uploaded handoff skill is preserved byte-for-byte at
 `skills/review-handoff/SKILL.md`.
 

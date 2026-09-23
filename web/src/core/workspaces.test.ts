@@ -73,10 +73,10 @@ test("the same directory on two tmux servers is two cards", () => {
 });
 
 test("default names use the tmux session while pane identities and saved names stay independent", () => {
-  const first = { ...pane("codex", "/repo"), location: "codercrew-cc:1.1" };
-  const second = { ...pane("2.1.272", "/repo"), location: "codercrew-cc:1.2" };
-  expect(classifyAgent(first, []).label).toBe("codercrew-cc");
-  expect(classifyAgent(second, []).label).toBe("codercrew-cc");
+  const first = { ...pane("codex", "/repo"), location: "altcli-cc:1.1" };
+  const second = { ...pane("2.1.272", "/repo"), location: "altcli-cc:1.2" };
+  expect(classifyAgent(first, []).label).toBe("altcli-cc");
+  expect(classifyAgent(second, []).label).toBe("altcli-cc");
   expect(first.identity.paneId).not.toBe(second.identity.paneId);
   expect(classifyAgent({ ...first, location: "renamed:1.1" }, []).label).toBe("renamed");
   expect(classifyAgent({ ...first, location: "" }, []).label).toBe("Codex %0");

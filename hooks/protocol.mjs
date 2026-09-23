@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 export const OUTCOMES = new Set(['no_incoming_handoff', 'strong_objection', 'accept_without_improvement', 'accept_and_improve']);
 export const marker = (text) => typeof text === 'string'
-  ? /\[codercrew-command:([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\]\s*$/i.exec(text)?.[1] : undefined;
+  ? /\[altcli-command:([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\]\s*$/i.exec(text)?.[1] : undefined;
 export const plain = (text, max = 2000) => typeof text === 'string' ? text.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').trim().slice(0, max) : '';
 /** Only the actual final nonempty line is a report. An earlier quoted example is not. */
 export function outcomeOf(text) {

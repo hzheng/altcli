@@ -1,6 +1,6 @@
 # ROADMAP
 
-## Project: CoderCrew
+## Project: AltCLI
 
 **Recorded:** September 13, 2026  
 **Updated:** September 16, 2026  
@@ -17,7 +17,7 @@ Keep the human in control first. Add deterministic relay automation later, follo
 
 | Area | Current direction | Status |
 | --- | --- | --- |
-| Project name | CoderCrew: the crew is Codex, Claude Code, and the developer | Confirmed September 16 |
+| Project name | AltCLI: the crew is Codex, Claude Code, and the developer | Confirmed September 16 |
 | Backend | Node.js with TypeScript source | Confirmed September 14 |
 | Frontend | TypeScript; React / Next.js App Router for the scaffold | TypeScript confirmed; Next.js App Router selected |
 | Worker sessions | Keep the coding CLIs running in tmux; register any number of panes from the console's live pane list | Confirmed; multi-pane registration September 15 |
@@ -137,7 +137,7 @@ Automate mechanical turn-taking only after the manual console is reliable. Use e
 
 - [ ] Define run IDs, turn IDs, handoff IDs, agent ownership, task scope, and explicit workflow states, attached to a registered relay pair and its worktree reservation.
 - [x] Add a small handoff-reporting helper around the existing skill without changing its staging rules implicitly: the skill now ends with a `RELAY-OUTCOME:` line, read by the turn-complete hook from the CLI's final message (ADR-0010).
-- [x] Ingest turn-complete events from the CLIs' own hooks instead of inferring completion from screen text: `hooks/codercrew-turn-complete.sh` is Claude Code's `Stop` hook and Codex's `notify` command and posts the pane's tmux identity and the CLI's session id to `POST /api/v1/events` (ADR-0009). A missing or unmatched event means unknown, never complete. The console shows idle/working, hands the target to the pair partner, and pre-ticks readiness; it does not send. Repository fingerprints and automatic advancement remain open.
+- [x] Ingest turn-complete events from the CLIs' own hooks instead of inferring completion from screen text: `hooks/altcli-turn-complete.sh` is Claude Code's `Stop` hook and Codex's `notify` command and posts the pane's tmux identity and the CLI's session id to `POST /api/v1/events` (ADR-0009). A missing or unmatched event means unknown, never complete. The console shows idle/working, hands the target to the pair partner, and pre-ticks readiness; it does not send. Repository fingerprints and automatic advancement remain open.
 - [x] Preserve the skill's four outcomes: no incoming handoff, strong objection, accept without improvement, and accept and improve. They are the only values the outcome line may carry; the console routes on them.
 - [ ] Advance only from a validated outgoing handoff. Do not treat already-accepted staged work as a new pending turn. Auto-relay (ADR-0010) advances only on a reported `accept_and_improve`; validating that report against index and worktree fingerprints remains open.
 - [ ] Associate handoffs with repository snapshots or fingerprints that cover the relevant index, worktree, and in-scope untracked content.

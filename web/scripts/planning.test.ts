@@ -22,12 +22,12 @@ import type { HookEvent, ManagedSession } from '../src/contracts/workflow.ts';
 
 // Real disposable Git/SQLite/files, fake terminal delivery and correlated lifecycle evidence.
 let directory: string; let root: string; let store: Store; let adapter: MockAdapter; let plane: ControlPlane; let group: Group; let sent: string[];
-const config = () => loadConfig({ CODERCREW_ADAPTER: 'mock', CODERCREW_TOKEN: 'a'.repeat(64), CODERCREW_DATA_DIR: join(directory, 'metadata') });
+const config = () => loadConfig({ ALTCLI_ADAPTER: 'mock', ALTCLI_TOKEN: 'a'.repeat(64), ALTCLI_DATA_DIR: join(directory, 'metadata') });
 function git(...args: string[]): string {
   return execFileSync('git', ['-C', root, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 beforeEach(async () => {
-  directory = realpathSync(mkdtempSync(join(tmpdir(), 'codercrew-planning-'))); root = join(directory, 'repo'); mkdirSync(root);
+  directory = realpathSync(mkdtempSync(join(tmpdir(), 'altcli-planning-'))); root = join(directory, 'repo'); mkdirSync(root);
   git('init', '-b', 'main'); writeFileSync(join(root, 'app.txt'), 'baseline\n'); git('add', 'app.txt'); git('commit', '-m', 'baseline'); // no ignore rule: plans stay out of the checkout
   git('switch', '-c', 'task/fixture'); // main is the integration branch: a starting point, never the implementation branch
   store = new Store(join(directory, 'metadata')); adapter = new MockAdapter(); sent = [];
@@ -236,7 +236,7 @@ test('plan documents live in the data directory, not the checkout; collisions an
   publish(fresh.requestId); assert.equal(git('status', '--porcelain=v1', '--untracked-files=all', '--ignored'), ''); // nothing, not even an ignored file
   await complete(fresh.requestId); assert.equal(run(fresh.requestId).planning!.drafts.codex!.status, 'finalized');
   // A run stored before the move kept checkout-relative paths; it is refused instead of being resolved against a guess.
-  const legacy = `.codercrew/plans/${fresh.requestId}`;
+  const legacy = `.altcli/plans/${fresh.requestId}`;
   await assert.rejects(validatePlanPaths({ ...plan, directory: legacy, planPath: `${legacy}/plan.md` }), /earlier layout/);
 });
 test('a plans root that is a link or lies inside the checkout is refused before delivery and at capture', async () => {

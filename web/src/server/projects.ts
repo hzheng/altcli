@@ -161,7 +161,7 @@ export class ProjectCatalog {
   }
   /** The resolved host root for task checkouts. */
   private async taskRoot(): Promise<string> {
-    const configured = this.config.worktreeDir ?? join(homedir(), '.codercrew');
+    const configured = this.config.worktreeDir ?? join(homedir(), '.altcli');
     if (!isAbsolute(configured)) throw new AppError('WORKTREE_PATH', 'The host task-worktree root must be absolute.', 409);
     return futurePath(configured);
   }

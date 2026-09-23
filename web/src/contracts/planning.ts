@@ -33,7 +33,7 @@ export interface PlanIdentity {
   registrationId: string;
   action: PlanAction;
   baseline: string;
-  /** Absolute path of the one document this turn may write, in CoderCrew's data directory, never inside the checkout. */
+  /** Absolute path of the one document this turn may write, in AltCLI's data directory, never inside the checkout. */
   outputPath: string;
   inputRevision: number | null;
   inputHash: string | null;

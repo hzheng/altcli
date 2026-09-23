@@ -6,7 +6,7 @@
 
 ## Context
 
-The user named the project CoderCrew, confirmed TypeScript for both the web frontend
+The user named the project AltCLI, confirmed TypeScript for both the web frontend
 and Node backend, requested a Next.js App Router skeleton with Tailwind,
 better-sqlite3 with raw SQL, Vitest, and Playwright, and reserved native iOS
 implementation for later. The repository has separate `web/` and `ios/` areas.
@@ -25,8 +25,8 @@ wire contract for future clients. Routes adapt HTTP to the controller and must
 not contain tmux command construction or Git workflow policy.
 
 Use SQLite via better-sqlite3/raw SQL for registrations, command records, and the
-manual-turn reservation. Keep its database outside CoderCrew and every managed
-worktree. The default base is `~/.local/share/codercrew`, with separate `mock/`
+manual-turn reservation. Keep its database outside AltCLI and every managed
+worktree. The default base is `~/.local/share/altcli`, with separate `mock/`
 and `tmux/` subdirectories. Raw pane snapshots are bounded and not persisted.
 
 Use simple polling for the initial screen snapshots. The UI replaces a snapshot
@@ -52,7 +52,7 @@ console and low-volume personal coordination. Keeping backend logic independent
 of route handlers permits a separate long-lived worker later if real scheduling
 or a persistent terminal stream makes that useful.
 
-These are design judgments for CoderCrew.
+These are design judgments for AltCLI.
 
 ## Explicit non-decisions
 

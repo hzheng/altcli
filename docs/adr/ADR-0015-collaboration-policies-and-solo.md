@@ -44,7 +44,7 @@ Planning adds "draft independently", "synthesize the shared plan", and "review/i
 | Concern | Plan | Commit-mode implementation |
 | --- | --- | --- |
 | Review target | Captured plan revision/hash and brief version | Explicit code baseline/candidate SHAs |
-| Editable output | Assigned draft or unified plan in CoderCrew's data directory | In-scope project files according to role |
+| Editable output | Assigned draft or unified plan in AltCLI's data directory | In-scope project files according to role |
 | Decision record | Structured controller-held result | Published result recorded in the handoff journal, optionally mirrored into a tracked log |
 | Version history | Controller snapshots/records | Git commits plus the journal's archived patches |
 | Initial concurrency | N assigned drafts, at most `maxConcurrentDrafts` active (parallel execution added in the last planning step) | One writer/publisher per task workspace |

@@ -26,9 +26,9 @@ async function workspace(path: string): Promise<Workspace> {
   return { cwd: realpathSync(path), socketPath: '/mock/socket', worktree: (await resolveWorktree(path))!, branch: git(path, 'branch', '--show-current') || null, agents: [], group: null, sharesIndexWith: [] };
 }
 beforeEach(() => {
-  directory = realpathSync(mkdtempSync(join(tmpdir(), 'codercrew-projects-'))); root = join(directory, 'repo'); mkdirSync(root);
+  directory = realpathSync(mkdtempSync(join(tmpdir(), 'altcli-projects-'))); root = join(directory, 'repo'); mkdirSync(root);
   git(root, 'init', '-b', 'main'); writeFileSync(join(root, 'app.txt'), 'baseline\n'); git(root, 'add', 'app.txt'); git(root, 'commit', '-m', 'baseline');
-  config = { ...loadConfig({ CODERCREW_TOKEN: 'a'.repeat(64), CODERCREW_DATA_DIR: join(directory, 'metadata'), CLAUDE_CONFIG_DIR: join(directory, 'claude'), CODEX_HOME: join(directory, 'codex') }), worktreeDir: join(directory, 'tasks') };
+  config = { ...loadConfig({ ALTCLI_TOKEN: 'a'.repeat(64), ALTCLI_DATA_DIR: join(directory, 'metadata'), CLAUDE_CONFIG_DIR: join(directory, 'claude'), CODEX_HOME: join(directory, 'codex') }), worktreeDir: join(directory, 'tasks') };
   store = new Store(config.dataDir); catalog = new ProjectCatalog(store, config);
 });
 afterEach(() => { store.close(); rmSync(directory, { recursive: true, force: true }); });
@@ -75,23 +75,23 @@ test('confirmed creation uses the chosen commit without moving a dirty source; s
   const [project] = await catalog.discover([], []); assert.equal(project!.worktrees.length, 2); assert.equal(project!.creations[0]!.status, 'ready');
 });
 test('a checkout under the task-worktree root uses its repository directory and saves a corrected name only on use', async () => {
-  const nested = join(config.worktreeDir!, 'codercrew', 'main'); mkdirSync(nested, { recursive: true });
+  const nested = join(config.worktreeDir!, 'altcli', 'main'); mkdirSync(nested, { recursive: true });
   git(nested, 'init', '-b', 'main'); writeFileSync(join(nested, 'app.txt'), 'baseline\n'); git(nested, 'add', 'app.txt'); git(nested, 'commit', '-m', 'baseline');
   const [project] = await catalog.discover([await workspace(nested)], []);
-  assert.equal(project!.name, 'codercrew'); assert.equal(project!.directoryName, 'codercrew');
+  assert.equal(project!.name, 'altcli'); assert.equal(project!.directoryName, 'altcli');
   // A task worktree for it becomes a sibling of that checkout, not a child of a branch directory.
   const preview = await catalog.preview({ projectId: project!.id, sourceWorktreeId: project!.worktrees[0]!.id, branch: 'feature/login' });
-  assert.equal(preview.path, join(config.worktreeDir!, 'codercrew', 'feature', 'login'));
+  assert.equal(preview.path, join(config.worktreeDir!, 'altcli', 'feature', 'login'));
   catalog.remember(nested);
   store.saveProject({ ...store.projects()[0]!, name: 'main', directoryName: 'main' }); // a record written before the repository directory named projects
   store.close(); store = new Store(config.dataDir); catalog = new ProjectCatalog(store, config);
   const before = store.db.prepare('SELECT total_changes() AS count').get();
   const [reloaded] = await catalog.discover([await workspace(nested)], []);
-  assert.equal(reloaded!.id, project!.id); assert.equal(reloaded!.name, 'codercrew');
+  assert.equal(reloaded!.id, project!.id); assert.equal(reloaded!.name, 'altcli');
   assert.deepEqual(store.db.prepare('SELECT total_changes() AS count').get(), before);
   assert.equal(store.projects()[0]!.directoryName, 'main');
   catalog.remember(nested);
-  assert.equal(store.projects()[0]!.directoryName, 'codercrew');
+  assert.equal(store.projects()[0]!.directoryName, 'altcli');
 });
 test('remembering an explicitly used project retains all its worktrees after sessions disappear', async () => {
   await catalog.discover([await workspace(root)], []); catalog.remember(root);
@@ -317,7 +317,7 @@ test('removal and discard refuse a worktree that the host\'s installed hooks or 
   const adapter = new MockAdapter(); adapter.listPanes = async () => [];
   const plane = new ControlPlane(new Controller(config, store, adapter));
   const claude = join(directory, 'claude'); const codex = join(directory, 'codex'); mkdirSync(claude); mkdirSync(join(codex, 'skills'), { recursive: true });
-  const hook = (checkout: string) => JSON.stringify({ theme: 'dark', hooks: { Stop: [{ hooks: [{ type: 'command', command: `'${join(checkout, 'hooks', 'codercrew-turn-complete.sh')}' claude`, timeout: 10 }] }] } });
+  const hook = (checkout: string) => JSON.stringify({ theme: 'dark', hooks: { Stop: [{ hooks: [{ type: 'command', command: `'${join(checkout, 'hooks', 'altcli-turn-complete.sh')}' claude`, timeout: 10 }] }] } });
   writeFileSync(join(claude, 'settings.json'), hook(request.path));
   await assert.rejects(plane.previewRemoval(target), /settings\.json Stop hook.*Reinstall them from the main checkout/);
   const preview = { ...await catalog.previewRemoval(target), confirm: true as const };
@@ -328,18 +328,18 @@ test('removal and discard refuse a worktree that the host\'s installed hooks or 
   // A Codex trust entry for the worktree is not an installation; its notify command is.
   writeFileSync(join(codex, 'config.toml'), `[projects."${request.path}"]\ntrust_level = "trusted"\n`);
   assert.equal((await plane.previewRemoval(target)).worktree.root, request.path);
-  writeFileSync(join(codex, 'config.toml'), `notify = ["${join(request.path, 'hooks', 'codercrew-turn-complete.sh')}", "codex"]\n[projects."${request.path}"]\ntrust_level = "trusted"\n`);
+  writeFileSync(join(codex, 'config.toml'), `notify = ["${join(request.path, 'hooks', 'altcli-turn-complete.sh')}", "codex"]\n[projects."${request.path}"]\ntrust_level = "trusted"\n`);
   await assert.rejects(plane.previewRemoval(target), /config\.toml notify/);
   // A valid multiline root array is what the installer itself accepts, so it must be read completely; a notify inside a table is not the installer's.
-  writeFileSync(join(codex, 'config.toml'), `# host\nmodel = "fixture" # one line\nnotify = [ # installed\n  "${join(request.path, 'hooks', 'codercrew-turn-complete.sh')}",\n  'codex',\n]\n[projects."${request.path}"]\ntrust_level = "trusted"\n`);
+  writeFileSync(join(codex, 'config.toml'), `# host\nmodel = "fixture" # one line\nnotify = [ # installed\n  "${join(request.path, 'hooks', 'altcli-turn-complete.sh')}",\n  'codex',\n]\n[projects."${request.path}"]\ntrust_level = "trusted"\n`);
   await assert.rejects(plane.previewRemoval(target), /config\.toml notify/);
-  writeFileSync(join(codex, 'config.toml'), `model = "fixture"\n[tui]\nnotify = ["${join(request.path, 'hooks', 'codercrew-turn-complete.sh')}"]\n`);
+  writeFileSync(join(codex, 'config.toml'), `model = "fixture"\n[tui]\nnotify = ["${join(request.path, 'hooks', 'altcli-turn-complete.sh')}"]\n`);
   assert.equal((await plane.previewRemoval(target)).worktree.root, request.path);
   for (const malformed of [`notify = [\n  "${join(root, 'hooks', 'x.sh')}",\n  "unclosed\n]\n`, `notify = ["""${join(root, 'hooks', 'x.sh')}"""]\n`, `notify = [1]\n`, `other = [\n"x"]\nnotify = ["y"]\n`]) {
     writeFileSync(join(codex, 'config.toml'), malformed);
     await assert.rejects(plane.previewRemoval(target), /notify command cannot be verified/); // fails closed, even with no reference into the worktree
   }
-  writeFileSync(join(codex, 'config.toml'), `notify = ["${join(root, 'hooks', 'codercrew-turn-complete.sh')}", "codex"]\n`);
+  writeFileSync(join(codex, 'config.toml'), `notify = ["${join(root, 'hooks', 'altcli-turn-complete.sh')}", "codex"]\n`);
   symlinkSync(join(request.path, 'skills', 'review-handoff'), join(codex, 'skills', 'review-handoff'));
   await assert.rejects(plane.previewDiscard(target), /codex\/skills\/review-handoff/);
   await assert.rejects(plane.previewRemoval(target), /codex\/skills\/review-handoff/);

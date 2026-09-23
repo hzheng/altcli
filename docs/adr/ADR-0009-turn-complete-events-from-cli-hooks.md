@@ -19,7 +19,7 @@ and `$TMUX`, which identify the pane exactly.
 
 ## Decision
 
-- One POSIX script, `hooks/codercrew-turn-complete.sh`, serves both CLIs. It posts
+- One POSIX script, `hooks/altcli-turn-complete.sh`, serves both CLIs. It posts
   `{source, paneId, socketPath, cwd, sessionId}` to `POST /api/v1/events` on
   loopback with the console token read from `web/.env.local`, exits 0 always,
   never prints, and does nothing outside tmux. Codex allows one `notify` command,

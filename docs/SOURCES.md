@@ -2,7 +2,7 @@
 
 **Historical starter provenance:** the September 14 notes below are retained as historical observations, not a new claim about today's tools or validation. The collaboration migration record follows, pinned to the submitted source and `46f228b`.
 
-Inspected September 14, 2026. Source observations and CoderCrew design choices are
+Inspected September 14, 2026. Source observations and AltCLI design choices are
 separated below. Repository access was read-only; no GitHub files were changed.
 
 ## User-provided sources
@@ -13,7 +13,7 @@ separated below. Repository access was read-only; no GitHub files were changed.
   improvements remain unstaged; the four outcomes are preserved.
 - The uploaded `ROADMAP.md` and `ADR-0001-tmux-web-controller.md`. Exact originals
   are archived under `docs/history/2026-09-13/`. Their original date is retained.
-- The conversation's September 14 decisions: CoderCrew as project name,
+- The conversation's September 14 decisions: AltCLI as project name,
   TypeScript frontend and backend, web-first development, native iOS reserved,
   and a ZIP starter delivery.
 
@@ -39,13 +39,13 @@ The submitted review's source baseline is preserved. This migration checked the 
 
 ## Product purpose, retained architecture, and comparison with the reference implementation
 
-CoderCrew is an external control center for coding agents, not another coding agent. Its immediate value is centralized reading, instructions, coordinated planning/review, and portable human supervision.
+AltCLI is an external control center for coding agents, not another coding agent. Its immediate value is centralized reading, instructions, coordinated planning/review, and portable human supervision.
 
 Retain the supplied architecture: registered coding CLIs operate in tmux; one host-resident Next.js App Router application with TypeScript on both sides, React, Tailwind, SQLite through `better-sqlite3`, Vitest, and Playwright; dependencies in `web/package.json`; repository operations in root `scripts/`; no root manifest just for forwarding commands. Terminal access and coordination remain server-side. The initial iPhone interface is the responsive console over private Tailscale access. Native iOS, richer terminal interaction, and an AI supervisor remain deferred.
 
 Codex, Claude Code, and Gemini CLI are examples of adapter kinds, not fixed agent identities. Multiple instances of the same CLI may be registered. Support for a Gemini model through some other runtime uses that runtime's adapter. Adding a third planning participant does not require a third supervisory AI or a replacement web stack.
 
-The scope remains **plans first, not competing implementations**. A group of N separately assigned draft writers uses one existing, user-prepared clean workspace; their documents live in CoderCrew's data directory. Initial selection is capped at one or two members; larger planning rosters remain a planned capability. Only distinct initial draft assignments may execute concurrently; the unified plan and implementation remain single-writer. CoderCrew discovers and validates agent placement; it does not create task worktrees, relocate CLI sessions, or provision their environments.
+The scope remains **plans first, not competing implementations**. A group of N separately assigned draft writers uses one existing, user-prepared clean workspace; their documents live in AltCLI's data directory. Initial selection is capped at one or two members; larger planning rosters remain a planned capability. Only distinct initial draft assignments may execute concurrently; the unified plan and implementation remain single-writer. AltCLI discovers and validates agent placement; it does not create task worktrees, relocate CLI sessions, or provision their environments.
 
 ### Evidence boundary for the comparison
 
@@ -111,7 +111,7 @@ V3 recorded a limited September 18, 2026 check of these official pages:
 
 - **[S4](SOURCES.md#source-4) Gemini CLI, Hooks reference:** `https://geminicli.com/docs/hooks/reference/`
 
-Their integration discussion is retained as context from V3, **not newly fetched or reverified in V4**. It does not establish the user's installed-version behavior, safe background-writer guarantees, or a functioning CoderCrew Gemini adapter. This consolidation claims no new external research, application test, CI run, or broad audit; its only new audit evidence is the targeted pinned-source verification in [Product purpose, retained architecture, and comparison with the reference implementation](SOURCES.md#product-purpose-retained-architecture-and-comparison-with-the-reference-implementation).
+Their integration discussion is retained as context from V3, **not newly fetched or reverified in V4**. It does not establish the user's installed-version behavior, safe background-writer guarantees, or a functioning AltCLI Gemini adapter. This consolidation claims no new external research, application test, CI run, or broad audit; its only new audit evidence is the targeted pinned-source verification in [Product purpose, retained architecture, and comparison with the reference implementation](SOURCES.md#product-purpose-retained-architecture-and-comparison-with-the-reference-implementation).
 
 ### Retained review judgments
 
@@ -134,13 +134,13 @@ Their integration discussion is retained as context from V3, **not newly fetched
 | Refreshing workspace discovery may adjust the running group. | Inventory may change; run membership, roles, and successors stay fixed until explicit boundary-controlled changes. |
 | N-agent design means all 3+ discovered agents can start immediately. | Initial selection cap is one or two. N-capable storage and tests are preserved; larger planning groups require explicit enablement. |
 | All selected members need only share a repository name or root prefix. | Initial local contract requires the same canonical cwd and actual worktree/index. Different cwd cards sharing an index cannot run conflicting tasks. |
-| CoderCrew should automatically provision task worktrees and move sessions. | Superseded. The user prepares environments and cwd; the app validates and gives Recheck diagnostics. No provisioning or automatic cleanup. |
+| AltCLI should automatically provision task worktrees and move sessions. | Superseded. The user prepares environments and cwd; the app validates and gives Recheck diagnostics. No provisioning or automatic cleanup. |
 | Controller Git access is absolutely read-only with no exceptions. | Publication validation stays read-only. A narrowly consented new-branch create-and-checkout at a settled boundary is the sole V4 setup exception, now recorded by [ADR-0013](adr/ADR-0013-confirmed-branch-setup.md); runtime implementation remains pending. |
 | Finding any branch other than main is enough. | Inspect the actual checked-out branch of this workspace. Other branches do not select the task branch. |
 | A task must always leave main. | Dedicated task branch recommended; explicit continuation on main/the configured primary branch is allowed with all other checks intact. |
 | Waiving plan approval permits the app to create a branch automatically. | Branch consent is independent. Missing consent waits; no switch beneath active planners. |
 | Independent planning requires separate code branches/worktrees and a merge. | Plan writes isolated named drafts in one existing workspace, then refines a unified document. |
-| Planning drafts must be tracked/committed or use force-add staging. | Drafts live in CoderCrew's data directory, outside the checkout; no Git mutation during Plan. |
+| Planning drafts must be tracked/committed or use force-add staging. | Drafts live in AltCLI's data directory, outside the checkout; no Git mutation during Plan. |
 | Every nonassigned draft must be unchanged at every completion. | During concurrency, other active owners may update their own assigned drafts; frozen/idle/unassigned artifacts remain protected. |
 | The author and next reviewer always establish plan agreement. | Only if they cover the whole required group for the current revision. Solo is plan-ready, not independent consensus. |
 | More planning agents require a third supervisor. | They are ordinary participants with provider adapters; no supervisor is required. |

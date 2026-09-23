@@ -1,4 +1,4 @@
-# CoderCrew roadmap
+# AltCLI roadmap
 
 **Implementation update: September 19, 2026.** The local commit path now implements
 the entry-layer group migration, Steps 1–2, and settled-boundary role/policy changes
@@ -125,7 +125,7 @@ run snapshots and index locks unchanged. Persist projects only at explicit edits
 Start or creation; read-only discovery caches unused projects for the process.
 
 Offer preview/confirmation of a new task branch and worktree under
-`~/.codercrew/<repo-name>/<branch-name>`, using a verified committed baseline.
+`~/.altcli/<repo-name>/<branch-name>`, using a verified committed baseline.
 Do not switch the source or copy dirty/ignored files. Serialize creation through
 durable project setup ownership without replacing per-index task ownership.
 Restart and uncertain results retain setup ownership; explicit inspection verifies

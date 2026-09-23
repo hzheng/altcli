@@ -29,7 +29,7 @@ token: the installed hook posts the main checkout's token, so a backend started
 from the worktree must accept it. Run one backend per store at a time.
 
 Restart the coding CLIs to load the hooks and skills. For the first checks, set
-`CODERCREW_ENABLE_INPUT=false` in `web/.env.local`, then start the console:
+`ALTCLI_ENABLE_INPUT=false` in `web/.env.local`, then start the console:
 
 ```bash
 cd web && npm run dev
@@ -43,45 +43,45 @@ hook through `/hooks`. Ready is a session observation, not task completion.
 Codex also installs Interrupt with its native three-second timeout limit. It
 reports the exact cancelled turn as Interrupted and pauses its relay; it never
 certifies completion or background-process quiescence. Trust this hook through
-`/hooks` after upgrading, along with the other CoderCrew hooks.
+`/hooks` after upgrading, along with the other AltCLI hooks.
 Metadata-only hook delivery diagnostics live beside turn bindings as `*.status`
-files under `~/.local/share/codercrew/hook-turns/`; they contain no prompt,
+files under `~/.local/share/altcli/hook-turns/`; they contain no prompt,
 response, token or raw error text.
 Native hooks must be enabled (`features.hooks`, enabled by default in Codex
 0.155.1). To update only hook installation, run `node scripts/install-hooks.mjs`
 from the main checkout while the CLIs are idle, then restart Codex and use `/hooks` to review and trust
-the CoderCrew UserPromptSubmit, SessionStart and Interrupt hooks before the next command. Codex skips new or
+the AltCLI UserPromptSubmit, SessionStart and Interrupt hooks before the next command. Codex skips new or
 changed native hooks until trusted; see [hook trust](https://learn.chatgpt.com/docs/hooks#review-and-trust-hooks).
 A turn that
 started without this native binding cannot be completed by searching notification
 history; reconcile any old owned run through Pause and Take over.
 
 Open http://127.0.0.1:8787 and enter the token from `web/.env.local`. Verify pane
-captures before setting `CODERCREW_ENABLE_INPUT=true` and restarting the backend.
+captures before setting `ALTCLI_ENABLE_INPUT=true` and restarting the backend.
 After configuration or server-code changes, settle active deliveries before
 restarting; hot reload retains the running controller.
 
 The **Settings** tab shows the configuration in effect and the variable behind each
-value: `CODERCREW_TMUX_BIN` (default `tmux`, resolved through PATH; the tab shows
-where), `CODERCREW_TMUX_SOCKET`, `CODERCREW_DATA_DIR` (default
-`~/.local/share/codercrew`, with the adapter mode appended), the task worktree root
-`~/.codercrew/<repo>/<branch>`, `CODERCREW_INTEGRATION_BRANCHES` (default
+value: `ALTCLI_TMUX_BIN` (default `tmux`, resolved through PATH; the tab shows
+where), `ALTCLI_TMUX_SOCKET`, `ALTCLI_DATA_DIR` (default
+`~/.local/share/altcli`, with the adapter mode appended), the task worktree root
+`~/.altcli/<repo>/<branch>`, `ALTCLI_INTEGRATION_BRANCHES` (default
 `main,master`; each project's detected default branch is always added),
-`CODERCREW_ADAPTER`, `CODERCREW_ENABLE_INPUT`, `CODERCREW_ENABLE_LEGACY_RELAY`,
-`CODERCREW_ALLOWED_ORIGINS`, `CLAUDE_CONFIG_DIR` and `CODEX_HOME`. They are read
+`ALTCLI_ADAPTER`, `ALTCLI_ENABLE_INPUT`, `ALTCLI_ENABLE_LEGACY_RELAY`,
+`ALTCLI_ALLOWED_ORIGINS`, `CLAUDE_CONFIG_DIR` and `CODEX_HOME`. They are read
 once at start; edit `web/.env.local` (or the shell) and restart the host to change
 one. The tab never shows the access token.
 
 ## Select a project, worktree and group
 
-Start a coding CLI in tmux inside your repository. CoderCrew discovers its local
+Start a coding CLI in tmux inside your repository. AltCLI discovers its local
 project through Git's shared metadata directory and lists all its worktrees,
 including those without agents. Linked worktrees in other folders stay in the
 same project; separate clones stay separate even with identical origin URLs.
 Projects used by an explicit name/membership edit, Start or creation are remembered
 after restart. Merely browsing is read-only and retains discoveries only for the
 current backend process. Prepare dependencies and agent sessions yourself;
-CoderCrew does not clone repositories, move agents or configure environments.
+AltCLI does not clone repositories, move agents or configure environments.
 
 In **Projects**, select a project, then click a worktree card to open its console.
 If agents occupy several subdirectories, choose the task group directory first.
@@ -105,7 +105,7 @@ other environment resources remain your responsibility.
 
 Choose **Create task worktree**, select a starting checkout, and enter a new
 branch name. **Preview worktree** displays the exact committed baseline and
-destination, defaulting to `~/.codercrew/<repo-name>/<branch-name>`. Branch slashes
+destination, defaulting to `~/.altcli/<repo-name>/<branch-name>`. Branch slashes
 become nested directories; same-named separate clones get distinct namespaces.
 Confirm the displayed details, then choose **Create confirmed worktree**. Existing
 branches, paths and symlinked destination components are refused rather than
@@ -152,7 +152,7 @@ not clean the checkout. To review that work after committing, choose a **Review
 baseline** and use **Relay [peer]**; to leave it uncommitted, use the optional
 staging fallback. Keep unrelated changes separate or create another clean task
 worktree.
-CoderCrew never automatically stages, commits, combines, stashes or discards them.
+AltCLI never automatically stages, commits, combines, stashes or discards them.
 
 Before Start, check all agents
 sharing the checkout, including unselected agents: prompts must be empty, with no
@@ -164,7 +164,7 @@ membership changes are blocked while a run owns the checkout.
 
 No ignore rule is needed. Drafts and the shared plan are written to
 `<data directory>/plans/<run-ID>/` (by default
-`~/.local/share/codercrew/<mode>/plans/`), beside the assignment and result files,
+`~/.local/share/altcli/<mode>/plans/`), beside the assignment and result files,
 so planning never writes into the checkout. Planners need write access there just
 as they already do for their result files.
 
@@ -196,16 +196,16 @@ Choose **2 · Implementation** to start coding directly, or enter it from Plan.
 Choose solo work, peer collaboration, or fixed worker/reviewer roles. Confirm the
 displayed branch and commit. On a task branch, continue there and confirm its
 recorded baseline when it cannot be inferred; on the default branch or a configured
-integration branch (`CODERCREW_INTEGRATION_BRANCHES`, default `main,master`, plus
+integration branch (`ALTCLI_INTEGRATION_BRANCHES`, default `main,master`, plus
 the local `origin/HEAD`) only a new task branch or task worktree is offered, and
 the server refuses anything else; detached HEAD requires a new named branch. Branch
 creation occurs at a settled boundary, with clean entry or captured initial changes, separately from Plan approval.
 Integrate accepted results yourself, preferably by squash merge or pull request.
-CoderCrew never switches to an existing branch, stages, commits, stashes or resets
+AltCLI never switches to an existing branch, stages, commits, stashes or resets
 your work.
 
 The assigned agent uses `commit-handoff` to publish one result per completed turn
-to CoderCrew's handoff journal, plus one commit when it changed project content;
+to AltCLI's handoff journal, plus one commit when it changed project content;
 report-only turns commit nothing. Each agent card under its pane holds that
 agent's actions. **Send** performs one standalone instruction without an automatic
 commit, branch change, or relay; its **After send** choice can instead ask the agent
@@ -240,7 +240,7 @@ commit too. Otherwise use **Next turn**.
 A completed chain still needs final task-level verification.
 
 The handoff journal (turns, reviewed ranges, findings, reported checks, archived
-handoff patches) is CoderCrew data under the controller data directory, not part
+handoff patches) is AltCLI data under the controller data directory, not part
 of the repository. **Export history** in Command history downloads the current
 worktree's runs, turns and journal as JSON; keep such exports with your backups,
 because cloning the repository cannot recover them. Removing a task worktree in
@@ -262,7 +262,7 @@ does not pause them. Resolve outstanding work before starting another run.
 ## Optional staging fallback
 
 The supervised two-agent staging flow is off by default. To use it, set
-`CODERCREW_ENABLE_LEGACY_RELAY=true`, restart after active deliveries settle, and
+`ALTCLI_ENABLE_LEGACY_RELAY=true`, restart after active deliveries settle, and
 select **Staging fallback**. Its `relay` instruction rule and staging contract are
 documented in [SKILLS.md](SKILLS.md#mapping-relay-to-the-skill). This option does
 not change Plan or committed Implementation.

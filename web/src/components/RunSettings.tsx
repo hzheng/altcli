@@ -30,7 +30,7 @@ export function useRunSettings(memory: PageMemory, prefix: string, git: Workspac
   const solo = members.length === 1;
   const selectedPolicy: CollaborationPolicy = solo ? 'solo' : policy;
   const workerId = members.includes(worker) ? worker : members[0];
-  // The journal lives in CoderCrew; mirroring it into a tracked file is an explicit project preference, off by default.
+  // The journal lives in AltCLI; mirroring it into a tracked file is an explicit project preference, off by default.
   const logPath = trackLog && log.trim() ? log.trim() : undefined;
   // An integration branch is a starting point only: the picker never offers to continue on it, and the server refuses it too.
   const branchChoice = choice ?? (git?.branch && !git.integration ? 'stay' : '');
@@ -119,7 +119,7 @@ export function RunSettingsBar({ settings, git, members, sessions, displayed, di
           <label className="readiness"><input type="checkbox" checked={s.trackLog} disabled={off} onChange={(e) => s.setTrackLog(e.target.checked)} />Also track the journal in the repository</label>
           {s.trackLog ? <><label>Tracked relay log<input aria-label="Tracked relay log" value={s.log} disabled={off} onChange={(e) => s.setLog(e.target.value)} /></label>
             <p className="fine">A nonignored JSON-lines file mirroring every journal entry inside its handoff commit, so report-only turns also commit. The agent creates it in its first handoff commit; existing entries must use the same schema.</p></>
-            : <p className="fine">The handoff journal stays in CoderCrew’s history: turns, reviewed ranges, findings and reported checks. Report-only turns publish no commit. Export it from Command history; promote enduring knowledge into the repository’s documents when finishing the task.</p>}
+            : <p className="fine">The handoff journal stays in AltCLI’s history: turns, reviewed ranges, findings and reported checks. Report-only turns publish no commit. Export it from Command history; promote enduring knowledge into the repository’s documents when finishing the task.</p>}
           {(planning || !s.solo) && <><label className="readiness"><input type="checkbox" checked={s.automatic} disabled={off} onChange={(e) => s.setAutomatic(e.target.checked)} />{planning ? 'Automatic collaboration across both phases' : 'Automatic collaboration after the initial review'}</label>
           <label className="readiness turn-limit">{planning ? 'Maximum automatic turns across both phases' : 'Maximum automatic implementation turns'}<input type="number" aria-label={planning ? 'Maximum automatic turns across both phases' : 'Maximum automatic implementation turns'} min={1} max={200} value={s.limit} disabled={off} onChange={(e) => s.setLimit(Number(e.target.value))} /></label>
           <label className="readiness"><input type="checkbox" checked={s.pauseOnObjection} disabled={off} onChange={(e) => s.setPauseOnObjection(e.target.checked)} />Pause on a reviewer objection</label>

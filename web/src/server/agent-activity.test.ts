@@ -69,7 +69,7 @@ test('an exact interruption ends activity without certifying completion and cann
   expect(tracker.read(session).state).toBe('working');
 });
 test('fresh interruption after backend restart requires the exact interrupted native binding', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'codercrew-interrupt-binding-'));
+  const directory = mkdtempSync(join(tmpdir(), 'altcli-interrupt-binding-'));
   const input = event({ event: 'turn_interrupted', settled: false, backgroundState: 'unknown' });
   const path = join(directory, `${contextKey(session.identity, input.sessionId)}.codex.json`);
   try {
@@ -157,7 +157,7 @@ test('copy mode and synchronized input cannot discard a matching lifecycle finis
   expect(tracker.read(session).state).toBe('idle');
 });
 test('restart recovery requires the current exact native binding and does not mistake services for a live turn', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'codercrew-activity-binding-'));
+  const directory = mkdtempSync(join(tmpdir(), 'altcli-activity-binding-'));
   const input = event({ event: 'turn_complete', settled: true, backgroundState: 'unknown', reporterPid: '200' });
   const path = join(directory, `${contextKey(session.identity, input.sessionId)}.codex.json`);
   const context = { source: 'codex', identity: session.identity, sessionId: input.sessionId, sourceTurnId: input.sourceTurnId,

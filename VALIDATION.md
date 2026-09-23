@@ -21,7 +21,7 @@ fully inside the settings panel and the viewport, and that Settings opens; the
 1440×900 Send-button assertion is unchanged.
 
 What ran: `./scripts/check.sh` exited 0 (30 hook/setup, 42 smoke, 269 workflow, 61
-unit, type checks, production build). `CODERCREW_E2E_PORT=9787 npx playwright test`
+unit, type checks, production build). `ALTCLI_E2E_PORT=9787 npx playwright test`
 per project: desktop 88 passed and 1 skipped; iPhone 87 passed and 2 skipped (89
 cases each; the new case runs on desktop only). Not run: installed-agent acceptance
 and physical Safari.
@@ -39,7 +39,7 @@ explanation and the viewport assertion are retained; the Send buttons end 54 px
 above the bottom of a 900 px viewport in mock mode.
 
 What ran: `./scripts/check.sh` exited 0 (30 hook/setup, 42 smoke, 269 workflow, 61
-unit, type checks, production build). `CODERCREW_E2E_PORT=9787 npx playwright test`
+unit, type checks, production build). `ALTCLI_E2E_PORT=9787 npx playwright test`
 per project on the committed tree: desktop 87 passed and 1 skipped; iPhone 87 passed
 and 1 skipped (88 cases each). Not run: installed-agent acceptance and physical
 Safari.
@@ -102,7 +102,7 @@ Follow-up UI requests after the contextual pane actions:
 
 What ran: `./scripts/check.sh` exited 0 (30 hook/setup, 42 smoke including the
 configuration description, 268 workflow, 60 unit, type checks, production build).
-`CODERCREW_E2E_PORT=9787 npx playwright test` per project: desktop 87 passed and 1
+`ALTCLI_E2E_PORT=9787 npx playwright test` per project: desktop 87 passed and 1
 skipped; iPhone 87 passed and 1 skipped (88 cases each). New browser coverage: the
 Settings rows and the About tab, no Advanced or How this works in the Console,
 history limited to the checkout and following the selected checkout, Pause versus
@@ -124,7 +124,7 @@ Peer review of `a1305ad` raised two findings, both reproduced and fixed:
   now belongs to one memory instance, and Lock replaces the instance.
 
 What ran: `./scripts/check.sh` exited 0 (30 hook/setup, 41 smoke, 268 workflow,
-60 unit, type checks, production build). `CODERCREW_E2E_PORT=9787 npx playwright
+60 unit, type checks, production build). `ALTCLI_E2E_PORT=9787 npx playwright
 test` per project: desktop 85 passed and 1 skipped; iPhone 85 passed and 1 skipped
 (86 cases each, three of them new). The three new browser cases (a refused derived
 range followed by a typed baseline, for a clean review and a dirty snapshot relay;
@@ -170,11 +170,11 @@ What ran:
   dependencies installed).
 - Before the change, at `29a4874`: `./scripts/check.sh` exited 0 (30 hook/setup, 41
   smoke, 268 workflow, 56 unit, type checks, production build). The Playwright suite
-  passed 148/148 with `CODERCREW_E2E_PORT=9787`, beside the live console on 8787.
+  passed 148/148 with `ALTCLI_E2E_PORT=9787`, beside the live console on 8787.
 - After the change:
   - `./scripts/check.sh` exited 0: 30 hook/setup, 41 smoke, 268 workflow, 60 unit
     (4 new request-mapping cases), type checks and production build.
-  - `CODERCREW_E2E_PORT=9787 npx playwright test`, run once per project: desktop 83
+  - `ALTCLI_E2E_PORT=9787 npx playwright test`, run once per project: desktop 83
     passed and 1 skipped; iPhone 83 passed and 1 skipped. Each project skips the
     other's viewport-specific test.
   - The existing browser specs were re-scoped to the agent cards and disclosures
@@ -216,10 +216,10 @@ suite was not rerun for this server-only fix.
 ## Plan documents move to the data directory on September 21, 2026
 
 Start Plan was refused on every click in this repository: plans were written to
-`<checkout>/.codercrew/plans/`, the controller required that exact ignore rule,
-and the checkout's `.gitignore` excluded all of `.codercrew/`. The refusal reason
+`<checkout>/.altcli/plans/`, the controller required that exact ignore rule,
+and the checkout's `.gitignore` excluded all of `.altcli/`. The refusal reason
 appeared only in the console message below the history, so nothing seemed to
-happen. Plan documents are CoderCrew working data, so each run now writes its
+happen. Plan documents are AltCLI working data, so each run now writes its
 drafts and `plan.md` to `<data directory>/plans/<run-ID>/` beside the assignments,
 with absolute canonical paths; the ignore-rule and tracked-file checks are gone
 and the link, special-file, collision and protected-artifact checks remain. A run
@@ -232,7 +232,7 @@ planning fixture repository has no ignore rule; a rewritten workflow case checks
 that plans land in the data directory, that nothing (not even an ignored file)
 appears in the checkout, that a pre-existing document collides, and that the old
 layout is refused. A new Playwright case covers the inline refusal.
-`CODERCREW_E2E_PORT=9787 ./scripts/check.sh --e2e` exited 0 beside the live
+`ALTCLI_E2E_PORT=9787 ./scripts/check.sh --e2e` exited 0 beside the live
 console: 30 hook/setup, 41 smoke, 267 workflow, 56 unit, type checks, production
 build, and 148 browser cases across both viewports. No real planner has run
 against the new location yet.
@@ -251,7 +251,7 @@ setting or the checkout changed) and shows it as a status line under the buttons
 also linked to Start Plan by `aria-describedby` and prefixed to its title. A new
 Playwright case reproduces the tick-then-type sequence and asserts the status
 text, accessible description and title, the turn-limit reason, and one start once
-Ready is confirmed again. `CODERCREW_E2E_PORT=9787 ./scripts/check.sh --e2e`
+Ready is confirmed again. `ALTCLI_E2E_PORT=9787 ./scripts/check.sh --e2e`
 exited 0 beside the live console: 30 hook/setup, 41 smoke, 267 workflow, 56 unit,
 type checks, production build, and 146 browser cases across both viewports.
 
@@ -350,7 +350,7 @@ Executed checks:
   restart, duplicate/conflicting requests, foreign/stale/rewritten endpoints,
   partial-hook failure and inspection, obstructing ignored files, removal only
   after the final batch, and upgrading old full-branch records.
-- `env CODERCREW_E2E_PORT=9787 ./scripts/check.sh --e2e` exited 0, including
+- `env ALTCLI_E2E_PORT=9787 ./scripts/check.sh --e2e` exited 0, including
   repeated non-browser checks and all 140 Playwright cases (70 desktop, 70 iPhone;
   4.7 minutes).
 - Six focused Playwright cases passed on desktop/iPhone: edited squash messages,
@@ -449,7 +449,7 @@ Executed checks on this task's final source:
   or busy discards, uncertain discards verified after restart, and the HTTP
   control-plane ownership/pane guards), type checking, 53 unit tests and the
   production build with the six new routes.
-- `env CODERCREW_E2E_PORT=9787 npx playwright test --project=desktop` and
+- `env ALTCLI_E2E_PORT=9787 npx playwright test --project=desktop` and
   `--project=iphone` (run separately beside the live console on 8787) each
   passed all 68 cases, 136 in total, including the new squash-preview and
   discard browser cases; both screenshots were inspected.
@@ -497,7 +497,7 @@ Executed checks on this task's final source:
   lines and other agents' entries; history export scoping; startup backfill,
   pre-removal archiving that skips commits already gone, diffstat fallback for an
   oversized commit; and archive-before-`git worktree remove` ordering.
-- `env CODERCREW_E2E_PORT=9787 npx playwright test --project=desktop` and
+- `env ALTCLI_E2E_PORT=9787 npx playwright test --project=desktop` and
   `--project=iphone` (run separately beside the live console on 8787) each
   passed all 66 cases, 132 in total, including the new tracked-log opt-in and
   history-export download cases and the renamed reviewer tooltip.
@@ -520,7 +520,7 @@ and generated directories, while modified/nonignored untracked files still block
 both preview and previously confirmed requests. `npm --prefix web run check`
 passed (41 smoke, 230 workflow, 53 unit tests, type checking and build), as did
 the 28 root hook/setup tests. The full
-`env CODERCREW_E2E_PORT=9787 npm --prefix web run e2e` passed all 126 desktop/iPhone
+`env ALTCLI_E2E_PORT=9787 npm --prefix web run e2e` passed all 126 desktop/iPhone
 viewport cases; both removal-warning screenshots were inspected. Both check
 wrappers still stop at the existing global skill-link mismatch described below.
 After verifying no active runs, executions or reservations, the backend was
@@ -557,7 +557,7 @@ Executed checks on this task's final relevant source:
 - The full browser run passed 122 of 124 cases; two new cases had an ambiguous
   alert selector matching Next's route announcer. After correcting that selector
   and adding lost-response coverage, the final
-  `env CODERCREW_E2E_PORT=9787 npm --prefix web run e2e -- e2e/projects.spec.ts`
+  `env ALTCLI_E2E_PORT=9787 npm --prefix web run e2e -- e2e/projects.spec.ts`
   passed all 18 desktop/iPhone-viewport Projects cases. The other 108 browser
   cases passed in the earlier full run. Browser removal responses are fixtures;
   actual Git removal is exercised only by disposable server tests.
@@ -644,7 +644,7 @@ background work still retains ownership and blocks peer delivery. Claude's
 source-specific Stop/background guards remain intact. No historical completion
 was replayed and no live workflow ownership was released.
 
-The final `CODERCREW_E2E_PORT=9787 ./scripts/check.sh --e2e` passed 27 hook/setup,
+The final `ALTCLI_E2E_PORT=9787 ./scripts/check.sh --e2e` passed 27 hook/setup,
 41 smoke, 209 workflow and 49 unit tests, type-check, production build, and all
 116 desktop/iPhone-viewport browser tests. New regressions cover persistent
 services, restart binding, process-inspection failure, stale/duplicate events,
@@ -669,7 +669,7 @@ notification during the fix was absorbed as a continuation of the same command
 without pausing the run — the first live observations of both #17 behaviors.
 
 `./scripts/check.sh` passed 27 hook/setup, 41 smoke, 197 workflow and 44 Vitest
-tests, typecheck and production build. `CODERCREW_E2E_PORT=9787 npm --prefix web
+tests, typecheck and production build. `ALTCLI_E2E_PORT=9787 npm --prefix web
 run e2e` passed all 106 desktop Chromium/iPhone-viewport cases, including the new
 delayed-response regression that switches a preset preview to Another commit,
 previews a typed SHA, and round-trips through the earliest preset; the same
@@ -706,7 +706,7 @@ are addressed here, and peer objections now route automatically.
   Command history.
 
 `./scripts/check.sh` passed 27 hook/setup, 41 smoke, 197 workflow and 44 Vitest
-tests, typecheck and production build. `CODERCREW_E2E_PORT=9787 npm --prefix web
+tests, typecheck and production build. `ALTCLI_E2E_PORT=9787 npm --prefix web
 run e2e` passed all 104 desktop Chromium/iPhone-viewport cases; the selector and
 agreement-panel screenshots were inspected. OpenAPI parsed with 285 internal
 references resolved. Real Git fixtures cover automatic objection routing,
@@ -726,7 +726,7 @@ row restates the chosen range and marker. The preview endpoint now also returns
 returns the selector to the earliest candidate.
 
 `./scripts/check.sh` passed 27 hook/setup, 41 smoke, 196 workflow and 44 Vitest
-tests, typecheck and production build. `CODERCREW_E2E_PORT=9787 npm --prefix web
+tests, typecheck and production build. `ALTCLI_E2E_PORT=9787 npm --prefix web
 run e2e` passed all 104 desktop Chromium/iPhone-viewport cases; the
 baseline-selector and typed-baseline screenshots were inspected. Browser fixtures
 cover option labels and order, the earliest default, consent reset on a changed
@@ -750,7 +750,7 @@ before Ready is confirmed. Recent commits keeps its explicit baseline dialog.
 Automatic chains still review from the accepted commit as before.
 
 `./scripts/check.sh` passed 27 hook/setup, 41 smoke, 196 workflow and 44 Vitest
-tests, typecheck and production build. `CODERCREW_E2E_PORT=9787 npm --prefix web
+tests, typecheck and production build. `ALTCLI_E2E_PORT=9787 npm --prefix web
 run e2e` passed all 102 desktop Chromium/iPhone-viewport cases; the explicit-range
 screenshot was inspected. Real disposable Git fixtures cover task-baseline
 fallback, recipient handoffs including log-only reviews, HEAD published by the
@@ -792,7 +792,7 @@ Changed HEAD, range, recipient or readiness invalidates confirmation. Deprecated
 staging controls also name their recipients while retaining their contracts.
 
 Final `./scripts/check.sh` passed 26 hook/setup, 41 smoke, 196 workflow and 44
-Vitest tests, typecheck and production build. `CODERCREW_E2E_PORT=9787
+Vitest tests, typecheck and production build. `ALTCLI_E2E_PORT=9787
 ./scripts/check.sh --e2e` initially passed 84 browser cases; two legacy console
 cases retained the wrong recipient selector and caused 16 serial cases to skip.
 After correcting the Claude selector, the complete console spec passed all 44
@@ -850,7 +850,7 @@ requests; it records incomplete work without claiming task acceptance. A clean
 checkout directs the user to existing-candidate review. Ordinary API `work`, Plan
 implementation and the deprecated staging fallback retain their existing behavior.
 
-`CODERCREW_E2E_PORT=9787 ./scripts/check.sh --e2e` passed: 26 hook/setup tests,
+`ALTCLI_E2E_PORT=9787 ./scripts/check.sh --e2e` passed: 26 hook/setup tests,
 41 smoke tests, 187 workflow tests, 44 Vitest tests, typecheck, production build,
 and all 98 desktop Chromium/iPhone viewport browser tests. The first sandboxed
 attempt could not bind a localhost hook fixture (`EPERM`); the authorized rerun
@@ -895,7 +895,7 @@ logs. No historical response was replayed as completion.
 The installed hook settings were updated with private backups. After verifying
 no owned run or delivery, the backend was reloaded and the empty Claude session
 restarted with its original arguments; the live API and Chrome console both
-reported codercrew-cc as Ready from its real startup event. Codex SessionStart
+reported altcli-cc as Ready from its real startup event. Codex SessionStart
 still needs native hook trust through `/hooks`; existing prompt-hook trust was
 preserved. No live task prompt, synthetic completion, Git write or ownership
 reconciliation was issued for these checks.
@@ -908,7 +908,7 @@ to a temporary backup and validation repeated. A new startup fixture initially
 failed because its existing group/pair prevented session deletion; the fixture
 now removes its group first without weakening the product guard.
 
-The final `CODERCREW_E2E_PORT=9787 ./scripts/check.sh --e2e` passed 26 hook/setup,
+The final `ALTCLI_E2E_PORT=9787 ./scripts/check.sh --e2e` passed 26 hook/setup,
 41 smoke, 185 workflow and 44 Vitest tests, type-check, production build and all
 98 desktop/iPhone-viewport browser cases. The additional cross-session completion
 guard passed the nine focused activity tests. OpenAPI parsed with all 273 local
@@ -935,7 +935,7 @@ manual later work and old completions cannot revive it. Hook subprocess/HTTP
 tests exercise the added metadata with simulated tmux and foreground discovery.
 
 `./scripts/check.sh` passed for the recovery change. The final
-`CODERCREW_E2E_PORT=9787 ./scripts/check.sh --e2e` passed 26 hook/setup tests,
+`ALTCLI_E2E_PORT=9787 ./scripts/check.sh --e2e` passed 26 hook/setup tests,
 40 smoke tests, 184 workflow tests, 41 Vitest tests, type-check, production build,
 and all 98 desktop Chromium/iPhone-viewport browser cases. Eight focused recovery
 browser cases also passed earlier. Browser activity/discovery observations are
@@ -983,7 +983,7 @@ Codex restart and human trust through `/hooks` remain required. No installed-age
 handoff with the new binding is claimed.
 No stopped run was replayed or inferred complete from terminal output.
 
-`CODERCREW_E2E_PORT=9787 ./scripts/check.sh --e2e` repeated the non-browser checks
+`ALTCLI_E2E_PORT=9787 ./scripts/check.sh --e2e` repeated the non-browser checks
 successfully and passed 90 browser cases; two existing tooltip assertions failed
 because the new disabled explanation replaced the commit explanation. The final
 tooltip preserves both. A focused desktop/iPhone rerun passed all six affected
@@ -999,7 +999,7 @@ No controller restart or takeover was issued by this investigation.
 
 ## Tmux default names and live dirty-entry validation on September 20, 2026
 
-`./scripts/check.sh` and `CODERCREW_E2E_PORT=9787 ./scripts/check.sh --e2e`
+`./scripts/check.sh` and `ALTCLI_E2E_PORT=9787 ./scripts/check.sh --e2e`
 passed: 26 setup/hook tests, 40 smoke tests, 180 workflow tests, 35 Vitest tests,
 type-check, production build, and all 88 desktop Chromium/iPhone-viewport browser
 tests. Two focused discovery regressions also passed after the final adjustment
@@ -1049,7 +1049,7 @@ performed. Changes remain uncommitted, preserving all earlier work.
 ## Finish-and-relay validation on September 20, 2026
 
 `./scripts/check.sh` passed. The final
-`CODERCREW_E2E_PORT=9787 ./scripts/check.sh --e2e` passed 24 setup/hook tests,
+`ALTCLI_E2E_PORT=9787 ./scripts/check.sh --e2e` passed 24 setup/hook tests,
 40 smoke tests, 178 workflow tests, 34 Vitest tests, type-check, production build,
 and all 88 desktop Chromium/iPhone-viewport browser tests. The first full browser
 pipeline stopped on a new test whose simulated external writer ran during setup
@@ -1079,7 +1079,7 @@ after the current run settles is needed to load the server contract change.
 
 ## Inline workspace reset validation on September 20, 2026
 
-`./scripts/check.sh` and `CODERCREW_E2E_PORT=9787 ./scripts/check.sh --e2e`
+`./scripts/check.sh` and `ALTCLI_E2E_PORT=9787 ./scripts/check.sh --e2e`
 passed: 24 setup/hook tests, 40 smoke tests, 171 workflow tests, 34 Vitest tests,
 type-check, production build, and all 82 desktop Chromium/iPhone-viewport browser
 tests. New browser cases simulate changed process identities while exercising
@@ -1095,12 +1095,12 @@ uncommitted, and the committed handoff log is untouched.
 
 `./scripts/check.sh` passed: 24 setup/hook tests, 40 smoke tests, 171 workflow
 tests, 34 Vitest tests, type-check and production build. The full
-`CODERCREW_E2E_PORT=9787 ./scripts/check.sh --e2e` pipeline repeated those checks;
+`ALTCLI_E2E_PORT=9787 ./scripts/check.sh --e2e` pipeline repeated those checks;
 its browser runs exposed a legacy test-helper discovery race and then an
 incorrect fallback expectation in the registration-free read-only scenario.
 The helper now waits explicitly and that read-only scenario skips fallback
 setup. After those test-only fixes, the final
-`CODERCREW_E2E_PORT=9787 npm --prefix web run e2e` passed all 78 tests across
+`ALTCLI_E2E_PORT=9787 npm --prefix web run e2e` passed all 78 tests across
 desktop Chromium and the iPhone viewport, with no skipped tests. An initial
 sandboxed check could not bind localhost; the checks above ran with that
 permission. OpenAPI parsed with all 271 internal references resolved.
@@ -1133,7 +1133,7 @@ extends a closed object through `allOf`; sample task, integration and detached
 responses validate, while missing, invalid and unknown fields are refused.
 The decision ledger and baseline descriptions now match the integration policy.
 
-`CODERCREW_E2E_PORT=9787 ./scripts/check.sh --e2e` passed on the incoming runtime,
+`ALTCLI_E2E_PORT=9787 ./scripts/check.sh --e2e` passed on the incoming runtime,
 including all 76 desktop/mobile browser tests. After the server/schema fixes,
 `./scripts/check.sh` passed: 24 setup/hook, 40 smoke, 167 workflow and 34 Vitest
 tests, type-check and production build. OpenAPI parsed with 72 schemas and 264
@@ -1148,7 +1148,7 @@ not claimed.
 
 ## Integration-branch policy validation on September 19, 2026
 
-`./scripts/check.sh` passed, followed by `CODERCREW_E2E_PORT=9787 npm run e2e` in
+`./scripts/check.sh` passed, followed by `ALTCLI_E2E_PORT=9787 npm run e2e` in
 `web/`: 24 setup/hook tests, 40 smoke tests, 166 workflow tests (55 staging/
 workspace, 48 Implementation, 49 Plan, 14 project/worktree), 34 Vitest tests,
 type-check, production build, and all 76 browser tests on desktop Chromium and
@@ -1159,7 +1159,7 @@ New disposable-Git tests cover: the default branch and configured integration
 branches refused as the implementation branch and as a new branch name, on the
 server for Implementation start, existing-candidate review, up-front Plan consent
 and the Plan checkpoint; a detected `origin/HEAD` default counted without a
-fetch; `CODERCREW_INTEGRATION_BRANCHES` parsing; a new task branch created from
+fetch; `ALTCLI_INTEGRATION_BRANCHES` parsing; a new task branch created from
 the default branch recording its baseline; an existing task branch's baseline
 inferred from the nearest integration tip, rejected outside the branch, required
 when diverged integration tips give no single base, and a review range that
@@ -1189,7 +1189,7 @@ in-app integration or protected-branch discovery from a forge is claimed.
 ## Project and task-worktree validation on September 19, 2026
 
 `./scripts/check.sh` passed, followed by the final stable-source
-`CODERCREW_E2E_PORT=9787 ./scripts/check.sh --e2e` pipeline: 24 setup/hook
+`ALTCLI_E2E_PORT=9787 ./scripts/check.sh --e2e` pipeline: 24 setup/hook
 tests, 40 smoke tests, 160 workflow tests (54 staging/workspace, 44 Implementation,
 48 Plan and 14 project/worktree), 34 Vitest tests, type-check, production build,
 and all 68 browser tests on desktop Chromium and the iPhone viewport. OpenAPI
@@ -1229,7 +1229,7 @@ iPhone/Safari, automatic cleanup, or environment-bootstrap acceptance.
 ## Registration-free workspace selection validation on September 19, 2026
 
 `./scripts/check.sh` passed, followed by the final stable-source
-`CODERCREW_E2E_PORT=9787 ./scripts/check.sh --e2e` pipeline: 24 setup/hook
+`ALTCLI_E2E_PORT=9787 ./scripts/check.sh --e2e` pipeline: 24 setup/hook
 tests, 40 smoke tests, 145 workflow tests (54 staging/workspace, 43 Implementation,
 48 Plan), 34 Vitest tests, type-check, production build, and all 56 browser tests
 on desktop Chromium and the iPhone viewport. The final Playwright run status is
@@ -1265,7 +1265,7 @@ larger-group execution, or physical iPhone/Safari acceptance.
 ## Automatic workspace-group validation on September 19, 2026
 
 `./scripts/check.sh` passed, followed by the final stable-source
-`CODERCREW_E2E_PORT=9787 ./scripts/check.sh --e2e` pipeline: 24 setup/hook
+`ALTCLI_E2E_PORT=9787 ./scripts/check.sh --e2e` pipeline: 24 setup/hook
 tests, 40 smoke tests, 140 workflow tests (53 staging/workspace, 41 Implementation,
 46 Plan), 34 Vitest tests, type-check, production build, and all 54 browser
 tests on desktop Chromium and the iPhone viewport. OpenAPI YAML and all 244
@@ -1295,7 +1295,7 @@ real Codex/Claude handoff or physical iPhone/Safari acceptance.
 
 ## Dirty-worktree entry validation on September 19, 2026
 
-`./scripts/check.sh` and `CODERCREW_E2E_PORT=9787 ./scripts/check.sh --e2e`
+`./scripts/check.sh` and `ALTCLI_E2E_PORT=9787 ./scripts/check.sh --e2e`
 passed: 24 setup/hook tests, 40 smoke tests, 133 workflow tests (46 staging,
 41 Implementation, 46 Plan), 34 Vitest tests, type-check and production build.
 The final browser run passed all 52 tests on desktop Chromium and the iPhone
@@ -1357,7 +1357,7 @@ unverified.
 
 No existing managed worktree was branched, staged or committed by this work;
 Git writes in validation were confined to disposable repositories. No persistent
-CoderCrew development backend was found to restart; isolated test servers were
+AltCLI development backend was found to restart; isolated test servers were
 started and stopped by Playwright. No global CLI configuration or installed
 skills were changed. The original staging skill and hook protocol are unchanged.
 
@@ -1365,7 +1365,7 @@ This validates the local sequential increment, not native CLI plan-mode isolatio
 real installed-agent execution, enabled 3+ member planning, concurrent drafts,
 in-flight guidance queues, automatic restart recovery, or deployment acceptance.
 N=3/N=5 tests exercise only the N-shaped state model. Plan requires a clean checkout
-and a user-prepared narrow `.codercrew/plans/` exclusion; no ignore rules were
+and a user-prepared narrow `.altcli/plans/` exclusion; no ignore rules were
 silently changed. Live-agent acceptance remains a separate supervised check.
 
 ## Implementation-phase validation on September 19, 2026
@@ -1385,7 +1385,7 @@ The branch/commit Implementation phase was checked with `./scripts/check.sh` and
 | OpenAPI and skill metadata | Passed | Ruby YAML parsing and internal OpenAPI reference resolution; commit-handoff frontmatter checked without installing dependencies |
 
 Desktop and mobile implementation-form screenshots were inspected. No live
-CoderCrew development backend was running, so none was restarted. No existing
+AltCLI development backend was running, so none was restarted. No existing
 managed worktree was branched, staged or committed by this validation; Git writes
 in tests were confined to disposable repositories. The user's pre-existing staged
 change was preserved.
@@ -1466,7 +1466,7 @@ locally.
 Follow [docs/TESTING.md](docs/TESTING.md) in order: install, automated checks, the
 tmux dry run against a harmless `cat` pane, and only then real coding CLIs with
 [docs/SETUP.md](docs/SETUP.md)'s manual acceptance checklist. Run read-only
-(`CODERCREW_ENABLE_INPUT=false`) first if you want captures verified before any send.
+(`ALTCLI_ENABLE_INPUT=false`) first if you want captures verified before any send.
 
 Update this record with actual results and versions as you proceed. Do not check
 off roadmap acceptance merely because a corresponding source file now exists.

@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { claudeSettings, codexConfig, codexHooks } from './lib/hook-config.mjs';
 import { installRoot } from './lib/install-root.mjs';
 const { root, linked } = installRoot(fileURLToPath(new URL('..', import.meta.url)));
-const hook = join(root, 'hooks', 'codercrew-turn-complete.sh');
+const hook = join(root, 'hooks', 'altcli-turn-complete.sh');
 const check = process.argv.includes('--check');
 // A linked worktree may verify the main checkout's installation but never own it; see lib/install-root.mjs.
 if (linked && !check) { console.error(`Hooks are installed from the main checkout so that removing this worktree cannot break them. Run this from ${root}.`); process.exit(1); }
@@ -31,10 +31,10 @@ if (check) {
   for (const { path, before, after } of plans) {
     if (before === after) continue;
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-    const suffix = `${Date.now()}-${randomUUID()}`; const temporary = `${path}.codercrew-${suffix}.tmp`;
+    const suffix = `${Date.now()}-${randomUUID()}`; const temporary = `${path}.altcli-${suffix}.tmp`;
     try {
       if (await read(path) !== before) throw new Error(`Configuration changed while planning: ${path}`);
-      if (before !== null) { const backup = `${path}.codercrew-backup-${suffix}`; await writeFile(backup, before, { mode: 0o600, flag: 'wx' }); console.log(`Backup: ${backup}`); }
+      if (before !== null) { const backup = `${path}.altcli-backup-${suffix}`; await writeFile(backup, before, { mode: 0o600, flag: 'wx' }); console.log(`Backup: ${backup}`); }
       const file = await open(temporary, 'wx', 0o600);
       try { await file.writeFile(after); await file.sync(); } finally { await file.close(); }
       if (await read(path) !== before) throw new Error(`Configuration changed before replacement: ${path}`);
@@ -42,5 +42,5 @@ if (check) {
     } finally { await unlink(temporary).catch((error) => { if (error.code !== 'ENOENT') throw error; }); }
   }
   console.log('Restart both coding CLIs to load the hooks. Backups are private; keep them until verification succeeds.');
-  console.log('In Codex, use /hooks to review and trust the CoderCrew UserPromptSubmit, SessionStart and Interrupt hooks before sending work.');
+  console.log('In Codex, use /hooks to review and trust the AltCLI UserPromptSubmit, SessionStart and Interrupt hooks before sending work.');
 }

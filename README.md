@@ -1,6 +1,6 @@
-# CoderCrew
+# AltCLI
 
-**A self-hosted control center for coding agents already running in tmux.**
+**Agents alternating on the CLI.** A self-hosted control center for coding agents already running in tmux.
 
 Read multiple Codex and Claude Code sessions, select a group,
 and explicitly start in Plan or Implementation. Planning produces captured documents;
@@ -20,7 +20,7 @@ does not imply installed-host acceptance.
 Owned modern assignments expose **Add detail to this task** and literal terminal controls. Input holds the whole run until its original result validates and you review the checkpoint. A separately saved waiting checkpoint can be restored after exactly observed external work settles; restoration sends nothing. Projects can request read-only squash-batch advice, with a fresh human preview and confirmation for every integration. See [ADR-0019](docs/adr/ADR-0019-terminal-input-and-checkpoints.md) and the installed-provider limits in [VALIDATION](VALIDATION.md).
 
 The supervised staging fallback is off by default. Set
-`CODERCREW_ENABLE_LEGACY_RELAY=true` and restart the backend to expose the supervised
+`ALTCLI_ENABLE_LEGACY_RELAY=true` and restart the backend to expose the supervised
 fallback. Its staging contract remains unchanged.
 
 Use [ROADMAP](ROADMAP.md#migration-and-implementation-sequence) for rollout, [OPEN-DECISIONS](docs/OPEN-DECISIONS.md) for unresolved choices, and [DESIGN-MIGRATION](docs/DESIGN-MIGRATION.md) to locate the content formerly held in the standalone collaboration draft. The draft is no longer a required document.
@@ -35,11 +35,11 @@ not stop a run. A backend restart pauses owned runs without replaying commands.
 | Capability | Current behavior |
 | --- | --- |
 | Reading and selection | Discover eligible agents without registration; checkboxes select members, inline names preserve identity; Start pins exact instances |
-| Projects and worktrees | Local repositories grouped by shared Git metadata; linked and empty worktrees remain visible; explicit confirmed creation under `~/.codercrew/<repo-name>/<branch-name>` |
+| Projects and worktrees | Local repositories grouped by shared Git metadata; linked and empty worktrees remain visible; explicit confirmed creation under `~/.altcli/<repo-name>/<branch-name>` |
 | Command delivery | Bounded text (multi-line delivered as one bracketed paste), exact pane checks, durable delivery receipt and uncertainty |
 | Implementation groups | One or two exact registered instances, frozen into each run; solo, peers, or fixed worker/reviewer |
-| Optional Plan | One or two required planners, concurrency one; drafts in CoderCrew's data directory, captured shared-plan versions, exact-version approval/override and retained final text |
-| Committed handoffs | One published result per completed turn in CoderCrew's handoff journal, at most one direct commit (none for report-only turns), archived patches, exact review range and role checks, captured initial work, clean review entry and leftovers; a tracked log mirror is an explicit project preference |
+| Optional Plan | One or two required planners, concurrency one; drafts in AltCLI's data directory, captured shared-plan versions, exact-version approval/override and retained final text |
+| Committed handoffs | One published result per completed turn in AltCLI's handoff journal, at most one direct commit (none for report-only turns), archived patches, exact review range and role checks, captured initial work, clean review entry and leftovers; a tracked log mirror is an explicit project preference |
 | Automatic continuation | Server-only; correlated completion, clear background-work evidence, valid publication, frozen participants and bounded automatic turns (default 20); work hands off only when project content changed |
 | Unknown evidence | Pause and retain execution ownership; never guess from terminal text or recent history |
 | Human control | Explicit branch/readiness confirmation; normal Next turn at manual waits; pause does not interrupt; takeover requires inspection of all participants |
@@ -67,13 +67,13 @@ Use Node 24 (`.nvmrc`). The application package is only under `web/`.
 
 ```bash
 node scripts/setup.mjs
-# For first-use capture checks, set CODERCREW_ENABLE_INPUT=false in web/.env.local.
+# For first-use capture checks, set ALTCLI_ENABLE_INPUT=false in web/.env.local.
 cd web && npm run dev
 ```
 
 Open `http://127.0.0.1:8787` and enter the token from `web/.env.local`. The token
 stays in page memory unless you turn on **Stay unlocked on this device** in
-Settings, which keeps it in that browser; Lock always forgets it. For first use set `CODERCREW_ENABLE_INPUT=false`, restart the
+Settings, which keeps it in that browser; Lock always forgets it. For first use set `ALTCLI_ENABLE_INPUT=false`, restart the
 backend, and verify captures before enabling input. `mock` is a test adapter;
 `tmux` remains the normal product path.
 
@@ -126,8 +126,8 @@ drafting, mid-turn guidance and automatic restart recovery remain deferred.
 
 Choose a project and worktree in **Projects**, then open its task group in Console. It has one group per agent directory, with all
 eligible agents included by default and a checkbox for each. One selected member
-is solo, two a pair, and three or more a larger group. Names default to the tmux session name (for example, `codercrew-cc:1.1`
-uses `codercrew-cc`); saved names remain explicit overrides. Inline Name fields replace
+is solo, two a pair, and three or more a larger group. Names default to the tmux session name (for example, `altcli-cc:1.1`
+uses `altcli-cc`); saved names remain explicit overrides. Inline Name fields replace
 registration and rename buttons. Selection supports larger groups; execution
 currently supports one or two and explicitly blocks larger runs.
 Choose peer collaboration or fixed worker/reviewer roles for
@@ -139,7 +139,7 @@ as they stand, including unfinished work, and stops without a relay.
 It does not implement pending requests or claim the task is complete. Both Relay actions require
 a clean index and nonignored worktree. Confirm the displayed branch and commit: continue on a task branch, confirming its recorded baseline when it
 cannot be inferred, or explicitly create a new task branch there. The default
-branch and configured integration branches (`CODERCREW_INTEGRATION_BRANCHES`,
+branch and configured integration branches (`ALTCLI_INTEGRATION_BRANCHES`,
 default `main,master`) are starting points only: create a task branch or task
 worktree from them; integrate accepted results with a separate squash merge or
 pull request. Detached HEAD needs a new named branch. The controller never
@@ -270,7 +270,7 @@ before returning changed work to review; it is not an armed run by itself. An
 objection without a reason or continuation permission, missing evidence, exhausted
 budget, uncertain delivery, or changed instance pauses the run.
 
-Commands carry a unique `[codercrew-command:<UUID>]` suffix. Hooks must echo the
+Commands carry a unique `[altcli-command:<UUID>]` suffix. Hooks must echo the
 exact prompt and bind its source turn/session; identical `relay` strings cannot
 borrow each other's completion. Relay commands use the `relay:` prefix. The global
 instruction rule must recognize that prefix as documented in [SKILLS](docs/SKILLS.md).
@@ -363,4 +363,4 @@ Historical documents under `docs/history/` are records, not current capability c
 
 ## License
 
-CoderCrew is licensed under the [Apache License, Version 2.0](LICENSE). See [NOTICE](NOTICE).
+AltCLI is licensed under the [Apache License, Version 2.0](LICENSE). See [NOTICE](NOTICE).

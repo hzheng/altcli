@@ -7,7 +7,7 @@ runtime.
 
 ## 0. Prerequisites
 
-- macOS or Linux, one Unix user for everything (CoderCrew, tmux, the coding CLIs).
+- macOS or Linux, one Unix user for everything (AltCLI, tmux, the coding CLIs).
 - Node >= 22.18 (`.nvmrc` says 24), npm, git, tmux 3.x.
 - For level 4 only: Codex and/or Claude Code installed as native binaries and
   already logged in. An npm-installed CLI reports `node` as its process name and is
@@ -16,7 +16,7 @@ runtime.
 ## 1. Install
 
 ```bash
-git clone <this repo> codercrew && cd codercrew
+git clone <this repo> altcli && cd altcli
 node scripts/setup.mjs            # writes web/.env.local with a random token; never overwrites
 npm --prefix web ci               # exact versions from the committed lockfile
 node scripts/install-skills.mjs   # symlink skills/review-handoff into ~/.claude/skills and ~/.codex/skills
@@ -46,7 +46,7 @@ What they prove and what they don't: the smoke and Vitest suites use fake tmux
 runners and the mock adapter; they never touch tmux, a repository, or a CLI. The
 e2e suite drives the real console against a mock backend with its own temporary
 store. It starts its own dev servers on ports 8787 and 8788 (one per viewport), so
-either stop the dev server first or move the suite: `CODERCREW_E2E_PORT=9787
+either stop the dev server first or move the suite: `ALTCLI_E2E_PORT=9787
 ./scripts/check.sh --e2e` uses 9787 and 9788. CI runs exactly `./scripts/check.sh` and the e2e step.
 
 ## 3. First run: a harmless pane on a private tmux server
@@ -57,40 +57,40 @@ preview, identity, hex input, Enter, capture, the reservation, and fail-closed
 without involving a coding CLI.
 
 ```bash
-mkdir -p /tmp/codercrew-dryrun/repo
-tmux -L codercrew-dryrun new-session -d -s echo -c /tmp/codercrew-dryrun/repo 'exec cat'
-SOCK=$(tmux -L codercrew-dryrun display-message -p '#{socket_path}')
-STORE=$(mktemp -d /tmp/codercrew-store.XXXX)
-cd web && CODERCREW_TMUX_SOCKET=$SOCK CODERCREW_DATA_DIR=$STORE npm run dev
+mkdir -p /tmp/altcli-dryrun/repo
+tmux -L altcli-dryrun new-session -d -s echo -c /tmp/altcli-dryrun/repo 'exec cat'
+SOCK=$(tmux -L altcli-dryrun display-message -p '#{socket_path}')
+STORE=$(mktemp -d /tmp/altcli-store.XXXX)
+cd web && ALTCLI_TMUX_SOCKET=$SOCK ALTCLI_DATA_DIR=$STORE npm run dev
 ```
 
-Command-line variables override `web/.env.local` (keep `CODERCREW_TOKEN` in the
+Command-line variables override `web/.env.local` (keep `ALTCLI_TOKEN` in the
 file); the throwaway store keeps your real registrations untouched. Open
 `http://127.0.0.1:8787` and paste the token. Expected:
 
 1. **LOCAL HOST** badge and, because nothing is registered yet, the add-pane
    panel is the page. Its list has one row, `echo:1.1 · %0 · cat ·
-   /tmp/codercrew-dryrun/repo` (macOS shows the resolved `/private/tmp/…` path;
+   /tmp/altcli-dryrun/repo` (macOS shows the resolved `/private/tmp/…` path;
    window and pane indexes follow your tmux `base-index`) with a **Select** button.
-   Try it first with the private server stopped (`tmux -L codercrew-dryrun
+   Try it first with the private server stopped (`tmux -L altcli-dryrun
    kill-server`) to see the *No tmux server is running* message, then start it again.
 2. **Select** it: a **Project** line appears with the pane's directory (the first
    pane fixes the project), the preview is an empty screen, and the type suggests
    *Other CLI*. Label it `Echo`, **Register pane**. The panel stays open, saying
    `1 of 2 panes`, now locked to that project; press **Cancel** to go to the console
    with one panel whose header reads `%0 · echo:1.1 · cat` and whose capture is empty.
-3. Tick readiness and send `hello from CoderCrew; $(echo x) 中文`. Status:
+3. Tick readiness and send `hello from AltCLI; $(echo x) 中文`. Status:
    `DELIVERED`. The panel shows the line **twice**, once echoed by the terminal and
    once by `cat`, with `$(echo x)` and the CJK text literal. The composer is back
    to **MANUAL** at once; nothing to release. Tick readiness again to send more.
-4. Fail closed: `tmux -L codercrew-dryrun send-keys -t %0 C-d` ends `cat`. Within
+4. Fail closed: `tmux -L altcli-dryrun send-keys -t %0 C-d` ends `cat`. Within
    one poll the panel turns **UNAVAILABLE** with tmux's own reason, and the
    composer is blocked.
 
 Clean up:
 
 ```bash
-tmux -L codercrew-dryrun kill-server 2>/dev/null; rm -rf /tmp/codercrew-dryrun "$STORE"
+tmux -L altcli-dryrun kill-server 2>/dev/null; rm -rf /tmp/altcli-dryrun "$STORE"
 ```
 
 The same sequence through the HTTP API (curl with `Authorization: Bearer <token>`
@@ -130,9 +130,9 @@ which of these have been done on which host.
 
 ## Appendix: the mock adapter (developers only)
 
-`CODERCREW_ADAPTER=mock` replaces tmux with four simulated panes (`%0` codex and
+`ALTCLI_ADAPTER=mock` replaces tmux with four simulated panes (`%0` codex and
 `%1` claude registered in `/demo/project`, `%2` a shell, `%3` a spare codex in
 `/demo/other`). The Playwright suite runs against it, and it is handy for UI work
-on a machine without tmux: `cd web && CODERCREW_ADAPTER=mock npm run dev`. It never
+on a machine without tmux: `cd web && ALTCLI_ADAPTER=mock npm run dev`. It never
 touches a terminal or repository and has its own store under
-`~/.local/share/codercrew/mock/`. It is not part of the product flow.
+`~/.local/share/altcli/mock/`. It is not part of the product flow.

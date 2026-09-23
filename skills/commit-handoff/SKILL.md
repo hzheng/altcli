@@ -1,12 +1,12 @@
 ---
 name: commit-handoff
-description: Execute a CoderCrew implementation assignment with an exact branch, revision range, one published result and at most one handoff commit. Use only with the controller-issued assignment file; ordinary reviews and legacy relay use their own contracts.
+description: Execute an AltCLI implementation assignment with an exact branch, revision range, one published result and at most one handoff commit. Use only with the controller-issued assignment file; ordinary reviews and legacy relay use their own contracts.
 ---
 
 # Committed implementation handoff
 
 Read the exact assignment JSON file named in the controller prompt. Its
-`identity.commandId` must match the prompt's `[codercrew-command:UUID]` marker.
+`identity.commandId` must match the prompt's `[altcli-command:UUID]` marker.
 The file gives the task, immutable identity, working directory, repository root,
 branch, external result path, optional tracked log path, outstanding findings, and
 on a review turn optionally `note`: the human's relay note for the reviewer.
@@ -81,7 +81,7 @@ Do not create intermediate commits: this release allows at most one direct,
 single-parent commit whose parent is `identity.parent`.
 
 Publish the result by writing one UTF-8 JSON object to the exact external
-`resultPath` **before finishing the turn**. It is outside the checkout; CoderCrew
+`resultPath` **before finishing the turn**. It is outside the checkout; AltCLI
 keeps it in its durable handoff journal. The object has **all fields copied
 verbatim from `identity`**, plus exactly these fields:
 
@@ -136,4 +136,4 @@ observed checks. Do not emit `RELAY-OUTCOME`: the published result is
 authoritative. A finished review chain is not evidence that the overall task is
 correct. Enduring knowledge (accepted rationale, usage documentation, important
 limitations, tests) belongs in the repository's own documents as part of finishing
-the task; the journal is CoderCrew's history, not a substitute for them.
+the task; the journal is AltCLI's history, not a substitute for them.

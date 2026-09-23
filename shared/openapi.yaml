@@ -1,6 +1,6 @@
 openapi: 3.1.0
 info:
-  title: CoderCrew host API
+  title: AltCLI host API
   version: 0.1.0
   description: Host-resident tmux console with explicit Plan and Implementation phases, captured plans kept in the app data directory, committed handoffs recorded in an app-owned journal, and an opt-in deprecated staging relay.
     Native iOS remains deferred. This contract and the JSON-only TypeScript types are maintained together.
@@ -43,7 +43,7 @@ paths:
   /api/v1/implementation/preview:
     post:
       operationId: previewCommittedReview
-      description: Read-only preview of an explicit ancestor..HEAD range, or of the commits after the newest first-parent commit at which the recipient completed a turn per CoderCrew's handoff journal (falling back to the task baseline). Does not create a run, bind agents, send input or mutate Git. Refuses stale HEAD and ranges exceeding 100 commits. With commitPending=true, allows an empty or log-only committed portion and offers HEAD as a baseline for a future snapshot; otherwise requires a project proposal.
+      description: Read-only preview of an explicit ancestor..HEAD range, or of the commits after the newest first-parent commit at which the recipient completed a turn per AltCLI's handoff journal (falling back to the task baseline). Does not create a run, bind agents, send input or mutate Git. Refuses stale HEAD and ranges exceeding 100 commits. With commitPending=true, allows an empty or log-only committed portion and offers HEAD as a baseline for a future snapshot; otherwise requires a project proposal.
       requestBody:
         required: true
         content:
@@ -79,7 +79,7 @@ paths:
   /api/v1/history/export:
     get:
       operationId: exportHistory
-      summary: Back up CoderCrew's own history, which cloning the repository cannot recover
+      summary: Back up AltCLI's own history, which cloning the repository cannot recover
       description: Every run and turn (captured plan results and publications included) plus the handoff journal, optionally limited to one worktree root. Read-only; touches no Git state.
       parameters:
       - {name: repository, in: query, required: false, schema: {type: string, maxLength: 4096}, description: Absolute worktree root to limit the export to.}
@@ -142,7 +142,7 @@ paths:
     post:
       operationId: submitCommand
       summary: Start an opt-in deprecated staging run
-      description: New starts require CODERCREW_ENABLE_LEGACY_RELAY=true. Preserves the frozen staging protocol.
+      description: New starts require ALTCLI_ENABLE_LEGACY_RELAY=true. Preserves the frozen staging protocol.
         Workflow ownership survives transport delivery until completion or explicit takeover. Uncertain commands are never replayed.
       requestBody:
         required: true
@@ -354,7 +354,7 @@ paths:
     delete:
       operationId: removeSession
       summary: Forget one registration
-      description: The tmux pane and its agent keep running; only CoderCrew forgets the pane. Refused while the worktree's
+      description: The tmux pane and its agent keep running; only AltCLI forgets the pane. Refused while the worktree's
         worktree is held. Idle group references are updated; command history and frozen runs keep the agent id.
       parameters:
       - name: id
@@ -514,7 +514,7 @@ paths:
     post:
       operationId: previewTaskWorktree
       summary: Read-only preview of a new branch and linked worktree
-      description: Validates a known project, accessible source with a commit, new branch, and unused destination under ~/.codercrew. Does not create directories or reserve setup. Dirty source files are not copied.
+      description: Validates a known project, accessible source with a commit, new branch, and unused destination under ~/.altcli. Does not create directories or reserve setup. Dirty source files are not copied.
       requestBody:
         required: true
         content:
@@ -993,7 +993,7 @@ paths:
     post:
       operationId: recordTurnEvent
       summary: Record a turn-complete event from a CLI's own hook
-      description: Called by hooks/codercrew-turn-complete.sh, registered as Claude Code's Stop hook and Codex's notify
+      description: Called by hooks/altcli-turn-complete.sh, registered as Claude Code's Stop hook and Codex's notify
         command on the same host. The event is matched to a registered pane by exact tmux identity and tied to the
         last command delivered there. It is informational; it authorizes nothing, sends nothing, and never clears a
         hold. An event from an unregistered pane is kept so a misconfigured hook is visible.
@@ -2144,7 +2144,7 @@ components:
       required: ["branch","head","primary","clean","changes","changeCount"]
       additionalProperties: false
     WorkspaceGit:
-      description: The workspace branch reading plus the host's integration-branch policy. The default branch (origin/HEAD) and CODERCREW_INTEGRATION_BRANCHES are starting points, never implementation branches.
+      description: The workspace branch reading plus the host's integration-branch policy. The default branch (origin/HEAD) and ALTCLI_INTEGRATION_BRANCHES are starting points, never implementation branches.
       type: object
       properties:
         branch: {type: [string, 'null']}
@@ -2271,7 +2271,7 @@ components:
         autoContinue: {"type":"boolean"}
         turnLimit: {"type":"integer","minimum":1,"maximum":200}
         pauseOnObjection: {"type":"boolean","description":"Agreement: a reviewer objection pauses for the human instead of routing to the author. Default false."}
-        logPath: {"type":"string","maxLength":200,"description":"Explicit project preference: also mirror every journal entry into this tracked, nonignored JSON-lines file inside the handoff commit, so report-only turns commit too. Absent (default), the journal lives only in CoderCrew and report-only turns publish no commit."}
+        logPath: {"type":"string","maxLength":200,"description":"Explicit project preference: also mirror every journal entry into this tracked, nonignored JSON-lines file inside the handoff commit, so report-only turns commit too. Absent (default), the journal lives only in AltCLI and report-only turns publish no commit."}
         branch: {"$ref":"#/components/schemas/BranchConsent"}
         reviewBase: {"$ref":"#/components/schemas/GitSha"}
         reviewNote: {type: string, maxLength: 1900, description: A note from the human for the peer that reviews this handoff, delivered with the review assignment as its note. Requires handoff and is not accepted for kind review, whose text is the review context.}
@@ -2351,7 +2351,7 @@ components:
       additionalProperties: false
     JournalRecord:
       type: object
-      description: One completed implementation turn in CoderCrew's durable history, independent of the checkout and its branch.
+      description: One completed implementation turn in AltCLI's durable history, independent of the checkout and its branch.
       properties:
         runId: {type: string, format: uuid}
         commandId: {type: string, format: uuid}
@@ -2417,7 +2417,7 @@ components:
         branch: {"type":"string"}
         consent: {"$ref":"#/components/schemas/BranchConsent"}
         setup: {"enum":["pending","applying","ready","uncertain"]}
-        logPath: {"type":["string","null"],"description":"Null keeps the journal in CoderCrew only."}
+        logPath: {"type":["string","null"],"description":"Null keeps the journal in AltCLI only."}
         taskBaseSha: {"$ref":"#/components/schemas/GitSha"}
         acceptedSha: {"$ref":"#/components/schemas/GitSha"}
         candidateSha: {"type":["string","null"]}
@@ -2561,7 +2561,7 @@ components:
         registrationId: {"type":"string","format":"uuid"}
         action: {"enum":["draft","synthesize","review","revise"]}
         baseline: {"$ref":"#/components/schemas/GitSha"}
-        outputPath: {"type":"string","description":"Absolute path of the one document this turn may write, in CoderCrew's data directory, never inside the checkout."}
+        outputPath: {"type":"string","description":"Absolute path of the one document this turn may write, in AltCLI's data directory, never inside the checkout."}
         inputRevision: {"oneOf":[{"type":"integer","minimum":1},{"type":"null"}]}
         inputHash: {"oneOf":[{"type":"string","pattern":"^[a-f0-9]{64}$"},{"type":"null"}]}
       required: ["schema","phase","runId","commandId","epoch","briefRevision","rosterRevision","policyRevision","agentId","registrationId","action","baseline","outputPath","inputRevision","inputHash"]

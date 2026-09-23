@@ -11,7 +11,7 @@ into `web/`. It declared no dependencies and owned no code. A single-workspace
 layout needs neither a root manifest nor root launchers: every task is
 `cd web && npm run <task>`, with `pre*` hooks and `web/scripts/` for tooling.
 
-Two things in CoderCrew are genuinely not web-package concerns: `scripts/setup.mjs`
+Two things in AltCLI are genuinely not web-package concerns: `scripts/setup.mjs`
 writes `web/.env.local`, and `scripts/install-skills.mjs` links the root `skills/`
 directory into `~/.claude/skills` and `~/.codex/skills`.
 

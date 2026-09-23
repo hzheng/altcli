@@ -40,7 +40,7 @@ provenance. What is preserved is separated by where it belongs:
 | Where | What |
 | --- | --- |
 | Repository | Accepted design rationale, relevant tests, usage documentation, and important limitations, promoted into the appropriate documents as part of finishing a task. |
-| CoderCrew history (app data) | The detailed journal: agent turns, reviewed commit ranges, findings, intermediate plans, reported validation, and each handoff commit's archived patch. |
+| AltCLI history (app data) | The detailed journal: agent turns, reviewed commit ranges, findings, intermediate plans, reported validation, and each handoff commit's archived patch. |
 | PR or final task summary | A concise explanation of the result and significant decisions, drawn from that history. |
 
 Consequently a commit-mode turn no longer has to commit `RELAY-LOG.jsonl`. The
@@ -80,7 +80,7 @@ refuse it rather than misread a run without a tracked log.
 The new implementation path now realizes the one-direct-commit contract below;
 installed-agent acceptance remains pending. It originally defaulted to
 `RELAY-LOG.jsonl`, with a validated user-selectable relative path, so the existing
-`.codercrew/` ignore rule needs no mutation; since the September 20 update above,
+`.altcli/` ignore rule needs no mutation; since the September 20 update above,
 that tracked mirror is opt-in. The proposed Markdown metadata representation
 below is retained as design provenance; the implemented encoding is UTF-8 JSON,
 schema 1, exactly one result per completed turn (one appended line per turn when
@@ -97,7 +97,7 @@ cannot also require a blocking human decision. Project changes are derived from
 Git, excluding only the reserved tracked log when one is kept. Any supplied legacy outcome must agree.
 
 New staging starts are disabled unless the host opts in with
-`CODERCREW_ENABLE_LEGACY_RELAY=true`. Existing staging runs, hooks, and the legacy
+`ALTCLI_ENABLE_LEGACY_RELAY=true`. Existing staging runs, hooks, and the legacy
 skill retain their protocol. No automatic migration adopts their uncommitted work.
 
 **Plain Send clarification (September 19, 2026).** Plain Send is outside the
@@ -231,7 +231,7 @@ direct commit and no uncommitted leftovers; completion does not certify task suc
 
 *Superseded as the default by [Journal as app data](#journal-as-app-data-september-20-2026); retained as provenance and as the contract of the opt-in tracked mirror.*
 
-Use one ordinary Git-tracked file on the task branch, working path `.codercrew/relay-log.md`. The path is a proposal; the single-file, append-only behavior is the agreed direction. It is the collaboration journal, separate from the product's release `CHANGELOG.md`, and Plan turns do not append to it. This repository currently ignores `.codercrew/` wholesale, so that proposed path first requires the human setup decision recorded in [OPEN-DECISIONS](../OPEN-DECISIONS.md#open-choices-and-intentionally-deferred-work); the controller does not rewrite ignore rules during a run.
+Use one ordinary Git-tracked file on the task branch, working path `.altcli/relay-log.md`. The path is a proposal; the single-file, append-only behavior is the agreed direction. It is the collaboration journal, separate from the product's release `CHANGELOG.md`, and Plan turns do not append to it. This repository currently ignores `.altcli/` wholesale, so that proposed path first requires the human setup decision recorded in [OPEN-DECISIONS](../OPEN-DECISIONS.md#open-choices-and-intentionally-deferred-work); the controller does not rewrite ignore rules during a run.
 
 ```text
 Worker writes files and appends an entry in its checkout.
@@ -243,9 +243,9 @@ For remote operation, the commit is pushed to the selected remote branch.
 The next worker fetches the commit, including the log.
 ```
 
-The original argument was that the log must not be kept only in CoderCrew's database, because a tracked log travels with the code. The September 20, 2026 update reverses that default: the journal is app history with export and pre-cleanup archiving, enduring knowledge is promoted into repository documents, and a tracked mirror is an explicit preference for projects that need the audit trail in Git. Runtime metadata (databases, tokens, sockets, diagnostics) stays outside managed worktrees regardless.
+The original argument was that the log must not be kept only in AltCLI's database, because a tracked log travels with the code. The September 20, 2026 update reverses that default: the journal is app history with export and pre-cleanup archiving, enduring knowledge is promoted into repository documents, and a tracked mirror is an explicit preference for projects that need the audit trail in Git. Runtime metadata (databases, tokens, sockets, diagnostics) stays outside managed worktrees regardless.
 
-Each completed commit-mode turn appends exactly one structured entry; earlier entries are never rewritten, and corrections are new entries. Sequential turn ownership is what makes one growing file appropriate: competing publications are a coordination conflict, not an invitation to merge fragments. Plan documents live in CoderCrew's data directory, so no exclusion can hide the log; a one-time implementation-start record may carry the approved plan when that transfer format is selected.
+Each completed commit-mode turn appends exactly one structured entry; earlier entries are never rewritten, and corrections are new entries. Sequential turn ownership is what makes one growing file appropriate: competing publications are a coordination conflict, not an invitation to merge fragments. Plan documents live in AltCLI's data directory, so no exclusion can hide the log; a one-time implementation-start record may carry the approved plan when that transfer format is selected.
 
 ### What the log records and what Git supplies
 

@@ -11,7 +11,7 @@ export class Store {
   constructor(directory: string) {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     chmodSync(directory, 0o700);
-    const path = join(directory, "codercrew.sqlite3");
+    const path = join(directory, "altcli.sqlite3");
     this.db = new Database(path);
     chmodSync(path, 0o600);
     this.db.pragma("journal_mode = WAL");

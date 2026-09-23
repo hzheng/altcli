@@ -1,6 +1,6 @@
 # Security boundary and limits
 
-CoderCrew is a privileged local application: it can submit instructions to coding
+AltCLI is a privileged local application: it can submit instructions to coding
 agents that may already have filesystem, shell, network, and credential access.
 It is not a sandbox and does not reduce those agents' existing permissions.
 
@@ -20,7 +20,7 @@ live only in page memory. This is not a complete login/pairing/session product.
 
 The default adapter is tmux and input is enabled: a send still needs a registered
 pane, a fresh identity check, and the per-command readiness confirmation. The
-host-side `CODERCREW_ENABLE_INPUT=false` switch makes the console read-only; it
+host-side `ALTCLI_ENABLE_INPUT=false` switch makes the console read-only; it
 cannot be changed by a browser request. The `mock` adapter simulates panes for the
 automated tests and never touches a terminal.
 There is no generic shell execution, arbitrary tmux command, skill-installation,

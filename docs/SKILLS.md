@@ -10,7 +10,7 @@ external `resultPath`, and the optional tracked `logPath`.
 It authorizes one scoped local publication; the controller never commits it.
 
 Every turn writes one schema-1 JSON object to `resultPath`, outside the checkout;
-CoderCrew records it in its handoff journal. The object copies every `identity`
+AltCLI records it in its handoff journal. The object copies every `identity`
 field in the assignment and adds `model`, `decision`, `reason`, `needsHuman`,
 `summary`, and `checks`. Work has null decision/reason; reviews report
 accept/object. A turn commits only when it changed project content; objection and
@@ -21,7 +21,7 @@ explicitly stops automatic remediation for out-of-scope questions. See the skill
 for limits.
 
 The `review-handoff` skill below is used only by the staging fallback, enabled with
-`CODERCREW_ENABLE_LEGACY_RELAY=true`.
+`ALTCLI_ENABLE_LEGACY_RELAY=true`.
 
 `skills/review-handoff/SKILL.md` defines that flow's baseline, staging rules and
 final `RELAY-OUTCOME` line. Its contract remains unchanged.
@@ -43,7 +43,7 @@ Add this rule deliberately to the global Claude and Codex instruction files:
 
 > When the user's entire message is `relay`, or begins with `relay:`, use the
 > `review-handoff` skill. Context after the colon does not change its baseline or
-> staging rules. A `[codercrew-command:<UUID>]` suffix is correlation metadata,
+> staging rules. A `[altcli-command:<UUID>]` suffix is correlation metadata,
 > not another task. Stage only the reviewed incoming change exactly as the skill
 > defines; an ordinary review request does not authorize staging.
 
@@ -94,7 +94,7 @@ Existing lifecycle hooks stay unchanged. The controller does not invoke a native
 plan mode or infer permissions from provider names; output restrictions and draft
 withholding are cooperative and still require installed-host acceptance.
 
-Do not combine incompatible instructions behind a guessed mode. [ADR-0016](adr/ADR-0016-plan-phase-and-approval.md) defines planning documents kept in CoderCrew's data directory: assigned draft or unified plan only, no staging/commits, exact-version completion, cooperative draft withholding, and an independent approval checkpoint. Native plan mode is adapter-specific; never broaden edit permissions merely to save a draft.
+Do not combine incompatible instructions behind a guessed mode. [ADR-0016](adr/ADR-0016-plan-phase-and-approval.md) defines planning documents kept in AltCLI's data directory: assigned draft or unified plan only, no staging/commits, exact-version completion, cooperative draft withholding, and an independent approval checkpoint. Native plan mode is adapter-specific; never broaden edit permissions merely to save a draft.
 
 [ADR-0014](adr/ADR-0014-commit-relay-and-deprecation.md) defines a separate commit-relay skill: captured unfinished input for initial work, clean entry for reviews and later turns, exact assigned revisions, one published result recorded in the handoff journal, at most one direct handoff commit with permitted project changes (optionally mirroring the entry into a tracked log), and no unpublished leftovers. The agent/authorized helper commits; the server validates read-only. A review-only or objection turn changes no project content and, without a tracked log, commits nothing. Work is a proposal, not self-approval; optional self-review is visibly non-independent.
 

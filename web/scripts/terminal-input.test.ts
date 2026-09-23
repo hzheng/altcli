@@ -8,7 +8,7 @@ import { createRunner, TmuxAdapter } from '../src/server/adapters/tmux.ts';
 import type { SessionRegistration } from '../src/contracts/api.ts';
 
 test('private tmux transmits literal UTF-8, multiline paste and key-only Enter/Escape exactly', async () => {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), 'codercrew-terminal-')));
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'altcli-terminal-')));
   const run = createRunner('tmux', join(directory, 'tmux.sock'));
   try {
     const script = join(directory, 'reader.sh');

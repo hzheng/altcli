@@ -6,7 +6,7 @@ automated checks, mock walkthrough, and `cat`-pane dry run before section 2.
 ## 1. Validate the mock starter first
 
 ```bash
-cd codercrew
+cd altcli
 nvm use
 node scripts/setup.mjs
 npm --prefix web ci
@@ -29,7 +29,7 @@ Xcode Command Line Tools.
 
 ## 2. Prepare the host
 
-CoderCrew and tmux must run on the same host and under the same Unix user. Start
+AltCLI and tmux must run on the same host and under the same Unix user. Start
 with an awake macOS or Linux development machine. This starter does not support
 Windows without an appropriate Linux environment, remote tmux hosts, or a web
 backend hosted in a cloud/serverless environment.
@@ -42,28 +42,28 @@ tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index}  #{pane_id}
 ```
 
 Use existing sessions. If you need to create two deliberately, these are manual
-examples, not commands CoderCrew runs for you:
+examples, not commands AltCLI runs for you:
 
 ```bash
 # Run in separate desktop terminals. Replace the repository path.
-tmux new-session -s codercrew-codex -c /absolute/path/to/project 'exec codex'
-tmux new-session -s codercrew-claude -c /absolute/path/to/project 'exec claude'
+tmux new-session -s altcli-codex -c /absolute/path/to/project 'exec codex'
+tmux new-session -s altcli-claude -c /absolute/path/to/project 'exec claude'
 ```
 
 `exec` avoids leaving an interactive shell behind when the agent exits. It does
 not make terminal input atomic or prove an agent is ready. Do not use `-d` to detach
 another person's client, enable synchronized panes, or run two writing turns on
 one shared worktree. These launch examples assume the CLIs are already installed
-and authenticated; CoderCrew does not manage those accounts.
+and authenticated; AltCLI does not manage those accounts.
 
 ## 3. Register panes from the console
 
 tmux is the default adapter, so `web/.env.local` needs no change for a normal
-setup. For a cautious first pass you can add `CODERCREW_ENABLE_INPUT=false` to make
-the console read-only (captures only) and remove it later. Set `CODERCREW_TMUX_BIN`
+setup. For a cautious first pass you can add `ALTCLI_ENABLE_INPUT=false` to make
+the console read-only (captures only) and remove it later. Set `ALTCLI_TMUX_BIN`
 only if tmux is absent from the backend's PATH; use an absolute binary path, not a
 shell fragment. If you use a non-default tmux server, set its absolute socket path
-in `CODERCREW_TMUX_SOCKET`. Restart the server after editing the file.
+in `ALTCLI_TMUX_SOCKET`. Restart the server after editing the file.
 
 Start the server (`cd web && npm run dev`) and unlock the console. With nothing
 registered, the add-pane panel is the page; later, **+ Add pane** opens it, locked
@@ -134,12 +134,12 @@ pane metadata or respawning the target while a command is being sent.
 ## 5. The first supervised input
 
 Only after the earlier checks pass (and, if you ran read-only, after removing
-`CODERCREW_ENABLE_INPUT=false` and restarting). Confirm on the desktop that the
+`ALTCLI_ENABLE_INPUT=false` and restarting). Confirm on the desktop that the
 selected CLI is at an **empty input prompt**, not a permission dialog, and that no
 other writing turn or write-capable background work is active. Send an innocuous
 instruction first, such as `Reply only READY without using tools or changing files.`
 
-CoderCrew types the text, waits 300 ms, re-checks the pane, then presses Enter:
+AltCLI types the text, waits 300 ms, re-checks the pane, then presses Enter:
 Codex treats a fast burst of characters as a paste and would otherwise turn the
 Enter into a newline inside its composer. If a CLI ever shows your instruction
 with an extra empty line and nothing submitted, press Enter in that terminal once.
@@ -156,9 +156,9 @@ The controller itself never stages, commits, cleans, resets, or edits the worktr
 
 ## 6. Let the CLIs report when a turn ends
 
-Both CLIs can tell CoderCrew when a turn finishes, from their own lifecycle, not
+Both CLIs can tell AltCLI when a turn finishes, from their own lifecycle, not
 from screen text: Claude Code through a `Stop` hook, Codex through its `notify`
-command. One script serves both, `hooks/codercrew-turn-complete.sh`; it posts the
+command. One script serves both, `hooks/altcli-turn-complete.sh`; it posts the
 pane's exact tmux identity (`$TMUX_PANE`, `$TMUX`) to the local console, exits 0
 always, and does nothing outside tmux.
 
@@ -168,7 +168,7 @@ node scripts/install-hooks.mjs --check  # verifies both
 ```
 
 Codex allows one `notify` command; if you already have one (for example the Codex
-Computer Use client) the installer keeps it and chains it after CoderCrew's hook
+Computer Use client) the installer keeps it and chains it after AltCLI's hook
 with the same JSON. Restart each CLI afterwards; hooks are read at startup. If a
 restart changes a pane, re-register it.
 
@@ -253,4 +253,4 @@ outside the hold.
 
 When local verification is complete, use a production build before configuring
 [Tailscale access](TAILSCALE.md). Host availability and CLI permissions remain your
-responsibility; CoderCrew does not restart or supervise the agents yet.
+responsibility; AltCLI does not restart or supervise the agents yet.

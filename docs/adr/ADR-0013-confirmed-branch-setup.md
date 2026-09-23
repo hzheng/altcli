@@ -21,7 +21,7 @@ Relationship: The read-only-controller setup restriction in ADR-0003 and ADR-001
 
 ## Context
 
-The workspace may be on a primary branch or detached HEAD. A small confirmed setup operation is useful without making CoderCrew a worktree or environment manager.
+The workspace may be on a primary branch or detached HEAD. A small confirmed setup operation is useful without making AltCLI a worktree or environment manager.
 
 ## Decision
 
@@ -36,7 +36,7 @@ Inspect the branch **currently checked out in this worktree**. Other local/remot
 | Detached HEAD at a valid commit | Offer confirmed new named-branch creation at that commit, or ask the user to check out a branch and Recheck. Do not pretend it is main. |
 | Unknown branch state, missing baseline, or failed Git inspection | Block commit implementation with an explanation; do not guess, initialize history, or repair automatically. |
 
-Do not hard-code `main` as the only integration name. The integration set is the repository default branch as recorded locally in `origin/HEAD` plus the host's `CODERCREW_INTEGRATION_BRANCHES` list (default `main,master`); keep the actual checked-out name visible. If default-branch information is unavailable, the configured list still applies and the picker says no default is recorded, rather than classifying the checkout as a safe task branch by accident. Exact default-source and fallback detection remain implementation details, not an excuse for automatic network or configuration writes.
+Do not hard-code `main` as the only integration name. The integration set is the repository default branch as recorded locally in `origin/HEAD` plus the host's `ALTCLI_INTEGRATION_BRANCHES` list (default `main,master`); keep the actual checked-out name visible. If default-branch information is unavailable, the configured list still applies and the picker says no default is recorded, rather than classifying the checkout as a safe task branch by accident. Exact default-source and fallback detection remain implementation details, not an excuse for automatic network or configuration writes.
 
 One implementation branch is recorded per run segment, and it is always a task branch: integration branches are starting points, never implementation branches, so intermediate work and review commits stay off them. Verified initial input, lineage, group ownership, ordinary permissions and final verification still apply. No PR is required and no automatic merge follows. The branch belongs to the workspace checkout, not to an individual agent or group object.
 
@@ -67,7 +67,7 @@ The create-and-checkout permission does **not** authorize existing-branch switch
 
 ### Explicit task-worktree creation
 
-The project view may offer **Create task worktree** before choosing agents or starting either phase. The user chooses an existing source checkout and a new task branch. A read-only preview returns the source worktree/index identity, source branch or detached state, full committed HEAD and destination. Default placement is `~/.codercrew/<repo-name>/<branch-name>`; separate same-named clones get distinct namespaces. Branch slashes create nested directories. Names and path components are checked, symlink indirection below the task root and checkout/metadata overlap are refused, and existing destinations are never adopted or overwritten.
+The project view may offer **Create task worktree** before choosing agents or starting either phase. The user chooses an existing source checkout and a new task branch. A read-only preview returns the source worktree/index identity, source branch or detached state, full committed HEAD and destination. Default placement is `~/.altcli/<repo-name>/<branch-name>`; separate same-named clones get distinct namespaces. Branch slashes create nested directories. Names and path components are checked, symlink indirection below the task root and checkout/metadata overlap are refused, and existing destinations are never adopted or overwritten.
 
 Confirmation authorizes one non-force `git worktree add --no-track -b <new-branch> -- <destination> <exact-SHA>`, with hooks disabled and no submodule recursion. It does not switch the source checkout. A dirty or active source does not itself block creating an independent checkout from the confirmed immutable commit: staged, unstaged, untracked, ignored and environment files remain in the source. Source identity, branch and HEAD are rechecked immediately before creation; a changed observation requires fresh consent. Plan and existing-candidate review require clean entry in their selected worktree; initial work follows the captured-input contract in ADR-0014.
 
@@ -106,7 +106,7 @@ and HEAD, integration evidence and request ID. Persist a project setup owner,
 revalidate live occupancy and exact Git evidence, then execute only non-force
 `git worktree remove -- <path>` with hooks disabled. Refuse the main checkout,
 integration branches, controller-data overlap, and a checkout that the host's
-installed CoderCrew hook commands or skill links still point into (read from the
+installed AltCLI hook commands or skill links still point into (read from the
 CLIs' user configuration, never edited: the installers own it and only install
 from the main checkout). Never delete files directly or
 use force, prune, reset or automatic cleanup. This remains cooperative same-user

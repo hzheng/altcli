@@ -20,7 +20,7 @@ tailscale serve status
 ```
 
 Use the exact HTTPS origin returned by Serve and add it to
-CODERCREW_ALLOWED_ORIGINS without a path or trailing slash. Restart the backend.
+ALTCLI_ALLOWED_ORIGINS without a path or trailing slash. Restart the backend.
 Connect the iPhone through Tailscale and open that address in Safari. Supply the
 owner token through the form, never a URL. A full reload requires the token again.
 

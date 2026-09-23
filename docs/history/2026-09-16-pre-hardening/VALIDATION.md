@@ -75,7 +75,7 @@ locally.
 Follow [docs/TESTING.md](docs/TESTING.md) in order: install, automated checks, the
 tmux dry run against a harmless `cat` pane, and only then real coding CLIs with
 [docs/SETUP.md](docs/SETUP.md)'s manual acceptance checklist. Run read-only
-(`CODERCREW_ENABLE_INPUT=false`) first if you want captures verified before any send.
+(`ALTCLI_ENABLE_INPUT=false`) first if you want captures verified before any send.
 
 Update this record with actual results and versions as you proceed. Do not check
 off roadmap acceptance merely because a corresponding source file now exists.

@@ -1,11 +1,11 @@
-# CoderCrew: coding-agent instructions
+# AltCLI: coding-agent instructions
 
 Read `README.md`, `ROADMAP.md`, `Architecture_Decision.md`, and `VALIDATION.md`
 before changing architecture or claiming a milestone complete.
 
 ## Product boundary
 
-CoderCrew is an external controller, not a third coding agent. Focus on the manual
+AltCLI is an external controller, not a third coding agent. Focus on the manual
 web console, which registers any number of existing tmux panes from the live pane
 list. TypeScript frontend and Node backend share a Next.js workspace under `web/`.
 Keep `ios/` reserved. No autonomous relay, model provider, terminal emulator, or
@@ -17,7 +17,7 @@ extra service is required for the first milestone.
 - Use JSON-only types under `web/src/contracts/`; update `shared/openapi.yaml`
   with API changes. Their synchronization is manual in this scaffold.
 - Use argument arrays, never a shell-concatenated prompt. tmux is the default
-  adapter and input is on; keep `CODERCREW_ENABLE_INPUT=false` working as the
+  adapter and input is on; keep `ALTCLI_ENABLE_INPUT=false` working as the
   read-only switch, and keep `mock` a test adapter, never the product flow.
 - Treat output as untrusted display data. Do not use terminal prose as a
   machine-readable completion or authorization signal.

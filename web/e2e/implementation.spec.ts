@@ -224,7 +224,7 @@ test('committed implementation is default and explicit branch consent carries fi
   expect(starts[0]).toMatchObject({ groupId: group.id, agentId: 'claude', policy: 'worker_reviewer', workerId: 'claude', kind: 'commit', handoff: false, autoContinue: false,
     branch: { branch: 'main', head: 'a'.repeat(40), newBranch: 'task/browser-fixture' }, confirmReady: true });
   expect(starts[0]).not.toHaveProperty('text'); // a hand-off as it stands carries no instruction
-  expect(starts[0]).not.toHaveProperty('logPath'); // the journal stays in CoderCrew unless the project opts into a tracked mirror
+  expect(starts[0]).not.toHaveProperty('logPath'); // the journal stays in AltCLI unless the project opts into a tracked mirror
   await expect(claude.getByLabel('Ready for implementation')).not.toBeChecked();
   await page.getByRole('button', { name: 'Lock', exact: true }).click(); expect(starts).toHaveLength(1);
 });
@@ -242,7 +242,7 @@ test('a tracked relay log is an explicit opt-in whose path is sent only when ena
   const codex = await openCard(page, 'Codex'); await handOff(codex, 'commit_relay');
   await editSettings(page); await expand(page, 'Collaboration settings');
   await expect(page.getByLabel('Tracked relay log')).toHaveCount(0);
-  await expect(page.getByText(/journal stays in CoderCrew/)).toBeVisible();
+  await expect(page.getByText(/journal stays in AltCLI/)).toBeVisible();
   await page.getByLabel('Implementation branch').selectOption('new'); await page.getByLabel('New branch name').fill('task/tracked');
   await expect.poll(() => previews.length).toBeGreaterThan(0); expect(previews.at(-1)).not.toHaveProperty('logPath');
   await page.getByLabel('Also track the journal in the repository').check();

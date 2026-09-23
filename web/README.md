@@ -1,4 +1,4 @@
-# CoderCrew web workspace
+# AltCLI web workspace
 
 Next.js App Router, React, TypeScript, Tailwind, SQLite/better-sqlite3, Vitest, and
 Playwright. Node 24 is suggested.
@@ -19,4 +19,4 @@ transport is polling, not WebSocket/SSE, and captures are not a transcript.
 See the root [README](../README.md), [validation record](../VALIDATION.md), and
 [host setup guide](../docs/SETUP.md). tmux is the default adapter; `mock` exists
 for the automated tests. Panes are registered from the console, not from a script.
-`CODERCREW_ENABLE_INPUT=false` makes the console read-only.
+`ALTCLI_ENABLE_INPUT=false` makes the console read-only.

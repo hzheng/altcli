@@ -22,15 +22,15 @@ const identityMatches = (a: ManagedSession['identity'], b?: HookEvent['identity'
   (['paneId', 'panePid', 'serverPid', 'serverStarted', 'socketPath'] as const).every((k) => a[k] === b[k]);
 export function wireText(input: StartInput, session: ManagedSession): string {
   const text = input.kind === 'relay' ? `${session.relayPrompt}: ${input.text ?? ''}`.trimEnd() : input.text!;
-  const wire = `${text} [codercrew-command:${input.requestId}]`;
-  if (new TextEncoder().encode(wire).length > 2000) throw new AppError('INVALID_TEXT', 'The text plus its 57-byte correlation marker exceeds 2,000 UTF-8 bytes. Shorten the text.');
+  const wire = `${text} [altcli-command:${input.requestId}]`;
+  if (new TextEncoder().encode(wire).length > 2000) throw new AppError('INVALID_TEXT', 'The text plus its 54-byte correlation marker exceeds 2,000 UTF-8 bytes. Shorten the text.');
   return promptText(wire);
 }
 /** A durable execution ledger, separate from transport receipts and the bounded history view. */
 export class WorkflowStore {
   readonly store: Store;
   readonly assignmentDirectory: string;
-  constructor(store: Store, assignmentDirectory = '/tmp/codercrew-test-assignments') {
+  constructor(store: Store, assignmentDirectory = '/tmp/altcli-test-assignments') {
     this.store = store;
     this.assignmentDirectory = assignmentDirectory;
     store.db.exec(`
@@ -390,7 +390,7 @@ export class WorkflowStore {
     const participant = run.participants.find((p) => p.id === agentId)!;
     // Like runtime.ts, the host starts from web/. Keep a filesystem path: bundlers must not import this agent document.
     const skill = resolve(process.cwd(), '../skills/commit-handoff/SKILL.md');
-    const wire = promptText(`Use the commit-handoff skill at ${JSON.stringify(skill)}. Read your assignment at ${JSON.stringify(join(this.assignmentDirectory, `${commandId}.json`))} and carry it out. [codercrew-command:${commandId}]`);
+    const wire = promptText(`Use the commit-handoff skill at ${JSON.stringify(skill)}. Read your assignment at ${JSON.stringify(join(this.assignmentDirectory, `${commandId}.json`))} and carry it out. [altcli-command:${commandId}]`);
     return { commandId, runId: run.id, agentId, input: { requestId: commandId, agentId, kind: 'instruction', text: text || 'Review the assigned committed candidate.', handoff, confirmReady: true },
       wireText: wire, status: 'planned', sessionId: null, sourceTurnId: null, continuation: commandId !== run.id, baselineProcesses: null, baselineWorktree: null,
       implementation: { resultPath: join(this.assignmentDirectory, `${commandId}.result.json`), identity: { schema: 1, phase: 'implementation', runId: run.id, commandId, turn: impl.turn, policyRevision: impl.revision, action, agentId,
@@ -403,7 +403,7 @@ export class WorkflowStore {
     const outputPath = next.action === 'draft' ? plan.drafts[next.agentId]!.path : plan.planPath;
     if (next.action === 'draft') plan.drafts[next.agentId]!.status = 'running';
     const skill = resolve(process.cwd(), '../skills/plan-handoff/SKILL.md');
-    const wire = promptText(`Use the plan-handoff skill at ${JSON.stringify(skill)}. Read your assignment at ${JSON.stringify(join(this.assignmentDirectory, `${commandId}.json`))}. Plan only; do not implement. [codercrew-command:${commandId}]`);
+    const wire = promptText(`Use the plan-handoff skill at ${JSON.stringify(skill)}. Read your assignment at ${JSON.stringify(join(this.assignmentDirectory, `${commandId}.json`))}. Plan only; do not implement. [altcli-command:${commandId}]`);
     plan.next = null;
     return { commandId, runId: run.id, agentId: next.agentId, input: { requestId: commandId, agentId: next.agentId, kind: 'instruction', text: 'Perform the assigned planning action only.', confirmReady: true },
       wireText: wire, status: 'planned', sessionId: null, sourceTurnId: null, continuation: commandId !== run.id, baselineProcesses: null, baselineWorktree: null,

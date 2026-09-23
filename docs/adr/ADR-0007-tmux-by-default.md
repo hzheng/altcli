@@ -6,7 +6,7 @@
 
 ## Context
 
-The scaffold started in a simulated console (`CODERCREW_ADAPTER=mock`) with real
+The scaffold started in a simulated console (`ALTCLI_ADAPTER=mock`) with real
 input off, so a first-time user saw fake panes and had to edit two environment
 variables and restart before the product did anything. The mock adapter exists so
 the browser tests and UI work can run without a tmux server; it is a test fixture,
@@ -18,9 +18,9 @@ gate that mostly produced confusion ("why is Relay disabled?").
 
 ## Decision
 
-- `CODERCREW_ADAPTER` defaults to `tmux`. `mock` remains selectable for tests and
+- `ALTCLI_ADAPTER` defaults to `tmux`. `mock` remains selectable for tests and
   development and is documented as such; it never touches a terminal.
-- `CODERCREW_ENABLE_INPUT` defaults to `true`. Setting it to `false` turns the console
+- `ALTCLI_ENABLE_INPUT` defaults to `true`. Setting it to `false` turns the console
   read-only (captures only); the console says so. It cannot be changed from the
   browser.
 - The first screen in tmux mode is the add-pane panel. With no tmux server it says
@@ -36,6 +36,6 @@ gate that mostly produced confusion ("why is Relay disabled?").
 ## Consequences
 
 `docs/TESTING.md` level 3 no longer restarts between read-only and input. The
-cautious path is still available by adding `CODERCREW_ENABLE_INPUT=false` for the
+cautious path is still available by adding `ALTCLI_ENABLE_INPUT=false` for the
 first run. An existing `web/.env.local` written by the earlier setup still pins
 `mock` and `false` and must be edited or regenerated.

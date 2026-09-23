@@ -76,7 +76,7 @@ export class TmuxAdapter implements TerminalAdapter {
     if (text.includes("\n")) {
       // A multi-line prompt arrives the way a terminal delivers a paste: one bracketed paste, which both CLIs insert
       // without submitting (LF becomes CR as a terminal would send it). A single line is still typed as keystrokes.
-      const buffer = `codercrew-${randomUUID()}`;
+      const buffer = `altcli-${randomUUID()}`;
       await this.run(["load-buffer", "-b", buffer, "-"], promptText(text));
       await this.run(["paste-buffer", "-p", "-d", "-b", buffer, "-t", validPaneId(session.identity.paneId)]);
     } else await this.run(inputArgs(session.identity.paneId, text));

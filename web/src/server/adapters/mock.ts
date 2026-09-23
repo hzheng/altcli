@@ -2,7 +2,7 @@ import type { AgentId, PaneState, SessionRegistration } from "../../contracts/ap
 import { AppError } from "../../core/errors.ts";
 import type { ProcessRecord } from "../../contracts/workflow.ts";
 import type { ListedPane, TerminalAdapter } from "./terminal.ts";
-const IDENTITY = { panePid: "10", serverPid: "20", serverStarted: "100", socketPath: "/tmp/codercrew-mock" };
+const IDENTITY = { panePid: "10", serverPid: "20", serverStarted: "100", socketPath: "/tmp/altcli-mock" };
 /** Simulated tmux server: two coding CLIs already registered by default, a shell to demonstrate refusal, and a spare CLI to register. */
 export function mockPanes(): ListedPane[] {
   return [
@@ -34,7 +34,7 @@ export class MockAdapter implements TerminalAdapter {
     return this.output.get(session.id) ?? `[MOCK ${session.label}]\n\nThis is a simulated pane, not a connected coding agent.\nNo repository has been read or modified.\n\nReady to preview a manual command.\n> `;
   }
   async send(session: SessionRegistration, text: string): Promise<void> {
-    if (text.replace(/ \[codercrew-command:[0-9a-f-]+\]$/i, "") === "mock:uncertain") throw new AppError("TMUX_FAILED", "Simulated transport failure after typing began.", 409);
+    if (text.replace(/ \[altcli-command:[0-9a-f-]+\]$/i, "") === "mock:uncertain") throw new AppError("TMUX_FAILED", "Simulated transport failure after typing began.", 409);
     this.output.set(session.id, `${await this.capture(session)}${text}\n\n[MOCK] Input received. No review or code change was performed.\n> `);
   }
   async processes(session: SessionRegistration): Promise<ProcessRecord[]> { return [...(this.trees.get(session.id) ?? [])]; }

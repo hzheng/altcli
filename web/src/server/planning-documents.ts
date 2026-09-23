@@ -28,16 +28,16 @@ const readBounded = (path: string, maximum: number) => readBoundedFile(path, max
 async function assertPlanRoot(root: string, worktree: string): Promise<void> {
   const info = await lstat(root);
   if (info.isSymbolicLink() || !info.isDirectory()) fail(`Unsafe plan directory: ${root}. Use an ordinary directory, not a link.`);
-  if (isWithin(await realpath(worktree), await realpath(root))) fail(`The plan directory ${root} is inside the checkout. Keep CoderCrew's data directory outside every project.`);
+  if (isWithin(await realpath(worktree), await realpath(root))) fail(`The plan directory ${root} is inside the checkout. Keep AltCLI's data directory outside every project.`);
 }
-/** Creates CoderCrew's plan directory and returns its canonical path once it is known to be safe for this worktree. */
+/** Creates AltCLI's plan directory and returns its canonical path once it is known to be safe for this worktree. */
 export async function planRoot(dataDir: string, worktree: string): Promise<string> {
   const path = join(dataDir, 'plans'); await mkdir(path, { recursive: true, mode: 0o700 });
   await assertPlanRoot(path, worktree); return realpath(path);
 }
-/** Plan documents live in CoderCrew's data directory, outside every checkout, so no ignore rule is involved. */
+/** Plan documents live in AltCLI's data directory, outside every checkout, so no ignore rule is involved. */
 export async function validatePlanPaths(plan: PlanningRun): Promise<void> {
-  // Earlier runs stored checkout-relative .codercrew/plans/ paths; they are refused rather than resolved against a guess.
+  // Earlier runs stored checkout-relative .altcli/plans/ paths; they are refused rather than resolved against a guess.
   if (!isAbsolute(plan.directory)) fail('This planning run keeps its documents inside the checkout, an earlier layout. Take over and start a new Plan.');
   const root = dirname(plan.directory); await assertPlanRoot(root, plan.worktree.root);
   for (const path of [...Object.values(plan.drafts).map((d) => d.path), plan.planPath]) await safePath(root, relative(root, path));

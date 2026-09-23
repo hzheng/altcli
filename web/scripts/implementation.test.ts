@@ -24,12 +24,12 @@ import type { HookEvent, ManagedSession } from '../src/contracts/workflow.ts';
 // Real Git and SQLite in disposable directories; terminal delivery and lifecycle evidence are simulated.
 let directory: string; let root: string; let store: Store; let adapter: MockAdapter; let plane: ControlPlane;
 let group: Group; let sent: string[];
-const config = () => loadConfig({ CODERCREW_ADAPTER: 'mock', CODERCREW_TOKEN: 'a'.repeat(64), CODERCREW_DATA_DIR: join(directory, 'metadata') });
+const config = () => loadConfig({ ALTCLI_ADAPTER: 'mock', ALTCLI_TOKEN: 'a'.repeat(64), ALTCLI_DATA_DIR: join(directory, 'metadata') });
 function git(...args: string[]): string {
   return execFileSync('git', ['-C', root, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 beforeEach(async () => {
-  directory = realpathSync(mkdtempSync(join(tmpdir(), 'codercrew-implementation-'))); root = join(directory, 'repo'); mkdirSync(root);
+  directory = realpathSync(mkdtempSync(join(tmpdir(), 'altcli-implementation-'))); root = join(directory, 'repo'); mkdirSync(root);
   git('init', '-b', 'main'); writeFileSync(join(root, 'app.txt'), 'baseline\n'); git('add', 'app.txt'); git('commit', '-m', 'baseline');
   git('switch', '-c', 'task/fixture'); // main is the integration branch: a starting point, never the implementation branch
   store = new Store(join(directory, 'metadata')); adapter = new MockAdapter(); sent = [];
@@ -240,7 +240,7 @@ test('an integration branch is a starting point, never the implementation branch
 });
 test('configured and detected integration branches are refused beyond the literal name main', async () => {
   git('branch', 'develop'); git('switch', '-c', 'release/1.0');
-  const configured = new ControlPlane(new Controller(loadConfig({ CODERCREW_ADAPTER: 'mock', CODERCREW_TOKEN: 'a'.repeat(64), CODERCREW_DATA_DIR: join(directory, 'metadata'), CODERCREW_INTEGRATION_BRANCHES: 'develop, release/1.0' }), store, adapter));
+  const configured = new ControlPlane(new Controller(loadConfig({ ALTCLI_ADAPTER: 'mock', ALTCLI_TOKEN: 'a'.repeat(64), ALTCLI_DATA_DIR: join(directory, 'metadata'), ALTCLI_INTEGRATION_BRANCHES: 'develop, release/1.0' }), store, adapter));
   await assert.rejects(configured.submitImplementation(request()), /release\/1.0 is an integration branch/);
   git('switch', 'develop'); await assert.rejects(configured.submitImplementation(request()), /develop is an integration branch/);
   git('switch', 'task/fixture'); assert.equal((await configured.submitImplementation(request())).status, 'delivered');
@@ -249,7 +249,7 @@ test('configured and detected integration branches are refused beyond the litera
   const policy = async () => { const state = await branchState(root); return { primary: state.primary, ...await taskBaseline(root, state, plane.config.integrationBranches) }; };
   assert.deepEqual(await policy(), { primary: 'trunk', integration: false, taskBase: git('rev-parse', 'HEAD') });
   git('switch', '-c', 'trunk'); assert.deepEqual(await policy(), { primary: 'trunk', integration: true, taskBase: null });
-  assert.throws(() => loadConfig({ CODERCREW_ADAPTER: 'mock', CODERCREW_TOKEN: 'a'.repeat(64), CODERCREW_INTEGRATION_BRANCHES: 'main,bad name' }), /CODERCREW_INTEGRATION_BRANCHES/);
+  assert.throws(() => loadConfig({ ALTCLI_ADAPTER: 'mock', ALTCLI_TOKEN: 'a'.repeat(64), ALTCLI_INTEGRATION_BRANCHES: 'main,bad name' }), /ALTCLI_INTEGRATION_BRANCHES/);
 });
 test('an existing task branch keeps its recorded baseline: inferred from the integration tip, confirmed when ambiguous, never guessed', async () => {
   const baseline = git('rev-parse', 'HEAD');
@@ -335,8 +335,8 @@ for (const kind of ['staged', 'mixed', 'untracked'] as const) test(`Existing-can
   assert.equal(plane.workflow.run(input.requestId), undefined);
 });
 test('ignored or symlinked log paths are rejected without modifying ignore rules', async () => {
-  writeFileSync(join(root, '.gitignore'), '.codercrew/\n'); git('add', '.gitignore'); git('commit', '-m', 'ignore fixture');
-  await assert.rejects(plane.submitImplementation(request({ logPath: '.codercrew/relay-log.md' })), /ignored/);
+  writeFileSync(join(root, '.gitignore'), '.altcli/\n'); git('add', '.gitignore'); git('commit', '-m', 'ignore fixture');
+  await assert.rejects(plane.submitImplementation(request({ logPath: '.altcli/relay-log.md' })), /ignored/);
   symlinkSync(join(directory, 'outside'), join(root, 'log-link')); git('add', 'log-link'); git('commit', '-m', 'symlink fixture');
   await assert.rejects(plane.submitImplementation(request({ logPath: 'log-link' })), /symlinks/);
 });
@@ -733,7 +733,7 @@ test('a steered Codex completion finishes standalone Send exactly once using the
   await plane.recordEvent(completion); // An older completed event cannot complete the newer run.
   assert.equal(run(next.requestId).status, 'running'); assert.equal(sent.length, 2);
   const wrongBinding = codexStartState({ hook_event_name: 'UserPromptSubmit', session_id: 'current-session', turn_id: 'next-turn',
-    prompt: `Wrong instruction [codercrew-command:${next.requestId}]` }, target.identity);
+    prompt: `Wrong instruction [altcli-command:${next.requestId}]` }, target.identity);
   const wrongEcho = parseHook(codexCompletion({ ...payload, 'turn-id': 'next-turn' }, target.identity, wrongBinding));
   assert.equal((await plane.recordEvent(wrongEcho)).accepted, false);
   assert.equal(run(next.requestId).status, 'paused'); assert.equal(plane.workflow.owner(`${root}/.git/index`), next.requestId);
@@ -746,7 +746,7 @@ test('a native-bound Codex handoff schedules peer review despite older commands 
   await plane.recordEvent(parseHook({ ...binding.context, event: 'turn_started' }));
   const candidate = publish(input.requestId, true);
   const event = parseHook(codexCompletion({ type: 'agent-turn-complete', 'thread-id': 'native-session', 'turn-id': 'native-turn',
-    'input-messages': ['Old command [codercrew-command:12345678-1234-4234-8234-123456789abc]', prompt, 'Unmarked clarification.'],
+    'input-messages': ['Old command [altcli-command:12345678-1234-4234-8234-123456789abc]', prompt, 'Unmarked clarification.'],
     'last-assistant-message': 'Committed.', background_tasks: [], session_crons: [] }, target.identity, binding));
   await plane.recordEvent(event);
   assert.equal(sent.length, 2); assert.equal(run(input.requestId).status, 'running');
@@ -760,7 +760,7 @@ test('plain Send works without legacy mode, leaves Git untouched, and completes 
   const input = instruction();
   assert.equal((await plane.submitStandalone(input)).status, 'delivered');
   assert.equal(run(input.requestId).implementation, undefined); assert.equal(run(input.requestId).autoContinue, false);
-  assert.equal(sent[0], `${input.text} [codercrew-command:${input.requestId}]`);
+  assert.equal(sent[0], `${input.text} [altcli-command:${input.requestId}]`);
   await plane.submitStandalone(input); assert.equal(sent.length, 1);
   await assert.rejects(plane.submitStandalone({ ...input, text: 'Changed' }), /another instruction/);
   await assert.rejects(plane.submitStandalone(instruction()), /execution owner/);

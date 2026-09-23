@@ -13,13 +13,13 @@ not installed-host acceptance claims. See [VALIDATION](../VALIDATION.md).
 
 ## Executive decision
 
-CoderCrew's main entry point is **a project**, then a worktree and task/agent group. Projects are identified by canonical shared Git metadata, not origin URLs. tmux discovers projects and live agents; Git lists all linked worktrees, including empty checkouts. Explicitly used/created projects are remembered across restart. Agents group by canonical cwd beneath each worktree. The app validates placement and offers separately confirmed task-worktree creation; it never moves sessions or configures their environments.
+AltCLI's main entry point is **a project**, then a worktree and task/agent group. Projects are identified by canonical shared Git metadata, not origin URLs. tmux discovers projects and live agents; Git lists all linked worktrees, including empty checkouts. Explicitly used/created projects are remembered across restart. Agents group by canonical cwd beneath each worktree. The app validates placement and offers separately confirmed task-worktree creation; it never moves sessions or configures their environments.
 
 **Group includes every cardinality.** Each workspace has one group, with all eligible agents included by default and a checkbox for every session. One selected instance is solo, two a pair, three or more a larger group. No Register/Create/Use group step is needed. The Name column supports inline display-name edits without changing instance IDs. Larger selections are saved, but execution currently requires one or two and displays that limit. Group selection is fixed into a run membership snapshot, not continuously inferred from discovery.
 
-**Two task phases remain:** optional **Plan**, then **Implementation**, or start directly in Implementation. Plan runs in the same clean existing workspace and writes per-agent drafts, then one shared plan, to CoderCrew's data directory rather than the checkout. No planning worktrees, code branches, staging, force-add, or commits are introduced. Use captured versions and explicit results. One-member Plan reaches **Plan ready (solo)**; multi-agent agreement requires the complete current-version required endorsement set. Later N-agent planning preserves N initial drafts plus one unified plan and sequential shared-plan refinement.
+**Two task phases remain:** optional **Plan**, then **Implementation**, or start directly in Implementation. Plan runs in the same clean existing workspace and writes per-agent drafts, then one shared plan, to AltCLI's data directory rather than the checkout. No planning worktrees, code branches, staging, force-add, or commits are introduced. Use captured versions and explicit results. One-member Plan reaches **Plan ready (solo)**; multi-agent agreement requires the complete current-version required endorsement set. Later N-agent planning preserves N initial drafts plus one unified plan and sequential shared-plan refinement.
 
-**Implementation** uses one recorded branch and commit-based handoffs as the main direction. Each completed commit-mode turn publishes one structured result to CoderCrew's handoff journal and, when it changed project content, one direct handoff commit; a report-only turn publishes no commit. Mirroring the journal into a tracked relay log is an explicit project preference, not the default. Two-member groups use **Peer relay** or **Worker + reviewer**; a one-member group does useful solo work without a fake peer review or implicit self-relay. The old index/worktree path remains deprecated under its frozen migration contract.
+**Implementation** uses one recorded branch and commit-based handoffs as the main direction. Each completed commit-mode turn publishes one structured result to AltCLI's handoff journal and, when it changed project content, one direct handoff commit; a report-only turn publishes no commit. Mirroring the journal into a tracked relay log is an explicit project preference, not the default. Two-member groups use **Peer relay** or **Worker + reviewer**; a one-member group does useful solo work without a fake peer review or implicit self-relay. The old index/worktree path remains deprecated under its frozen migration contract.
 
 **Branch choice is explicit:** reuse the checked-out task branch by default, confirming its recorded baseline when it cannot be inferred; on the default branch or a configured integration branch offer only a customizable new task branch, here or as a task worktree, never continuation there; detached HEAD needs a named branch before commit implementation. Creating a new branch in the existing checkout requires scoped consent at a settled boundary; initial work may preserve its captured uncommitted task changes at the same HEAD, while reviews and Plan require clean entry. Separately, **Create task worktree** creates a new branch and independent checkout at an exact committed baseline, without switching the source or copying dirty changes. Neither operation permits staging, committing or resetting user files.
 
@@ -91,7 +91,7 @@ The entry model is now project → worktree → task/group, with solo support an
 | **Uncommitted relay** | Deprecated index/worktree contract: stage accepted incoming work and leave reviewer improvements unstaged. Remains separately frozen. |
 | **Lifecycle evidence** | Adapter-specific evidence of correlated execution completion and remaining activity. It is distinct from result publication. |
 | **Result channel** | Captured plan result, published handoff result recorded in the journal, or legacy outcome line, according to phase and handoff contract. |
-| **Handoff journal** | CoderCrew's durable record of completed implementation turns: identity, decision, findings, reported checks, the resulting commit and its archived patch. App data, exported for backup; never recovered by cloning the repository. |
+| **Handoff journal** | AltCLI's durable record of completed implementation turns: identity, decision, findings, reported checks, the resulting commit and its archived patch. App data, exported for backup; never recovered by cloning the repository. |
 | **Automatic collaboration** | Whether eligible successors proceed without a click under the server policy. A solo run has no implicit self-relay successor. |
 | **Planning epoch** | One planning attempt with identified brief, baseline, and required membership revision; stale attempts cannot fill current slots. |
 | **Agent instance / adapter / model** | Registered execution identity / runtime integration / actual configured or observed model. A model or display name never substitutes for an instance identity. |
@@ -138,7 +138,7 @@ Keep implementation handoff mode fixed for the execution segment. Plan-to-Implem
 
 | | Plan documents | Commit relay | Uncommitted relay (deprecated) |
 | --- | --- | --- | --- |
-| Artifact | Draft files and one unified plan in CoderCrew's data directory | Handoff commits on one task branch, journal entries in CoderCrew | The shared index and worktree |
+| Artifact | Draft files and one unified plan in AltCLI's data directory | Handoff commits on one task branch, journal entries in AltCLI | The shared index and worktree |
 | Result channel | Structured planning result plus controller-captured revision | External result file recorded in the handoff journal (optionally mirrored into a tracked log) | Final `RELAY-OUTCOME` line |
 | "Did this turn change anything?" | Captured content hash of the assigned document | Handoff commit diff, excluding the tracked log path when one is kept; no commit means no change | Worktree digest before and after a Send & relay instruction; the outcome line otherwise |
 | Git mutations by the agent | None | Stage and commit its own handoff | Stage accepted incoming work only |
@@ -174,10 +174,10 @@ Opening or pinning a card is read-only. It does not start a run, type into termi
 Illustrative initial screen:
 
 ```text
-PROJECT: CoderCrew
+PROJECT: AltCLI
   Main checkout       main                    Claude
-  Login fix           codercrew-fix-login      Codex + Claude
-  Settings redesign   codercrew-feat-settings  No agents yet
+  Login fix           altcli-fix-login      Codex + Claude
+  Settings redesign   altcli-feat-settings  No agents yet
   [Create task worktree]
 ```
 
@@ -218,7 +218,7 @@ A branch choice may be included in the clearly labeled Start confirmation rather
 ### Phase and role setup after selecting the workspace
 
 ```text
-Workspace:         CoderCrew /Users/hui/Dev/codercrew
+Workspace:         AltCLI /Users/hui/Dev/altcli
 Group:             Codex main, Claude architecture
 Start phase:       [Plan]
 Shared task:       [Describe the requested change...]
@@ -235,7 +235,7 @@ Reviewer:          Claude architecture
 
 For a one-member group, show **Solo** and the selected agent instead of artificial worker/reviewer slots. For a two-member peer group, show both and the first implementer. Roles are not inferred permanently from provider names. The same person may read another panel without changing the actual action target.
 
-The user may reuse an existing worktree or explicitly create one under `~/.codercrew/<repo-name>/<branch-name>`. Preview and confirmation show the exact source identity/commit, new branch and destination; existing paths/branches are not overwritten. A dirty source remains untouched, and its changes are not copied. Creation is separate from Start and does not bootstrap environments or move/start agents. An uncertain result retains setup ownership and requires read-only inspection, never automatic retry or cleanup. Missing agent/environment setup leads to diagnostics and Recheck.
+The user may reuse an existing worktree or explicitly create one under `~/.altcli/<repo-name>/<branch-name>`. Preview and confirmation show the exact source identity/commit, new branch and destination; existing paths/branches are not overwritten. A dirty source remains untouched, and its changes are not copied. Creation is separate from Start and does not bootstrap environments or move/start agents. An uncertain result retains setup ownership and requires read-only inspection, never automatic retry or cleanup. Missing agent/environment setup leads to diagnostics and Recheck.
 
 ### Later N-agent planning without new onboarding concepts
 
@@ -313,7 +313,7 @@ Within one page, drafts, choices, open sections and scroll positions survive tab
 
 ## Final design principle
 
-**Choose the project and worktree, confirm the group, and coordinate the work. Users own environments and agent placement; CoderCrew owns confirmed setup, explicit assignments, review, agreement, and progression.**
+**Choose the project and worktree, confirm the group, and coordinate the work. Users own environments and agent placement; AltCLI owns confirmed setup, explicit assignments, review, agreement, and progression.**
 
 Phase determines the artifact and edit permission. Group membership determines the participating instances, not every discovered pane. A solo member works once without an invented peer; two members can cooperate as peers or worker/reviewer; later N-member planning requires complete current-version agreement. Workspace grouping follows canonical cwd, while local execution exclusion follows the underlying worktree/index.
 

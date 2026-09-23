@@ -8,7 +8,7 @@ describe('literal terminal input contract', () => {
     expect(parseInteraction({ ...input, text: 'line one\nline two' }).text).toBe('line one\nline two');
   });
   it('bounds bytes and refuses control sequences, blank input and correlation markers', () => {
-    for (const text of ['', ' ', '\u001b[A', '中'.repeat(667), '[codercrew-command:fake]']) expect(() => parseInteraction({ ...input, text })).toThrow();
+    for (const text of ['', ' ', '\u001b[A', '中'.repeat(667), '[altcli-command:fake]']) expect(() => parseInteraction({ ...input, text })).toThrow();
     expect(parseInteraction({ ...input, text: 'a'.repeat(2000) }).text).toHaveLength(2000);
   });
   it('requires fresh identity, explicit presence and a closed schema', () => {

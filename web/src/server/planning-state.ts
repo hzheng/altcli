@@ -5,7 +5,7 @@ import type { CapturedPlanResult, PlanAction, PlanningRun, PlanStart } from '../
 import type { ManagedSession } from '../contracts/workflow.ts';
 
 /** N-shaped state; the API's separate rollout guard limits selected groups to two. `plans` is the canonical plan-document
- * directory in CoderCrew's data directory, so planning never writes into the checkout. */
+ * directory in AltCLI's data directory, so planning never writes into the checkout. */
 export function newPlanning(input: PlanStart, group: Group, participants: ManagedSession[], implementationParticipants: ManagedSession[], cwd: string, plans: string): PlanningRun {
   const directory = join(plans, input.requestId);
   return { phase: 'plan', group: { ...group, cwd }, participants, implementationParticipants, cwd, worktree: participants[0]!.worktree!,

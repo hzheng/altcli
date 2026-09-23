@@ -39,13 +39,13 @@ acceptance is separate. The broader target decision below retains those limits.
 
 ## Plan documents leave the checkout — September 21, 2026
 
-Drafts and `plan.md` are CoderCrew working data, not project content. Each run now
+Drafts and `plan.md` are AltCLI working data, not project content. Each run now
 writes them to `<data directory>/plans/<run-ID>/`, beside the assignment and
 result files, never inside the checkout. Plan therefore needs no ignore rule in any
 project, and the controller no longer inspects ignore rules for planning. Paths are
 absolute and canonical; the link, special-file, collision and protected-artifact
 checks are unchanged, and the checkout must still match its clean baseline
-throughout Plan. A run stored with the earlier checkout-relative `.codercrew/plans/`
+throughout Plan. A run stored with the earlier checkout-relative `.altcli/plans/`
 layout is refused rather than resolved, so it must be taken over and restarted.
 The sections below describe this layout.
 
@@ -69,7 +69,7 @@ Initially every selected planner is a required participant. Optional advisors or
 
 Require a clean project state, eligible selected group, common canonical current directory/worktree/index, and no conflicting project writer: no staged changes, unstaged tracked changes, or nonignored untracked project files. Record the current branch or detached state, starting code, and brief revisions. The workspace stays visible when dirty, but Plan dispatch is refused with useful paths. Unselected agents sharing the underlying checkout must not be running conflicting work. Recheck rather than moving them automatically. Never stage, stash, reset, discard, commit, or switch branches around user work.
 
-Plan documents live in CoderCrew's data directory, outside the checkout, so no ignore rule is prepared or inspected and the clean-state test covers project content only. The controller creates the canonical `<data directory>/plans/` directory and assigns absolute output paths under `<run-ID>/`. A plans root that is a link, or that resolves inside the bound checkout, is refused before it is followed, both at Start and at every capture, since it would redirect plan writes into the project where an ignored target escapes the clean-baseline check. It does not write Git configuration or ignore rules. The separate confirmed branch-setup exception in [ADR-0013](ADR-0013-confirmed-branch-setup.md) does not authorize ignore-rule edits or Git mutation during planning.
+Plan documents live in AltCLI's data directory, outside the checkout, so no ignore rule is prepared or inspected and the clean-state test covers project content only. The controller creates the canonical `<data directory>/plans/` directory and assigns absolute output paths under `<run-ID>/`. A plans root that is a link, or that resolves inside the bound checkout, is refused before it is followed, both at Start and at every capture, since it would redirect plan writes into the project where an ignored target escapes the clean-baseline check. It does not write Git configuration or ignore rules. The separate confirmed branch-setup exception in [ADR-0013](ADR-0013-confirmed-branch-setup.md) does not authorize ignore-rule edits or Git mutation during planning.
 
 Reject symlinks, special files, or parent paths that escape the canonical plan directory. Validate safe registry/task IDs, canonical parents, and collisions before dispatch and before any controller capture or permitted output write. Do not turn a user-supplied label into a filesystem path. Rechecks narrow path races; ordinary same-user filesystem access is not hostile-agent isolation.
 
@@ -78,7 +78,7 @@ A clean check is a point-in-time observation. Recheck project content and HEAD b
 #### File layout and ownership
 
 ```text
-<data directory>/                     # CODERCREW_DATA_DIR/<mode>, outside every checkout
+<data directory>/                     # ALTCLI_DATA_DIR/<mode>, outside every checkout
 ├── assignments/                      # Assignment and result JSON per command
 └── plans/
     └── <run-id>/
@@ -93,7 +93,7 @@ There are at most **N initial drafts plus one unified working plan**, regardless
 
 The `draft-` prefix reserves `plan.md` safely even when an agent is registered as `plan`. Safe IDs must be unique under the host's filename comparison rules. Display labels may change without renaming an active assignment. The captured completion also carries registration generation, source session, assignment ID, and planning epoch; a reused filename does not make an old result current.
 
-Keeping documents outside the checkout is not a read restriction; withholding peer drafts stays cooperative. Plan turns must not run staging, commit, merge, or branch-switch operations. The agent's own native scratch files are not additional CoderCrew report files; provider-native output locations must be declared and mediated by its adapter, not treated as broad project-write permission.
+Keeping documents outside the checkout is not a read restriction; withholding peer drafts stays cooperative. Plan turns must not run staging, commit, merge, or branch-switch operations. The agent's own native scratch files are not additional AltCLI report files; provider-native output locations must be declared and mediated by its adapter, not treated as broad project-write permission.
 
 #### Step A: independent drafts with a complete-roster barrier
 
@@ -143,7 +143,7 @@ Record ownership intervals and the set of allowed outputs when assignments start
 
 #### Native CLI capabilities and a provider-neutral adapter
 
-CoderCrew's Plan phase is not a vendor's plan-mode switch. Each adapter must establish safe planning permissions, an allowed output path or supported output capture, correlated execution/result evidence, and prevention of premature implementation. Never grant unrestricted project edits merely to get a draft written.
+AltCLI's Plan phase is not a vendor's plan-mode switch. Each adapter must establish safe planning permissions, an allowed output path or supported output capture, correlated execution/result evidence, and prevention of premature implementation. Never grant unrestricted project edits merely to get a draft written.
 
 Separate these concepts in registration and history:
 
@@ -155,11 +155,11 @@ Separate these concepts in registration and history:
 | Instance generation/session | Registration generation and runtime session | Reject stale events and distinguish restarts. |
 | Capability profile | Planning output, correlation, handoff evidence | Determines eligible operations; unverified fields do not authorize automation. |
 
-**Previously recorded external context:** Gemini CLI's official Plan Mode documentation describes planning-only write locations, configurable plan storage, and approval that can start implementation. Its hook reference describes `BeforeAgent`/`AfterAgent` with prompt, response, and session information. These are adapter integration points, not evidence that CoderCrew's Gemini adapter exists or is tested. This integration context is retained from the source, not newly verified in this documentation migration. [S3](../SOURCES.md#source-3)[S4](../SOURCES.md#source-4)
+**Previously recorded external context:** Gemini CLI's official Plan Mode documentation describes planning-only write locations, configurable plan storage, and approval that can start implementation. Its hook reference describes `BeforeAgent`/`AfterAgent` with prompt, response, and session information. These are adapter integration points, not evidence that AltCLI's Gemini adapter exists or is tested. This integration context is retained from the source, not newly verified in this documentation migration. [S3](../SOURCES.md#source-3)[S4](../SOURCES.md#source-4)
 
 Do not reuse Claude's `prompt_id`, Stop schema, or background arrays as mandatory Gemini fields. Map documented native evidence into a normalized contract; mark unsupported correlation or activity evidence unknown. A final-response callback is not proof that every tool, hook-induced retry, or background writer is quiescent. A model hosted by another runtime uses that runtime's contract rather than automatically becoming a Gemini CLI instance.
 
-A read-only output or supervised planning capability can be useful before an adapter qualifies for automatic handoff. Unsupported automation should be visible before starting an unattended run. Native plan approval cannot bypass the CoderCrew checkpoint, and required permission prompts must be handled under explicit user authority.
+A read-only output or supervised planning capability can be useful before an adapter qualifies for automatic handoff. Unsupported automation should be visible before starting an unattended run. Native plan approval cannot bypass the AltCLI checkpoint, and required permission prompts must be handled under explicit user authority.
 
 #### Step B: synthesis and sequential group refinement
 
@@ -276,7 +276,7 @@ The implementation prompt names the frozen plan, task requirements, current code
 
 #### Draft retention versus implementation input
 
-The N drafts and the editable unified plan stay in CoderCrew's data directory during implementation, outside the checkout. The planning roster is quiescent before the implementation group gains project-write authority. The documents are not incoming code changes, and implementation turns must not modify them to bypass approval. Preserve the frozen plan and authorization record before deleting any working draft; retention depth for intermediate snapshots is an open detail. For remote implementation, the controller delivers the frozen plan with the task or records it once in a tracked implementation-start entry; neither is yet mandatory ([ADR-0018](ADR-0018-remote-publication-and-history.md)).
+The N drafts and the editable unified plan stay in AltCLI's data directory during implementation, outside the checkout. The planning roster is quiescent before the implementation group gains project-write authority. The documents are not incoming code changes, and implementation turns must not modify them to bypass approval. Preserve the frozen plan and authorization record before deleting any working draft; retention depth for intermediate snapshots is an open detail. For remote implementation, the controller delivers the frozen plan with the task or records it once in a tracked implementation-start entry; neither is yet mandatory ([ADR-0018](ADR-0018-remote-publication-and-history.md)).
 
 ## Consequences and acceptance
 

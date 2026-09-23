@@ -64,7 +64,7 @@ projects, pairs, and a confirmed agent type on top of this registration model.
 Terminal text is still observation, not authorization. Snapshots are still
 replaced, never accumulated. The controller still never runs Git mutation, never
 replays uncertain commands, and never sends input in mock mode or while
-`CODERCREW_ENABLE_INPUT=false`. The store schema is unchanged; existing rows remain
+`ALTCLI_ENABLE_INPUT=false`. The store schema is unchanged; existing rows remain
 valid.
 
 ## Considered and deferred

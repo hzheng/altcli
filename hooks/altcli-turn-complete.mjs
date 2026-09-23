@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { claudeCompletion, claudeContinuation, claudeStartState, claudeStopContext, codexCompletion, codexInterruption, codexStartState, contextKey, isTaskNotification } from './protocol.mjs';
 const [source, ...args] = process.argv.slice(2);
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const directory = join(homedir(), '.local', 'share', 'codercrew', 'hook-turns');
+const directory = join(homedir(), '.local', 'share', 'altcli', 'hook-turns');
 function diagnostic(path, paneId) {
   return (status, details = {}) => {
     try {
@@ -24,10 +24,10 @@ const pane = /^%\d+$/.test(process.env.TMUX_PANE ?? '') ? process.env.TMUX_PANE 
 let report = ['claude', 'codex', 'codex-start'].includes(source)
   ? diagnostic(join(directory, `${contextKey({ paneId: pane, socket: (process.env.TMUX ?? '').split(',')[0] }, source)}.entry.status`), pane) : () => {};
 async function post(body) {
-  const env = readFileSync(process.env.CODERCREW_ENV ?? join(root, 'web', '.env.local'), 'utf8');
-  const token = env.split('\n').map((l) => /^CODERCREW_TOKEN=([0-9a-f]{64})\s*$/i.exec(l)?.[1]).find(Boolean);
+  const env = readFileSync(process.env.ALTCLI_ENV ?? join(root, 'web', '.env.local'), 'utf8');
+  const token = env.split('\n').map((l) => /^ALTCLI_TOKEN=([0-9a-f]{64})\s*$/i.exec(l)?.[1]).find(Boolean);
   if (!token) { report('missing_token'); return; }
-  const base = new URL(process.env.CODERCREW_URL ?? 'http://127.0.0.1:8787');
+  const base = new URL(process.env.ALTCLI_URL ?? 'http://127.0.0.1:8787');
   if (!['http:', 'https:'].includes(base.protocol) || !['127.0.0.1', 'localhost', '[::1]'].includes(base.hostname) || base.username || base.password) { report('invalid_endpoint'); return; }
   report('posting', { event: body.event, paired: Boolean(body.sourceTurnId), cliPid: body.cliPid ?? null });
   const response = await fetch(new URL('/api/v1/events', base), { method: 'POST', signal: AbortSignal.timeout(body.event === 'turn_interrupted' ? 1500 : 3000),

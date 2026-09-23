@@ -7,15 +7,15 @@ import { ControlPlane } from './control-plane.ts';
 import { MockAdapter, mockSessions } from './adapters/mock.ts';
 import { TmuxAdapter, createRunner } from './adapters/tmux.ts';
 import { assertExternalDataDir } from './paths.ts';
-const runtime = globalThis as typeof globalThis & { codercrewControlPlane?: ControlPlane };
+const runtime = globalThis as typeof globalThis & { altcliControlPlane?: ControlPlane };
 export function controller(): ControlPlane {
-  if (runtime.codercrewControlPlane) return runtime.codercrewControlPlane;
+  if (runtime.altcliControlPlane) return runtime.altcliControlPlane;
   const config = loadConfig();
   assertExternalDataDir(config.dataDir, resolve(process.cwd(), '..'));
   const store = new Store(config.dataDir);
   if (config.mode === 'mock' && !store.sessions().length) for (const session of mockSessions()) store.saveSession(session);
   const adapter = config.mode === 'mock' ? new MockAdapter() : new TmuxAdapter(createRunner(config.tmuxBin, config.tmuxSocket));
   const plane = new ControlPlane(new Controller(config, store, adapter));
-  runtime.codercrewControlPlane = plane;
+  runtime.altcliControlPlane = plane;
   return plane;
 }

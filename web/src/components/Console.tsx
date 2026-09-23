@@ -12,13 +12,13 @@ import { PaneActions } from './PaneActions';
 import { PlanSetup } from './PlanSetup';
 import { CheckpointControls, InteractionComposer } from './InteractionControls';
 import { RunSettingsBar, useRunSettings, type Phase } from './RunSettings';
-const PREFERENCE = 'codercrew.autoRelay';
-const LAYOUT = 'codercrew.paneLayout';
-const TURN_LIMIT = 'codercrew.turnLimit';
-const WORKSPACE = 'codercrew.workspace';
+const PREFERENCE = 'altcli.autoRelay';
+const LAYOUT = 'altcli.paneLayout';
+const TURN_LIMIT = 'altcli.turnLimit';
+const WORKSPACE = 'altcli.workspace';
 /** Off by default: with the preference on, the token is kept in this browser so reopening the page unlocks without typing it. */
-const STAY_UNLOCKED = 'codercrew.stayUnlocked';
-const SAVED_TOKEN = 'codercrew.token';
+const STAY_UNLOCKED = 'altcli.stayUnlocked';
+const SAVED_TOKEN = 'altcli.token';
 const DEFAULT_TURN_LIMIT = 20;
 const timeOf = (iso: string) => new Date(iso).toLocaleTimeString();
 type Tab = 'console' | 'workspaces' | 'settings' | 'about';
@@ -325,7 +325,7 @@ export function Console() {
     try {
       const history = await api<HistoryExport>(token, `history/export?repository=${encodeURIComponent(project)}`);
       const url = URL.createObjectURL(new Blob([JSON.stringify(history, null, 2)], { type: 'application/json' }));
-      const anchor = document.createElement('a'); anchor.href = url; anchor.download = `codercrew-history-${nameOf(project)}-${history.exportedAt.replace(/[:.]/g, '-')}.json`;
+      const anchor = document.createElement('a'); anchor.href = url; anchor.download = `altcli-history-${nameOf(project)}-${history.exportedAt.replace(/[:.]/g, '-')}.json`;
       anchor.click(); URL.revokeObjectURL(url);
       setMessage(`Exported ${history.runs.length} run${history.runs.length === 1 ? '' : 's'} and ${history.journal.length} journal entr${history.journal.length === 1 ? 'y' : 'ies'} for ${project}.`);
     } catch (caught) { setMessage(caught instanceof Error ? caught.message : 'History export failed.'); }
@@ -352,7 +352,7 @@ export function Console() {
     finally { setStatusReset(null); await refresh(); submission.current = false; setBusy(false); }
   }
   if (!token) return <main className="unlock-shell">
-    <div className="wordmark"><span className="brand-mark">C</span> CoderCrew</div>
+    <div className="wordmark"><span className="brand-mark">A</span> AltCLI</div>
     <section className="unlock-card"><p className="eyebrow">YOUR AGENTS. ONE CONSOLE.</p><h1>Stay in control.</h1>
       <form onSubmit={(e) => { e.preventDefault(); unlock(draftToken.trim()); }}>
         <label htmlFor="token">Host access token</label><input id="token" type="password" autoComplete="off" value={draftToken} onChange={(e) => setDraftToken(e.target.value)} required />
@@ -371,7 +371,7 @@ export function Console() {
   const common = { token, state: state!, git, workspaceError, agentsKey: JSON.stringify(card?.agents ?? null), busy, submit: guarded, consent, setConsent, runMark,
     recheck: recheckRevision, refresh, onRecheck: recheckAll, onMessage: setMessage, onUncertain: setUnknownRequest };
   return <MemoryContext.Provider value={memory}><main className="console-shell">
-    <header className="topbar"><div className="wordmark"><span className="brand-mark">C</span> CoderCrew</div>
+    <header className="topbar"><div className="wordmark"><span className="brand-mark">A</span> AltCLI</div>
       <nav className="section-tabs" aria-label="Sections">
         <button type="button" className={tab === 'console' ? 'selected' : ''} aria-pressed={tab === 'console'} onClick={() => showTab('console')}>Console</button>
         <button type="button" className={tab === 'workspaces' ? 'selected' : ''} aria-pressed={tab === 'workspaces'} onClick={() => showTab('workspaces')}>Projects</button>
@@ -382,7 +382,7 @@ export function Console() {
     {tab === 'workspaces' ? <div className="page-heading"><div><p className="eyebrow">PROJECT · WORKTREE · TASK</p><h1>Projects and agents</h1>
         <p className="muted">Choose an existing worktree or explicitly create one for a new task. Opening a console never starts work.</p></div>{connection}</div>
       : tab === 'settings' ? <div className="page-heading compact"><h1>Settings</h1>{connection}</div>
-      : tab === 'about' ? <div className="page-heading compact"><h1>About CoderCrew</h1>{connection}</div>
+      : tab === 'about' ? <div className="page-heading compact"><h1>About AltCLI</h1>{connection}</div>
       : <div className="page-heading compact"><h1>Agent console</h1>{connection}</div>}
     {error && <div className="notice error" role="alert">{error} <button onClick={() => void refresh()}>Refresh</button></div>}
     {state && <>
@@ -553,15 +553,15 @@ export function Console() {
         {configError && <p className="notice error" role="alert">{configError}</p>}
         {config && <div className="table-scroll"><table><thead><tr><th>Setting</th><th>Value</th><th>Variable</th></tr></thead><tbody>
           {([
-            ['tmux binary', config.tmuxPath ? config.tmuxBin === config.tmuxPath ? config.tmuxPath : `${config.tmuxBin} → ${config.tmuxPath}` : `${config.tmuxBin} (not found on PATH)`, 'CODERCREW_TMUX_BIN', 'tmux from PATH'],
-            ['tmux socket', config.tmuxSocket ?? 'tmux default', 'CODERCREW_TMUX_SOCKET', `tmux's default socket`],
-            ['Data store', config.dataDir, 'CODERCREW_DATA_DIR', '~/.local/share/codercrew/<mode>'],
-            ['Task worktrees', config.worktreeDir, '', '~/.codercrew/<repo>/<branch>'],
-            ['Integration branches', `${config.integrationBranches.join(', ')} + each project's default branch`, 'CODERCREW_INTEGRATION_BRANCHES', 'main, master'],
-            ['Adapter', config.mode === 'mock' ? 'mock (simulated panes)' : 'tmux', 'CODERCREW_ADAPTER', 'tmux'],
-            ['Console input', config.inputEnabled ? 'enabled' : 'read-only', 'CODERCREW_ENABLE_INPUT', 'true'],
-            ['Deprecated staging relay', config.legacyEnabled ? 'allowed' : 'disabled', 'CODERCREW_ENABLE_LEGACY_RELAY', 'false'],
-            ['Allowed origins', config.allowedOrigins.join(', '), 'CODERCREW_ALLOWED_ORIGINS', 'http://127.0.0.1:8787, http://localhost:8787'],
+            ['tmux binary', config.tmuxPath ? config.tmuxBin === config.tmuxPath ? config.tmuxPath : `${config.tmuxBin} → ${config.tmuxPath}` : `${config.tmuxBin} (not found on PATH)`, 'ALTCLI_TMUX_BIN', 'tmux from PATH'],
+            ['tmux socket', config.tmuxSocket ?? 'tmux default', 'ALTCLI_TMUX_SOCKET', `tmux's default socket`],
+            ['Data store', config.dataDir, 'ALTCLI_DATA_DIR', '~/.local/share/altcli/<mode>'],
+            ['Task worktrees', config.worktreeDir, '', '~/.altcli/<repo>/<branch>'],
+            ['Integration branches', `${config.integrationBranches.join(', ')} + each project's default branch`, 'ALTCLI_INTEGRATION_BRANCHES', 'main, master'],
+            ['Adapter', config.mode === 'mock' ? 'mock (simulated panes)' : 'tmux', 'ALTCLI_ADAPTER', 'tmux'],
+            ['Console input', config.inputEnabled ? 'enabled' : 'read-only', 'ALTCLI_ENABLE_INPUT', 'true'],
+            ['Deprecated staging relay', config.legacyEnabled ? 'allowed' : 'disabled', 'ALTCLI_ENABLE_LEGACY_RELAY', 'false'],
+            ['Allowed origins', config.allowedOrigins.join(', '), 'ALTCLI_ALLOWED_ORIGINS', 'http://127.0.0.1:8787, http://localhost:8787'],
             ['Claude config', config.claudeConfigDir, 'CLAUDE_CONFIG_DIR', '~/.claude'],
             ['Codex home', config.codexHome, 'CODEX_HOME', '~/.codex'],
           ] as [string, string, string, string][]).map(([name, value, variable, fallback]) => <tr key={name}><td>{name}</td><td className="mono command-text">{value}</td>
@@ -575,13 +575,13 @@ export function Console() {
         <label className="readiness"><input type="checkbox" aria-label="Stay unlocked on this device" checked={stayUnlocked} onChange={(e) => rememberToken(e.target.checked)} />
           Stay unlocked on this device: keep the host access token in this browser so reopening the page does not ask for it. Anyone who can use this browser profile can then open the console; the host still checks the token on every request. <strong>Lock</strong> always forgets the token.</label>
         {state.legacyEnabled ? <label className="readiness"><input type="checkbox" aria-label="Staging fallback" checked={!!showLegacy} disabled={pair?.sessions.length !== 2} onChange={(e) => setLegacy(e.target.checked)} />Show the deprecated staging fallback in the Console for the current two-member group (supervised relay; no branch handoffs or fixed roles). It applies to <span className="mono">{project ? nameOf(project) : 'the selected checkout'}</span> and is forgotten on Lock.</label>
-          : <p className="fine">The deprecated staging fallback is disabled by the host (<span className="mono">CODERCREW_ENABLE_LEGACY_RELAY</span>).</p>}
+          : <p className="fine">The deprecated staging fallback is disabled by the host (<span className="mono">ALTCLI_ENABLE_LEGACY_RELAY</span>).</p>}
       </section>}
     </div>
     <div className="section-panel" hidden={tab !== 'about'}>
       <section className="panel about" aria-label="How this works">
         <div className="section-heading"><h2>How this works</h2></div>
-        <p>CoderCrew is a host-resident console for coding agents running in tmux panes. It never runs an agent itself: you start the CLIs, and the console coordinates the turns.</p>
+        <p>AltCLI is a host-resident console for coding agents running in tmux panes. It never runs an agent itself: you start the CLIs, and the console coordinates the turns.</p>
         <p>In the Console, each card acts on the agent above it. Send delivers an instruction; After send can add one handoff commit, or a commit and one review by the named peer. Current changes snapshots work as it stands, and Committed review asks this agent to review a committed range. Every action names its recipients and needs a fresh readiness confirmation.</p>
         <p>The server owns every run, validates and deduplicates correlated completions, and pauses on unknown background work. No effect in this page sends commands. A completed chain is not final task acceptance.</p>
         <p>Viewing another worktree never changes a running relay. Pause a run before manual terminal takeover. Locking this view or disconnecting your phone does not interrupt workers.</p>

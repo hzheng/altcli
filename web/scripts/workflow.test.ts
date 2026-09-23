@@ -23,11 +23,11 @@ let sent: { agent: string; text: string }[];
 /** Simulated worktree digest; a test that models an agent editing files changes it between delivery and completion. */
 let worktree: () => Promise<string>;
 beforeEach(() => {
-  directory = mkdtempSync(join(tmpdir(), 'codercrew-workflow-'));
+  directory = mkdtempSync(join(tmpdir(), 'altcli-workflow-'));
   store = new Store(directory); for (const session of mockSessions()) store.saveSession(session);
   adapter = new MockAdapter(); sent = []; worktree = async () => 'unchanged';
   adapter.send = async (session, text) => { sent.push({ agent: session.id, text }); };
-  plane = new ControlPlane(new Controller(loadConfig({ CODERCREW_ADAPTER: 'mock', CODERCREW_ENABLE_LEGACY_RELAY: 'true', CODERCREW_TOKEN: 'a'.repeat(64), CODERCREW_DATA_DIR: directory }), store, adapter), () => worktree());
+  plane = new ControlPlane(new Controller(loadConfig({ ALTCLI_ADAPTER: 'mock', ALTCLI_ENABLE_LEGACY_RELAY: 'true', ALTCLI_TOKEN: 'a'.repeat(64), ALTCLI_DATA_DIR: directory }), store, adapter), () => worktree());
 });
 afterEach(() => { store.close(); rmSync(directory, { recursive: true, force: true }); });
 const start = (more: Partial<StartInput> = {}): StartInput => ({ requestId: randomUUID(), agentId: 'codex', kind: 'relay', confirmReady: true, ...more });
@@ -181,7 +181,7 @@ test('an actionable objection automatically returns to the author for correction
   assert.equal(run.status, 'running'); assert.equal(run.automaticTurns, 2);
   assert.equal(correction.input.kind, 'instruction'); assert.equal(correction.input.handoff, true);
   assert.equal(correction.input.text, 'Address objection: The delete path can remove records outside the selected project.\n\nMake the required changes, leave them unstaged, and then return the work for relay review.');
-  assert.match(correction.wireText, /\[codercrew-command:[0-9a-f-]+\]$/);
+  assert.match(correction.wireText, /\[altcli-command:[0-9a-f-]+\]$/);
   worktree = async () => 'corrected';
   await complete(correction.commandId, { outcome: undefined });
   assert.deepEqual(sent.map((s) => s.agent), ['codex', 'claude', 'codex', 'claude']);
@@ -331,7 +331,7 @@ test('the automatic turn limit is chosen at start, frozen into the run, and enfo
 test('a multi-line instruction correlates with the flattened echo the hooks produce', async () => {
   const command = start({ kind: 'instruction', text: 'check these:\n- one\n- two', handoff: true, pairId: pair().id }); await plane.submit(command);
   const wire = plane.workflow.execution(command.requestId)!.wireText;
-  assert.equal(wire, `check these:\n- one\n- two [codercrew-command:${command.requestId}]`);
+  assert.equal(wire, `check these:\n- one\n- two [altcli-command:${command.requestId}]`);
   assert.equal(sent[0]!.text, wire);
   // hooks/protocol.mjs `plain` turns every control character into a space; a CLI that stored CR instead of LF flattens the same way.
   worktree = async () => 'edited';
@@ -370,7 +370,7 @@ test('an auxiliary Codex turn that quotes the command is ignored; the exact comp
 });
 test('a prompt that does not contain the delivered command still pauses the run', async () => {
   const command = start({ pairId: pair().id, autoContinue: true }); await plane.submit(command);
-  await plane.recordEvent(event(command.requestId, { prompt: `something else [codercrew-command:${command.requestId}]` }));
+  await plane.recordEvent(event(command.requestId, { prompt: `something else [altcli-command:${command.requestId}]` }));
   assert.equal(plane.workflow.run(command.requestId)!.status, 'paused'); assert.equal(sent.length, 1);
 });
 for (const agentId of ['codex', 'claude']) test(`${agentId} native start with leftover input pauses and retains ownership`, async () => {
@@ -430,7 +430,7 @@ test('pausing is durable and human takeover is explicit', async () => {
 test('restart pauses durable runs and never replays a delivery', async () => {
   const command = start({ pairId: pair().id, autoContinue: true }); await plane.submit(command);
   store.close(); store = new Store(directory);
-  plane = new ControlPlane(new Controller(loadConfig({ CODERCREW_ADAPTER: 'mock', CODERCREW_ENABLE_LEGACY_RELAY: 'true', CODERCREW_TOKEN: 'a'.repeat(64), CODERCREW_DATA_DIR: directory }), store, adapter));
+  plane = new ControlPlane(new Controller(loadConfig({ ALTCLI_ADAPTER: 'mock', ALTCLI_ENABLE_LEGACY_RELAY: 'true', ALTCLI_TOKEN: 'a'.repeat(64), ALTCLI_DATA_DIR: directory }), store, adapter));
   await complete(command.requestId); assert.equal(sent.length, 1); assert.equal(plane.workflow.run(command.requestId)!.status, 'paused');
   assert.match(plane.workflow.run(command.requestId)!.reason, /paused/);
 });
@@ -620,11 +620,11 @@ test('workspace reset input requires an absolute path and explicit confirmation'
 });
 
 test('unsaved agent names follow tmux session names without changing registration identity or writing configuration', async () => {
-  let location = 'codercrew-cc:1.1'; const list = adapter.listPanes.bind(adapter);
+  let location = 'altcli-cc:1.1'; const list = adapter.listPanes.bind(adapter);
   adapter.listPanes = async () => (await list()).map((pane) => pane.identity.paneId === '%3' ? { ...pane, location } : pane);
   const before = store.db.prepare('SELECT total_changes() AS count').get();
   const first = (await plane.state()).sessions.find((session) => session.identity.paneId === '%3')!;
-  assert.equal(first.label, 'codercrew-cc');
+  assert.equal(first.label, 'altcli-cc');
   location = 'renamed-session:2.3';
   const next = (await plane.state()).sessions.find((session) => session.id === first.id)!;
   assert.equal(next.label, 'renamed-session'); assert.equal(next.registrationId, first.registrationId);

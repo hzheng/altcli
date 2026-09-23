@@ -8,7 +8,7 @@ import test from 'node:test';
 
 const source = fileURLToPath(new URL('..', import.meta.url));
 function fixture(t, customDirectories = false) {
-  const scratch = realpathSync(mkdtempSync(join(tmpdir(), 'codercrew-setup-'))); // Git reports canonical paths
+  const scratch = realpathSync(mkdtempSync(join(tmpdir(), 'altcli-setup-'))); // Git reports canonical paths
   t.after(() => rmSync(scratch, { recursive: true, force: true }));
   const root = join(scratch, 'clone with spaces'); const testHome = join(scratch, 'test-home'); const bin = join(scratch, 'bin');
   mkdirSync(join(root, 'web'), { recursive: true }); mkdirSync(testHome); mkdirSync(bin);
@@ -44,19 +44,19 @@ for (const custom of [false, true]) test(`one setup command installs and verifie
   const first = f.run(); assert.equal(first.status, 0, first.stderr); assert.match(first.stdout, /Setup complete/);
   assert.deepEqual(JSON.parse(readFileSync(f.env.SETUP_TEST_CALLS, 'utf8').trim()), { cwd: realpathSync(f.root), args: ['--prefix', 'web', 'ci'] });
   const settings = readFileSync(join(f.claude, 'settings.json'), 'utf8'); const config = readFileSync(join(f.codex, 'config.toml'), 'utf8');
-  assert.equal(JSON.parse(settings).theme, 'dark'); assert.match(settings, /codercrew-turn-complete/);
-  assert.match(config, /fixture-model/); assert.match(config, /codercrew-turn-complete/);
+  assert.equal(JSON.parse(settings).theme, 'dark'); assert.match(settings, /altcli-turn-complete/);
+  assert.match(config, /fixture-model/); assert.match(config, /altcli-turn-complete/);
   const native = JSON.parse(readFileSync(join(f.codex, 'hooks.json'), 'utf8'));
   assert.match(native.hooks.UserPromptSubmit[0].hooks[0].command, /codex-start$/);
   assert.equal(native.hooks.SessionStart[0].matcher, 'startup|resume');
   assert.equal(native.hooks.Interrupt[0].hooks[0].timeout, 3);
   assert.equal(JSON.parse(settings).hooks.SessionStart[0].matcher, 'startup|resume');
   for (const directory of [f.claude, f.codex]) {
-    assert.equal(readdirSync(directory).filter((name) => name.includes('codercrew-backup')).length, 1);
+    assert.equal(readdirSync(directory).filter((name) => name.includes('altcli-backup')).length, 1);
     for (const skill of ['review-handoff', 'commit-handoff', 'plan-handoff']) assert.equal(realpathSync(join(directory, 'skills', skill)), realpathSync(join(f.root, 'skills', skill)));
   }
   const target = join(f.root, 'web', '.env.local'); const content = readFileSync(target, 'utf8');
-  const token = content.match(/^CODERCREW_TOKEN=([a-f0-9]{64})$/m)?.[1]; assert.ok(token, 'A random token is stored in the local environment file.');
+  const token = content.match(/^ALTCLI_TOKEN=([a-f0-9]{64})$/m)?.[1]; assert.ok(token, 'A random token is stored in the local environment file.');
   assert.ok(!first.stdout.includes(token) && !first.stderr.includes(token), 'Setup must not print its token.');
   assert.equal(statSync(target).mode & 0o777, 0o600);
   const edited = `${content}\n# User setting retained\n`; writeFileSync(target, edited);
@@ -64,7 +64,7 @@ for (const custom of [false, true]) test(`one setup command installs and verifie
   assert.ok(readFileSync(target, 'utf8') === edited, 'Rerunning setup must preserve local configuration and token.');
   assert.equal(readFileSync(join(f.claude, 'settings.json'), 'utf8'), settings); assert.equal(readFileSync(join(f.codex, 'config.toml'), 'utf8'), config);
   assert.deepEqual(JSON.parse(readFileSync(join(f.codex, 'hooks.json'), 'utf8')), native);
-  for (const directory of [f.claude, f.codex]) assert.equal(readdirSync(directory).filter((name) => name.includes('codercrew-backup')).length, 1);
+  for (const directory of [f.claude, f.codex]) assert.equal(readdirSync(directory).filter((name) => name.includes('altcli-backup')).length, 1);
 });
 test('setup stops on dependency installation failure before editing CLI or local configuration', (t) => {
   const f = fixture(t); const result = f.run({ SETUP_TEST_NPM_EXIT: '17' });
@@ -93,7 +93,7 @@ test('installers point at the main checkout: a linked worktree can verify the in
   assert.equal(existsSync(join(f.claude, 'settings.json')), false); assert.equal(existsSync(join(f.claude, 'skills')), false);
   for (const script of ['install-hooks.mjs', 'install-skills.mjs']) { const installed = run(main, script); assert.equal(installed.status, 0, installed.stderr); }
   const settings = readFileSync(join(f.claude, 'settings.json'), 'utf8');
-  assert.ok(settings.includes(join(main, 'hooks', 'codercrew-turn-complete.sh')) && !settings.includes(linked), settings);
+  assert.ok(settings.includes(join(main, 'hooks', 'altcli-turn-complete.sh')) && !settings.includes(linked), settings);
   for (const skill of ['review-handoff', 'commit-handoff', 'plan-handoff']) assert.equal(realpathSync(join(f.claude, 'skills', skill)), realpathSync(join(main, 'skills', skill)));
   // The same check passes from the linked worktree now: nothing nudges a worktree session into reinstalling from itself.
   for (const script of ['install-hooks.mjs', 'install-skills.mjs']) { const verified = run(linked, script, '--check'); assert.equal(verified.status, 0, verified.stderr); }
@@ -106,16 +106,16 @@ test('setup in a linked worktree installs dependencies, verifies the main instal
   assert.deepEqual(calls(), [{ cwd: linked, args: ['--prefix', 'web', 'ci'] }]); // dependencies land in the worktree
   assert.equal(existsSync(join(linked, 'web', '.env.local')), false); assert.equal(existsSync(join(f.claude, 'settings.json')), false);
   const main = f.run(); assert.equal(main.status, 0, main.stderr); const token = readFileSync(join(f.root, 'web', '.env.local'), 'utf8');
-  const settings = readFileSync(join(f.claude, 'settings.json'), 'utf8'); const backups = readdirSync(f.claude).filter((name) => name.includes('codercrew-backup'));
+  const settings = readFileSync(join(f.claude, 'settings.json'), 'utf8'); const backups = readdirSync(f.claude).filter((name) => name.includes('altcli-backup'));
   // A worktree set up before hooks moved to the main checkout kept its own minted token; that must not pass as complete.
-  const stale = token.replace(/^CODERCREW_TOKEN=.*$/m, `CODERCREW_TOKEN=${'f'.repeat(64)}`); writeFileSync(join(linked, 'web', '.env.local'), stale);
-  const mismatch = f.run({}, linked); assert.notEqual(mismatch.status, 0); assert.match(mismatch.stderr, /different CODERCREW_TOKEN/); assert.doesNotMatch(mismatch.stdout, /Setup complete/);
+  const stale = token.replace(/^ALTCLI_TOKEN=.*$/m, `ALTCLI_TOKEN=${'f'.repeat(64)}`); writeFileSync(join(linked, 'web', '.env.local'), stale);
+  const mismatch = f.run({}, linked); assert.notEqual(mismatch.status, 0); assert.match(mismatch.stderr, /different ALTCLI_TOKEN/); assert.doesNotMatch(mismatch.stdout, /Setup complete/);
   assert.equal(readFileSync(join(linked, 'web', '.env.local'), 'utf8'), stale, 'User configuration is preserved, not overwritten.');
   rmSync(join(linked, 'web', '.env.local'));
   const first = f.run({}, linked); assert.equal(first.status, 0, first.stderr); assert.match(first.stdout, /Copied the main checkout/); assert.match(first.stdout, /Setup complete for this worktree/);
   assert.equal(readFileSync(join(linked, 'web', '.env.local'), 'utf8'), token); assert.equal(statSync(join(linked, 'web', '.env.local')).mode & 0o777, 0o600);
-  assert.ok(!first.stdout.includes(token.match(/^CODERCREW_TOKEN=([a-f0-9]{64})$/m)[1]), 'Setup must not print the token.');
-  assert.equal(readFileSync(join(f.claude, 'settings.json'), 'utf8'), settings); assert.deepEqual(readdirSync(f.claude).filter((name) => name.includes('codercrew-backup')), backups);
+  assert.ok(!first.stdout.includes(token.match(/^ALTCLI_TOKEN=([a-f0-9]{64})$/m)[1]), 'Setup must not print the token.');
+  assert.equal(readFileSync(join(f.claude, 'settings.json'), 'utf8'), settings); assert.deepEqual(readdirSync(f.claude).filter((name) => name.includes('altcli-backup')), backups);
   assert.ok(!settings.includes(linked), 'The worktree never enters the host configuration.');
   const again = f.run({}, linked); assert.equal(again.status, 0, again.stderr); assert.match(again.stdout, /nothing was overwritten/);
 });

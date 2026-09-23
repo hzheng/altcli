@@ -15,11 +15,11 @@ let adapter: MockAdapter;
 let controller: Controller;
 const PROJECT = "/demo/project";
 beforeEach(() => {
-  directory = mkdtempSync(join(tmpdir(), "codercrew-test-"));
+  directory = mkdtempSync(join(tmpdir(), "altcli-test-"));
   store = new Store(directory);
   for (const session of mockSessions()) store.saveSession(session);
   adapter = new MockAdapter();
-  controller = new Controller(loadConfig({ CODERCREW_TOKEN: "a".repeat(64), CODERCREW_ADAPTER: "mock", CODERCREW_DATA_DIR: directory }), store, adapter);
+  controller = new Controller(loadConfig({ ALTCLI_TOKEN: "a".repeat(64), ALTCLI_ADAPTER: "mock", ALTCLI_DATA_DIR: directory }), store, adapter);
 });
 afterEach(() => { store.close(); rmSync(directory, { recursive: true, force: true }); });
 function command(agentId = "codex"): CommandInput { return { requestId: randomUUID(), agentId, kind: "relay", confirmReady: true }; }
@@ -210,8 +210,8 @@ test("session metadata, pairs and command history survive store reopen", async (
 });
 test("a version 1 store migrates its global reservation and untyped sessions", () => {
   store.close();
-  rmSync(directory, { recursive: true, force: true }); directory = mkdtempSync(join(tmpdir(), "codercrew-test-"));
-  const db = new Database(join(directory, "codercrew.sqlite3"));
+  rmSync(directory, { recursive: true, force: true }); directory = mkdtempSync(join(tmpdir(), "altcli-test-"));
+  const db = new Database(join(directory, "altcli.sqlite3"));
   const { agentType: _codexType, ...codex } = mockSessions()[0]!;
   const { agentType: _claudeType, ...claude } = mockSessions()[1]!;
   const id = randomUUID(); const now = new Date().toISOString();
