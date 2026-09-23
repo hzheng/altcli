@@ -361,5 +361,6 @@ See [ROADMAP.md](ROADMAP.md), [Architecture_Decision.md](Architecture_Decision.m
 The review-to-change map is in [docs/REVIEW-RESOLUTION.md](docs/REVIEW-RESOLUTION.md).
 Historical documents under `docs/history/` are records, not current capability claims.
 
-The source remains private-package/`UNLICENSED`; no public license is selected by
-this change.
+## License
+
+CoderCrew is licensed under the [Apache License, Version 2.0](LICENSE). See [NOTICE](NOTICE).
