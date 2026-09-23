@@ -86,6 +86,16 @@ async function futurePath(path: string): Promise<string> {
   return join(await futurePath(parent), basename(path));
 }
 
+/** A checkout under the task-worktree root sits at `<root>/<repository>/<branch>`, so the repository directory names the project, not the branch directory. */
+function projectName(commonDir: string, taskRoot: string | null): string {
+  const root = basename(commonDir) === '.git' ? dirname(commonDir) : commonDir;
+  if (taskRoot && root !== taskRoot && contains(taskRoot, root)) {
+    const repository = relative(taskRoot, root).split(process.platform === 'win32' ? /[\\/]/ : '/')[0]!;
+    if (repository) return repository;
+  }
+  return basename(root).replace(/\.git$/, '');
+}
+
 /** Read-only inventory plus one explicit, durable setup operation. Never changes run ownership or terminal state. */
 export class ProjectCatalog {
   private readonly known = new Map<string, ProjectRecord>();
@@ -102,16 +112,19 @@ export class ProjectCatalog {
   }
   async discover(live: Workspace[], sessions: SessionRegistration[]): Promise<Project[]> {
     const roots = [...new Set([...live.map((w) => w.worktree.root), ...sessions.map((s) => s.repository)])].sort();
+    let taskRoot: string | null = null;
+    try { taskRoot = await this.taskRoot(); } catch { /* An unreadable task root only costs the repository-directory naming below. */ }
     for (const root of roots) {
       try {
         const commonDir = this.config.mode === 'mock' ? `${root}/.git` : await commonGitDir(root);
         const id = idOf('project', commonDir);
-        if (!this.known.has(id)) {
-          const name = basename(commonDir) === '.git' ? basename(dirname(commonDir)) : basename(commonDir).replace(/\.git$/, '');
-          const slug = name.replace(/[^A-Za-z0-9_-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'project';
-          const collision = [...this.known.values()].some((p) => p.directoryName.toLowerCase() === slug.toLowerCase());
-          this.known.set(id, { id, commonDir, name, directoryName: collision ? `${slug}-${id.slice(-8)}` : slug });
-        }
+        const known = this.known.get(id);
+        const name = projectName(commonDir, taskRoot);
+        if (known?.name === name) continue;
+        const slug = name.replace(/[^A-Za-z0-9_-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'project';
+        const collision = [...this.known.values()].some((p) => p.id !== id && p.directoryName.toLowerCase() === slug.toLowerCase());
+        const record = { id, commonDir, name, directoryName: collision ? `${slug}-${id.slice(-8)}` : slug };
+        this.known.set(id, record);
       } catch { /* Live discovery already carries diagnostics. Saved projects below remain visible when unavailable. */ }
     }
     this.views = await Promise.all([...this.known.values()].map(async (project) => {
@@ -146,10 +159,14 @@ export class ProjectCatalog {
     if (!source?.identity || source.error || !source.head) throw new AppError('WORKTREE_CHANGED', 'Choose an accessible worktree with an initial commit.', 409);
     return { project, source };
   }
-  private async destination(project: ProjectRecord, branch: string): Promise<string> {
+  /** The resolved host root for task checkouts. */
+  private async taskRoot(): Promise<string> {
     const configured = this.config.worktreeDir ?? join(homedir(), '.codercrew');
     if (!isAbsolute(configured)) throw new AppError('WORKTREE_PATH', 'The host task-worktree root must be absolute.', 409);
-    const base = await futurePath(configured);
+    return futurePath(configured);
+  }
+  private async destination(project: ProjectRecord, branch: string): Promise<string> {
+    const base = await this.taskRoot();
     const path = join(base, project.directoryName, ...branch.split('/'));
     if (!contains(base, path) || path === base) throw new AppError('WORKTREE_PATH', 'The destination must stay under the task-worktree directory.', 409);
     let parent = path;

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, test } from 'node:test';
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -245,7 +245,7 @@ test('a plans root that is a link or lies inside the checkout is refused before 
   appendFileSync(join(root, '.git', 'info', 'exclude'), '.plans/\n'); mkdirSync(inside); mkdirSync(config().dataDir, { recursive: true }); symlinkSync(inside, plans);
   await assert.rejects(plane.submitPlan(request()), /Unsafe plan directory/); assert.equal(sent.length, 0); assert.equal(plane.workflow.runs().length, 0);
   // A link swapped in after Start redirects the draft into the checkout; capture refuses it and keeps ownership.
-  rmSync(plans); const input = request(); await plane.submitPlan(input); assert.equal(sent.length, 1);
+  unlinkSync(plans); const input = request(); await plane.submitPlan(input); assert.equal(sent.length, 1);
   const planning = run(input.requestId).planning!; renameSync(plans, join(directory, 'moved-plans')); symlinkSync(inside, plans);
   publish(input.requestId); await complete(input.requestId);
   assert.equal(run(input.requestId).status, 'paused'); assert.match(run(input.requestId).reason, /Unsafe plan directory/); assert.equal(run(input.requestId).planning!.drafts.codex!.status, 'running');

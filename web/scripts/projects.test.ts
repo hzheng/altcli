@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { beforeEach, afterEach, test } from 'node:test';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, existsSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -73,6 +73,25 @@ test('confirmed creation uses the chosen commit without moving a dirty source; s
   assert.equal((await catalog.create(request)).status, 'ready'); assert.equal(store.worktreeCreations().length, 1);
   store.close(); store = new Store(config.dataDir); catalog = new ProjectCatalog(store, config);
   const [project] = await catalog.discover([], []); assert.equal(project!.worktrees.length, 2); assert.equal(project!.creations[0]!.status, 'ready');
+});
+test('a checkout under the task-worktree root uses its repository directory and saves a corrected name only on use', async () => {
+  const nested = join(config.worktreeDir!, 'codercrew', 'main'); mkdirSync(nested, { recursive: true });
+  git(nested, 'init', '-b', 'main'); writeFileSync(join(nested, 'app.txt'), 'baseline\n'); git(nested, 'add', 'app.txt'); git(nested, 'commit', '-m', 'baseline');
+  const [project] = await catalog.discover([await workspace(nested)], []);
+  assert.equal(project!.name, 'codercrew'); assert.equal(project!.directoryName, 'codercrew');
+  // A task worktree for it becomes a sibling of that checkout, not a child of a branch directory.
+  const preview = await catalog.preview({ projectId: project!.id, sourceWorktreeId: project!.worktrees[0]!.id, branch: 'feature/login' });
+  assert.equal(preview.path, join(config.worktreeDir!, 'codercrew', 'feature', 'login'));
+  catalog.remember(nested);
+  store.saveProject({ ...store.projects()[0]!, name: 'main', directoryName: 'main' }); // a record written before the repository directory named projects
+  store.close(); store = new Store(config.dataDir); catalog = new ProjectCatalog(store, config);
+  const before = store.db.prepare('SELECT total_changes() AS count').get();
+  const [reloaded] = await catalog.discover([await workspace(nested)], []);
+  assert.equal(reloaded!.id, project!.id); assert.equal(reloaded!.name, 'codercrew');
+  assert.deepEqual(store.db.prepare('SELECT total_changes() AS count').get(), before);
+  assert.equal(store.projects()[0]!.directoryName, 'main');
+  catalog.remember(nested);
+  assert.equal(store.projects()[0]!.directoryName, 'codercrew');
 });
 test('remembering an explicitly used project retains all its worktrees after sessions disappear', async () => {
   await catalog.discover([await workspace(root)], []); catalog.remember(root);
@@ -324,7 +343,7 @@ test('removal and discard refuse a worktree that the host\'s installed hooks or 
   symlinkSync(join(request.path, 'skills', 'review-handoff'), join(codex, 'skills', 'review-handoff'));
   await assert.rejects(plane.previewDiscard(target), /codex\/skills\/review-handoff/);
   await assert.rejects(plane.previewRemoval(target), /codex\/skills\/review-handoff/);
-  rmSync(join(codex, 'skills', 'review-handoff')); mkdirSync(join(codex, 'skills', 'review-handoff')); // a real directory is the user's own skill
+  unlinkSync(join(codex, 'skills', 'review-handoff')); mkdirSync(join(codex, 'skills', 'review-handoff')); // a real directory is the user's own skill
   assert.equal((await plane.previewDiscard(target)).worktree.root, request.path);
   writeFileSync(join(claude, 'settings.json'), '{'); // unreadable configuration fails closed
   await assert.rejects(plane.previewRemoval(target), /not valid JSON/);
