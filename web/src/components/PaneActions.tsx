@@ -197,6 +197,7 @@ export function PaneActions(p: PaneActionsProps) {
   const openSettings = () => { s.setOpen(true); document.getElementById('run-settings')?.scrollIntoView({ block: 'nearest' }); };
   const inputOff = !!common;
   return <section className="pane-actions" aria-label={`Actions for ${name}`}>
+    <p className="zone-label"><span aria-hidden="true">⌨️</span> Command · {canSend ? `Send to ${name}` : `${name} reviews`}</p>
     {canSend && <>
       <label className="sr-only" htmlFor={`${ids}-text`}>Instruction for {name}</label>
       <textarea id={`${ids}-text`} rows={2} value={text} maxLength={1900} placeholder={dirty && after !== 'nothing' ? `Instruction for ${name} — leave empty to hand off the ${git!.changeCount} uncommitted ${git!.changeCount === 1 ? 'path' : 'paths'} as they stand` : `Instruction for ${name}`} onChange={(e) => setText(e.target.value)} />

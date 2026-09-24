@@ -360,6 +360,8 @@ export function Console() {
       </form><p className="fine">{stayUnlocked ? 'This device stays unlocked until you press Lock (a Settings preference); the token is kept in this browser.' : 'The token stays in page memory.'} Locking or closing this page does not pause a server-owned run.</p>
     </section></main>;
   const feedback = message && <p className="feedback" role="status">{message}</p>;
+  // Separates the terminal stage from a group-wide command section below it; decorative, the section names itself.
+  const commandDivider = <div className="command-divider" aria-hidden="true"><span>⌨️ Command</span></div>;
   const connection = <div className="connection">{stale ? 'Not current' : 'Connected'}<small>{updated ? new Date(updated).toLocaleTimeString() : 'Connecting'}</small></div>;
   const actionable = !!pair && members.length <= 2;
   const settings = phase === 'plan' ? planSettings : implementationSettings;
@@ -458,8 +460,12 @@ export function Console() {
         </details>}
       {!owned.length && !latestRun && <p className="fine">The controller is not driving this checkout: no command is in flight, and nothing it drove earlier involves the agents shown here.</p>}
             </> }} />
-        <div className="target-row"><nav className="agent-tabs" aria-label="Command target">{visible.map((s) => <button key={s.id} className={s.id === current?.id ? 'selected' : ''} aria-pressed={s.id === current?.id} onClick={() => select(s.id)}>
-            <Icon badge={statuses.get(s.id)?.badge ?? 'unknown'} />{s.label}</button>)}</nav>
+        {/* Watch zone: a recessed stage of terminal captures. Commands sit under each capture or below the stage, never over it. */}
+        <div className="terminal-stage">
+        <div className="target-row"><h2 className="stage-title"><span aria-hidden="true">🖥️</span> Live terminals <span className="stage-cue">captured output · commands below</span></h2>
+          {/* The tab picks the command recipient (and Plan's default first implementer), not only the displayed pane. */}
+          <div className="stage-target"><span className="target-caption">Target</span><nav className="agent-tabs" aria-label="Command target">{visible.map((s) => <button key={s.id} className={s.id === current?.id ? 'selected' : ''} aria-pressed={s.id === current?.id} onClick={() => select(s.id)}>
+            <Icon badge={statuses.get(s.id)?.badge ?? 'unknown'} />{s.label}</button>)}</nav></div>
           <div className="row-tools"><div className="segmented" role="group" aria-label="Pane layout">
               <button className={layout === 'parallel' ? 'selected' : 'quiet'} aria-pressed={layout === 'parallel'} onClick={() => chooseLayout('parallel')}>Parallel</button>
               <button className={layout === 'focus' ? 'selected' : 'quiet'} aria-pressed={layout === 'focus'} onClick={() => chooseLayout('focus')}>Focus</button></div></div></div>
@@ -474,9 +480,9 @@ export function Console() {
           const resetBlock = resetStatusReason(s);
           const location = locationOf(s);
           return <article key={s.id} aria-label={`${s.label} pane`} hidden={layout === 'focus' && s.id !== displayed} className={`pane ${s.id === displayed ? 'active' : ''}`}>
-            <div className="pane-heading"><h2><Icon badge={status.badge} />{s.label}</h2><span className="mono muted">{s.agentType}{location ? ` · ${location}` : ''} · {s.identity.paneId}</span>
+            <div className="pane-heading"><h2><Icon badge={status.badge} />{s.label}</h2><span className="mono muted pane-meta">{s.agentType}{location ? ` · ${location}` : ''}</span>
               <span className="badge">{execution ? execution.status.toUpperCase() : 'NO ACTIVE CONTROLLER TURN'}</span></div>
-            <div className="pane-status"><span className="state"><Icon badge={status.badge} />{status.badge}</span><span className="pane-detail" title={status.detail}>{status.detail}</span>
+            <div className="pane-status"><span className="state">{status.badge}</span><span className="pane-detail" title={status.detail}>{status.detail}</span>
               {status.when && <span className="mono muted">{timeOf(status.when)}</span>}
               {activity?.state === 'unknown' && <button type="button" disabled={!!resetBlock} title={resetBlock || 'Restore Ready after inspecting this terminal.'}
                 onClick={() => setStatusReset({ agentId: s.id, registrationId: s.registrationId, expectedUpdatedAt: activity.updatedAt })}>Reset status</button>}
@@ -484,16 +490,19 @@ export function Console() {
             {resetPrompt(s.id)}
             {visibleOutcome?.outcome && <div className={`outcome ${visibleOutcome.outcome}`}>{visibleOutcome.outcome}: {visibleOutcome.reason}</div>}
             <Output label={`${s.label} output`} memoryKey={`scroll:${ws}:${s.id}`} text={(snapshot?.status === 'unavailable' ? snapshot.error : snapshot?.text) || 'Waiting for a capture'} />
-            <div className="pane-footer"><span>{snapshot ? `Captured ${new Date(snapshot.capturedAt).toLocaleTimeString()}` : ''}</span></div>
+            {/* A tmux-style status line: the boundary between the capture above and any command section below. */}
+            <div className="pane-footer"><span className="mono">{s.identity.paneId}</span><span>{snapshot ? `Captured ${new Date(snapshot.capturedAt).toLocaleTimeString()}` : ''}</span></div>
             {inputRun && !showLegacy && <InteractionComposer token={token} state={state} run={inputRun} agent={s} draftKey={`draft:${scope}:${s.id}`} disabled={busy || stale || setupHeld || !state.inputEnabled || !!identityBlockedReason || !!cardReason(s)} viewEpoch={viewEpoch} refresh={refresh} />}
             {actionable && !inputRun && phase === 'implementation' && !showLegacy && <PaneActions {...common} group={pair} agent={s} settings={implementationSettings}
               blockedReason={sharedReason || cardReason(s)} draftKey={`draft:${scope}:${s.id}`} />}
             {actionable && showLegacy && s.id === current?.id && <p className="fine pane-hint">The staging fallback is on: use its composer below.</p>}
           </article>;
         })}</section>
-        {phase === 'plan' && !inputRun && !showLegacy && <PlanSetup {...common} group={pair && members.length ? pair : undefined} settings={planSettings} displayed={displayed}
-          blockedReason={sharedReason || cardReason(current)} draftKey={`plan:${scope}`} />}
-        {showLegacy && <section className="composer"><div className="section-heading"><h2>Legacy staging: send to {current?.label}</h2><span className="badge">{owned.length ? 'EXECUTION OWNED' : 'MANUAL START'}</span></div>
+        </div>
+        {phase === 'plan' && !inputRun && !showLegacy && <>{commandDivider}<PlanSetup {...common} group={pair && members.length ? pair : undefined} settings={planSettings} displayed={displayed}
+          blockedReason={sharedReason || cardReason(current)} draftKey={`plan:${scope}`} /></>}
+        {showLegacy && commandDivider}
+        {showLegacy && <section className="composer command-zone"><div className="section-heading"><h2>Legacy staging: send to {current?.label}</h2><span className="badge">{owned.length ? 'EXECUTION OWNED' : 'MANUAL START'}</span></div>
           {!state?.inputEnabled && <p>Read-only console: the host has disabled input.</p>}
           <form onSubmit={(e) => { e.preventDefault(); void send('instruction'); }}>
             <label className="sr-only" htmlFor="instruction">Instruction to {current?.label}</label>

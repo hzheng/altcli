@@ -490,6 +490,8 @@ for (const phase of ['Plan', 'Implementation'] as const) test(`${phase} applies 
   await sections.getByRole('button', { name: 'Settings', exact: true }).click(); await page.getByLabel('Staging fallback', { exact: true }).check();
   await sections.getByRole('button', { name: 'Console', exact: true }).click();
   await expect(page.getByLabel('Ready to send', { exact: true })).toBeEnabled(); expect(starts).toBe(1);
+  // The legacy composer is a command section below the terminal stage, like Plan setup.
+  await expect(page.locator('.terminal-stage + .command-divider + .composer.command-zone')).toHaveCount(1);
 });
 test('failed Git recheck blocks cached clean consent until a successful read and fresh confirmation', async ({ page, request }) => {
   const group = await post(request, 'groups', { name: 'Read failure', members: ['codex', 'claude'] }); let failure = false;
@@ -571,6 +573,9 @@ test('an active plain Send may dirty the checkout without displaying a clean-che
   await expect(page.getByRole('region', { name: 'Uncommitted changes', exact: true })).toHaveCount(0);
   // Owned work has a contextual draft; starting a second assignment or changing follow-up is unavailable.
   const update = page.getByRole('region', { name: 'Input for Codex', exact: true });
+  // Active-run input is a command section directly under its own capture.
+  await expect(pane(page, 'Codex').locator('.pane-footer + .pane-actions')).toHaveAttribute('aria-label', 'Input for Codex');
+  await expect(update.locator('.zone-label')).toHaveText('⌨️ Input to Codex · run in progress');
   await update.getByLabel('Add detail for Codex').fill('Keep this draft while native acknowledgment is pending.');
   await expect(update.getByRole('button', { name: 'Send update to Codex' })).toBeDisabled();
   await expect(update.getByLabel('After send')).toHaveCount(0);

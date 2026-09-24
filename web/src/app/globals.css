@@ -1,5 +1,7 @@
 @import "tailwindcss";
-:root { color-scheme: dark; --bg:#101719; --panel:#172125; --line:#2c3b40; --text:#ecf1ed; --muted:#a0b2b7; --accent:#bde785; }
+:root { color-scheme: dark; --bg:#101719; --panel:#172125; --line:#2c3b40; --text:#ecf1ed; --muted:#a0b2b7; --accent:#bde785;
+  /* Watch zone (recessed terminal stage) and command zone (raised input surfaces); see .terminal-stage and .pane-actions. */
+  --stage-bg:#0b1113; --term-bg:#070b0d; --term-bar:#111a1d; --command-bg:#1a2629; --command-edge:#3a5140; }
 * { box-sizing:border-box; }
 body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; font-size:14px; line-height:1.55; }
 button,input,select { font:inherit; }
@@ -45,7 +47,7 @@ small { display:block; font-size:11px; color:var(--muted); font-weight:400; }
 .segmented { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
 .segmented button { border:0; border-radius:0; font-size:11px; padding:6px 12px; }
 .segmented button.selected { background:#202e25; color:var(--accent); }
-.panes.focus { grid-template-columns:1fr; }
+.panes.focus { grid-template-columns:1fr; --output-h:clamp(320px, 58vh, 900px); }
 .console-shell { max-width:1440px; margin:0 auto; padding:0 38px; }
 .topbar { min-height:79px; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--line); gap:20px; }
 .toolbar { display:flex; gap:14px; align-items:center; }
@@ -69,16 +71,19 @@ small { display:block; font-size:11px; color:var(--muted); font-weight:400; }
 .agent-tabs button { min-width:174px; display:flex; gap:14px; align-items:center; background:transparent; padding:7px 14px; }
 .agent-tabs button.selected { border-color:#6d8c55; background:#202e25; }
 .agent-tabs small { font-size:8px; }
-.panes { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:16px; }
-.pane { min-width:0; overflow:hidden; background:#121c20; border:1px solid var(--line); border-radius:12px; }
+/* Captures grow with the window. At 1440×900 the height is bounded by both Send buttons staying in the first viewport (layout.spec.ts). */
+.panes { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:18px; --output-h:clamp(252px, 28.5vh, 620px); }
+.pane { min-width:0; overflow:hidden; background:var(--term-bar); border:1px solid var(--line); border-radius:12px; box-shadow:0 6px 18px rgba(0,0,0,.28); }
 .pane.active { border-color:#537144; }
-.pane-heading { display:flex; justify-content:space-between; align-items:center; padding:16px 18px 8px; }
+.pane.active .pane-heading { box-shadow:inset 0 2px 0 var(--accent); }
+.pane-heading { display:flex; justify-content:space-between; align-items:center; padding:9px 14px 5px; }
 .outcome { font-size:11px; padding:7px 18px; border-bottom:1px solid var(--line); background:#1a261e; color:#cfe3c4; overflow-wrap:anywhere; }
 .outcome.strong_objection { background:#332624; color:#f1bbb0; }
 .outcome.accept_without_improvement, .outcome.no_incoming_handoff { background:#28251d; color:#d8c398; }
 .outcome.pending { background:#1c2327; color:var(--muted); font-style:italic; }
-.pane pre { height:236px; overflow:auto; margin:0; padding:20px; line-height:1.65; font-size:12px; white-space:pre-wrap; overflow-wrap:anywhere; color:#d5e0dd; tab-size:4; }
-.pane-footer { display:flex; justify-content:space-between; align-items:center; gap:10px; color:var(--muted); padding:6px 18px; border-top:1px solid var(--line); font-size:10px; }
+.pane pre { height:var(--output-h); overflow:auto; margin:0; padding:14px 16px; line-height:1.65; font-size:12px; white-space:pre-wrap; overflow-wrap:anywhere; color:#d5e0dd; tab-size:4;
+  background:var(--term-bg); box-shadow:inset 0 6px 12px -8px rgba(0,0,0,.8); }
+.pane-footer { display:flex; justify-content:space-between; align-items:center; gap:10px; color:var(--muted); padding:6px 14px; border-top:1px solid var(--line); font-size:10px; background:var(--term-bar); }
 .pane-footer button { margin-left:auto; font-size:10px; padding:5px 9px; }
 .confirm-inline { margin-left:auto; display:inline-flex; align-items:center; gap:6px; }
 .confirm-inline button { margin-left:0; }
@@ -233,11 +238,11 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
 .settings-editor details.agreement { margin-top:12px; }
 .pane-heading { flex-wrap:wrap; gap:4px 10px; }
 .pane-heading h2 { margin-right:auto; }
-.pane-status { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; padding:0 18px 10px; border-bottom:1px solid var(--line); font-size:11px; color:var(--muted); }
+.pane-status { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; padding:0 14px 7px; border-bottom:1px solid var(--line); font-size:11px; color:var(--muted); }
 .pane-status .state { display:inline-flex; align-items:center; text-transform:uppercase; font-size:10px; letter-spacing:.4px; color:var(--text); white-space:nowrap; }
 .pane-detail { flex:1; min-width:0; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow-wrap:anywhere; }
 .pane-status button { font-size:10px; padding:4px 9px; flex-shrink:0; }
-.pane-actions { display:grid; grid-template-columns:minmax(0, 1fr); gap:8px; padding:12px 18px 14px; border-top:1px solid var(--line); font-size:12px; }
+.pane-actions { display:grid; grid-template-columns:minmax(0, 1fr); gap:8px; padding:10px 14px 12px; font-size:12px; }
 .pane-disclosure { grid-template-columns:minmax(0, 1fr); }
 .pane-actions select { max-width:100%; }
 .pane-actions textarea { width:100%; min-height:58px; resize:vertical; font:inherit; line-height:1.5; background:#101a1d; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:9px 11px; }
@@ -285,6 +290,27 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
 .reset-status button { margin-left:0; }
 .status:not([open]) { padding-bottom:14px; }
 .status summary .muted { font-size:12px; }
+/* Watch zone: a recessed stage holds the terminal captures, set apart from the raised controller and settings cards above. */
+.terminal-stage { background:var(--stage-bg); border:1px solid #33454b; border-radius:14px; padding:10px; box-shadow:inset 0 1px 0 rgba(255,255,255,.03), inset 0 8px 18px rgba(0,0,0,.35); }
+.terminal-stage .target-row { align-items:center; flex-wrap:wrap; gap:8px 14px; margin-bottom:10px; }
+.terminal-stage .agent-tabs { margin-bottom:0; }
+.stage-title { margin:0; display:flex; align-items:baseline; gap:8px; font-size:13px; white-space:nowrap; }
+.stage-cue { font-size:11px; font-weight:400; color:var(--muted); }
+.stage-target { display:flex; align-items:center; gap:10px; margin-right:auto; min-width:0; }
+.target-caption, .zone-label, .command-divider { font-size:10px; font-weight:650; letter-spacing:1.2px; text-transform:uppercase; }
+.target-caption { color:var(--muted); }
+.pane-heading h2 { font-size:15px; }
+.pane-meta { min-width:0; font-size:11px; overflow-wrap:anywhere; }
+/* Command zone: raised input surfaces with an accent edge; the edge dims while the section's send action is unavailable. */
+.pane-actions { background:var(--command-bg); border-top:2px solid var(--command-edge); box-shadow:inset 3px 0 0 var(--accent); }
+.pane-actions:has(> .ready-row > .primary:disabled), .pane-actions:has(> button:disabled) { box-shadow:inset 3px 0 0 var(--command-edge); }
+.zone-label { margin:0 0 -2px; line-height:14px; color:var(--accent); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.zone-label > span { letter-spacing:0; margin-right:2px; }
+.command-zone { background:var(--command-bg); box-shadow:inset 3px 0 0 var(--accent); }
+.command-divider { display:flex; align-items:center; gap:12px; margin-top:20px; color:var(--accent); }
+.command-divider::before, .command-divider::after { content:""; flex:1; height:1px; background:var(--line); }
+.command-divider + .command-zone { margin-top:10px; }
+@media(max-width:760px) { .terminal-stage { padding:6px; border-radius:12px; } .stage-title { flex-wrap:wrap; white-space:normal; } .stage-target { width:100%; } .stage-target .agent-tabs { flex:1; } }
 @media(max-width:760px) {
   /* Leave room below the last control: phone browsers' bottom bars, and emulated visual viewports, hide the page tail. */
   .console-shell { padding:0 16px calc(120px + env(safe-area-inset-bottom, 0px)); }
@@ -293,8 +319,8 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
   .page-heading .muted { font-size:12px; }.connection { margin-top:6px; min-width:85px; }
   .connection small { max-width:100px; }.agent-tabs button { flex:1; min-width:0; padding:10px 12px; display:block; text-align:left; }
   .agent-tabs small { margin-top:4px; }.panes { grid-template-columns:1fr; }.pane:not(.active) { display:none; }
-  .pane pre { height:320px; }.toolbar-note { display:none; }
-  .context-actions { margin-left:0; }.run-summary .summary-text { flex-basis:100%; white-space:normal; overflow-wrap:anywhere; }.run-summary .badge.warning { white-space:normal; }.row-toggles { margin-left:0; width:100%; }.pane-actions { padding:12px 14px 14px; }.pane-status { padding:0 14px 10px; }.baseline { flex-wrap:wrap; }.composer,.panel { padding:16px; }.command-line { flex-wrap:wrap; }.register-grid { grid-template-columns:1fr; }
+  .panes, .panes.focus { --output-h:clamp(340px, 52svh, 520px); }.toolbar-note { display:none; }
+  .context-actions { margin-left:0; }.run-summary .summary-text { flex-basis:100%; white-space:normal; overflow-wrap:anywhere; }.run-summary .badge.warning { white-space:normal; }.row-toggles { margin-left:0; width:100%; }.pane-actions { padding:10px 12px 12px; }.baseline { flex-wrap:wrap; }.composer,.panel { padding:16px; }.command-line { flex-wrap:wrap; }.register-grid { grid-template-columns:1fr; }
   .workspace-cards { grid-template-columns:1fr; }.workspaces .section-heading { flex-wrap:wrap; }
   /* The section tabs take their own full-width row; an overflowing top bar would make mobile browsers zoom the whole page out. */
   .topbar { flex-wrap:wrap; gap:8px 12px; padding:10px 0; }.section-tabs { order:3; width:100%; margin-left:0; flex-wrap:wrap; }.section-tabs button { flex:1; padding:8px 10px; font-size:13px; }
@@ -305,4 +331,5 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
   .history summary { flex-wrap:wrap; gap:6px; }td,th { padding:11px; }
   footer { gap:18px; }footer span { text-align:right; }.unlock-card { padding:26px; }
 }
+@supports not (height:1svh) { @media(max-width:760px) { .panes, .panes.focus { --output-h:clamp(340px, 52vh, 520px); } } }
 @media(prefers-reduced-motion:reduce) { * { scroll-behavior:auto !important; } }

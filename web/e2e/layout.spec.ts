@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import type { Group, ImplementationStart, StandaloneStart } from '../src/contracts/implementation';
 import type { WorkflowState } from '../src/contracts/workflow';
 import { editSettings, expand, openCard, pane } from './ui';
@@ -284,10 +284,54 @@ test('both Send buttons are in the first desktop viewport, directly under their 
   const group = await post(request, 'groups', { name: 'Viewport', members: ['codex','claude'] });
   await openGroup(page, group);
   for (const name of ['Codex', 'Claude']) {
-    await expect(page.getByRole('region', { name: `Actions for ${name}` }).getByRole('button', { name: `Send ${name}`, exact: true })).toBeInViewport({ ratio: 1 });
+    const send = page.getByRole('region', { name: `Actions for ${name}` }).getByRole('button', { name: `Send ${name}`, exact: true });
+    await expect(send).toBeInViewport({ ratio: 1 });
     await expect(pane(page, name).locator('.pane-footer + .pane-actions')).toHaveCount(1);
+    // A safety margin, so added chrome above the panes fails here before it clips a Send button.
+    const box = (await send.boundingBox())!;
+    expect(900 - (box.y + box.height), `${name} Send margin`).toBeGreaterThanOrEqual(16);
   }
   await page.screenshot({ path: info.outputPath('console-1440x900.png') });
+});
+test('terminal captures are taller, grow with the window, and stand apart from settings and commands', async ({ page, request }, info) => {
+  test.skip(info.project.name !== 'desktop', 'Window heights are resized from the desktop project.');
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const group = await post(request, 'groups', { name: 'Stage', members: ['codex','claude'] });
+  await openGroup(page, group);
+  const height = (name: string) => page.getByLabel(`${name} output`).evaluate((el) => el.clientHeight);
+  const background = (element: Locator) => element.evaluate((el) => getComputedStyle(el).backgroundColor);
+  const stage = page.locator('.terminal-stage');
+  await expect(stage.getByRole('heading', { name: /^Live terminals/ })).toBeVisible();
+  await expect(stage.getByRole('navigation', { name: 'Command target' })).toBeVisible();
+  // Guards only: the watch, command and settings surfaces differ; exact colours are a design choice.
+  expect(await background(stage)).not.toBe(await background(page.getByRole('region', { name: 'Implementation settings' })));
+  for (const name of ['Codex', 'Claude']) {
+    const actions = page.getByRole('region', { name: `Actions for ${name}` });
+    expect(await height(name), `${name} capture at 1440×900`).toBeGreaterThanOrEqual(252);
+    expect(await background(page.getByLabel(`${name} output`))).not.toBe(await background(actions));
+    await expect(actions.locator('.zone-label')).toHaveText(`⌨️ Command · Send to ${name}`);
+  }
+  const parallel = await height('Codex');
+  await page.getByRole('button', { name: 'Focus', exact: true }).click();
+  await expect.poll(() => page.locator('article.pane:not([hidden]) pre').evaluate((el) => el.clientHeight)).toBeGreaterThan(parallel);
+  await page.getByRole('button', { name: 'Parallel', exact: true }).click();
+  await page.setViewportSize({ width: 1440, height: 1200 });
+  await expect.poll(() => height('Codex')).toBeGreaterThan(parallel);
+});
+test('Plan setup sits below the terminal stage, behind a command divider', async ({ page, request }, info) => {
+  test.skip(info.project.name !== 'desktop', 'The Plan screenshot is taken on a desktop window.');
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const group = await post(request, 'groups', { name: 'Plan divider', members: ['codex','claude'] });
+  await openGroup(page, group); await page.getByRole('button', { name: '1 · Plan', exact: true }).click();
+  const setup = page.getByRole('region', { name: 'Plan setup' });
+  await expect(setup).toBeVisible();
+  expect(await setup.evaluate((el) => ({
+    outside: !el.closest('.terminal-stage'),
+    after: !!(document.querySelector('.terminal-stage')!.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING),
+    divider: !!el.previousElementSibling?.matches('.command-divider[aria-hidden="true"]'),
+    zone: el.classList.contains('command-zone'),
+  }))).toEqual({ outside: true, after: true, divider: true, zone: true });
+  await page.screenshot({ path: info.outputPath('console-plan-1440x900.png') });
 });
 test('the settings row wraps inside its panel at intermediate widths, with the Settings toggle reachable', async ({ page, request }, info) => {
   test.skip(info.project.name !== 'desktop', 'Intermediate widths are resized from the desktop project.');
@@ -335,5 +379,7 @@ test('the console has no horizontal overflow at phone widths', async ({ page, re
     await page.setViewportSize({ width, height: 800 });
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
   }
+  // The single visible capture is taller than the former fixed 320 px phone height.
+  expect(await page.getByLabel('Codex output').evaluate((el) => el.clientHeight)).toBeGreaterThan(320);
   await page.screenshot({ path: info.outputPath('console-320.png'), fullPage: true });
 });

@@ -38,6 +38,7 @@ export function InteractionComposer({ token, state, run, agent, draftKey, disabl
     } finally { setBusy(false); await refresh(); }
   }
   return <section className="pane-actions" aria-label={`Input for ${agent.label}`}>
+    <p className="zone-label"><span aria-hidden="true">⌨️</span> Input to {agent.label} · run in progress</p>
     <label>Add detail to this task<textarea aria-label={`Add detail for ${agent.label}`} rows={2} value={text} maxLength={1900} onChange={(e) => setText(e.target.value)} /></label>
     <p className="fine">After the current task: {run.implementation ? turn?.input.handoff ? 'publish the assigned result, then review with the peer' : 'publish the assigned result, then stop' : run.planning ? 'continue the configured planning workflow' : 'stop after the instruction'}. This update does not change that choice.</p>
     <label><input type="checkbox" checked={present} disabled={!!reason || busy} onChange={(e) => setPresent(e.target.checked)} /> I inspected {agent.label}’s terminal and intend this input.</label>

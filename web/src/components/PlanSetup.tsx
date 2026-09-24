@@ -60,7 +60,7 @@ export function PlanSetup(p: {
       } finally { await Promise.all([p.refresh(), p.onRecheck()]); }
     });
   }
-  return <section className="composer implementation" aria-label="Plan setup">
+  return <section className="composer implementation command-zone" aria-label="Plan setup">
     <div className="section-heading"><h2>Plan</h2><span className="badge">PLAN DOCUMENTS · NO CODE EDITS</span></div>
     <p className="muted">Each planner drafts independently, one at a time. Then refine one shared plan. Coding starts only after the separate approval and branch gates.</p>
     {!p.blockedReason && git && !git.clean && <section className="notice workspace-changes" aria-label="Uncommitted changes">

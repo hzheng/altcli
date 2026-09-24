@@ -4,6 +4,30 @@
 **Last local validation:** September 21, 2026
 **Scope:** Source scaffold, not a completed release or security certification
 
+## Terminal stage: watch and command zones, September 23, 2026
+
+The Console now has three visually distinct zones:
+
+- **Controls** (context bar, next-run settings, controller panel): raised cards, unchanged.
+- **Watch** (🖥️ "Live terminals"): a recessed, darker stage that holds the Target tabs and the pane captures. Each pane looks like a terminal window, with a title bar, a near-black capture and a tmux-style status line (pane ID and capture time). The status line marks the boundary before any command section. The pane ID moved there, and the status row no longer repeats the title's state icon.
+- **Command** (⌨️): the per-agent actions, active-run input, Plan setup and the legacy composer are raised, tinted surfaces with a labelled heading and an accent left edge. The edge dims while the section's primary send is unavailable. In Plan and legacy mode, a labelled divider separates the stage from the command section below it.
+
+The visible "Target" caption is there because the tab still chooses the recipient and Plan's default first implementer. Emoji are `aria-hidden` and always paired with text. Accessible names are unchanged.
+
+Capture height is now `clamp(252px, 28.5vh, 620px)` in Parallel, `clamp(320px, 58vh, 900px)` in Focus, and `clamp(340px, 52svh, 520px)` on phones. The previous fixed values were 236 px and 320 px. The first-viewport Send rule bounds the 1440×900 value. Before the change, in mock mode, the Send buttons ended at y=845.6 (54.4 px margin) with 236 px captures. After it, they end at y=880.25 (19.75 px margin) with 257 px captures. The viewport case now asserts a margin of at least 16 px, so added chrome fails there first. WCAG contrast of text, muted text, accent and capture text on the four new backgrounds is at least 7.05:1.
+
+New or extended browser cases:
+- captures of at least 252 px at 1440×900 that grow at 1440×1200 and are taller in Focus
+- distinct computed backgrounds for capture vs command section and stage vs settings, plus the command headings
+- Plan setup outside and after the stage, behind the divider (Plan screenshot saved)
+- legacy composer placement
+- active-run input directly under its capture
+- phone capture taller than 320 px
+
+What ran: `npm ci` in `web/` (lockfile unchanged). `ALTCLI_E2E_PORT=9787 ./scripts/check.sh --e2e` exited 0: 30 hook/setup, 43 smoke, 292 workflow and 66 unit tests, type checks, the production build, and 181 browser cases passed with 5 skipped across the desktop and iPhone projects. Screenshots at 1440×900 (Implementation and Plan) and at 320 px were inspected in headless Chromium, where emoji render as monochrome glyphs. Not run: installed-agent acceptance, physical Safari, and color-emoji rendering.
+
+Review follow-up, September 23, 2026: Moved the unsupported-`svh` `vh` fallback after the phone `svh` rule so it wins the cascade in browsers without `svh`. On the final source, `./scripts/check.sh` exited 0 (30 hook/setup, 43 smoke, 292 workflow, 66 unit tests, type checks and production build). `ALTCLI_E2E_PORT=9787 ./scripts/check.sh --e2e` also exited 0, including 181 Chromium browser cases passed and 5 skipped. Final desktop Implementation/Plan and 320 px phone screenshots were inspected. An engine without `svh` was not run; the fallback order was checked in the CSS source.
+
 ## Review finding on intermediate widths, September 22, 2026
 
 Peer review of `d30ddf8` found the one-line settings row overflowing between the
