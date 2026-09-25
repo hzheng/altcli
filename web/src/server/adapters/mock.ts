@@ -13,19 +13,20 @@ export function mockPanes(): ListedPane[] {
   ].map(({ paneId, ...pane }) => ({ ...pane, identity: { paneId, ...IDENTITY }, dead: false, inMode: false, synchronized: false }));
 }
 export class MockAdapter implements TerminalAdapter {
+  launched: ListedPane[] = [];
   readonly output = new Map<AgentId, string>();
   /** Simulated process trees per session; tests set them to model work spawned during a turn. */
   readonly trees = new Map<AgentId, ProcessRecord[]>();
   /** Simulated foreground pids; unset means the mock cannot tell, like an adapter without process visibility. */
   readonly foregrounds = new Map<AgentId, string>();
-  async listPanes(): Promise<ListedPane[]> { return mockPanes(); }
+  async listPanes(): Promise<ListedPane[]> { return [...mockPanes(), ...this.launched]; }
   async inspect(paneId: string): Promise<PaneState> {
-    const pane = mockPanes().find((p) => p.identity.paneId === paneId);
+    const pane = [...mockPanes(), ...this.launched].find((p) => p.identity.paneId === paneId);
     if (!pane) throw new AppError("TMUX_FAILED", `Mock pane ${paneId} does not exist.`, 409);
     return pane;
   }
   async peek(paneId: string): Promise<string> {
-    const pane = mockPanes().find((p) => p.identity.paneId === paneId);
+    const pane = [...mockPanes(), ...this.launched].find((p) => p.identity.paneId === paneId);
     if (!pane) throw new AppError("TMUX_FAILED", `Mock pane ${paneId} does not exist.`, 409);
     return `[MOCK preview of ${paneId} at ${pane.location}]\n${pane.command} running in ${pane.cwd}\nNo real terminal was read.\n> `;
   }

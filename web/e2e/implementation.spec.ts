@@ -18,6 +18,33 @@ test.beforeEach(async ({ request, page }) => {
 });
 // Finish intercepted polling requests before Playwright closes the page.
 test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'wait' }); });
+test('blocked handoff details require fresh inspection and an explicit recheck click', async ({ page, request }) => {
+  const group = await post(request, 'groups', { name: 'Blocked handoff', members: ['codex', 'claude'] });
+  const id = crypto.randomUUID(); let revision = crypto.randomUUID(); const actions: unknown[] = [];
+  await post(request, 'commands', { requestId: id, agentId: 'codex', kind: 'instruction', text: 'Prior task', confirmReady: true });
+  await post(request, 'runs', { runId: id, action: 'pause' });
+  // UI fixture only: real Git/lifecycle/recovery and concurrent decisions are exercised by server tests.
+  await page.route('**/api/v1/state', async route => {
+    const response = await route.fetch(); const data: WorkflowState = await response.json();
+    data.runs.find(r => r.id === id)!.blockedHandoff = { commandId: id, revision, backgroundState: 'active',
+      backgroundSummary: { tasks: 1, crons: 0, taskTypes: ['local_bash'] }, publishedSha: 'c'.repeat(40), publicationError: null,
+      gate: 'Background work remains active; ownership was not transferred.' };
+    await route.fulfill({ json: data });
+  });
+  await page.route('**/api/v1/runs', async route => { actions.push(route.request().postDataJSON()); await route.fulfill({ json: { ok: true } }); });
+  await openGroup(page, group); await openController(page);
+  const panel = page.getByLabel('Blocked handoff', { exact: true });
+  await expect(panel).toContainText('cccccccccccc'); await expect(panel).toContainText('Tasks: 1'); await expect(panel).toContainText('local_bash');
+  const button = panel.getByRole('button', { name: 'Recheck and relay', exact: true });
+  await expect(button).toBeDisabled(); expect(actions).toEqual([]);
+  await panel.getByRole('checkbox').check(); await expect(button).toBeEnabled();
+  revision = crypto.randomUUID(); await page.getByRole('button', { name: 'Recheck', exact: true }).click();
+  await expect(panel.getByRole('checkbox')).not.toBeChecked(); await expect(button).toBeDisabled(); expect(actions).toEqual([]);
+  await panel.getByRole('checkbox').check(); await button.click();
+  await expect.poll(() => actions.length).toBe(1);
+  expect(actions[0]).toEqual({ runId: id, action: 'recheck', confirmReady: true, expectedCommandId: id, expectedRevision: revision });
+  await expect(button).toBeDisabled();
+});
 test('the baseline selector lists every candidate, defaults to the earliest, and marks the latest', async ({ page, request }, info) => {
   const group = await post(request, 'groups', { name: 'Baseline choices', members: ['codex','claude'] });
   const starts: ImplementationStart[] = [];
@@ -107,11 +134,10 @@ for (const dirty of [false, true]) test(`another baseline requires preview and c
   });
   await page.route('**/api/v1/implementation', async (route) => { starts.push(route.request().postDataJSON()); await route.fulfill({ json: { status: 'delivered', error: null } }); });
   await openGroup(page, group);
-  // Every card carries its own Send, including one the phone layout currently hides.
-  await expect(pane(page, 'Codex').locator('button', { hasText: /^Send Codex$/ })).toBeAttached();
+  await expect((await openCard(page, 'Codex')).getByRole('button', {name:'Send Codex',exact:true})).toBeVisible();
   // A dirty checkout is snapshotted by Claude and relayed to Codex from Claude's card; a clean range is reviewed in Codex's own card.
   const scope = await openCard(page, dirty ? 'Claude' : 'Codex');
-  await expect(pane(page, 'Claude').locator('button', { hasText: /^Send Claude$/ })).toBeAttached();
+  await expect(page.getByRole('region', {name:'AltCLI control',exact:true}).locator('.pane-actions')).toHaveCount(1);
   if (dirty) await handOff(scope, 'commit_relay'); else await expand(scope, 'Committed review');
   const send = scope.getByRole('button', { name: dirty ? 'Commit current changes & relay Codex' : 'Relay Codex', exact: true }); const baseline = scope.getByLabel('Review baseline', { exact: true });
   const ready = scope.getByLabel('Ready for implementation');
@@ -491,7 +517,7 @@ for (const phase of ['Plan', 'Implementation'] as const) test(`${phase} applies 
   await sections.getByRole('button', { name: 'Console', exact: true }).click();
   await expect(page.getByLabel('Ready to send', { exact: true })).toBeEnabled(); expect(starts).toBe(1);
   // The legacy composer is a command section below the terminal stage, like Plan setup.
-  await expect(page.locator('.terminal-stage + .command-divider + .composer.command-zone')).toHaveCount(1);
+  await expect(page.locator('.control-pane .command-divider + .composer.command-zone')).toHaveCount(1);
 });
 test('failed Git recheck blocks cached clean consent until a successful read and fresh confirmation', async ({ page, request }) => {
   const group = await post(request, 'groups', { name: 'Read failure', members: ['codex', 'claude'] }); let failure = false;
@@ -574,7 +600,7 @@ test('an active plain Send may dirty the checkout without displaying a clean-che
   // Owned work has a contextual draft; starting a second assignment or changing follow-up is unavailable.
   const update = page.getByRole('region', { name: 'Input for Codex', exact: true });
   // Active-run input is a command section directly under its own capture.
-  await expect(pane(page, 'Codex').locator('.pane-footer + .pane-actions')).toHaveAttribute('aria-label', 'Input for Codex');
+  await expect(page.getByRole('region', {name:'AltCLI control',exact:true}).locator('.pane-actions')).toHaveAttribute('aria-label', 'Input for Codex');
   await expect(update.locator('.zone-label')).toHaveText('⌨️ Input to Codex · run in progress');
   await update.getByLabel('Add detail for Codex').fill('Keep this draft while native acknowledgment is pending.');
   await expect(update.getByRole('button', { name: 'Send update to Codex' })).toBeDisabled();
@@ -586,7 +612,7 @@ test('an active plain Send may dirty the checkout without displaying a clean-che
 
 for (const policy of ['peer', 'worker_reviewer'] as const) test(`Relay adapts to dirty input and snapshots before review with ${policy} roles`, async ({ page, request }) => {
   const group = await post(request, 'groups', { name: 'Adaptive relay', members: ['codex','claude'] });
-  let dirty = false; const starts: ImplementationStart[] = [];
+  let dirty = false; const starts: ImplementationStart[] = []; const previews: {base?: string; commitPending: boolean}[] = [];
   await page.route('**/api/v1/workspaces', async (route) => {
     const response = await route.fetch(); const data = await response.json();
     for (const workspace of data.workspaces) Object.assign(workspace.git, { branch: 'task/current', integration: false, taskBase: 'b'.repeat(40), clean: !dirty,
@@ -595,7 +621,8 @@ for (const policy of ['peer', 'worker_reviewer'] as const) test(`Relay adapts to
   });
   await page.route('**/api/v1/implementation/preview', async (route) => {
     const input = route.request().postDataJSON(); const base = input.base ?? 'b'.repeat(40);
-    expect(input.commitPending).toBe(dirty);
+    // Bind assertions to the visible completed preview; earlier reads can finish across a fixture transition.
+    previews.push(input);
     await route.fulfill({ json: { base, baseSubject: 'Baseline change', head: input.head, since: input.base ? 'explicit' : 'task',
       commits: base === input.head ? [] : [{ sha: input.head, subject: 'Latest changes' }],
       candidates: [{ sha: base, subject: 'Baseline change' }, ...(!input.base ? [{ sha: 'c'.repeat(40), subject: 'Earlier change' }] : []),
@@ -611,6 +638,7 @@ for (const policy of ['peer', 'worker_reviewer'] as const) test(`Relay adapts to
   const reviewer = await openCard(page, peer); await expand(reviewer, 'Committed review');
   await reviewer.getByLabel('Review baseline', { exact: true }).selectOption('c'.repeat(40));
   await expect(reviewer.getByText(new RegExp(`Relay ${peer}: 1 commit after cccccc`))).toBeVisible();
+  expect(previews.at(-1)).toMatchObject({base:'c'.repeat(40),commitPending:false});
   await reviewer.getByLabel('Ready for implementation').check(); await expect(reviewer.getByRole('button', { name: `Relay ${peer}`, exact: true })).toBeEnabled();
   dirty = true; await page.getByRole('button', { name: 'Recheck', exact: true }).click();
   await expect(reviewer.getByLabel('Ready for implementation')).not.toBeChecked();
@@ -622,9 +650,11 @@ for (const policy of ['peer', 'worker_reviewer'] as const) test(`Relay adapts to
   await expect(baseline).toHaveValue('b'.repeat(40));
   await baseline.selectOption('a'.repeat(40));
   await expect(author.getByText(new RegExp(`Relay ${peer}: 0 commits plus current changes after aaaaaa`))).toBeVisible();
+  expect(previews.at(-1)).toMatchObject({base:'a'.repeat(40),commitPending:true});
   await ready.check(); await expect(relay).toBeEnabled();
   await baseline.selectOption('c'.repeat(40));
   await expect(author.getByText(new RegExp(`Relay ${peer}: 1 commit plus current changes after cccccc`))).toBeVisible();
+  expect(previews.at(-1)).toMatchObject({base:'c'.repeat(40),commitPending:true});
   await expect(ready).not.toBeChecked();
   await editSettings(page); await expand(page, 'Collaboration settings');
   await page.getByLabel('Automatic collaboration after the initial review').uncheck();

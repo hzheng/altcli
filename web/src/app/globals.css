@@ -333,3 +333,33 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
 }
 @supports not (height:1svh) { @media(max-width:760px) { .panes, .panes.focus { --output-h:clamp(340px, 52vh, 520px); } } }
 @media(prefers-reduced-motion:reduce) { * { scroll-behavior:auto !important; } }
+
+/* Native terminal owns its rows; hidden cards must not send zero-size resizes. */
+.xterm-mount { height: 26rem; min-width: 0; padding: .5rem; background: #101719; }
+.xterm-mount[hidden] { display: none; }
+.terminal-tools, .terminal-keys { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; padding: .5rem; }
+.native-terminal { min-width: 0; }
+.native-terminal.expanded .xterm-mount { height: 80svh; }
+.native-terminal:focus-within, .control-pane:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.control-pane { margin-block: 1rem; padding: 1rem; border: 1px solid var(--line, #425354); border-radius: .5rem; }
+@media (max-width: 600px) { .xterm-mount { height: 22rem; } .terminal-keys button { min-height: 44px; } }
+/* Optional placements of the one control pane: beside the stage on wide screens, a bottom drawer on phones. */
+.workbench { min-width: 0; }
+.control-heading { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.pane-heading .use-control { font-size: 11px; padding: 4px 10px; }
+.control-placement, .drawer-toggle { display: none; }
+@media (min-width: 1280px) {
+  .control-placement { display: inline-flex; }
+  .workbench.side { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 26rem); gap: 1rem; align-items: start; }
+  .workbench.side > .control-pane { margin-block: 0; position: sticky; top: 1rem; max-height: calc(100svh - 2rem); overflow: auto; }
+}
+@media (max-width: 760px) {
+  .drawer-toggle { display: inline-flex; }
+  .control-pane.drawer { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; margin: 0; max-height: 62svh; overflow: auto;
+    background: var(--panel); border-radius: 14px 14px 0 0; box-shadow: 0 -12px 32px rgba(0,0,0,.5); padding-bottom: calc(1rem + env(safe-area-inset-bottom)); }
+}
+
+.launch-agents { padding: .6rem; overflow-wrap: anywhere; }
+.launch-agents code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.launch-agents table { table-layout: fixed; width: 100%; }
+.launch-agents .row-tools { flex-wrap: wrap; }

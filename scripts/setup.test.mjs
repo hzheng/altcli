@@ -59,12 +59,19 @@ for (const custom of [false, true]) test(`one setup command installs and verifie
   const token = content.match(/^ALTCLI_TOKEN=([a-f0-9]{64})$/m)?.[1]; assert.ok(token, 'A random token is stored in the local environment file.');
   assert.ok(!first.stdout.includes(token) && !first.stderr.includes(token), 'Setup must not print its token.');
   assert.equal(statSync(target).mode & 0o777, 0o600);
+  assert.match(content, /^ALTCLI_ENABLE_TERMINAL=true$/m); assert.match(content, /^ALTCLI_ENABLE_AGENT_LAUNCH=true$/m);
   const edited = `${content}\n# User setting retained\n`; writeFileSync(target, edited);
   const again = f.run(); assert.equal(again.status, 0, again.stderr); assert.match(again.stdout, /nothing was overwritten/);
   assert.ok(readFileSync(target, 'utf8') === edited, 'Rerunning setup must preserve local configuration and token.');
   assert.equal(readFileSync(join(f.claude, 'settings.json'), 'utf8'), settings); assert.equal(readFileSync(join(f.codex, 'config.toml'), 'utf8'), config);
   assert.deepEqual(JSON.parse(readFileSync(join(f.codex, 'hooks.json'), 'utf8')), native);
   for (const directory of [f.claude, f.codex]) assert.equal(readdirSync(directory).filter((name) => name.includes('altcli-backup')).length, 1);
+});
+test('every ALTCLI_ENABLE_* switch the host reads is written into the generated environment template', () => {
+  const flags = [...new Set(readFileSync(join(source, 'web', 'src', 'server', 'config.ts'), 'utf8').match(/env\.ALTCLI_ENABLE_[A-Z_]+/g).map((m) => m.slice(4)))];
+  const template = readFileSync(join(source, 'web', '.env.example'), 'utf8');
+  assert.ok(flags.length >= 4, `expected the host switches, found ${flags.join(', ')}`);
+  for (const flag of flags) assert.match(template, new RegExp(`^${flag}=(true|false)$`, 'm'), `${flag} is missing from web/.env.example`);
 });
 test('setup stops on dependency installation failure before editing CLI or local configuration', (t) => {
   const f = fixture(t); const result = f.run({ SETUP_TEST_NPM_EXIT: '17' });

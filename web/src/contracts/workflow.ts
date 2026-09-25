@@ -1,3 +1,4 @@
+import type { ManualSession } from './terminals.ts';
 import type { AgentId, AgentType, CommandInput, CommandRecord, ConsoleState, EventInput, PaneIdentity, SessionRegistration, TurnEvent } from './api.ts';
 import type { Group, ImplementationRun, ImplementationTurn, JournalRecord, StandaloneStart, WorkspaceGit } from './implementation.ts';
 import type { PlanningRun, PlanTurn } from './planning.ts';
@@ -23,6 +24,21 @@ export interface ActivityReset { agentId: string; registrationId: string; expect
 /** `turnLimit` is the run's maximum number of automatic turns, frozen at start; the server default is 20. */
 export interface StartInput extends CommandInput { pairId?: string; autoContinue?: boolean; turnLimit?: number; pauseOnObjection?: boolean }
 export type RunStatus = 'running' | 'waiting' | 'paused' | 'completed' | 'stopped';
+/** Bounded registry diagnostics; arbitrary task text never enters this contract. */
+export interface BackgroundSummary {
+  tasks: number | null;
+  crons: number | null;
+  taskTypes: ('local_bash' | 'local_agent' | 'remote_agent' | 'in_process_teammate' | 'unknown')[];
+}
+export interface BlockedHandoff {
+  commandId: string;
+  revision: string;
+  backgroundState: 'clear' | 'active' | 'unknown';
+  backgroundSummary?: BackgroundSummary;
+  publishedSha: string | null;
+  publicationError: string | null;
+  gate: string;
+}
 export interface RelayRun {
   id: string;
   repository: string;
@@ -46,6 +62,8 @@ export interface RelayRun {
   interaction?: InteractionHold;
   /** Restoring a checkpoint never automatically starts a successor or a phase. */
   restoredCheckpoint?: boolean;
+  /** Only an unresolved completion gate may be explicitly rechecked; other pauses revoke it. */
+  blockedHandoff?: BlockedHandoff;
 }
 /** A live process under a registered pane, as the host reported it. */
 export interface ProcessRecord { pid: string; command: string }
@@ -67,6 +85,8 @@ export interface Execution {
   baselineWorktree: string | null;
   implementation?: ImplementationTurn;
   planning?: PlanTurn;
+  /** Latest ordered, correlated completion. Retained independently of the bounded event history. */
+  completion?: HookEvent;
 }
 export interface HookEvent extends Omit<EventInput, 'event'> {
   event: 'session_started' | 'turn_started' | 'turn_complete' | 'turn_interrupted' | 'outcome';
@@ -75,6 +95,9 @@ export interface HookEvent extends Omit<EventInput, 'event'> {
   identity?: PaneIdentity;
   /** Missing lifecycle evidence stays unknown; it is not converted into idle. */
   backgroundState?: 'clear' | 'active' | 'unknown';
+  backgroundSummary?: BackgroundSummary;
+  /** Monotonically increasing Stop observation within this exact native turn. */
+  completionSequence?: number;
   /** The hook process posting this event. It runs under the pane while reporting, so process evidence must not count it. */
   reporterPid?: string;
   /** CLI process and timestamp captured at the native start, retained unchanged by its matching completion. */
@@ -86,6 +109,7 @@ export interface HistoryCommand extends CommandRecord { runId: string | null; pa
   /** The worktree root its run executed in, so the console shows one checkout's history. */
   repository: string | null }
 export interface WorkflowState extends ConsoleState {
+  manualSessions?: ManualSession[];
   groups: Group[];
   legacyEnabled: boolean;
   sessions: ManagedSession[];
@@ -98,8 +122,8 @@ export interface WorkflowState extends ConsoleState {
   interactions?: InteractionRecord[];
   checkpoints?: Checkpoint[];
 }
-export interface HookReceipt { accepted: boolean; reason: string; event: TurnEvent | null }
-export interface RunAction { runId: string; action: 'pause' | 'takeover' | 'continue'; confirmReady?: true; expectedCommandId?: string }
+export interface HookReceipt { accepted: boolean; reason: string; event: TurnEvent | null; completion?: 'pending' | 'finished' }
+export interface RunAction { runId: string; action: 'pause' | 'takeover' | 'continue' | 'recheck'; confirmReady?: true; expectedCommandId?: string; expectedRevision?: string }
 
 /** How discovery classified a pane's foreground process. Only codex and claude can be group members. */
 export type DiscoveredKind = AgentType | 'shell';

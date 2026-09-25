@@ -1,5 +1,8 @@
 # ADR-0012: Project-centered discovery, worktrees and explicit groups
 
+> September 24 extension: ADR-0021 adds explicit canonical repository entry and confirmed profile launching. Discovery remains read-only and never grants readiness.
+
+
 Date: September 19, 2026
 
 Status: Accepted design direction; local workspace grouping implemented, host acceptance pending.

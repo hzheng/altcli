@@ -169,6 +169,35 @@ active; unreadable evidence is unknown. This is observational evidence, not proo
 against deliberately detached work, and it never substitutes for Claude's in-process
 task report.
 
+#### Ordered pending completion and explicit handoff recheck
+
+Claude's `stop_hook_active` is a Stop-hook continuation flag, not evidence of
+background tasks. Active registry entries still block completion; missing arrays
+remain unknown. Hooks send only bounded task/cron counts and allowlisted task kinds,
+never descriptions, commands or cron prompts. A Stop keeps its exact native binding
+until a clear, settled completion receives an explicit controller acknowledgment.
+Identical retries retain their sequence, and later changed observations increment
+it. The event ledger deduplicates by source turn plus sequence and ignores older
+observations. Conflicting payloads at one sequence still pause the run. An HTTP
+response cannot overwrite a newer native binding. A recorded Stop still ends a
+legacy (no `prompt_id`) overlap, so the next legacy start keeps its command marker
+while the earlier slot waits for clear background evidence.
+
+For Implementation only, a completion/background pause retains its correlated
+completion independently of recent history. A later clear observation updates the
+gate without resuming. The explicit **Recheck and relay** action requires inspection
+of every checkout writer and the displayed command/observation revision. It verifies
+the frozen instances, settled completion, source-specific background evidence,
+current publication and clean exact checkout. Claude needs an exact clear Stop;
+Codex may reread its differential process evidence. New lifecycle activity during
+validation invalidates the decision. The transaction consumes the publication and
+applies the frozen policy once; the existing dispatcher still owns delivery.
+
+Other pauses revoke this path: explicit human pause, restart, unrelated prompt,
+uncertain transport, changed instance or manual-input reconciliation. No command is
+replayed, and no missing lifecycle binding is reconstructed from artifacts or
+history. Published/observed, accepted-for-relay and task-success remain distinct.
+
 ### Human policy and browser lifetime
 
 A browser may remember the user's default continuation preference. Starting a run

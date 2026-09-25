@@ -8,6 +8,23 @@ implementation uses committed handoffs. The same responsive
 web console is intended for desktop and private iPhone access through Tailscale.
 Native iOS and a third AI supervisor remain deferred.
 
+## Native terminals and explicit launch
+
+`node scripts/setup.mjs` writes `ALTCLI_ENABLE_TERMINAL=true` and
+`ALTCLI_ENABLE_AGENT_LAUNCH=true` into a new `web/.env.local`; a missing line means
+off, so add them to an older file. With the host flags enabled,
+**Open terminal** observes a card; **Take keyboard** grants the one server-wide
+writer and holds AltCLI dispatch/setup/launch. Automatically sized tmux windows
+use captured observation to avoid resizing workers. Release and reconciliation
+are explicit; held workflow checkpoints need their own review.
+
+The single AltCLI control pane remembers drafts per recipient independently of
+which terminal you view. Projects accepts a repository directory even with no
+tmux panes. Settings edits executable/argument profiles; **Launch agents…** previews
+exact checkout, commit and program before creating sessions. This is host-shell
+power for the authenticated owner. See [the protocol](docs/TERMINAL-PROTOCOL.md)
+and [validation](VALIDATION.md); feature activation is not acceptance.
+
 ## Accepted next direction
 
 The local Implementation path supports groups, solo work, peer relay, fixed
@@ -43,7 +60,8 @@ not stop a run. A backend restart pauses owned runs without replaying commands.
 | Automatic continuation | Server-only; correlated completion, clear background-work evidence, valid publication, frozen participants and bounded automatic turns (default 20); work hands off only when project content changed |
 | Unknown evidence | Pause and retain execution ownership; never guess from terminal text or recent history |
 | Human control | Explicit branch/readiness confirmation; normal Next turn at manual waits; pause does not interrupt; takeover requires inspection of all participants |
-| Full terminal / native iOS / supervisor | Not implemented |
+| Native terminal and explicit launch | Implemented; setup enables both host flags (a missing flag means off); installed-host/mobile acceptance remains open |
+| Image attachments / native iOS / supervisor | Deferred |
 
 **Background-work evidence:** Claude uses `UserPromptSubmit` and the current
 Stop payload, including background-task and cron information when available.
@@ -59,7 +77,12 @@ pane just before delivery and, at completion, treats any process newly associate
 with that pane that is still alive as active background work. Long-lived Codex
 helpers that predate the turn are not counted. When neither source can answer (an older hook,
 an unreadable process table, a pane whose identity changed), the completion stays
-`unknown` and pauses the run. Use manual takeover after inspecting the workers.
+`unknown` and pauses the run. An Implementation handoff paused on completion or
+background evidence shows its observed publication and task counts. A later exact
+clear completion keeps it paused until **Recheck and relay** revalidates the current
+workers, result and checkout. Inspect every writer before confirming. Explicit
+pause, restart, manual input and changed workers still require reconciliation or
+takeover; a result file alone cannot unblock a run.
 
 ## Start
 
@@ -151,8 +174,8 @@ does not switch any existing checkout. Dirty source changes remain untouched and
 are not copied. Separate clones stay separate even with matching remotes; branch
 names are not project or worktree identities. Git's worktree inventory includes
 empty checkouts, and explicitly used/created projects are remembered after restart.
-New worktrees have no agents: prepare dependencies/environment and launch coding
-CLIs in the new directory yourself, then Recheck. No automatic cleanup or merge
+New worktrees have no agents: prepare dependencies/environment, then launch coding
+CLIs yourself or use the explicitly enabled **Launch agents…** preview and confirmation. No automatic cleanup or merge
 follows completion; each linked task worktree instead offers three confirmed
 end-of-task actions in Projects. Squash can run in successive batches: choose
 **Squash through commit**, preview the range, edit its message, and confirm. Leave

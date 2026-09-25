@@ -10,6 +10,20 @@ disposable task worktree never owns the host's configuration.
 
 ## Install and start
 
+The interactive-terminal dependencies are pinned in `web/package.json`.
+Native browser input and session launching use the optional host flags described
+[below](#optional-native-terminals-and-launch). Use Node 24
+for both installation and execution; `better-sqlite3` is built for that Node ABI.
+If a directory-specific shell configuration changes Node after `cd web`, run
+`npm --prefix web …` from the repository root instead. After changing Node
+versions, run `npm --prefix web rebuild better-sqlite3 node-pty`.
+
+On supported Unix hosts the project postinstall step makes node-pty's packaged
+`spawn-helper` executable. This fixes the macOS arm64 prebuild in node-pty 1.1.0;
+it touches only that installed package's helper. Platforms without a compatible
+prebuild require node-pty's native build toolchain. The recorded M0 checks cover
+macOS arm64/Node 24; Linux native acceptance is still required.
+
 From the repository root:
 
 ```bash
@@ -251,6 +265,10 @@ documents as part of finishing a task.
 ## Pause and recovery
 
 Unknown completion, background work or changed agent identity pauses the run.
+An Implementation run paused only at its completion/background gate offers
+**Recheck and relay** after inspection. It requires current correlated clear
+evidence and revalidates the publication and checkout; refreshing the page never
+resumes it. See [the handoff recovery rules](WORKFLOWS.md#a-published-handoff-waiting-for-completion).
 Inspect the agents and use **Pause the controller**, then **Take over from the controller…**, before manual intervention.
 Pause prevents further scheduling but does not interrupt workers or retract input;
 explicit takeover releases ownership after inspection. Never send a replacement
@@ -279,3 +297,46 @@ establish installed-agent compatibility.
 Use [TAILSCALE.md](TAILSCALE.md) for private remote access. Never expose a development
 server publicly. See [WORKFLOWS.md](WORKFLOWS.md) for behavior and
 [ROADMAP.md](../ROADMAP.md) for remaining capabilities and acceptance work.
+
+## Optional native terminals and launch
+
+`node scripts/setup.mjs` writes `ALTCLI_ENABLE_TERMINAL=true` and
+`ALTCLI_ENABLE_AGENT_LAUNCH=true` into a new `web/.env.local`. A missing line means
+false, so an older file needs both lines added before those features appear.
+Change either only at a settled boundary;
+`ALTCLI_ENABLE_INPUT=false` still prevents keyboard grants, launch, project and
+profile writes. Use `npm run dev` / `npm run start` in `web/` (the custom loopback
+host), not bare Next commands. Install dependencies through the normal project
+setup on the intended Node runtime; node-pty is loaded only for real attachments.
+
+Prepare CLI credential stores, dependencies and hooks yourself. Launch omits API
+keys, OAuth tokens and proxy environment variables to keep them out of tmux's
+retained argv. Profiles requiring those environment variables are unsupported.
+Agents you already run in tmux inside a checkout need none of this; they are
+discovered as described in [Select a project, worktree and group](#select-a-project-worktree-and-group).
+To launch agents from AltCLI:
+
+1. In **Projects**, enter the repository's absolute path under **Repository directory**
+   and choose **Add project**.
+2. In **Settings → Launch profiles**, choose **Use claude preset** or **Use codex
+   preset** (or **New profile**). The preset fills the label, the executable
+   name and the adapter hint. Add literal arguments with **Add argument**, keep
+   **Enabled** checked, and choose **Save profile**. The executable is a name found
+   on PATH or an absolute path; there is no shell parsing, and saving runs nothing.
+3. In **Projects**, choose **Launch agents…** on the checkout's card (empty/new
+   worktrees included; **Create task worktree** can open it for the new one).
+   **Add launch row**, pick the profile and a count, and add a second row for
+   another CLI.
+4. **Preview launch** lists each session name (`<profile>-<branch>-<id>`), the
+   literal executable and arguments and the commit. Resolve any listed blocker,
+   then confirm with **Launch N sessions** before the two-minute preview expires.
+5. Each launch shows its status. Use **Open terminal** to watch startup; answering
+   a first-run prompt, such as folder trust, needs **Take keyboard…**. Startup is not
+   readiness. **Inspect** rereads a launch's state; an unresolved one also offers
+   **Reconcile after host inspection…**. Nothing is retried.
+6. Open the checkout's card. The launched agents appear there with checkboxes, and
+   the ticked ones form the group (use **Recheck** if one is missing).
+
+Before enabling on a deployed host, follow [TERMINAL-PROTOCOL](TERMINAL-PROTOCOL.md)
+and the private-fixture tests, then supervised installed-CLI acceptance. Never
+restart the active controller during delivery to adopt server changes.

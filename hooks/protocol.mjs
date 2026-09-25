@@ -12,8 +12,18 @@ export function outcomeOf(text) {
 export function backgroundState(payload) {
   const tasks = payload.background_tasks ?? payload['background-tasks'];
   const crons = payload.session_crons ?? payload['session-crons'];
-  if ((Array.isArray(tasks) && tasks.length) || (Array.isArray(crons) && crons.length) || payload.stop_hook_active === true) return 'active';
+  // stop_hook_active describes Stop-hook continuation, not the task registry.
+  if ((Array.isArray(tasks) && tasks.length) || (Array.isArray(crons) && crons.length)) return 'active';
   return Array.isArray(tasks) && Array.isArray(crons) ? 'clear' : 'unknown';
+}
+/** Only counts and known task kinds leave the hook; never descriptions, commands or cron prompts. */
+export function backgroundSummary(payload) {
+  const tasks = payload.background_tasks ?? payload['background-tasks'];
+  const crons = payload.session_crons ?? payload['session-crons'];
+  const kinds = new Set(['local_bash', 'local_agent', 'remote_agent', 'in_process_teammate']);
+  return { tasks: Array.isArray(tasks) ? Math.min(tasks.length, 100000) : null,
+    crons: Array.isArray(crons) ? Math.min(crons.length, 100000) : null,
+    taskTypes: Array.isArray(tasks) ? [...new Set(tasks.map(t => kinds.has(t?.type) ? t.type : 'unknown'))].sort() : [] };
 }
 export const contextKey = (identity, sessionId) => createHash('sha256').update(JSON.stringify([identity, sessionId])).digest('hex');
 /** Claude Code >= 2.1.196 sends the same prompt_id to UserPromptSubmit and the Stop that closes that prompt. */
@@ -23,8 +33,9 @@ export const pairingOf = (payload) => promptId(payload) ? 'native' : Object.hasO
 export function claudeStart(payload, target, previous) {
   const pairing = pairingOf(payload);
   // Without a native prompt id, two starts without an intervening Stop cannot be safely paired with one completion.
-  // Fail closed rather than let a queued prompt borrow the preceding turn's final response.
-  const commandId = pairing === 'native' || (pairing === 'legacy' && previous?.phase !== 'active') ? marker(payload.prompt) : undefined;
+  // Fail closed rather than let a queued prompt borrow the preceding turn's final response. A recorded completionSequence
+  // is that intervening Stop, even when the slot stays active awaiting clear background evidence.
+  const commandId = pairing === 'native' || (pairing === 'legacy' && (previous?.phase !== 'active' || previous.completionSequence !== undefined)) ? marker(payload.prompt) : undefined;
   return { source: 'claude', paneId: target.paneId, socketPath: target.socketPath, identity: target, sessionId: payload.session_id,
     sourceTurnId: promptId(payload) ?? randomUUID(), prompt: plain(payload.prompt), ...(commandId ? { commandId } : {}) };
 }
@@ -60,7 +71,7 @@ export function claudeCompletion(payload, context) {
   // Never read transcript_path. It may still end with a previous turn's response.
   const text = typeof payload.last_assistant_message === 'string' ? payload.last_assistant_message : null;
   return { ...context, source: 'claude', event: 'turn_complete', settled: text !== null,
-    backgroundState: backgroundState(payload), ...outcomeOf(text) };
+    backgroundState: backgroundState(payload), backgroundSummary: backgroundSummary(payload), ...outcomeOf(text) };
 }
 /** Bind only the native prompt event, never the legacy notifier's prompt history. */
 export function codexStartState(payload, identity, saved) {

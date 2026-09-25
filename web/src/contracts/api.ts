@@ -165,6 +165,8 @@ export interface ConsoleState {
 export interface ApiError { error: { code: string; message: string } }
 /** The host's effective global configuration as read at startup. Read-only; the access token is never included. */
 export interface HostConfig {
+  terminalEnabled?: boolean;
+  launchEnabled?: boolean;
   mode: AdapterMode;
   inputEnabled: boolean;
   /** Whether the deprecated staging relay may be shown as a console preference. */

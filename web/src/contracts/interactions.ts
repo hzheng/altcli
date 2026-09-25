@@ -12,6 +12,7 @@ export interface InteractionRecord {
 /** A hold belongs to the entire run/index, never only to the next recipient pane. */
 export interface InteractionHold {
   revision: number; active: boolean; fault: boolean;
+  origin?: 'keyboard';
   disposition?: 'complete' | 'automatic' | 'waiting' | 'plan';
 }
 export interface CheckpointInput {

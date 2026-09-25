@@ -4,6 +4,67 @@
 **Last local validation:** September 21, 2026
 **Scope:** Source scaffold, not a completed release or security certification
 
+## Interactive-terminal M0 probes, September 24, 2026
+
+**Historical preparation result, superseded by the implementation record below.**
+The approved terminal/launch plan is not implemented. The probe code lives under
+`web/scripts/`, is not imported by the app, and does not change the running backend.
+No deployed settings, installed CLI instructions or user tmux sessions were changed.
+
+Host: macOS 26.6.2 arm64, Node 24.12.0, tmux 3.5a, Next 16.3.4. Pinned packages:
+`@xterm/xterm` 6.0.0, `@xterm/addon-fit` 0.11.0, `node-pty` 1.1.0, `ws` 8.21.3
+and `@types/ws` 8.18.1. Dependency installation was explicitly authorized.
+
+Executed evidence:
+
+- `npm --prefix web ci` exited 0 using Node 24. The project postinstall fixes the
+  non-executable macOS node-pty spawn helper. A real PTY printed `native-ready`,
+  and an in-memory SQLite database opened and closed under Node 24.
+- `node web/scripts/terminal-http-probe.mjs` exited 0. In a disposable Next app,
+  Chromium opened six HTTP/1.1 output streams. A warmed control POST remained
+  blocked for the full 500 ms observation window in both `next dev --webpack`
+  and `next start`; it completed only after streams were aborted (553 ms and
+  658 ms total, respectively). The candidate per-card HTTP transport fails its
+  control-capacity gate. The approved WebSocket alternative is selected for the
+  next implementation experiment; its runtime owner, authentication, latency,
+  output credit and shutdown gates have not run.
+- `npm --prefix web run probe:terminal` exits 1: **two cases pass, one fails**.
+  The passing private-tmux cases cover observer input/sizing isolation alongside
+  an ordinary client, redraw without observer replies, Unicode/escape/bracketed
+  paste bytes, writer sizing, client identity, exclusion from pane background
+  processes, detach survival and refusal of `destroy-unattached on`. A separate
+  launch fixture verifies empty/literal arguments including trailing semicolons,
+  stable session/pane IDs and instant-exit output retention after lifetime options
+  and the launch marker are set. tmux-specific semicolon escaping is required.
+- The failing gate starts an unattended 120×40 window and attaches only a
+  `read-only,ignore-size` client. Resizing that observer to 30×8 changes the worker
+  window to 30×7 (one status row). This contradicts the approved promise that
+  observing never resizes a worker. tmux 3.5a's
+  [size-selection code](https://github.com/tmux/tmux/blob/3.5a/resize.c#L62-L89)
+  ignores those flagged clients only while an ordinary client supplies a size.
+  The assertion remains failing; it is not part of the existing application gate.
+
+**Resolved by the subsequent controller assignment:** the owner approved captured-text fallback. The earlier question was: preserve the no-resize guarantee by using
+captured-text fallback wherever a native observer cannot meet it (recommended),
+or explicitly permit native observers to resize unattended sessions and document
+that behavior. Do not silently change discovered/global tmux settings or infer
+that polling can eliminate the client-detach race.
+
+An initial repository check passed 30 hook/setup, 43 smoke and 292 workflow cases
+then found a probe-only TypeScript error caused by Next's ambient `ProcessEnv`
+requiring `NODE_ENV`. The child intentionally strips that variable; the probe's
+type annotation was corrected. The final `./scripts/check.sh` exited 0: 30
+hook/setup, 43 smoke, 292 workflow and 66 unit cases passed, along with type
+checking and the production build. The opt-in native gate still exits 1 as
+reported above. Application browser e2e was not run: no UI or runtime behavior
+changed in this M0 preparation. The HTTP probe did exercise real Chromium.
+
+`npm audit` reported four findings in the existing PostCSS/Tailwind and Vitest
+dependency chains (three moderate, one high); no unrelated dependency upgrade was
+performed. Native Linux CI, an actual WebSocket host/broker, renderer credit,
+proxy/remote latency, restart/fault injection, effective child-environment
+acceptance, installed CLIs and physical iPhone acceptance remain unexecuted.
+
 ## Terminal stage: watch and command zones, September 23, 2026
 
 The Console now has three visually distinct zones:
@@ -1520,3 +1581,386 @@ Final automated results for this proposal:
 - New inline OpenAPI JSON schemas parsed and all schema references resolved. `git diff --check` passed. Task files and the handoff report were screened for credentials; only dummy test fixtures were retained.
 
 No live-provider or physical-mobile acceptance is inferred from these results.
+
+## Native terminal and launch implementation proposal — September 24, 2026
+
+The owner approved captured-text fallback where native observation could resize
+workers. The automatically sized unattended fixture now asserts refusal before
+attach and unchanged dimensions. Native helpers are now used by the application.
+Both feature flags remain false by default. No deployed host, installed CLI
+configuration or user tmux session was changed; the live controller was not
+restarted during this active delivery.
+
+Validation used macOS 26.6.2 arm64, Node 24.12.0, npm 11.6.2 and tmux 3.5a.
+Installer fixtures used temporary homes; native fixtures used private sockets,
+throwaway Git repositories and harmless programs. Browser hosts used ports
+9787/9788 and isolated mock stores. No coding CLI was launched by these tests.
+
+Observed checks:
+
+- `./scripts/check.sh` passed: 30 hook/setup, 43 smoke, 307 workflow and 66
+  unit tests, TypeScript and production build. The subsequently added stale
+  attachment/watcher regression also passed in the focused 14-case broker suite.
+- `npm --prefix web run test:native` passed all eight cases. They cover captured
+  fallback without worker resize, native observer isolation, Unicode/control and
+  bracketed-paste bytes, exact attachment identity and worker survival, literal
+  argv including tmux semicolons, fresh/contaminated child environments, session
+  lifetime and mouse setup, instant exit and a surviving detached child. Injected
+  failures at eight startup boundaries retained reservations and never repeated
+  execution, including after restart and a lost creation/respawn response.
+- The 14 broker/project/profile cases cover admission exclusion, two-client
+  transfer, generation/sequence checks, duplicates, flags, restart, durable holds,
+  renderer credit and output pressure. A stalled renderer closes only its owned
+  attachment. Old PTY exits, late attachments and stale watcher failures cannot
+  close or replace a new generation. Two implementation fixtures additionally
+  preserve active completions and original waiting checkpoints without dispatch.
+- The real custom host passed the WebSocket probe in development and production:
+  six concurrent streams shared Next's broker, control requests returned typed
+  errors, reused tickets were rejected, and SIGTERM shutdown exited zero. Latest
+  measured control latency was 349 ms in development (including route compilation)
+  and 3 ms in production. These are local measurements, not remote latency claims.
+- OpenAPI parsed with 118 schemas and 407 resolved references. `git diff --check`
+  passed. Changed files were screened for credentials; only dummy test values and
+  configuration key names remain.
+
+`ALTCLI_E2E_PORT=9787 ./scripts/check.sh --e2e` passed, including the backend
+and build gates plus 185 Chromium browser cases across desktop and iPhone
+emulation; five viewport-specific cases were intentionally skipped. Its workflow
+suite includes all 308 cases. The final production build also passed after the
+profile editor and definite-refusal handling fixes. Native terminal and launch
+screenshots were inspected at desktop and phone sizes. A final focused
+`npm --prefix web run e2e -- e2e/native.spec.ts` passed all four cases after the
+last UI changes, including exact UTF-8/Ctrl/Alt bytes and profile create, revision
+edit and deletion while existing launches retain their captured profiles.
+
+Earlier failing runs exposed stale per-card/view selectors, hidden duplicate
+status-message matches and an overbroad worktree-setup guard; these were corrected.
+The launch fault fixture now waits for its asynchronous execution marker. Review
+also found retired-attachment callback races and profile-edit metadata leaking
+into the strict request shape; their fixes preserve the runtime validators.
+Failures are not counted as passes.
+
+The terminal/launch flags remain off by default. Linux/macOS native CI jobs were
+added but were not run through CI here. Installed Codex/Claude behavior, physical
+Safari/IME, the actual remote proxy, remote output-load latency, host rollout and
+restart acceptance remain unverified. Conservative reconciliation retains the
+server-wide barrier when pane inventory/identity changes or activity is unknown.
+Do not infer acceptance from a mock fixture, a completed review chain or this
+proposal. Adopt server changes only after the controller delivery has settled.
+
+## 2026-09-24 — manual barrier and launch credential review corrections
+
+This follow-up revises the native terminal proposal above. Strict reconciliation
+requires known activity for agent panes and process evidence for non-agent panes;
+ordinary shell directory changes are allowed. Changed/missing/dead panes and
+unknown activity can instead receive an explicit, noted human inspection decision.
+It releases only the server-wide barrier, retaining affected run holds, checkpoints
+and faults. The recovery notice remains accessible with no agents or feature flags
+off. API keys, OAuth tokens and proxy environment variables are omitted from launch
+argv; use CLI credential stores. Profiles requiring credential or proxy
+environment variables are unsupported.
+
+Observed on the same macOS arm64 / Node 24.12.0 / tmux 3.5a host, using private
+tmux sockets, temporary repositories and mock HTTP hosts on 9787/9788:
+
+- `./scripts/check.sh` passed: 30 hook/setup, 43 smoke, 310 workflow and 66 unit
+  tests, TypeScript and production build.
+- `npm --prefix web run test:native` passed all 13 cases. The five new real-tmux
+  cases cover idle shell and cwd settlement, disappearing panes across restart
+  with flags off, dead remain-on-exit panes, surviving background processes, and
+  shell `exec` replacing the command without changing its PID. Barriers persist
+  until explicit decisions; unknown evidence never supplies settlement.
+- Real fresh-server and contaminated-server launches verify that dummy API/OAuth
+  and proxy credentials occur in neither launch-client argv nor retained
+  `pane_start_command`, and are absent from the launched child's environment.
+- Two broker regressions reject live keyboard and delivery/setup/launch owners,
+  invalid or oversized notes, mixed confirmations and conflicting request IDs.
+  An implementation fixture verifies that a human decision leaves the run and its
+  faulted original checkpoint unchanged and sends no successor.
+- The final command-evidence guard passed TypeScript and the four focused
+  human-reconciliation/native-keyboard cases after the broader backend gate.
+- The focused recovery browser test passed at desktop and iPhone Chromium sizes;
+  the phone screenshot was inspected. Only its empty-agent display is intercepted;
+  acquisition, durable release and reconciliation use the mock server API.
+- `ALTCLI_E2E_PORT=9787 ./scripts/check.sh --e2e` passed its backend/build gates
+  and 187 Chromium browser cases, with five intentional viewport-specific skips.
+- Inline OpenAPI JSON parsed and all 407 references resolved across 118 schemas.
+- The final task diff and handoff text were screened for secrets; only clearly
+  labelled dummy credentials were retained. `git diff --check` passed.
+
+Earlier focused attempts used the wrong test working directory, omitted the token
+after Lock, assumed an empty-agent console opens on Console rather than Projects,
+and captured a fixture shell before its launcher finished `exec`. Those fixture
+issues were corrected and their checks rerun; failed attempts are not passes.
+
+No installed provider, physical Safari/IME, remote proxy or Linux CI acceptance
+was performed. Feature flags remain off by default. The active backend was not
+restarted during its controller-owned assignment; adopt changes at a settled
+boundary before installed-host acceptance.
+
+## 2026-09-24 — exited panes at keyboard grant (review improvement)
+
+Review found that the manual-input snapshot read every pane's process tree. An
+exited remain-on-exit pane, which launches deliberately leave visible, has no
+live process, so the snapshot failed with "The pane process is no longer
+present". While any such pane existed on the server, every keyboard grant failed.
+Exited panes now record `dead: true` with no processes. A pane that was already
+exited at the grant no longer blocks the grant or strict settlement. A pane that
+exits during manual input still fails strict settlement and needs the recorded
+human decision.
+
+Observed on macOS arm64 / Node 24.12.0 / tmux 3.5a with private sockets:
+
+- A scratch reproduction outside the checkout created one exited remain-on-exit
+  pane. The snapshot failed with `PS_FAILED` before the change and succeeded after it.
+- `node --experimental-strip-types --test scripts/native-reconcile.test.ts`
+  passed six cases. The fixture helper now records panes through the production
+  grant snapshot, and a new case covers a pane already exited at the grant.
+- `npm --prefix web run test:native` passed all 14 cases.
+- `./scripts/check.sh` passed: 30 hook/setup, 43 smoke, 310 workflow and 66 unit
+  tests, TypeScript and production build.
+- The edited `ManualSession` inline OpenAPI JSON parsed. No YAML parser is
+  installed, so full-document OpenAPI validation was not repeated. `git diff --check` passed.
+
+Browser e2e, installed CLIs, the remote proxy and physical devices were not
+exercised by this change.
+
+## 2026-09-24 — remaining terminal/launch implementation, images deferred
+
+The owner deferred image attachments and requested the remaining terminal/launch
+work and a ROADMAP update. ROADMAP now maps M0–M6 to implemented source and
+remaining acceptance, with M4A/M4B explicitly deferred. README and setup no longer
+describe the browser terminal as unimplemented.
+
+The browser now keeps input pumps within their stream generation: an old HTTP
+response cannot stall or revoke a recovered keyboard. Leaving the terminal,
+changing views or collapsing it discards unsent queued bytes. Added an explicit
+text-paste action with target/input/focus checks after clipboard access, warnings
+for unbracketed multiline or large paste, in-page expansion, visible control-pane
+focus navigation and optional screen-reader mode. Snapshot timestamps accompany
+only snapshots. Resize requests are debounced and serialized in the browser;
+the server independently bounds their frequency/concurrency and keeps its
+dimension clamps. OpenAPI describes the 429 response and input bounds.
+
+Observed with Node 24.12.0 and tmux 3.5a on the local macOS host:
+
+- `./scripts/check.sh` passed: 30 hook/setup, 43 smoke, 311 workflow and 66 unit
+  tests, TypeScript and production build.
+- `npm --prefix web run test:native` passed all 14 private-tmux fixture cases.
+- `npm --prefix web run e2e -- e2e/native.spec.ts e2e/planning.spec.ts` passed all
+  30 desktop/phone-sized Chromium cases. These use simulated agents, the mock
+  API and the real xterm renderer. Desktop/phone screenshots were inspected.
+- The final `./scripts/check.sh --e2e` passed its hook/setup, backend, type,
+  unit and production-build gates, then 197 Chromium browser cases with five
+  intentional viewport-specific skips (202 total). Test hosts exited afterward.
+- `npm --prefix web run probe:terminal:ws` and
+  `node web/scripts/terminal-websocket-probe.mjs --production` passed against
+  isolated development/production hosts with six simulated terminal streams,
+  shared broker ownership, typed errors and ticket-replay refusal. Observed
+  local control latency was 374 ms and 3 ms respectively; this is not a remote
+  latency measurement or installed-provider demonstration.
+- All 329 inline OpenAPI JSON objects parsed; 408 schema references resolved
+  against 118 schemas. The resize response and request bounds were checked.
+  This was not full-document YAML/OpenAPI validation.
+
+New regression tests first reproduced the delayed-response stall and absent
+multiline-paste warning. Testing caught xterm 6's disabled emoji/insertText
+fallback when screen-reader mode was forced on; the option now defaults off,
+with ordinary key input and toggling back to Unicode input tested. Clipboard
+testing caught focus loss from disabling its pending button; it now exposes
+busy state while preserving focus and rejecting duplicate actions. A stale
+generated phone-test CSS cache was verified in the trace and rebuilt. A full
+suite attempt exposed a mock keyboard hold leaking into later Plan tests;
+native tests now revoke/reconcile through the API after their assertions.
+Interrupted and failed attempts are not counted as completed gates.
+
+`codex --version` reported 0.156.1 and `claude --version` reported 2.1.282;
+only versions were inspected. No installed-provider workflow, physical Safari/
+IME/screen-reader, actual remote proxy, Linux CI or deployed upgrade/rollback
+acceptance is claimed. Feature flags remain off by default. The active
+development controller was not restarted during delivery; all test hosts were
+isolated. The remaining release demonstrations are listed in docs/TESTING.md.
+
+## 2026-09-24 — review improvements: paste integrity and enhanced-plan UI states
+
+Review of `84da512..dc541fc` against enhanced-plan.md (image paste excluded)
+found one regression and a few unimplemented UI states.
+
+- **Paste integrity.** Leaving a terminal, changing views or collapsing it
+  dropped every queued frame. That included the unsent remainder of one input
+  event already partly sent, so a paste above 4 KiB could reach the CLI without
+  its closing bracketed-paste marker. Now only events not yet started are
+  dropped; a partly sent event finishes.
+- **Badges (plan §4.3).** Card badges now also show **Controlled in another
+  browser**, **Keyboard in another terminal**, **Manual CLI/shell** (the
+  registered CLI instance was replaced) and **Observing · manual input
+  unresolved**.
+- **Keyboard ready (§4.4).** A grant that completes after focus moved elsewhere
+  reports **Keyboard ready for <name>** instead of taking focus. The
+  WebSocket keyboard frame makes this decision, so it no longer depends on
+  response ordering.
+- **Window size (§8.4).** The `active` frame carries the effective tmux window
+  size, shown in the status line.
+- **Settings (§18.2).** Settings lists the server-wide keyboard scope and the
+  terminal limits.
+- **Heading (§4.1).** With native terminals enabled, the stage is titled
+  **Native terminals**.
+
+Observed on macOS arm64 / Node 24.12.0 / tmux 3.5a:
+
+- The new paste-integrity e2e case failed against the candidate component, with
+  4,096 of 10,000 bytes sent, and passed after the change.
+- `npm --prefix web run e2e -- e2e/native.spec.ts` passed 22 cases (11 tests,
+  desktop and iPhone Chromium). The new cases cover paste integrity, the four
+  badge states, the Settings rows and readiness without focus theft. A second
+  page stands in for another browser. Only the replaced-CLI state is simulated,
+  through an intercepted state response.
+- `npm --prefix web run test:native` passed 14 private-tmux cases, including a
+  new assertion that `active()` reports the real 70x19 window after a writer
+  resize.
+- The final `./scripts/check.sh --e2e` passed: 30 hook/setup, 43 smoke, 311
+  workflow and 66 unit tests, TypeScript, the production build, and 203
+  Chromium browser cases with five intentional viewport-specific skips.
+
+Installed CLIs, a physical iPhone, the remote proxy and Linux CI were not
+exercised. Feature flags remain off by default. The live controller (running
+from the main checkout) was not restarted.
+
+## 2026-09-24 — optional control-pane placements (owner request)
+
+The owner asked for the enhanced plan's three optional UI items. Each is an
+alternate placement or shortcut for the one AltCLI control pane, never a second
+composer:
+
+- **Use <agent> in control pane** on each terminal card (plan §4.6). It changes
+  only the control target, revokes readiness, focuses the pane and sends nothing.
+- **Control beside** on windows at least 1280 px wide (§4.2). The pane sits in a
+  sticky column beside the terminal stage; the choice is remembered in this
+  browser, and narrower windows stack it below.
+- **Open control drawer** at phone widths (§4.7). The same pane opens as a
+  bottom drawer; Escape or **Close drawer** returns focus to the toggle.
+
+Observed on macOS arm64 / Node 24.12.0 with the mock adapter:
+
+- `npx playwright test e2e/layout.spec.ts` passed on desktop and iPhone Chromium.
+  The three new cases (retarget without a new command, side placement remembered
+  and stacked below 1280 px, drawer focus return) also passed three repeated
+  runs on both projects.
+- A first full-spec attempt failed once on an unpolled horizontal-overflow read
+  taken immediately after switching placement. It did not reproduce in isolation
+  or in a later full desktop run. The check now polls for layout to settle; the
+  failed attempt is not counted.
+- The final `./scripts/check.sh --e2e` passed: 30 hook/setup, 43 smoke, 311
+  workflow and 66 unit tests, TypeScript, the production build, and 207 Chromium
+  browser cases with seven intentional viewport-specific skips.
+
+A physical iPhone, installed CLIs and the remote proxy were not exercised.
+
+## 2026-09-24 — peer objection fixes: frame contract, Plan brief, session navigation
+
+These changes address the peer review of `dc541fc..d3884c0` and the gaps it noted
+against enhanced-plan.md.
+
+- **Frame contract.** The `active` WebSocket frame gained `size` in `b60dde8`, but
+  `shared/openapi.yaml` still rejected it (`additionalProperties: false`). The
+  `TerminalFrame.active` schema now declares an optional `size` string matching
+  `^[0-9]+x[0-9]+$`. Unknown fields stay rejected.
+- **Plan brief.** It was disabled whenever any blocker applied, including a native
+  keyboard hold, contrary to plan §3.3/§4.4. It now stays editable like the
+  instruction draft, and only **Start Plan** is blocked, with the reason shown.
+- **Session navigation.** A keyboard writer's deliberate tmux session switch
+  closed the attachment. Per plan §6.4 and UI12 it is now followed and labelled.
+  The control target is unchanged and the server-wide hold still applies.
+  Observers never follow. Loss of the original target (the pane leaving its
+  session, or the session ending) still closes the attachment without falling
+  back to another session (TT08).
+
+Observed on macOS arm64 / Node 24.12.0 / tmux 3.5a:
+
+- A new broker test validates every emitted frame (reset, out, active) against
+  the inline OpenAPI `TerminalFrame` schema, and confirms unknown fields and a
+  malformed size are rejected. Evaluating the committed pre-fix schema with the
+  same logic rejected an emitted `active` frame carrying `size`.
+- A new private-tmux test switches a writer's client to another session
+  (followed, with the new label), switches an observer (closed) and then ends the
+  original session (the navigated writer closes). It failed against the previous
+  `tmux-attach.ts` and passes now.
+- A new e2e test shows the Plan brief stays editable, and Start Plan is disabled,
+  under a keyboard hold. It failed against the previous `PlanSetup.tsx` and passes
+  on desktop and iPhone Chromium.
+- `npm --prefix web run test:native` passed 15 cases.
+- The final `./scripts/check.sh --e2e` passed: 30 hook/setup, 43 smoke, 312
+  workflow and 66 unit tests, TypeScript, the production build, and 209 Chromium
+  browser cases with seven intentional viewport-specific skips.
+
+Full-document YAML/OpenAPI validation was not run; no YAML parser is installed.
+Installed CLIs, a physical iPhone and the remote proxy were not exercised.
+
+## 2026-09-24 — pending completion recovery and setup feature flags
+
+Claude completion now uses task/cron registry evidence, excluding the
+`stop_hook_active` continuation flag. The hook retains its exact turn binding
+until acknowledged clear completion, preserves event identity on identical retries,
+and orders changed observations. Implementation background/completion pauses show
+the observed publication and bounded diagnostics. **Recheck and relay** requires
+explicit inspection and revalidates current completion, workers, publication and
+checkout before consuming the frozen policy once. Restart and other reconciliation
+holds cannot use this path.
+
+Included the concurrent setup change: a newly generated environment file enables
+native terminals and agent launch. Existing configuration and tokens are preserved;
+omitted flags still mean disabled at runtime.
+
+Observed on macOS arm64 / Node 24.12.0 / tmux 3.5a:
+
+- Final `./scripts/check.sh` passed: 32 hook/setup, 43 smoke, 324 workflow
+  and 68 unit tests, TypeScript and the production build.
+- `./scripts/check.sh --e2e` passed its full gate, including 211 desktop/iPhone
+  Chromium browser cases with seven intentional viewport-specific skips. Its unit
+  stage ran 67 cases; the later restart-observation regression is included in the
+  final 68-case source check above. The new browser fixture verifies publication and
+  background details, no recovery from viewing/refreshing, revision changes revoking
+  consent, and one explicit correlated recheck request on both viewports.
+- Hook subprocess tests use isolated homes and real HTTP with simulated tmux/process
+  discovery. They cover rejected responses, identical retries, active-to-clear task
+  notification completion, and a newer prompt arriving before the older receipt.
+  The smoke HTTP fixture now returns an explicit completion acknowledgment.
+- Recovery tests use disposable Git/SQLite with simulated CLI lifecycle and terminal
+  delivery. They cover duplicate/concurrent clicks, old and conflicting observations,
+  new activity during validation, restart, human pause, manual input, changed workers,
+  dirty checkout, invalid publication and fresh Codex process evidence. The 11 focused
+  recovery cases passed again after adding the store's explicit background gate.
+- Activity tests cover ordered pending Stops and reject an older Claude completion
+  against a newer on-disk observation after restart.
+- `npm --prefix web run test:native` passed 15 private-tmux terminal/launch/recovery
+  cases. These use disposable services, not installed coding agents.
+- System Ruby/Psych parsed the complete OpenAPI YAML and verified all 121 schema
+  references resolve. The event response now names `HookReceipt`; the bounded
+  diagnostics, pending completion and explicit recheck fields are documented.
+  This is syntax/reference verification, not a full OpenAPI validator.
+
+The live backend remains in the main checkout; it was not restarted from this
+feature worktree. Installed CLI acceptance, physical iPhone and remote proxy checks
+remain open. Old paused runs without retained completion evidence still require
+their existing reconciliation; no live run or hook slot was manually rewritten.
+
+## 2026-09-24 — external activity during input preflight
+
+An unrelated native start now faults an active input hold even when the original
+turn has already completed and paused the run before a checkpoint was captured.
+Rejecting the pending input cannot apply its saved completion or automatic handoff.
+Other paused runs retain their existing recovery guidance.
+
+- Two new tests failed against `1527583`: the run released ownership without a
+  handoff, or dispatched a peer with a handoff. Both pass with the fix, retaining
+  ownership and sending nothing further. These use disposable Git/SQLite and
+  simulated terminal delivery and lifecycle events.
+- Seven focused cases passed, including normal preflight rejection, original
+  completion during preflight, blocked-handoff invalidation, and explicit restore
+  of a settled waiting checkpoint with its recovery guidance preserved.
+- `./scripts/check.sh` passed: 32 hook/setup, 43 smoke, 326 workflow and 68 unit
+  cases, TypeScript and the production build.
+
+Browser e2e and installed-CLI acceptance were not rerun for this server-only fix.
+The live backend runs from the main checkout; it was not restarted from this
+feature worktree.

@@ -14,6 +14,7 @@ interface Observation {
   state: AgentActivity['state']; updatedAt: string; detail: string;
   finished: boolean;
   humanConfirmed?: true;
+  completionSequence?: number;
 }
 /** A fresh completion can recover its exact native start after a backend restart. Never scan history. */
 export async function hasCurrentNativeBinding(input: HookEvent, directory = join(homedir(), '.local', 'share', 'altcli', 'hook-turns')): Promise<boolean> {
@@ -25,7 +26,9 @@ export async function hasCurrentNativeBinding(input: HookEvent, directory = join
     const stat = await lstat(path);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 65536) return false;
     const saved = JSON.parse(await readFile(path, 'utf8')); const c = saved.context;
-    return (input.source === 'codex' ? saved.phase === (input.event === 'turn_interrupted' ? 'interrupted' : 'active') : saved.phase === 'finished') &&
+    const phase = input.source === 'codex' ? saved.phase === (input.event === 'turn_interrupted' ? 'interrupted' : 'active')
+      : (saved.phase === 'finished' || (saved.phase === 'active' && input.completionSequence !== undefined)) && saved.completionSequence === input.completionSequence;
+    return phase &&
       c?.source === input.source && c.sessionId === input.sessionId && c.sourceTurnId === input.sourceTurnId &&
       c.cliPid === input.cliPid && c.startedAt === input.startedAt && isDeepStrictEqual(c.identity, input.identity);
   } catch { return false; }
@@ -100,6 +103,7 @@ export class AgentActivityTracker {
         state: 'unknown', updatedAt: '', detail: '', finished: false };
     }
     if (!completion || completion.finished) return;
+    if (input.completionSequence !== undefined && input.completionSequence <= (completion.completionSequence ?? 0)) return;
     if (this.observations.get(key) !== prior) return;
     completion.finished = true; completion.updatedAt = new Date().toISOString();
     if (input.event === 'turn_interrupted') {
@@ -112,6 +116,8 @@ export class AgentActivityTracker {
     // Claude Stop can continue the agent, so retain its source-specific background evidence guard.
     completion.state = input.source === 'claude' && input.backgroundState === 'active' ? 'working'
       : input.settled === true && (input.source === 'codex' || input.backgroundState === 'clear') ? 'idle' : 'unknown';
+    completion.finished = completion.state === 'idle';
+    completion.completionSequence = input.completionSequence;
     completion.detail = completion.state === 'idle'
       ? 'The matching CLI turn finished. Background work and handoff readiness are checked separately.'
       : completion.state === 'working' ? 'Claude reported a Stop with continued or background work active.'

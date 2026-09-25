@@ -305,7 +305,10 @@ test("Claude hooks bind the actual prompt and current Stop response without read
   const { writeFile } = await import("node:fs/promises");
   const directory = await mkdtemp(join(tmpdir(), "altcli-hook-"));
   const posts: Record<string, unknown>[] = [];
-  const server = createServer((req, res) => { let body = ""; req.on("data", (c) => { body += c; }); req.on("end", () => { posts.push(JSON.parse(body)); res.end("{}"); }); });
+  const server = createServer((req, res) => { let body = ""; req.on("data", (c) => { body += c; }); req.on("end", () => {
+    const event = JSON.parse(body); posts.push(event);
+    res.end(JSON.stringify({ accepted: true, completion: event.backgroundState === 'clear' ? 'finished' : 'pending' }));
+  }); });
   try {
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const port = (server.address() as { port: number }).port;

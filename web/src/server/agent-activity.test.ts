@@ -136,6 +136,29 @@ test('a matching settled completion does not depend on process inspection being 
   await tracker.record(event({ event: 'turn_complete', settled: true, backgroundState: 'unknown' }), session);
   expect(tracker.read(session).state).toBe('idle');
 });
+test('ordered Claude Stops keep activity pending until the exact clear observation', async () => {
+  session = { ...mockSessions()[1]!, registrationId: 'generation', worktree: null, cliPid: '100' }; adapter.foregrounds.set(session.id, '100');
+  await tracker.record(event({ source: 'claude' }), session);
+  const complete = event({ source: 'claude', event: 'turn_complete', settled: true, completionSequence: 2, backgroundState: 'active' });
+  await tracker.record(complete, session); expect(tracker.read(session).state).toBe('working');
+  await tracker.record({ ...complete, completionSequence: 1, backgroundState: 'clear' }, session);
+  expect(tracker.read(session).state).toBe('working');
+  await tracker.record({ ...complete, completionSequence: 3, backgroundState: 'clear' }, session);
+  expect(tracker.read(session).state).toBe('idle');
+});
+test('Claude restart display recovery rejects a Stop older than the saved pending observation', async () => {
+  session = { ...mockSessions()[1]!, registrationId: 'generation', worktree: null, cliPid: '100' }; adapter.foregrounds.set(session.id, '100');
+  const directory = mkdtempSync(join(tmpdir(), 'altcli-claude-pending-'));
+  const input = event({ source: 'claude', event: 'turn_complete', settled: true, backgroundState: 'clear', completionSequence: 2 });
+  const path = join(directory, `${contextKey(session.identity, input.sessionId)}.json`);
+  try {
+    tracker = new AgentActivityTracker(adapter, e => hasCurrentNativeBinding(e, directory));
+    writeFileSync(path, JSON.stringify({ phase: 'active', context: input, completionSequence: 3 }));
+    await tracker.record(input, session); expect(tracker.read(session).state).toBe('unknown');
+    writeFileSync(path, JSON.stringify({ phase: 'active', context: input, completionSequence: 2 }));
+    await tracker.record(input, session); expect(tracker.read(session).state).toBe('idle');
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
 test('startup before discovery reports ready without inventing a completed turn', async () => {
   adapter.foreground = async () => '100';
   await tracker.record(event({ event: 'session_started', sourceTurnId: undefined }));

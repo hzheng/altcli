@@ -157,3 +157,24 @@ During refinement: one writer, exact input/output versions, and an endorsement s
 Before implementation: consume an exact-version human approval or a valid preauthorized agreement once, with all planning activity settled. Preserve final text, membership, findings, and authority. A plan document copied into the project during implementation is a protocol violation, not a reason to exclude more paths from project review.
 
 Validate the actual file schema as well as hashes: expected regular file, bounded size, acceptable text encoding, no unexpected path indirection, and supported result fields. File content is untrusted display data; a plan instruction cannot grant itself runtime permissions or approve a phase transition.
+
+## Native keyboard and launch permissions
+
+An authenticated keyboard or launch user has host-shell power. Native tmux keys
+can navigate and create shells; executable profiles can run arbitrary programs.
+This is not a sandbox. Keep the token and tailnet access limited to the owner.
+
+The WebSocket upgrade requires exact Origin and Host; the short-lived, single-use
+ticket is sent only in its first frame after a bearer-authenticated HTTP request.
+No URL credentials, compression, raw input persistence or automatic uncertain
+replay. Output has renderer credit and bounded queues. Terminal output never
+becomes HTML or controller instructions. Launch execution reconstructs its allowed
+child environment from nonsecret host settings and strips old tmux service variables.
+API keys, OAuth tokens and proxy variables are omitted because tmux retains argv
+in pane metadata. Use CLI credential stores; profiles requiring credential or
+proxy environment variables are unsupported.
+Do not put credentials in profile arguments. See [the protocol](TERMINAL-PROTOCOL.md).
+Unresolved manual/launch records retain dispatch/setup ownership even with flags off.
+Manual barriers have an explicit, noted human inspection decision for changed or
+missing panes. It records possible prior/background effects, refuses live or
+unresolved operations, and leaves all affected run holds/checkpoints/faults intact.

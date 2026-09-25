@@ -17,7 +17,7 @@ export class Store {
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("busy_timeout = 5000");
     const version = this.db.pragma("user_version", { simple: true }) as number;
-    if (version > 13) throw new Error("Unsupported database version. Do not downgrade this store.");
+    if (version > 14) throw new Error("Unsupported database version. Do not downgrade this store.");
     this.db.transaction(() => {
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -27,6 +27,11 @@ export class Store {
         CREATE TABLE IF NOT EXISTS reservations (repository TEXT PRIMARY KEY, active_id TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS interactions (id TEXT PRIMARY KEY, repository TEXT NOT NULL, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS keyboard_sessions (id TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS terminal_decisions (id TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS launch_profiles (id TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS launches (id TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS launch_reservations (index_path TEXT PRIMARY KEY, launch_id TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS checkpoints (run_id TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS checkpoint_decisions (id TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -41,7 +46,7 @@ export class Store {
       if (version === 1) this.migrateFromV1();
       if (version < 5) for (const pair of this.pairs()) this.saveGroup({ id: pair.id, name: pair.name, repository: pair.repository,
         cwd: null, members: pair.sessions, revision: 1, createdAt: pair.createdAt, legacyPairId: pair.id });
-      this.db.exec("PRAGMA user_version = 13"); // older servers must not ignore interaction ownership
+      this.db.exec("PRAGMA user_version = 14"); // older servers must not ignore interaction ownership
     })();
   }
   /** v1 had one global reservation in `control` and sessions without agentType. */

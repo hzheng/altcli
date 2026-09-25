@@ -44,3 +44,13 @@ Chromium mobile viewport tests are not a substitute for Safari on an actual
 phone. Record the exact commit, host/CLI versions and observations before claiming
 private-phone acceptance. See the official
 [Tailscale Serve reference](https://tailscale.com/docs/reference/tailscale-cli/serve).
+
+## Native terminal acceptance through the proxy
+
+Keep the host loopback-only. Forward the exact `/api/v1/terminals/socket` WebSocket
+upgrade with its original Host and HTTPS Origin; neither token nor ticket belongs
+in the URL. Add only the exact HTTPS origin to `ALTCLI_ALLOWED_ORIGINS`. Do not
+relax Origin/Host checks to work around a proxy. Verify several simultaneous
+terminal streams, responsive control POSTs, renderer-credit stalls, heartbeat
+expiry and reconnect through the actual proxy before enabling the terminal flag.
+Local Chromium and private tmux fixtures do not certify Tailscale or Safari.

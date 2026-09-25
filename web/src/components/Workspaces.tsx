@@ -6,6 +6,7 @@ import type { ManagedSession, RelayRun, Workspace, WorkspaceDiscovery, Workspace
 import type { ProjectWorktree } from '../contracts/projects';
 import { api } from '../client/api';
 import { LifecycleResults, WorktreeActions } from './RemoveWorktree';
+import { LaunchAgents } from './LaunchAgents';
 import { CreateWorktree } from './CreateWorktree';
 export const nameOf = (path: string) => path.split('/').filter(Boolean).pop() ?? path;
 export const workspaceKey = (w: Workspace) => `${w.socketPath}\0${w.cwd}`;
@@ -19,6 +20,7 @@ export function groupStatus(w: Workspace): { badge: string; detail: string } {
 }
 interface Props {
   token: string; disabled: boolean;
+  launchEnabled?: boolean; terminalEnabled?: boolean; clientInstanceId?: string; manualHeld?: boolean;
   discovery: WorkspaceDiscovery | null; discoveryError: string; onRecheck: () => Promise<void>;
   sessions: SessionRegistration[]; pairs: Group[]; lockedRepositories: string[];
   selectedKey: string | null; onSelectWorkspace: (workspace: Workspace) => void;
@@ -33,8 +35,10 @@ interface Props {
 /** Read-only workspace navigation; only explicit name/membership edits persist configuration. */
 export function Workspaces(props: Props) {
   const { discovery, discoveryError, onRecheck, selectedKey, selectedRoot, onSelectWorkspace, onSelectWorktree } = props;
+  const [directory, setDirectory] = useState(''), [addError, setAddError] = useState('');
   const [checking, setChecking] = useState(false);
   const [projectId, setProjectId] = useState<string | null>(null);
+  const [launchRequest, setLaunchRequest] = useState<{treeId:string; nonce:number}|null>(null);
   const [directoryRoot, setDirectoryRoot] = useState<string | null>(null);
   const workspaces = discovery?.workspaces ?? [];
   const projects = discovery?.projects ?? [];
@@ -47,6 +51,10 @@ export function Workspaces(props: Props) {
         <div className="row-tools"><span className="muted">{discovery ? `Checked ${new Date(discovery.discoveredAt).toLocaleTimeString()}` : 'Checking…'}</span>
           <button type="button" className="quiet" disabled={checking} onClick={() => { setChecking(true); void onRecheck().finally(() => setChecking(false)); }}>Recheck</button></div></div>
       <p className="muted">Choose a project, then a worktree and its task group. Linked worktrees belong to the same local repository, even in different directories.</p>
+      <form onSubmit={e => {e.preventDefault();if(checking)return;setChecking(true);setAddError('');void api(props.token, 'projects', {body:{path:directory}}).then(async()=>{setDirectory('');await onRecheck();}).catch(e=>setAddError(e instanceof Error?e.message:'Could not add repository.')).finally(()=>setChecking(false));}}>
+        <label htmlFor="project-path">Repository directory</label><div className="row-tools"><input id="project-path" value={directory} onChange={e=>setDirectory(e.target.value)} placeholder="/absolute/path/to/repository" autoComplete="off" /><button type="submit" disabled={checking || !directory.trim()}>Add project</button></div>
+        <p className="fine">Adds an existing Git checkout by its canonical identity. No files or tmux sessions are created.</p>{addError && <p role="alert">{addError}</p>}
+      </form>
       {discoveryError && <p className="notice error" role="alert">{discoveryError}</p>}
       {discovery?.error && <p className="notice error" role="alert">{discovery.error}</p>}
       {discovery && !projects.length && <p>No known Git project. Start a coding CLI in tmux inside a repository, then Recheck.</p>}
@@ -87,13 +95,14 @@ export function Workspaces(props: Props) {
           {groups.length > 1 && <span>{groups.length} agent directories · choose a task group</span>}
         </button>{!tree.main && <WorktreeActions project={project} tree={tree} token={props.token}
           disabled={!!squashReason} disabledReason={squashReason} deletionReason={hardReason} deletionHint={ownerReason || occupied}
-          onChanged={props.onChanged} viewEpoch={props.viewEpoch} />}</li>;
+          onChanged={props.onChanged} viewEpoch={props.viewEpoch} />}
+          <LaunchAgents requested={launchRequest?.treeId === tree.id ? launchRequest.nonce : 0} token={props.token} projectId={project.id} tree={tree} enabled={props.launchEnabled === true && props.inputEnabled} inputEnabled={props.inputEnabled} terminalEnabled={props.terminalEnabled === true} held={props.manualHeld === true} clientInstanceId={props.clientInstanceId ?? ''} onChanged={props.onChanged} viewEpoch={props.viewEpoch}/></li>;
       })}</ul>
       {directories.length > 1 && <div className="directory-groups"><h3>Choose the task group directory</h3><p className="fine">Collaborators must share a directory. These groups share one checkout; only one may own it at a time.</p>
         {directories.map((w) => <button type="button" key={workspaceKey(w)} className="quiet" onClick={() => onSelectWorkspace(w)}><span className="mono">{w.cwd}</span> · {w.agents.map((a) => a.label).join(', ')}</button>)}
       </div>}
       <LifecycleResults project={project} token={props.token} onChanged={props.onChanged} />
-      <CreateWorktree key={project.id} project={project} token={props.token} disabled={props.disabled || !props.inputEnabled || !!discoveryError || !!project.error} onChanged={props.onChanged} viewEpoch={props.viewEpoch} />
+      <CreateWorktree onLaunch={props.launchEnabled ? path => {const tree=project.worktrees.find(t=>t.path===path);if(tree){setDirectoryRoot(path);setLaunchRequest({treeId:tree.id,nonce:Date.now()});document.getElementById(`launch-${tree.id}`)?.scrollIntoView({block:'center'});}} : undefined} key={project.id} project={project} token={props.token} disabled={props.disabled || !props.inputEnabled || !!discoveryError || !!project.error} onChanged={props.onChanged} viewEpoch={props.viewEpoch} />
     </section>}
     {open && <WorkspaceDetail key={selectedKey} workspace={open} {...props} />}
   </>;

@@ -29,10 +29,21 @@ import type { Checkpoint, CheckpointInput, InteractionInput, InteractionRecord }
 import type { RelayRun } from '../contracts/workflow.ts';
 import { InteractionStore } from './interaction-store.ts';
 import { parseCheckpoint, parseInteraction } from '../core/interaction-validation.ts';
+import { InputAuthority } from './input-authority.ts';
+import { LaunchService } from './launches.ts';
+import { MockAdapter } from './adapters/mock.ts';
+import { TerminalBroker } from './terminal-broker.ts';
+import { inspectAttach, type AttachTarget } from './tmux-attach.ts';
+import { paneProcesses } from './processes.ts';
+import type { ManualPane, ManualReconcile, ManualSession, TerminalOpen, TerminalTarget } from '../contracts/terminals.ts';
+import { parseManualReconcile } from '../core/terminal-validation.ts';
 
 /** The only controller exposed to HTTP. The older Controller supplies transport/read-model helpers, not scheduling. */
 export class ControlPlane {
   readonly workflow: WorkflowStore;
+  readonly authority: InputAuthority;
+  readonly terminals: TerminalBroker;
+  readonly launches: LaunchService;
   readonly interactions: InteractionStore;
   get store() { return this.transport.store; }
   get config() { return this.transport.config; }
@@ -41,6 +52,8 @@ export class ControlPlane {
   readonly projects: ProjectCatalog;
   private readonly activity: AgentActivityTracker;
   private nativeRevision = 0;
+  private lifecycleRevision = 0;
+  private lifecycleObservations = 0;
   private nativeObservations = 0;
   /** Ephemeral identity proposals. Discovery never writes registrations or starts work. */
   private readonly discovered = new Map<string, ManagedSession>();
@@ -63,9 +76,112 @@ export class ControlPlane {
         worktree: { root: session.repository, gitDir: `${session.repository}/.git`, indexPath: `${session.repository}/.git/index` } } as ManagedSession);
     }
     this.workflow.recover();
+    this.authority = new InputAuthority(this.store);
+    this.launches = new LaunchService(this.config, this.store, this.projects, this.authority, tree => {
+      if(this.workflow.owner(tree.indexPath) || this.store.activeFor(tree.root)) throw new AppError('WORKTREE_BUSY', 'A run or delivery owns this checkout.', 409);
+    });
+    this.transport.inputGuard = () => this.authority.assertAutomated();
+    this.terminals = new TerminalBroker({ config: this.config, authority: this.authority,
+      resolve: target => this.terminalTarget(target), begin: (input, id, generation, prior) => this.beginKeyboard(input, id, generation, prior),
+      reconcile: input => this.reconcileManual(input) });
   }
   /** The effective host configuration for the Settings tab; read-only and without the token. */
   hostConfig(): HostConfig { return describeConfig(this.config); }
+  private ownedRuns(): RelayRun[] {
+    return (this.store.db.prepare('SELECT run_id FROM workflow_owners').all() as { run_id: string }[]).map(row => this.workflow.run(row.run_id)!);
+  }
+  private assertNativeBoundary(): void {
+    const setup = [...this.store.worktreeCreations(), ...this.store.worktreeRemovals(), ...this.store.worktreeIntegrations(), ...this.store.worktreeDiscards()];
+    if (this.store.reservations().length || setup.some(op => ['applying', 'uncertain'].includes(op.status)) ||
+      this.store.db.prepare('SELECT 1 FROM launch_reservations LIMIT 1').get() ||
+      this.ownedRuns().some(run => (run.implementation && run.implementation.setup !== 'ready') || this.interactions.pending(run.id))) {
+      throw new AppError('INPUT_BUSY', 'A delivery, setup or launch is unresolved. Inspect its owner before native input or reconciliation.', 409);
+    }
+  }
+  async terminalTarget(target: TerminalTarget): Promise<AttachTarget> {
+    if ('launchId' in target) return this.launches.target(target.launchId);
+    const discovery = await this.workspaces();
+    const session = this.workspaceSessions(discovery).find(s => s.id === target.agentId && s.registrationId === target.registrationId);
+    if (!session || (this.config.mode !== 'mock' && await this.adapter.foreground(session) !== session.cliPid)) throw new AppError('TARGET_CHANGED', 'The terminal registration or CLI process changed. Recheck.', 409);
+    if (this.config.mode === 'mock') return { identity: session.identity, sessionId: `mock-${session.identity.paneId}`, label: session.label };
+    return inspectAttach(this.config, session.identity);
+  }
+  private async manualSnapshot(): Promise<ManualPane[]> {
+    const panes = await this.adapter.listPanes();
+    if (panes.length > 64) throw new AppError('INPUT_INVENTORY', 'Manual reconciliation supports at most 64 panes on this server.', 409);
+    // An exited (remain-on-exit) pane has no process tree to read; its pane_pid is gone or could be reused.
+    const snapshots = await Promise.all(panes.map(async pane => ({ identity: pane.identity, cwd: pane.cwd, command: pane.command, dead: pane.dead,
+      agent: ['codex','claude'].includes(suggestAgentType(pane.command)) || this.store.sessions().some(s => isDeepStrictEqual(s.identity, pane.identity)),
+      processes: this.config.mode === 'mock' || pane.dead ? [] : await paneProcesses(pane.identity.panePid) })));
+    return snapshots.sort((a, b) => a.identity.paneId.localeCompare(b.identity.paneId));
+  }
+  private async beginKeyboard(input: TerminalOpen, connectionId: string, generation: string, prior?: ManualSession): Promise<ManualSession> {
+    this.assertNativeBoundary();
+    const revision = this.nativeRevision;
+    await this.terminalTarget(input.target);
+    const panes = await this.manualSnapshot();
+    const runs = this.ownedRuns();
+    const expected = JSON.stringify(runs);
+    return this.store.db.transaction(() => {
+      this.assertNativeBoundary();
+      if (this.nativeObservations || revision !== this.nativeRevision || JSON.stringify(this.ownedRuns()) !== expected) throw new AppError('INPUT_CHANGED', 'Activity changed during keyboard inspection. Recheck.', 409);
+      const known = new Set(prior?.runs.map(r => r.id) ?? []);
+      for (const run of runs) if (!known.has(run.id)) {
+        const cp = this.interactions.checkpoint(run.id);
+        this.workflow.beginKeyboard(run.id);
+        // Preserve the original checkpoint bytes/evidence; never recapture away intervening work.
+        if (run.status === 'waiting' && cp?.kind === 'waiting' && cp.commandId === run.currentCommandId) this.interactions.saveCheckpoint({ ...cp, kind: 'interaction', revision: cp.revision + 1 });
+        else if (run.status === 'paused') this.interactions.invalidate(run.id, 'Keyboard acquisition cannot restore an already paused run.');
+      }
+      const now = new Date().toISOString();
+      return this.authority.save({ id: prior?.id ?? randomUUID(), revision: prior?.revision ?? 0, bootId: this.authority.bootId,
+        clientInstanceId: input.clientInstanceId, connectionId, generation, target: input.target, live: true, reconciliationRequired: true,
+        inputMayHaveOccurred: prior?.inputMayHaveOccurred ?? false, bytes: prior?.bytes ?? 0, createdAt: prior?.createdAt ?? now, updatedAt: now,
+        reason: 'Keyboard granted; dispatch, setup and launch are held across this server.', panes: prior?.panes ?? panes,
+        runs: [...(prior?.runs ?? []), ...runs.filter(r => !known.has(r.id)).map(r => ({ id: r.id, commandId: r.currentCommandId, priorStatus: r.status }))] });
+    }).immediate();
+  }
+  async reconcileManual(value: ManualReconcile): Promise<ManualSession> {
+    const input = parseManualReconcile(value);
+    const duplicate = this.authority.duplicate<ManualSession>(input.requestId, input); if (duplicate) return duplicate;
+    const manual = this.authority.get(input.manualSessionId);
+    if (this.authority.pending().some(s => s.live) || manual.revision !== input.expectedRevision || !manual.reconciliationRequired || this.authority.busy) throw new AppError('MANUAL_CHANGED', 'Release the keyboard and inspect the current manual input record.', 409);
+    this.assertNativeBoundary(); const nativeRevision = this.nativeRevision;
+    if ('confirmReady' in input) {
+      const panes = await this.manualSnapshot();
+      if (!isDeepStrictEqual(panes.map(p => p.identity), manual.panes.map(p => p.identity))) throw new AppError('INPUT_INVENTORY', 'Pane identities changed during manual input. Inspect the host and record a human decision if settled checks cannot establish safety.', 409);
+      const sessions = this.workspaceSessions(await this.workspaces());
+      for (const pane of panes) {
+        const session = sessions.find(s => isDeepStrictEqual(s.identity, pane.identity));
+        const before = manual.panes.find(p => isDeepStrictEqual(p.identity, pane.identity))!;
+        const agent = pane.agent || before.agent || !!session;
+        if (!!pane.dead !== !!before.dead) throw new AppError('INPUT_INVENTORY', 'A pane exited during manual input. Inspect and record a human decision.', 409);
+        if (!agent && (!before.command || pane.command !== before.command)) throw new AppError('INPUT_INVENTORY', 'A non-agent command changed or lacks its original evidence. Inspect and record a human decision.', 409);
+        if (agent && pane.cwd !== before.cwd) throw new AppError('INPUT_INVENTORY', 'An agent directory changed during manual input. Inspect and record a human decision.', 409);
+        if (this.config.mode !== 'mock' && agent && (!session || !['idle','ready'].includes(this.activity.read(session).state))) throw new AppError('UNKNOWN_ACTIVITY', 'Agent panes need known settled activity. Inspect unowned CLIs and use Reset status where eligible, or record a human decision.', 409);
+        if (pane.processes.some(p => p.pid !== session?.cliPid && !(session?.agentType === 'codex' && isCodexHelper(p.command)) && !before.processes.some(b => b.pid === p.pid && b.command === p.command))) throw new AppError('BACKGROUND_ACTIVE', 'New background processes remain after manual input.', 409);
+      }
+      for (const affected of manual.runs) {
+        const run = this.workflow.run(affected.id);
+        if (!run || !['running','waiting','paused'].includes(run.status)) continue; // deliberate takeover retains its history
+        const cp = this.interactions.checkpoint(run.id);
+        if (affected.priorStatus === 'paused' || !cp || cp.fault || cp.commandId !== affected.commandId || run.currentCommandId !== affected.commandId || this.checkpointResult(run) !== cp.result) throw new AppError('CHECKPOINT_CHANGED', 'An affected run lacks its valid original checkpoint. Wait for completion or use deliberate takeover.', 409);
+        await this.assertCheckpointResult(run);
+        if (await this.readWorktree(run.repository) !== cp.fingerprint || (this.config.mode !== 'mock' && await currentBranch(run.repository) !== cp.branch)) throw new AppError('CHECKPOINT_CHANGED', 'An affected checkout changed after its validated checkpoint.', 409);
+      }
+    }
+    return this.store.db.transaction(() => {
+      const prior = this.authority.duplicate<ManualSession>(input.requestId, input); if (prior) return prior;
+      this.assertNativeBoundary();
+      if (this.authority.busy || this.authority.pending().some(s => s.live) || this.authority.get(manual.id).revision !== manual.revision || this.nativeObservations || this.nativeRevision !== nativeRevision) throw new AppError('MANUAL_CHANGED', 'New input or activity invalidated reconciliation.', 409);
+      // This decision releases only the server barrier. Run holds, checkpoints and faults remain untouched.
+      const result = this.authority.save({ ...manual, reconciliationRequired: false, ...('confirmInspected' in input
+        ? { humanDecision: { requestId: input.requestId, note: input.note, at: new Date().toISOString() },
+          reason: 'Human inspection recorded possible prior and background effects. Server barrier released; affected runs still require checkpoint review or takeover.' }
+        : { reason: 'Manual input recorded settled after inspection. Review each saved workflow checkpoint explicitly.' }) });
+      this.authority.decide(input.requestId, input, result); return result;
+    }).immediate();
+  }
   async state(): Promise<WorkflowState> {
     const discovery = await this.workspaces();
     const sessions = this.workspaceSessions(discovery);
@@ -76,7 +192,7 @@ export class ControlPlane {
     const activities = sessions.map((session) => instances.find((i) => i.agentId === session.id)?.status === 'current' ? this.activity.read(session)
       : { agentId: session.id, state: 'unknown' as const, updatedAt: null, detail: 'The current CLI instance cannot be verified.' });
     return { ...base, commands, sessions, groups: this.workspaceGroups(discovery), legacyEnabled: this.config.legacyEnabled === true, runs: this.workflow.runs(), executions: this.workflow.activeExecutions(), instances, activities,
-      interactions: this.interactions.recent(), checkpoints: this.interactions.activeCheckpoints() };
+      manualSessions: this.authority.pending(), interactions: this.interactions.recent(), checkpoints: this.interactions.activeCheckpoints() };
   }
   /** Same CLI process as at registration? A registration made before pids were recorded stays unknown until renewed. */
   private async instance(session: ManagedSession): Promise<InstanceState> {
@@ -87,6 +203,7 @@ export class ControlPlane {
   preview(id: string) { return this.transport.preview(id); }
   /** Read-only workspace discovery. Opening or refreshing it never registers a pane, starts a run or touches Git. */
   async workspaces(): Promise<WorkspaceDiscovery> {
+    if(this.adapter instanceof MockAdapter) this.adapter.launched = this.launches.batches().flatMap(b=>b.items).filter(i=>i.identity).map(i=>({identity:i.identity!,cwd:i.worktree.root,location:`${i.sessionName}:0.0`,command:i.profile.adapterHint==='manual'?'sh':i.profile.adapterHint,dead:false,inMode:false,synchronized:false}));
     const sessions = this.store.sessions() as ManagedSession[];
     const discovery = await discoverWorkspaces(this.adapter, this.config.mode, sessions, this.config.integrationBranches);
     await Promise.all(discovery.workspaces.flatMap((workspace) => workspace.agents.map(async (agent) => {
@@ -123,7 +240,8 @@ export class ControlPlane {
     return { ...discovery, projects: await this.projects.discover(discovery.workspaces, sessions) };
   }
   async previewWorktree(input: WorktreePreviewInput) { await this.workspaces(); return this.projects.preview(input); }
-  async createWorktree(input: WorktreeCreateInput) { await this.workspaces(); return this.projects.create(input); }
+  async createWorktree(input: WorktreeCreateInput) { return this.authority.automated(() => this.createWorktreeAdmitted(input)); }
+  private async createWorktreeAdmitted(input: WorktreeCreateInput) { await this.workspaces(); return this.projects.create(input); }
   private async removalGuard(worktree: NonNullable<ManagedSession['worktree']>): Promise<void> {
     const panes = await this.adapter.listPanes(); // An unavailable inventory is not an empty checkout.
     for (const pane of panes) {
@@ -141,7 +259,8 @@ export class ControlPlane {
     const preview = await this.projects.previewRemoval(input);
     await this.removalGuard(preview.worktree); return preview;
   }
-  async removeWorktree(input: WorktreeRemoveInput) {
+  async removeWorktree(input: WorktreeRemoveInput) { return this.authority.automated(() => this.removeWorktreeAdmitted(input)); }
+  private async removeWorktreeAdmitted(input: WorktreeRemoveInput) {
     await this.workspaces(); return this.projects.remove(input, (worktree) => this.removalGuard(worktree), (worktree) => this.archiveJournal(worktree.root));
   }
   /** The squash commit changes the integration checkout's files and index, so neither checkout may be owned by a run or an unresolved delivery. */
@@ -154,7 +273,8 @@ export class ControlPlane {
     const preview = await this.projects.previewIntegration(input);
     this.integrationGuard(preview.target, preview.worktree); return preview;
   }
-  async integrateWorktree(input: WorktreeIntegrateRequest) {
+  async integrateWorktree(input: WorktreeIntegrateRequest) { return this.authority.automated(() => this.integrateWorktreeAdmitted(input)); }
+  private async integrateWorktreeAdmitted(input: WorktreeIntegrateRequest) {
     await this.workspaces(); return this.projects.integrate(input, async (target, source) => this.integrationGuard(target, source));
   }
   async previewDiscard(input: WorktreeDiscardInput) {
@@ -162,11 +282,13 @@ export class ControlPlane {
     const preview = await this.projects.previewDiscard(input);
     await this.removalGuard(preview.worktree); return preview;
   }
-  async discardWorktree(input: WorktreeDiscardConfirm) {
+  async discardWorktree(input: WorktreeDiscardConfirm) { return this.authority.automated(() => this.discardWorktreeAdmitted(input)); }
+  private async discardWorktreeAdmitted(input: WorktreeDiscardConfirm) {
     await this.workspaces(); return this.projects.discard(input, (worktree) => this.removalGuard(worktree), (worktree) => this.archiveJournal(worktree.root));
   }
   /** No occupancy guard: the checkout is verified gone before the remaining branch deletion, and its pending discard refuses new runs. */
-  async finishDiscard(input: WorktreeDiscardFinish) {
+  async finishDiscard(input: WorktreeDiscardFinish) { return this.authority.automated(() => this.finishDiscardAdmitted(input)); }
+  private async finishDiscardAdmitted(input: WorktreeDiscardFinish) {
     await this.workspaces(); return this.projects.finishDiscard(input);
   }
   /** Archive before cleanup: every handoff commit this worktree's runs published keeps its content in the journal, so later
@@ -412,7 +534,8 @@ export class ControlPlane {
     this.transport.removePair(id);
     this.store.removeGroup(id);
   }
-  async submit(input: StartInput): Promise<CommandRecord> {
+  async submit(input: StartInput): Promise<CommandRecord> { return this.authority.automated(() => this.submitAdmitted(input)); }
+  private async submitAdmitted(input: StartInput): Promise<CommandRecord> {
     if (!this.config.legacyEnabled && !this.workflow.execution(input.requestId)) throw new AppError('LEGACY_DISABLED', 'The deprecated staging relay is disabled. Start a committed implementation run, or explicitly enable ALTCLI_ENABLE_LEGACY_RELAY on the host for supervised fallback.', 409);
     if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'Input is disabled by the host.', 403);
     const session = this.store.sessions().find((s) => s.id === input.agentId) as ManagedSession | undefined;
@@ -435,7 +558,8 @@ export class ControlPlane {
     if (!record) throw new AppError('RUN_PAUSED', 'The run is paused before delivery. Nothing was replayed.', 409);
     return record;
   }
-  async submitStandalone(input: StandaloneStart): Promise<CommandRecord> {
+  async submitStandalone(input: StandaloneStart): Promise<CommandRecord> { return this.authority.automated(() => this.submitStandaloneAdmitted(input)); }
+  private async submitStandaloneAdmitted(input: StandaloneStart): Promise<CommandRecord> {
     if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'Input is disabled by the host.', 403);
     const existing = this.workflow.execution(input.requestId);
     if (existing) {
@@ -462,7 +586,8 @@ export class ControlPlane {
     if (!group || (input.recipient && !group.members.includes(input.recipient))) throw new AppError('INVALID_GROUP', 'Recheck the selected workspace group and recipient before previewing.', 409);
     return previewCommittedRange(group.repository, input, (agentId, shas) => this.workflow.publishedBy(agentId, shas));
   }
-  async submitImplementation(input: ImplementationStart): Promise<CommandRecord> {
+  async submitImplementation(input: ImplementationStart): Promise<CommandRecord> { return this.authority.automated(() => this.submitImplementationAdmitted(input)); }
+  private async submitImplementationAdmitted(input: ImplementationStart): Promise<CommandRecord> {
     if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'Input is disabled by the host.', 403);
     const existing = this.workflow.execution(input.requestId);
     if (existing) {
@@ -555,7 +680,8 @@ export class ControlPlane {
       } catch (error) { this.workflow.setupResult(runId, false, messageOf(error)); throw error; }
     }
   }
-  async submitPlan(input: PlanStart): Promise<CommandRecord> {
+  async submitPlan(input: PlanStart): Promise<CommandRecord> { return this.authority.automated(() => this.submitPlanAdmitted(input)); }
+  private async submitPlanAdmitted(input: PlanStart): Promise<CommandRecord> {
     if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'Input is disabled by the host.', 403);
     const existing = this.workflow.execution(input.requestId);
     if (existing) {
@@ -591,7 +717,8 @@ export class ControlPlane {
     if (!receipt) throw new AppError('RUN_PAUSED', 'Planning delivery is pending or paused. Inspect the run; nothing was replayed.', 409);
     return receipt;
   }
-  async decidePlan(input: PlanDecision, authority: 'human' | 'automatic' = 'human'): Promise<void> {
+  async decidePlan(input: PlanDecision, authority: 'human' | 'automatic' = 'human'): Promise<void> { return this.authority.automated(() => this.decidePlanAdmitted(input, authority)); }
+  private async decidePlanAdmitted(input: PlanDecision, authority: 'human' | 'automatic' = 'human'): Promise<void> {
     if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'Input is disabled by the host.', 403);
     const run = this.workflow.run(input.runId); const plan = run?.planning;
     if (!run || !plan) throw new AppError('NOT_FOUND', 'Planning run not found.', 404);
@@ -616,6 +743,10 @@ export class ControlPlane {
   }
   /** Exactly one caller can claim a planned turn; browsers never create continuation commands. */
   private async pump(runId: string): Promise<void> {
+    if (this.authority.blocked) return;
+    return this.authority.automated(() => this.pumpAdmitted(runId));
+  }
+  private async pumpAdmitted(runId: string): Promise<void> {
     const run = this.workflow.run(runId); if (!run) return;
     if (run.planning && !run.implementation && run.status === 'waiting' && !run.restoredCheckpoint && !run.planning.next && run.autoContinue && !run.planning.request.requireApproval && planAgreed(run.planning)) {
       const plan = run.planning;
@@ -731,6 +862,11 @@ export class ControlPlane {
   }
 
   async recordEvent(input: HookEvent): Promise<HookReceipt> {
+    this.lifecycleRevision++; this.lifecycleObservations++;
+    try { return await this.recordObservedEvent(input); }
+    finally { this.lifecycleRevision++; this.lifecycleObservations--; }
+  }
+  private async recordObservedEvent(input: HookEvent): Promise<HookReceipt> {
     const observed = [...this.store.sessions() as ManagedSession[], ...this.discovered.values()].find((s) => s.identity.socketPath === input.socketPath && s.identity.paneId === input.paneId);
     this.nativeRevision++; this.nativeObservations++;
     try {
@@ -747,7 +883,12 @@ export class ControlPlane {
     }
     if (input.event === 'turn_started' && input.identity) {
       const session = observed;
-      for (const run of this.workflow.runs().filter((r) => (r.implementation || r.planning) && ['running','waiting'].includes(r.status))) {
+      // Input holds can apply a saved disposition when preflight rejects, even before a checkpoint exists.
+      // Revoke them and blocked handoffs; other pauses keep their reason and recovery path.
+      for (const run of this.workflow.runs().filter((r) => (r.implementation || r.planning) && (
+        ['running','waiting'].includes(r.status) ||
+        (r.status === 'paused' && (r.blockedHandoff || (r.interaction?.active && !r.interaction.fault)))
+      ))) {
         const previous = input.commandId ? this.workflow.execution(input.commandId) : undefined;
         if (session?.worktree?.indexPath === run.lockKey && input.commandId !== run.currentCommandId && previous?.status !== 'finished') this.workflow.pause(run.id, 'Another prompt started on this checkout outside its current assignment. Reconcile all writers.');
       }
@@ -767,7 +908,8 @@ export class ControlPlane {
     if (turn) { await this.captureCheckpoint(turn.runId); await this.pump(turn.runId); }
     return receipt;
   }
-  async submitInteraction(value: InteractionInput): Promise<InteractionRecord> {
+  async submitInteraction(value: InteractionInput): Promise<InteractionRecord> { return this.authority.automated(() => this.submitInteractionAdmitted(value)); }
+  private async submitInteractionAdmitted(value: InteractionInput): Promise<InteractionRecord> {
     const input = parseInteraction(value);
     if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'Input is disabled by the host.', 403);
     const duplicate = this.interactions.duplicate(input); if (duplicate) return duplicate;
@@ -908,7 +1050,8 @@ export class ControlPlane {
       } catch { /* Unknown remains a blocker. */ }
     }
   }
-  async reconcileCheckpoint(value: CheckpointInput): Promise<void> {
+  async reconcileCheckpoint(value: CheckpointInput): Promise<void> { return this.authority.automated(() => this.reconcileCheckpointAdmitted(value)); }
+  private async reconcileCheckpointAdmitted(value: CheckpointInput): Promise<void> {
     const input = parseCheckpoint(value);
     if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'Input is disabled by the host.', 403);
     if (this.interactions.duplicateDecision(input)) return;
@@ -939,7 +1082,9 @@ export class ControlPlane {
   }
   action(input: RunAction): void | Promise<void> {
     if (input.action === 'pause') { this.interactions.invalidate(input.runId, 'Explicit human pause requires takeover.'); this.workflow.pause(input.runId); }
+    else if (input.action === 'recheck') return this.authority.automated(() => this.recheckHandoff(input));
     else if (input.action === 'continue') {
+      this.authority.assertAutomated();
       if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'Input is disabled by the host.', 403);
       if (input.confirmReady !== true || !input.expectedCommandId) throw new AppError('READINESS_REQUIRED', 'Confirm readiness for the current manual handoff.');
       this.workflow.continue(input.runId, input.expectedCommandId); return this.pump(input.runId);
@@ -949,6 +1094,33 @@ export class ControlPlane {
       if (this.interactions.records().some((r) => r.input.runId === input.runId && ['recorded','sending'].includes(r.status))) throw new AppError('DELIVERY_PENDING', 'Wait for terminal input to finish before taking over.', 409);
       this.interactions.invalidate(input.runId, 'Human takeover ended this checkpoint.'); this.workflow.takeover(input.runId);
     }
+  }
+  private async recheckHandoff(input: RunAction): Promise<void> {
+    if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'Input is disabled by the host.', 403);
+    if (input.confirmReady !== true || !input.expectedCommandId || !input.expectedRevision) throw new AppError('READINESS_REQUIRED', 'Inspect every checkout writer and confirm the current blocked handoff.');
+    const run = this.workflow.run(input.runId); const turn = this.workflow.execution(input.expectedCommandId);
+    const completion = turn?.completion;
+    const participant = run?.participants.find(p => p.id === turn?.agentId);
+    if (!run?.implementation || run.status !== 'paused' || run.pauseRequested || run.interaction?.active ||
+      run.currentCommandId !== input.expectedCommandId || run.blockedHandoff?.revision !== input.expectedRevision ||
+      turn?.status !== 'delivered' || !completion || completion.cliPid !== participant?.cliPid || !completion.cliPid || !completion.startedAt ||
+      completion.sessionId !== turn.sessionId || completion.sourceTurnId !== turn.sourceTurnId || this.interactions.pending(run.id)) {
+      throw new AppError('HANDOFF_CHANGED', 'This handoff lacks current completion evidence or requires separate reconciliation.', 409);
+    }
+    const expected = JSON.stringify(run); const revision = this.lifecycleRevision;
+    if (this.lifecycleObservations) throw new AppError('HANDOFF_CHANGED', 'Lifecycle evidence is still arriving. Recheck after it settles.', 409);
+    await this.validateMembers(run.participants, run.implementation.cwd);
+    const evidence = completion.source === 'codex' && completion.backgroundState === 'unknown' ? await this.evidence(turn) : null;
+    const background = evidence?.state ?? completion.backgroundState;
+    if (completion.settled !== true || background !== 'clear') throw new AppError('BACKGROUND_PENDING', 'Waiting for a current, correlated clear completion. An idle-looking terminal cannot replace this evidence.', 409);
+    const publication = await this.publication(turn, completion);
+    if (!publication?.publication) throw new AppError('INVALID_PUBLICATION', publication?.error ?? 'No validated handoff result was found.', 409);
+    if (run.blockedHandoff.publishedSha && run.blockedHandoff.publishedSha !== publication.publication.sha) throw new AppError('HANDOFF_CHANGED', 'The published commit changed after completion. Reconcile the checkout.', 409);
+    if (this.lifecycleObservations || this.lifecycleRevision !== revision || JSON.stringify(this.workflow.run(run.id)) !== expected || this.interactions.pending(run.id)) {
+      throw new AppError('HANDOFF_CHANGED', 'New activity invalidated this confirmation. Refresh and inspect the run.', 409);
+    }
+    this.workflow.recheck(run.id, turn.commandId, input.expectedRevision, publication, evidence);
+    await this.pump(run.id);
   }
   changePolicy(input: PolicyChange): void { this.workflow.changePolicy(input); }
 }

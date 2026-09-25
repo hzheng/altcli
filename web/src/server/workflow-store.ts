@@ -128,6 +128,7 @@ export class WorkflowStore {
     this.store.db.prepare('INSERT INTO workflow_turns(id,run_id,value) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(turn.commandId, turn.runId, json(turn));
   }
   private stop(run: RelayRun, reason: string, complete = false): void {
+    delete run.blockedHandoff;
     if (run.interaction?.active) {
       if (complete && !run.interaction.fault) { this.holdDisposition(run, 'complete'); return; }
       run.interaction.fault = true;
@@ -142,6 +143,17 @@ export class WorkflowStore {
     this.saveRun(run);
   }
   /** Called in the interaction reservation transaction, before any terminal side effect. */
+  beginKeyboard(id: string): void {
+    const run = this.run(id)!;
+    if (!run.implementation && !run.planning && !run.standalone) throw new AppError('LEGACY_OWNED', 'Settle or take over the legacy staging run before native input.', 409);
+    const turn = this.execution(run.currentCommandId);
+    if (run.status === 'running' && turn?.status !== 'delivered') throw new AppError('DELIVERY_PENDING', 'Wait for the current delivery before taking keyboard.', 409);
+    const fault = run.status === 'paused' || run.pauseRequested || run.interaction?.fault === true;
+    run.interaction = { revision: (run.interaction?.revision ?? 0) + 1, active: true, fault, origin: 'keyboard',
+      ...(run.status === 'waiting' ? { disposition: 'waiting' as const } : {}) };
+    if (run.status === 'waiting') { run.status = 'paused'; run.reason = 'Manual keyboard input holds this validated checkpoint.'; }
+    this.saveRun(run);
+  }
   beginInteraction(input: InteractionInput): void {
     const run = this.run(input.runId); const turn = this.execution(input.commandId);
     if (!run || (!run.implementation && !run.planning && !run.standalone) || run.status !== 'running' || run.pauseRequested || run.interaction?.fault ||
@@ -216,12 +228,14 @@ export class WorkflowStore {
       const turn: Execution = planning ? this.planTurn(run) : implementation ? this.commitTurn(run, first.id, implementation.request.kind !== 'review' ? 'work' : implementation.policy === 'peer' ? 'review_and_improve' : 'review', input.text ?? '', input.handoff === true, input.requestId) : { commandId: input.requestId, runId: run.id, agentId: first.id, input, wireText: wire,
         status: 'planned', sessionId: null, sourceTurnId: null, continuation: false, baselineProcesses: null, baselineWorktree: null };
       this.saveRun(run); this.saveExecution(turn);
+      if(this.store.db.prepare('SELECT 1 FROM launch_reservations WHERE index_path=?').get(lockKey)) throw new AppError('LAUNCH_BUSY', 'An unresolved launch owns this checkout.', 409);
       this.store.db.prepare('INSERT INTO workflow_owners(lock_key,run_id) VALUES (?,?)').run(lockKey, run.id);
       return turn;
     }).immediate();
   }
   claim(id: string): Execution | null {
     return this.store.db.transaction(() => {
+      if (this.store.db.prepare(`SELECT 1 FROM keyboard_sessions WHERE json_extract(value,'$.live')=1 OR json_extract(value,'$.reconciliationRequired')=1 LIMIT 1`).get()) return null;
       const turn = this.execution(id); const run = turn && this.run(turn.runId);
       if (!turn || !run || run.interaction?.active || run.status !== 'running' || run.currentCommandId !== id || turn.status !== 'planned' || (run.implementation && run.implementation.setup !== 'ready')) return null;
       turn.status = 'dispatching'; this.saveExecution(turn); return turn;
@@ -247,7 +261,9 @@ export class WorkflowStore {
       // Old hooks/follow-ups remain diagnostic only. They can never complete a newer command.
       return { accepted: false, reason: 'Uncorrelated lifecycle event; update hooks or reconcile manually.', event: null };
     }
-    const key = hash([input.source, input.identity, input.sessionId, input.sourceTurnId, input.event]);
+    const identity: unknown[] = [input.source, input.identity, input.sessionId, input.sourceTurnId, input.event];
+    if (input.completionSequence !== undefined) identity.push(input.completionSequence);
+    const key = hash(identity);
     const { reporterPid: _reporterPid, ...semanticInput } = input;
     const digest = hash(semanticInput); // reporterPid identifies the transient hook process, not the lifecycle event.
     return this.store.db.transaction(() => {
@@ -267,8 +283,9 @@ export class WorkflowStore {
       .map((row) => JSON.parse(row.value) as HookEvent);
   }
   private apply(key: string, input: HookEvent, evidence: BackgroundEvidence | null, worktree: string | null, publication: PublicationResult | null, planCapture: PlanCapture | null): HookReceipt {
-    const done = (reason: string, event: TurnEvent | null = null): HookReceipt => {
-      const receipt = { accepted: event !== null, reason, event };
+    const done = (reason: string, event: TurnEvent | null = null, completion?: HookReceipt['completion']): HookReceipt => {
+      const state = completion ?? (event && input.event === 'turn_complete' ? this.execution(input.commandId!)?.status === 'finished' ? 'finished' : 'pending' : undefined);
+      const receipt: HookReceipt = { accepted: event !== null, reason, event, ...(state ? { completion: state } : {}) };
       this.store.db.prepare('UPDATE workflow_events SET receipt=? WHERE id=?').run(json(receipt), key);
       return receipt;
     };
@@ -288,6 +305,7 @@ export class WorkflowStore {
     if (turn.status === 'dispatching') return { accepted: false, reason: 'Buffered until delivery is established.', event: null };
     if (turn.status === 'finished') return done('This command already has a completion.');
     if (turn.status === 'interrupted') return done('This command was interrupted; completion cannot resume it.');
+    if (input.cliPid && input.cliPid !== participant.cliPid) { this.stop(run, 'The CLI process changed. Reconcile this worker.'); return done(run.reason); }
     if (flat(input.prompt) !== flat(turn.wireText)) {
       if (input.event === 'turn_complete' && flat(input.prompt).includes(flat(turn.wireText))) {
         // Codex also notifies for auxiliary turns (thread-title generation) whose prompt quotes the user prompt, marker
@@ -316,9 +334,25 @@ export class WorkflowStore {
       this.stop(run, 'The assigned CLI turn was interrupted. Inspect unfinished work and background writers before taking over; no handoff was accepted.');
       return done(run.reason);
     }
+    if (turn.completion && (input.completionSequence ?? 0) <= (turn.completion.completionSequence ?? 0)) return done('Older completion observation; no workflow transition.');
+    turn.completion = input; this.saveExecution(turn);
     const event = this.asTurnEvent(input, participant.id, input.commandId!);
     this.store.addEvent(event);
     const background = input.backgroundState === 'unknown' && evidence ? evidence : { state: input.backgroundState, detail: null };
+    const recheckable = run.implementation && !run.pauseRequested && !run.interaction?.active &&
+      (run.status === 'running' || !!run.blockedHandoff);
+    if (recheckable && (input.settled !== true || background.state !== 'clear' || run.blockedHandoff)) {
+      const gate = input.settled !== true ? 'Waiting for settled completion of the assigned turn.'
+        : background.state === 'active' ? 'Background work remains active; ownership was not transferred.'
+          : background.state !== 'clear' ? 'Background-work state is unknown; waiting for current evidence.'
+            : 'Clear completion recorded. Inspect every writer, then recheck the handoff.';
+      this.stop(run, gate);
+      run.blockedHandoff = { commandId: turn.commandId, revision: randomUUID(), backgroundState: background.state ?? 'unknown',
+        ...(input.backgroundSummary ? { backgroundSummary: input.backgroundSummary } : {}),
+        publishedSha: publication?.publication?.sha ?? null, publicationError: publication?.error ?? null, gate };
+      this.saveRun(run);
+      return done(gate, event, input.settled === true && background.state === 'clear' ? 'finished' : 'pending');
+    }
     if (input.settled !== true || background.state !== 'clear') {
       this.stop(run, background.state === 'active' ? `Background work remains active${background.detail ? ` (${background.detail})` : ''}; ownership was not transferred.`
         : 'Completion or background-work state is unknown; inspect the workers.');
@@ -520,6 +554,21 @@ export class WorkflowStore {
       if (run?.planning && !run.implementation && run.status === 'waiting' && run.currentCommandId === expectedCommandId && run.planning.next) { run.restoredCheckpoint = false; this.schedulePlan(run, false); return; }
       if (!run?.implementation || run.status !== 'waiting' || run.currentCommandId !== expectedCommandId || !run.implementation.next) throw new AppError('HANDOFF_CHANGED', 'This manual handoff is no longer current. Refresh the run.', 409);
       run.restoredCheckpoint = false; this.scheduleCommit(run, false);
+    }).immediate();
+  }
+  /** One explicit decision consumes the retained completion and applies the frozen continuation policy once. */
+  recheck(id: string, commandId: string, revision: string, publication: PublicationResult, evidence: BackgroundEvidence | null): void {
+    this.store.db.transaction(() => {
+      const run = this.run(id); const turn = this.execution(commandId);
+      const completion = turn?.completion;
+      const background = completion?.source === 'codex' && completion.backgroundState === 'unknown' ? evidence?.state : completion?.backgroundState;
+      if (!run?.implementation || run.status !== 'paused' || run.pauseRequested || run.interaction?.active || completion?.settled !== true || background !== 'clear' ||
+        run.currentCommandId !== commandId || run.blockedHandoff?.revision !== revision || turn?.status !== 'delivered' || !turn.completion || !publication.publication) {
+        throw new AppError('HANDOFF_CHANGED', 'This blocked handoff is no longer current. Refresh and inspect the run.', 409);
+      }
+      delete run.blockedHandoff; run.status = 'running';
+      turn.status = 'finished'; this.saveExecution(turn);
+      this.consumePublication(run, turn, publication.publication, publication.archive);
     }).immediate();
   }
   changePolicy(input: PolicyChange): void {

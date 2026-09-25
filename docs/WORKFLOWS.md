@@ -99,6 +99,30 @@ The entry model is now project → worktree → task/group, with solo support an
 
 One group is not necessarily two agents. It is also not every process found in a workspace. Selected members must be distinct actual executions; one-member groups store one identity once. All examples of three-or-more planners below describe the retained target capability, not the initial UI dispatch limit.
 
+### A published handoff waiting for completion
+
+An Implementation result may exist while the exact CLI turn still reports active
+or unknown background work. The controller retains ownership and shows the
+observed publication SHA, failed completion gate, and bounded task/cron counts and
+task types when supplied. Task descriptions, commands and cron prompts are excluded.
+For Claude, `stop_hook_active` describes Stop-hook continuation, not task activity;
+only the task and cron registries answer the background question. Missing registries
+remain unknown. Later ordered Stops keep the original command/session/source-turn
+binding and cannot automatically resume a paused run.
+
+After inspecting all checkout writers for empty prompts, queued input and background
+work, choose **Recheck and relay**. The server requires the current completion
+observation, verifies unchanged workers, rereads the publication and checkout, and
+applies the frozen continuation policy once. Claude requires a correlated clear
+Stop; Codex notify with unknown background state uses a fresh process comparison.
+Concurrent clicks and stale confirmations cannot dispatch another turn. Opening or
+refreshing the page performs no recovery action.
+
+This recovery applies only to the completion/background gate. Explicit pause,
+restart, uncertain delivery, unrelated prompts and manual-input holds require
+their existing reconciliation or takeover. Old runs without retained completion
+evidence cannot be recovered by guessing from a result file or terminal text.
+
 ### Workspace, inventory, and bound group are separate
 
 ```text
@@ -328,3 +352,24 @@ Each delivered input holds the whole run, including peer dispatch and final owne
 **Restore checkpoint** is separate. It is available only for a previously validated waiting boundary subsequently paused by exactly observed external native work. Original results, checkout/Plan content, identities and policy must be unchanged and that external work settled. Restoring sends nothing; Next turn or the Plan decision remains explicit. It cannot salvage an unfinished assignment, missing publication or old pause with no checkpoint. See [ADR-0019](adr/ADR-0019-terminal-input-and-checkpoints.md).
 
 In Projects, **Ask an agent to suggest batches** sends a standalone read-only advisory instruction about the exact integration preview. Read its output in Console and copy each proposed endpoint and message into a fresh preview. Confirm every squash separately; the suggestion does not execute a Git operation.
+
+## Manual keyboard and launched sessions
+
+The terminal view and AltCLI control recipient are separate. **Use <agent> in control
+pane** on a card retargets the one control pane without sending anything. On wide
+windows the pane can sit beside the terminals (**Control beside**); on phones
+**Open control drawer** shows the same pane as a bottom drawer. **Open terminal** is
+observation; **Take keyboard** requires confirmation and holds dispatch/setup/launch
+across the configured tmux server. It does not interrupt workers already computing.
+Use **Release and record settled** after inspecting all panes. Failed checks,
+disconnect, Lock and restart retain a durable manual barrier. Then review each
+valid saved workflow checkpoint explicitly. Faulted/originally paused runs need
+existing deliberate takeover; they do not become resumable through keyboard input.
+
+Add an absolute Git directory in Projects, select a main or task worktree, and
+preview literal profile launches. Launching after worktree creation is a separate
+confirmation on its ready checkout card. Generic startup or immediate exit remains
+visible and reserved for inspection; successful startup still needs normal agent
+discovery/readiness. Lost responses return the recorded batch on the same request.
+Uncertain launches are inspected, never automatically retried or removed. See
+[TERMINAL-PROTOCOL](TERMINAL-PROTOCOL.md) for scope and recovery.

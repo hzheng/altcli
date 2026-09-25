@@ -9,8 +9,7 @@ export async function editSettings(page: Page) {
   const toggle = page.getByRole('region', { name: /^(Implementation|Plan) settings$/ }).getByRole('button', { name: 'Settings', exact: true });
   if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
 }
-/** The action group under an agent's pane. Only the displayed pane is visible on a phone, so choose it through its tab first;
- * like every view switch, that revokes readiness, so tests confirm readiness after opening the card. */
+/** Choose the command recipient in the single AltCLI control pane, independently of terminal view. This revokes readiness. */
 export async function openCard(page: Page, name: string) {
   await page.getByRole('navigation', { name: 'Command target' }).getByRole('button', { name, exact: true }).click();
   return page.getByRole('region', { name: `Actions for ${name}`, exact: true });

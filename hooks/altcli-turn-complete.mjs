@@ -5,7 +5,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { claudeCompletion, claudeContinuation, claudeStartState, claudeStopContext, codexCompletion, codexInterruption, codexStartState, contextKey, isTaskNotification } from './protocol.mjs';
 const [source, ...args] = process.argv.slice(2);
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -33,6 +33,7 @@ async function post(body) {
   const response = await fetch(new URL('/api/v1/events', base), { method: 'POST', signal: AbortSignal.timeout(body.event === 'turn_interrupted' ? 1500 : 3000),
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, reporterPid: String(process.pid) }) });
   report(response.ok ? 'posted' : 'rejected', { event: body.event, paired: Boolean(body.sourceTurnId), cliPid: body.cliPid ?? null, httpStatus: response.status });
+  return response.ok ? await response.json() : null;
 }
 function identity() {
   const paneId = process.env.TMUX_PANE; const socket = (process.env.TMUX ?? '').split(',')[0];
@@ -104,8 +105,18 @@ async function main() {
   } else if (payload.hook_event_name === 'Stop') {
     const saved = load(); const context = claudeStopContext(payload, target, saved);
     if (!context) return;
-    save({ ...saved, phase: 'finished' });
-    await post(claudeCompletion(payload, context));
+    const completion = claudeCompletion(payload, context);
+    const completionDigest = createHash('sha256').update(JSON.stringify(completion)).digest('hex');
+    const pending = { ...saved, completionDigest, completionSequence: saved.completionDigest === completionDigest ? saved.completionSequence : (saved.completionSequence ?? 0) + 1 };
+    save(pending);
+    const event = { ...completion, completionSequence: pending.completionSequence };
+    const receipt = await post(event);
+    // A failed/unknown delivery or an active registry keeps the exact binding for a later Stop.
+    // Never overwrite a new prompt or a newer Stop that arrived while HTTP was in flight.
+    if (receipt && event.settled && event.backgroundState === 'clear' &&
+      (!context.commandId || (receipt.accepted === true && receipt.completion === 'finished')) && JSON.stringify(load()) === JSON.stringify(pending)) {
+      save({ ...pending, phase: 'finished' });
+    }
   }
 }
 try { await main(); } catch { report('failed'); /* Missing evidence pauses the server run; never block or clutter the worker CLI. */ }

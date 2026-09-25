@@ -50,6 +50,28 @@ pretend those are actual installed Codex/Claude payloads.
 
 ## Host acceptance still required
 
+### Interactive-terminal M0 probes
+
+Use Node 24 from the repository root. The native suites require tmux and run only
+private sockets with harmless fixture programs; they never use the user's sessions.
+
+```bash
+npm --prefix web run test:native
+npm --prefix web run probe:terminal:ws
+npm --prefix web run build
+node web/scripts/terminal-websocket-probe.mjs --production
+```
+
+The native tests cover captured fallback for automatic sizing, manually sized
+observer isolation, literal bytes, detach/lifetime, direct-argv launches, immediate
+exit, old-server environment contamination and durable reservations. The real-host
+WebSocket probe checks Next's shared broker, six live streams, typed errors,
+first-frame ticket replay rejection and shutdown. It uses isolated stores.
+`probe:terminal:http` retains the rejected six-HTTP-stream experiment for comparison.
+Application checks include broker admission, restart, duplicate and checkpoint
+fixtures; browser tests distinguish mock rendering from actual tmux behavior.
+See [the protocol](TERMINAL-PROTOCOL.md) and [validation](../VALIDATION.md).
+
 Use a disposable repository and private tmux socket first. Start with a harmless
 read/echo process to check transport, then actual installed Codex and Claude Code.
 Inspect process metadata, output and exact submitted prompt including command
@@ -60,6 +82,30 @@ Exercise permission dialogs, queued/partial input, native CLI restarts, backend
 restart, two clients, and physical iPhone disconnection. Record the exact commit,
 CLI/tmux/Node versions, commands and observed outcomes. Final task-level tests and
 Git delta review remain required after a relay chain ends.
+
+### Terminal and launch release checklist
+
+Image attachment acceptance is deferred by the owner's September 24 scope
+decision. For the remaining terminal/launch release, record each demonstration
+against the source revision and installed Node/tmux/CLI/browser versions. Leave
+an unexecuted row open; a mock result cannot fill an installed-host row.
+
+| Demonstration | Required observations |
+| --- | --- |
+| Native idle/startup | In a disposable checkout/private tmux socket, launch the installed CLI, use its native model menu, answer a question, then establish fresh readiness. Record both supported providers separately. Do not automatically accept trust, login or permission prompts. |
+| Active assignment | Answer a native prompt under a keyboard hold; validate the original correlated result, release/reconcile, and apply its saved checkpoint once. An unrelated new turn or interrupted task must require explicit recovery. |
+| Project and batch launch | Add a repository with no tmux server, launch two profiles, handle startup and start a valid task. Launch three instances separately and verify the workflow execution cap remains one/two. Check uncertain worktree creation never launches into a guessed path. |
+| Mobile and concurrent access | Use a physical iPhone Safari and a desktop together. Check English/Chinese IME, emoji, multiline paste, screen-reader mode, touch modifiers, expansion, rotation, keyboard visibility, two-client exclusion and focus routing. Chromium phone emulation is only layout/interaction evidence. |
+| Remote path | On the intended private HTTPS/WSS origin, check upgrades, proxy buffering, output load, network switching and reconnect. Record input latency and verify no input replay or automatic workflow continuation. |
+| Settled restart and rollback | With no active delivery, restart the backend and confirm original workers survive, old tickets fail and manual/launch uncertainty remains. Disable flags and verify captures and explicit reconciliation remain available; do not clear ownership rows. |
+
+`web/e2e/native.spec.ts` exercises the real mock API and xterm renderer, including
+late input responses after recovery, paste consent, separate control drafts,
+expansion without lease changes and the explicit accessibility controls.
+`web/scripts/terminal-broker.test.ts` covers server resize admission and generation
+checks. Run `./scripts/check.sh`, `./scripts/check.sh --e2e` and the native probes
+above; inspect the produced screenshots. These local checks do not complete the
+physical device, real-provider or deployed proxy rows.
 
 A green CI checks the implementation and fixtures, not the host's process identity,
 background-task observability or private-device security boundary.

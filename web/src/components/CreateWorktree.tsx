@@ -5,16 +5,17 @@ import { api, HttpError } from '../client/api';
 import { useRemembered } from '../client/memory';
 
 /** Explicit setup only; no effects create worktrees, bind agents, or start runs. */
-export function CreateWorktree({ project, token, disabled, onChanged, viewEpoch = 0 }: {
+export function CreateWorktree({ project, token, disabled, onChanged, onLaunch, viewEpoch = 0 }: {
   project: Project; token: string; disabled: boolean; onChanged: (notice: string) => Promise<void>;
   /** Increases whenever the view changes; hiding the form revokes its confirmation but keeps its inputs. */
-  viewEpoch?: number;
+  viewEpoch?: number; onLaunch?: (path: string) => void;
 }) {
   const sources = project.worktrees.filter((w) => w.identity && w.head && !w.error);
   // Ordinary inputs are remembered per project in page memory; previews and confirmations are not.
   const [open, setOpen] = useRemembered(`create:${project.id}:open`, false); const [sourceId, setSourceId] = useRemembered(`create:${project.id}:source`, sources[0]?.id ?? '');
   const [branch, setBranch] = useRemembered(`create:${project.id}:branch`, ''); const [preview, setPreview] = useState<WorktreePreview | null>(null);
   const [confirmed, setConfirmed] = useState(false); const [busy, setBusy] = useState(false); const [error, setError] = useState('');
+  const [readyPath, setReadyPath] = useState<string | null>(null);
   const [uncertain, setUncertain] = useState<string | null>(null);
   const source = project.worktrees.find((w) => w.id === sourceId);
   const sourceKey = JSON.stringify([source?.identity, source?.head, source?.branch, source?.error]);
@@ -36,7 +37,7 @@ export function CreateWorktree({ project, token, disabled, onChanged, viewEpoch 
     try {
       const operation = await api<WorktreeCreation>(token, 'projects/worktrees', { body: { ...preview, confirm: true } });
       await onChanged(operation.message);
-      if (operation.status === 'ready') { setOpen(false); setBranch(''); setPreview(null); }
+      if (operation.status === 'ready') { setReadyPath(operation.input.path); setOpen(false); setBranch(''); setPreview(null); }
       else { setError(operation.message); if (operation.status === 'applying' || operation.status === 'uncertain') setUncertain(preview.requestId); }
     } catch (caught) {
       if (!(caught instanceof HttpError) || caught.status >= 500) { setUncertain(preview.requestId); setError('Creation response is unknown. Recheck its result before doing anything else; do not resend.'); }
@@ -48,6 +49,7 @@ export function CreateWorktree({ project, token, disabled, onChanged, viewEpoch 
     try {
       const result = await api<WorktreeCreation>(token, 'projects/worktrees/reconcile', { body: { requestId } });
       await onChanged(result.message);
+      if (result.status === 'ready') setReadyPath(result.input.path);
       if (result.status === 'ready' || result.status === 'failed') { setUncertain(null); setPreview(null); setConfirmed(false); }
       else setError(result.message);
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Inspection failed. No creation was retried.'); }
@@ -77,6 +79,7 @@ export function CreateWorktree({ project, token, disabled, onChanged, viewEpoch 
     </div>)}
     {uncertain && !unresolved.some((op) => op.input.requestId === uncertain) && <div className="notice">Creation {uncertain} needs inspection.
       <button type="button" disabled={busy} onClick={() => void reconcile(uncertain)}>Inspect creation result</button></div>}
+    {onLaunch && readyPath && project.worktrees.some(tree => tree.path === readyPath && tree.identity && !tree.error) && <button type="button" disabled={disabled} onClick={() => onLaunch(readyPath)}>Launch agents here</button>}
     {error && <p role="alert" className="notice error">{error}</p>}
   </div>;
 }

@@ -36,6 +36,14 @@ See [ROADMAP.md](ROADMAP.md) for implementation versus remaining acceptance, and
 remain under [docs/history/2026-09-13](docs/history/2026-09-13/), and pre-hardening
 operating documents under [docs/history/2026-09-16-pre-hardening](docs/history/2026-09-16-pre-hardening/).
 
+## Native terminal and launch extension
+
+[ADR-0020](docs/adr/ADR-0020-native-terminals.md) and
+[ADR-0021](docs/adr/ADR-0021-project-entry-and-agent-launch.md) describe the approved
+terminal/launch direction and captured-text fallback. Their implementation is a
+proposal behind host flags that setup enables (a missing flag means off);
+installed-host acceptance is recorded separately.
+
 ## Accepted collaboration direction (not yet implemented)
 
 The submitted design is owned by the ADRs and guides below; there is no required

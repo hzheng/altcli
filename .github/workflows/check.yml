@@ -14,3 +14,23 @@ jobs:
       - run: ./scripts/check.sh
       - run: cd web && npx playwright install --with-deps chromium
       - run: cd web && npm run e2e
+
+  native:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y tmux
+      - if: runner.os == 'macOS'
+        run: brew install tmux
+      - run: npm --prefix web ci
+      - run: npm --prefix web run test:native
+      - run: npm --prefix web run probe:terminal:ws
+      - run: npm --prefix web run build
+      - run: node web/scripts/terminal-websocket-probe.mjs --production

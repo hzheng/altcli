@@ -4,11 +4,13 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "engines": { "node": ">=22.18.0" },
+  "engines": {
+    "node": ">=22.18.0"
+  },
   "scripts": {
-    "dev": "next dev --hostname 127.0.0.1 --port 8787",
+    "dev": "node --experimental-strip-types server.ts --dev",
     "build": "next build",
-    "start": "next start --hostname 127.0.0.1 --port 8787",
+    "start": "node --experimental-strip-types server.ts",
     "typecheck": "next typegen && tsc --noEmit",
     "test:terminal": "node --experimental-strip-types --test scripts/terminal-input.test.ts",
     "test:smoke": "node --experimental-strip-types --test scripts/smoke.test.ts",
@@ -17,13 +19,22 @@
     "e2e": "playwright test",
     "check": "npm run test:smoke && npm run test:workflow && npm run typecheck && npm test && npm run build",
     "check:e2e": "npm run check && npm run e2e",
-    "test:workflow": "node --experimental-strip-types --test scripts/workflow.test.ts scripts/implementation.test.ts scripts/planning.test.ts scripts/projects.test.ts"
+    "test:workflow": "node --experimental-strip-types --test scripts/workflow.test.ts scripts/implementation.test.ts scripts/planning.test.ts scripts/projects.test.ts scripts/terminal-broker.test.ts",
+    "postinstall": "node scripts/prepare-pty.mjs",
+    "probe:terminal": "node --experimental-strip-types --test scripts/native-terminal.test.ts",
+    "probe:terminal:http": "node scripts/terminal-http-probe.mjs",
+    "test:native": "node --experimental-strip-types --test scripts/native-terminal.test.ts scripts/native-launch.test.ts scripts/native-reconcile.test.ts",
+    "probe:terminal:ws": "node scripts/terminal-websocket-probe.mjs"
   },
   "dependencies": {
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0",
     "better-sqlite3": "12.11.1",
     "next": "16.3.4",
+    "node-pty": "1.1.0",
     "react": "19.2.7",
-    "react-dom": "19.2.7"
+    "react-dom": "19.2.7",
+    "ws": "8.21.3"
   },
   "devDependencies": {
     "@playwright/test": "1.61.0",
@@ -32,6 +43,7 @@
     "@types/node": "25.9.3",
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
+    "@types/ws": "8.18.1",
     "tailwindcss": "4.3.1",
     "typescript": "6.0.3",
     "vitest": "4.1.9"

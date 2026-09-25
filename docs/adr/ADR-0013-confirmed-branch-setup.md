@@ -1,5 +1,8 @@
 # ADR-0013: Confirmed branch and task-worktree setup
 
+> September 24 extension: ADR-0021 separately permits confirmed session launching in an existing or newly ready checkout. It does not combine branch/worktree consent, copy dirty source files or prepare environments.
+
+
 Date: September 19, 2026
 
 Status: Accepted design direction; implementation and host acceptance pending.

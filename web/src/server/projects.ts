@@ -9,6 +9,7 @@ import type { Project, ProjectRecord, ProjectWorktree, WorktreeCreateInput, Work
 import type { Workspace, WorktreeIdentity } from '../contracts/workflow.ts';
 import { AppError, messageOf } from '../core/errors.ts';
 import { parseDiscard, parseDiscardFinish, parseDiscardPreview, parseIntegrate, parseIntegrationPreview, parseWorktreeCreate, parseWorktreePreview, parseRemoval, parseRemovalPreview } from '../core/project-validation.ts';
+import { terminalFields, terminalText } from '../core/terminal-validation.ts';
 import { defaultSquashMessage } from '../core/squash-message.ts';
 import { branchState, defaultBranch, integrationNames, validateNewBranch } from './commit-handoff.ts';
 import type { Config } from './config.ts';
@@ -110,6 +111,41 @@ export class ProjectCatalog {
     for (const operation of store.worktreeDiscards().filter((op) => op.status === 'applying')) this.discardFinish(operation, 'uncertain', 'Backend restarted during discard. Inspect its result; nothing is retried.');
     for (const operation of store.worktreeCreations().filter((op) => op.status === 'applying')) this.finish(operation, 'uncertain', 'Backend restarted during worktree creation. Inspect and reconcile; do not retry.');
   }
+  /** Explicit path entry is metadata only: no shell, tmux server creation or Git mutation. */
+  async add(value: unknown): Promise<ProjectRecord> {
+    if(!this.config.inputEnabled) throw new AppError('READ_ONLY', 'The host has disabled project changes.', 403);
+    const b = terminalFields(value, ['path']); const path = terminalText(b.path, 4096);
+    if (!isAbsolute(path)) throw new AppError('PROJECT_PATH', 'Enter an absolute repository directory.');
+    let root: string, commonDir: string;
+    if (this.config.mode === 'mock') {
+      if (!/^\/demo\/[A-Za-z0-9_-]+$/.test(path)) throw new AppError('MOCK_PROJECT', 'Mock repository paths use /demo/name. No real directory is inspected.');
+      root = path; commonDir = `${path}/.git`;
+    } else {
+      const identity = await resolveWorktree(await realpath(path)).catch(() => null);
+      if (!identity) throw new AppError('PROJECT_PATH', 'Choose an accessible, non-bare Git checkout.', 409);
+      root = identity.root; commonDir = await commonGitDir(root);
+      const metadata = await futurePath(this.config.dataDir);
+      if (contains(root, metadata) || contains(metadata, root) || contains(commonDir, metadata) || contains(metadata, commonDir)) throw new AppError('PROJECT_PATH', 'Controller metadata and projects must not overlap.', 409);
+    }
+    const id = idOf('project', commonDir); const existing = this.known.get(id);
+    if (existing) { this.store.saveProject(existing); return existing; }
+    const name = projectName(commonDir, await this.taskRoot());
+    const slug = name.replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 60) || 'project';
+    const record = { id, commonDir, name, directoryName: [...this.known.values()].some(p => p.directoryName.toLowerCase() === slug.toLowerCase()) ? `${slug}-${id.slice(-8)}` : slug };
+    this.store.saveProject(record); this.known.set(id, record); return record;
+  }
+  record(projectId: string): ProjectRecord {
+    const project = this.known.get(projectId);
+    if (!project) throw new AppError('PROJECT_CHANGED', 'Recheck the project before launching.', 409);
+    return project;
+  }
+  async launchWorktree(projectId: string, worktreeId: string): Promise<ProjectWorktree> {
+    const project = this.record(projectId);
+    const trees = this.config.mode === 'mock' ? this.views.find(p => p.id === projectId)?.worktrees ?? [] : await worktrees(project);
+    const tree = trees.find(t => t.id === worktreeId);
+    if (!tree?.identity || tree.error || !tree.head) throw new AppError('WORKTREE_CHANGED', 'Choose an accessible checkout with an initial commit.', 409);
+    this.assertWorktreeReady(tree.path, true); return tree;
+  }
   async discover(live: Workspace[], sessions: SessionRegistration[]): Promise<Project[]> {
     const roots = [...new Set([...live.map((w) => w.worktree.root), ...sessions.map((s) => s.repository)])].sort();
     let taskRoot: string | null = null;
@@ -134,6 +170,10 @@ export class ProjectCatalog {
           .filter((w, index, all) => all.findIndex((candidate) => candidate.worktree.root === w.worktree.root) === index)
           .map((w) => ({ id: idOf('worktree', [project.id, w.worktree.gitDir, w.worktree.indexPath]), path: w.worktree.root,
             identity: w.worktree, branch: w.branch, head: w.git?.head ?? 'a'.repeat(40), main: true, error: null })) : await worktrees(project);
+        if (this.config.mode === 'mock' && !trees.length) {
+          const root = dirname(project.commonDir), identity = { root, gitDir: project.commonDir, indexPath: join(project.commonDir, 'index') };
+          trees = [{ id: idOf('worktree', [project.id, identity.gitDir, identity.indexPath]), path: root, identity, branch: 'main', head: 'a'.repeat(40), main: true, error: null }];
+        }
       } catch { error = 'Project Git metadata is unavailable. Its saved identity has been kept; inspect the host and Recheck.'; }
       return { ...project, worktrees: trees, error, removals: this.store.worktreeRemovals().filter((op) => op.input.projectId === project.id), creations: this.store.worktreeCreations().filter((op) => op.input.projectId === project.id),
         integrations: this.store.worktreeIntegrations().filter((op) => op.input.projectId === project.id), discards: this.store.worktreeDiscards().filter((op) => op.input.projectId === project.id) };
@@ -145,7 +185,12 @@ export class ProjectCatalog {
     const project = this.views.find((p) => p.worktrees.some((w) => w.path === root));
     if (project) this.store.saveProject(this.known.get(project.id)!);
   }
-  assertWorktreeReady(root: string): void {
+  private pendingLaunch(projectId?: string, root?: string): boolean {
+    const batches = (this.store.db.prepare('SELECT value FROM launches WHERE id IN (SELECT launch_id FROM launch_reservations)').all() as {value:string}[]).map(r => JSON.parse(r.value) as import('../contracts/launches.ts').LaunchBatch);
+    return batches.some(b=>b.items.some(i=>(!projectId || i.projectId===projectId) && (!root || i.worktree.root===root)));
+  }
+  assertWorktreeReady(root: string, ignoreLaunch = false): void {
+    if(!ignoreLaunch && this.pendingLaunch(undefined,root)) throw new AppError('LAUNCH_BUSY','An unresolved launch owns this checkout. Inspect it in Projects.',409);
     if (this.store.worktreeRemovals().some((op) => op.input.worktree.root === root && ['applying', 'uncertain'].includes(op.status))) throw new AppError('WORKTREE_SETUP_BUSY', 'This worktree removal is applying or uncertain. Inspect its result in Projects before using it.', 409);
     if (this.store.worktreeDiscards().some((op) => op.input.worktree.root === root && ['applying', 'uncertain'].includes(op.status))) throw new AppError('WORKTREE_SETUP_BUSY', 'This worktree discard is applying or uncertain. Inspect its result in Projects before using it.', 409);
     if (this.store.worktreeIntegrations().some((op) => (op.input.target.root === root || op.input.worktree.root === root) && ['applying', 'uncertain'].includes(op.status))) throw new AppError('WORKTREE_SETUP_BUSY', 'A squash integration involving this checkout is applying or uncertain. Inspect its result in Projects before using it.', 409);
@@ -271,7 +316,7 @@ export class ProjectCatalog {
     })(); return updated;
   }
   private projectHeld(projectId: string): boolean {
-    return [...this.store.worktreeCreations(), ...this.store.worktreeRemovals(), ...this.store.worktreeIntegrations(), ...this.store.worktreeDiscards()].some((op) => op.input.projectId === projectId && ['applying', 'uncertain'].includes(op.status));
+    return this.pendingLaunch(projectId) || [...this.store.worktreeCreations(), ...this.store.worktreeRemovals(), ...this.store.worktreeIntegrations(), ...this.store.worktreeDiscards()].some((op) => op.input.projectId === projectId && ['applying', 'uncertain'].includes(op.status));
   }
   /** The local integration branch that verification and squash target: main when it exists, else the recorded default. */
   private async integrationRef(path: string, primary: string | null): Promise<{ name: string; targetRef: string; targetHead: string }> {

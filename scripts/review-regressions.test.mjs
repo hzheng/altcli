@@ -24,6 +24,13 @@ test('active or missing background evidence is not silently called idle', () => 
   assert.equal(backgroundState({ background_tasks: [{}], session_crons: [] }), 'active');
   assert.equal(backgroundState({ background_tasks: [], session_crons: [{}] }), 'active');
   assert.equal(backgroundState({ background_tasks: [] }), 'unknown');
+  assert.equal(backgroundState({ background_tasks: [], session_crons: [], stop_hook_active: true }), 'clear');
+  assert.equal(backgroundState({ stop_hook_active: true }), 'unknown');
+});
+test('background diagnostics contain only bounded counts and allowlisted kinds', () => {
+  const result = claudeCompletion({ background_tasks: [{ type: 'local_bash', command: 'private command' }, { type: 'private type', description: 'private description' }], session_crons: [{ prompt: 'private prompt' }] }, context);
+  assert.deepEqual(result.backgroundSummary, { tasks: 2, crons: 1, taskTypes: ['local_bash', 'unknown'] });
+  assert.equal(JSON.stringify(result).includes('private'), false);
 });
 test('a native prompt_id pairs each Stop with its own start, so an interrupted turn cannot block the next command', () => {
   const prompt = `relay: [altcli-command:${ID}]`;
@@ -45,6 +52,8 @@ test('without a native prompt_id, a start during an active turn fails closed and
   assert.equal(queued.commandId, undefined);
   assert.equal(claudeStopContext({ session_id: 's1' }, identity, { phase: 'active', pairing: 'legacy', context: first }), first);
   assert.equal(claudeStart({ session_id: 's1', prompt }, identity, { phase: 'finished', context: first }).commandId, ID);
+  // A Stop already observed for the slot ends the overlap, even while its binding stays open for background evidence.
+  assert.equal(claudeStart({ session_id: 's1', prompt }, identity, { phase: 'active', completionSequence: 1, context: first }).commandId, ID);
 });
 test('only the final nonempty line is an outcome, not an example earlier in the response', () => {
   assert.equal(outcomeOf('RELAY-OUTCOME: accept_and_improve\nActually I could not finish.').outcome, null);
@@ -240,10 +249,12 @@ test('a task notification is not a turn start; the Stop closing it still complet
 test('the real hooks preserve Claude prompt pairing and Codex correlation through steering', async () => {
   const home = mkdtempSync(join(tmpdir(), 'altcli-prompt-pair-'));
   const events = [];
+  let fail = false; let beforeReply = null;
   const server = createServer(async (request, response) => {
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
-    events.push(JSON.parse(Buffer.concat(chunks).toString('utf8')));
-    response.writeHead(200, { 'Content-Type': 'application/json' }); response.end('{}');
+    const event = JSON.parse(Buffer.concat(chunks).toString('utf8')); events.push(event);
+    if (beforeReply) { const run = beforeReply; beforeReply = null; await run(); }
+    response.writeHead(fail ? 503 : 200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ accepted: true, completion: event.backgroundState === 'clear' ? 'finished' : 'pending' }));
   });
   try {
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
@@ -336,6 +347,35 @@ test('the real hooks preserve Claude prompt pairing and Codex correlation throug
     const current = readFileSync(codexSlot, 'utf8'); const count = events.length;
     await invoke(interrupted, 'codex-start');
     assert.equal(events.length, count); assert.equal(readFileSync(codexSlot, 'utf8'), current);
+    // A lost/rejected receipt must keep the binding; an identical retry keeps the event identity.
+    const native = { hook_event_name: 'UserPromptSubmit', prompt_id: 'p-pending', prompt: `Task [altcli-command:${ID}]` };
+    await invoke(native); fail = true;
+    const stop = { ...response, prompt_id: 'p-pending', stop_hook_active: true };
+    await invoke(stop);
+    assert.equal(JSON.parse(readFileSync(slot, 'utf8')).phase, 'active');
+    assert.equal(events.at(-1).completionSequence, 1);
+    await invoke(stop); assert.equal(events.at(-1).completionSequence, 1);
+    fail = false;
+    await invoke({ ...stop, background_tasks: [{ type: 'local_bash', command: 'private command' }] });
+    assert.equal(events.at(-1).completionSequence, 2);
+    assert.equal(JSON.parse(readFileSync(slot, 'utf8')).phase, 'active');
+    await invoke({ hook_event_name: 'UserPromptSubmit', prompt_id: 'p-completed-task', prompt: '<task-notification>done</task-notification>' });
+    await invoke({ ...stop, prompt_id: 'p-completed-task' });
+    assert.equal(events.at(-1).sourceTurnId, 'p-pending'); assert.equal(events.at(-1).completionSequence, 3);
+    assert.equal(JSON.parse(readFileSync(slot, 'utf8')).phase, 'finished');
+    assert.doesNotMatch(JSON.stringify(events.at(-1)), /private command/);
+    // An older HTTP response cannot finish a newer native prompt's slot.
+    await invoke({ ...native, prompt_id: 'p-racing' });
+    beforeReply = () => invoke({ ...native, prompt_id: 'p-newer' });
+    await invoke({ ...stop, prompt_id: 'p-racing' });
+    assert.equal(JSON.parse(readFileSync(slot, 'utf8')).context.sourceTurnId, 'p-newer');
+    assert.equal(JSON.parse(readFileSync(slot, 'utf8')).phase, 'active');
+    // A CLI without registry fields reports unknown background work, so its slot stays open; the next legacy start still correlates.
+    const { background_tasks: _tasks, session_crons: _crons, ...bare } = response;
+    await invoke({ ...bare, prompt_id: 'p-newer' });
+    assert.equal(events.at(-1).backgroundState, 'unknown'); assert.equal(JSON.parse(readFileSync(slot, 'utf8')).phase, 'active');
+    await invoke({ hook_event_name: 'UserPromptSubmit', prompt: `Legacy [altcli-command:${ID}]` });
+    assert.equal(events.at(-1).event, 'turn_started'); assert.equal(events.at(-1).commandId, ID);
   } finally {
     server.closeAllConnections();
     if (server.listening) await new Promise((resolve) => server.close(resolve));

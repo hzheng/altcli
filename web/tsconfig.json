@@ -39,7 +39,9 @@
     ".next-e2e-altcli-desktop/types/**/*.ts",
     ".next-e2e-altcli-desktop/dev/types/**/*.ts",
     ".next-e2e-altcli-iphone/types/**/*.ts",
-    ".next-e2e-altcli-iphone/dev/types/**/*.ts"
+    ".next-e2e-altcli-iphone/dev/types/**/*.ts",
+    ".next-e2e-altcli-ws-probe/types/**/*.ts",
+    ".next-e2e-altcli-ws-probe/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

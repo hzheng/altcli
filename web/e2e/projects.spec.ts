@@ -155,7 +155,7 @@ test('squash into main previews the exact operation and message, requires confir
   await page.getByRole('button', { name: 'Recheck', exact: true }).click();
   // The three lifecycle actions read top to bottom: squash, removal check, discard; the branch is not repeated in the visible labels.
   const card = page.getByRole('list', { name: 'Available worktrees' }).getByRole('listitem').filter({ hasText: 'finished' });
-  await expect(card.getByRole('button')).toHaveText(['finished0 AGENTS/home/fixture/tasks/finishedBranch: feature/finishedNo agents · start coding CLIs here, then Recheck', 'Squash into main', 'Check removal', 'Discard…']);
+  await expect(card.getByRole('button')).toHaveText(['finished0 AGENTS/home/fixture/tasks/finishedBranch: feature/finishedNo agents · start coding CLIs here, then Recheck', 'Squash into main', 'Check removal', 'Discard…', 'Launch agents…']);
   await page.getByRole('button', { name: 'Squash feature/finished into main', exact: true }).click();
   const region = page.getByRole('region', { name: 'Squash feature/finished', exact: true });
   await expect(region).toContainText('Squash 2 commits from feature/finished (bbbbbbb..aaaaaaa) into main');

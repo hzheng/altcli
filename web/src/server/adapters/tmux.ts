@@ -19,6 +19,7 @@ export function createRunner(binary = "tmux", socket?: string): Runner {
         if (!error) return resolve(stdout);
         // tmux's own first line ("no server running on ...", "can't find pane ...") is what the operator needs to see.
         const detail = (stderr || error.message).split("\n")[0]?.trim();
+        if (args[0] === 'list-panes' && typeof error.code === 'number' && /^(no server running on .+|error connecting to .+ \(No such file or directory\))$/.test(detail ?? '')) return reject(new AppError('TMUX_ABSENT', 'No tmux server is running.', 409));
         reject(new AppError("TMUX_FAILED", `tmux ${args[0]} failed${detail ? `: ${detail}` : ""}. Inspect tmux on the host.`, 409));
       });
     if (input !== undefined) child.stdin?.end(input); else child.stdin?.end();
@@ -26,8 +27,9 @@ export function createRunner(binary = "tmux", socket?: string): Runner {
 }
 const SEP = "\t";
 const PANE_FIELDS = ["pane_id", "pane_pid", "pid", "start_time", "socket_path", "pane_current_command", "pane_current_path", "pane_dead", "pane_in_mode", "synchronize-panes"];
-const FORMAT = PANE_FIELDS.map((x) => `#{${x}}`).join(SEP);
-const LIST_FORMAT = ["session_name", "window_index", "pane_index", ...PANE_FIELDS].map((x) => `#{${x}}`).join(SEP);
+const paneField = (x: string) => x === 'pane_current_command' ? '#{?pane_dead,exited,#{pane_current_command}}' : x === 'pane_current_path' ? '#{?pane_dead,#{pane_start_path},#{pane_current_path}}' : `#{${x}}`;
+const FORMAT = PANE_FIELDS.map(paneField).join(SEP);
+const LIST_FORMAT = ["session_name", "window_index", "pane_index", ...PANE_FIELDS].map(paneField).join(SEP);
 function parsePane(parts: string[]): PaneState {
   if (parts.length !== PANE_FIELDS.length || parts.slice(0, 7).some((s) => !s)) throw new AppError("INVALID_PANE", "Unexpected tmux metadata. Refusing to infer target identity.", 409);
   const [id, panePid, serverPid, serverStarted, socketPath, command, cwd, dead, inMode, synchronized] = parts as [string,string,string,string,string,string,string,string,string,string];
@@ -38,7 +40,10 @@ export async function inspectPane(run: Runner, paneId: string): Promise<PaneStat
   return parsePane((await run(["display-message", "-p", "-t", validPaneId(paneId), FORMAT])).trimEnd().split(SEP));
 }
 export async function listPanes(run: Runner): Promise<ListedPane[]> {
-  const lines = (await run(["list-panes", "-a", "-F", LIST_FORMAT])).split("\n").filter((line) => line.length > 0);
+  let output: string;
+  try { output = await run(["list-panes", "-a", "-F", LIST_FORMAT]); }
+  catch (error) { if (error instanceof AppError && error.code === 'TMUX_ABSENT') return []; throw error; }
+  const lines = output.split("\n").filter((line) => line.length > 0);
   return lines.map((line) => {
     const parts = line.split(SEP);
     if (parts.length !== PANE_FIELDS.length + 3) throw new AppError("INVALID_PANE", "Unexpected tmux metadata. Refusing to infer target identity.", 409);

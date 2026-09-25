@@ -10,6 +10,45 @@ servers:
 security:
 - ownerToken: []
 paths:
+  /api/v1/launches/{id}/capture:
+    get:
+      operationId: captureLaunch
+      parameters: [{in: path, name: id, required: true, schema: {type: string}}]
+      responses:
+        '200': {description: Exact-identity captured text, content: {application/json: {schema: {type: object, properties: {text: {type: string}}, required: [text], additionalProperties: false}}}}
+  /api/v1/projects:
+    post: {"operationId":"addProject","description":"Explicit canonical repository entry. Input must be enabled; no Git or tmux mutation.","responses":{"200":{"description":"Recorded result; never task readiness or acceptance","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ProjectRecord"}}}},"409":{"description":"Changed, held or uncertain; inspect before proceeding","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}},"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}}}}}
+  /api/v1/terminals:
+    post: {"operationId":"openTerminal","description":"Mint a ten-second single-use ticket for first-frame WebSocket authentication. Opens only an observer.","responses":{"200":{"description":"Recorded result; never task readiness or acceptance","content":{"application/json":{"schema":{"$ref":"#/components/schemas/TerminalConnection"}}}},"409":{"description":"Changed, held or uncertain; inspect before proceeding","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}},"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/TerminalOpen"}}}}}
+  /api/v1/terminals/{id}/keyboard:
+    post: {"operationId":"decideKeyboard","description":"One writer per configured tmux server. A durable barrier survives release, lock, disconnect and restart.","responses":{"200":{"description":"Recorded result; never task readiness or acceptance","content":{"application/json":{"schema":{"$ref":"#/components/schemas/KeyboardResult"}}}},"409":{"description":"Changed, held or uncertain; inspect before proceeding","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}},"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/KeyboardInput"}}}},"parameters":[{"in":"path","name":"id","required":true,"schema":{"type":"string"}}]}
+  /api/v1/terminals/{id}/input:
+    post: {"operationId":"writeNativeInput","description":"At most 4096 bytes, exact generation and contiguous sequence. No uncertain replay.","responses":{"200":{"description":"Recorded result; never task readiness or acceptance","content":{"application/json":{"schema":{"type":"object","properties":{"generation":{"type":"string","format":"uuid"},"seq":{"type":"integer","minimum":0}},"required":["generation","seq"],"additionalProperties":false}}}},"409":{"description":"Changed, held or uncertain; inspect before proceeding","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}},"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/NativeInput"}}}},"parameters":[{"in":"path","name":"id","required":true,"schema":{"type":"string"}}]}
+  /api/v1/terminals/{id}/resize:
+    post: {"operationId":"resizeTerminal","description":"At most one resize per connection per 100 ms, with one native inspection in flight. Dimensions clamp to 20–500 columns and 5–200 rows.","responses":{"200":{"description":"Recorded result; never task readiness or acceptance","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Ok"}}}},"409":{"description":"Changed, held or uncertain; inspect before proceeding","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}},"429":{"description":"Resize frequency or concurrency limit reached; wait for the viewport to settle.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}},"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","properties":{"generation":{"type":"string","format":"uuid"},"cols":{"type":"integer","minimum":1,"maximum":10000},"rows":{"type":"integer","minimum":1,"maximum":10000}},"required":["generation","cols","rows"],"additionalProperties":false}}}},"parameters":[{"in":"path","name":"id","required":true,"schema":{"type":"string"}}]}
+  /api/v1/terminals/{id}/close:
+    post: {"operationId":"closeTerminal","description":"","responses":{"200":{"description":"Recorded result; never task readiness or acceptance","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Ok"}}}},"409":{"description":"Changed, held or uncertain; inspect before proceeding","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}},"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","properties":{},"required":[],"additionalProperties":false}}}},"parameters":[{"in":"path","name":"id","required":true,"schema":{"type":"string"}}]}
+  /api/v1/terminals/revoke:
+    post: {"operationId":"revokeBrowserTerminals","description":"","responses":{"200":{"description":"Recorded result; never task readiness or acceptance","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Ok"}}}},"409":{"description":"Changed, held or uncertain; inspect before proceeding","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}},"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","properties":{"clientInstanceId":{"type":"string","format":"uuid"}},"required":["clientInstanceId"],"additionalProperties":false}}}}}
+  /api/v1/terminals/reconcile:
+    post: {"operationId":"reconcileManualInput","description":"Strict settled check or explicit human inspection with a bounded note acknowledging possible prior and background effects. Releases only the server barrier; run holds, checkpoints and faults remain. Live keyboard or unresolved delivery/setup/launch refuses reconciliation.","responses":{"200":{"description":"Recorded result; never task readiness or acceptance","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ManualSession"}}}},"409":{"description":"Changed, held or uncertain; inspect before proceeding","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}},"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ManualReconcile"}}}}}
+  /api/v1/launch-profiles:
+    get: {"operationId":"listLaunchProfiles","description":"","responses":{"200":{"description":"Recorded result; never task readiness or acceptance","content":{"application/json":{"schema":{"type":"array","items":{"$ref":"#/components/schemas/LaunchProfile"}}}}},"409":{"description":"Changed, held or uncertain; inspect before proceeding","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}}}
+    post: {"operationId":"createLaunchProfile","description":"","responses":{"200":{"description":"Recorded result; never task readiness or acceptance","content":{"application/json":{"schema":{"$ref":"#/components/schemas/LaunchProfile"}}}},"409":{"description":"Changed, held or uncertain; inspect before proceeding","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}},"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/LaunchProfileInput"}}}}}
+  /api/v1/launch-profiles/{id}:
+    patch: {"operationId":"updateLaunchProfile","description":"","responses":{"200":{"description":"Recorded result; never task readiness or acceptance","content":{"application/json":{"schema":{"$ref":"#/components/schemas/LaunchProfile"}}}},"409":{"description":"Changed, held or uncertain; inspect before proceeding","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}},"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/LaunchProfileInput"}}}},"parameters":[{"in":"path","name":"id","required":true,"schema":{"type":"string"}}]}
+    delete: {"operationId":"deleteLaunchProfile","description":"","responses":{"200":{"description":"Recorded result; never task readiness or acceptance","content":{"application/json":{"schema":{"type":"object","properties":{"removed":{"type":"boolean"}},"required":["removed"],"additionalProperties":false}}}},"409":{"description":"Changed, held or uncertain; inspect before proceeding","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}},"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","properties":{"expectedRevision":{"type":"integer","minimum":0}},"required":["expectedRevision"],"additionalProperties":false}}}},"parameters":[{"in":"path","name":"id","required":true,"schema":{"type":"string"}}]}
+  /api/v1/launches/preview:
+    post: {"operationId":"previewLaunch","description":"","responses":{"200":{"description":"Recorded result; never task readiness or acceptance","content":{"application/json":{"schema":{"$ref":"#/components/schemas/LaunchPreview"}}}},"409":{"description":"Changed, held or uncertain; inspect before proceeding","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}},"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/LaunchPreviewInput"}}}}}
+  /api/v1/launches:
+    get: {"operationId":"listLaunches","description":"","responses":{"200":{"description":"Recorded result; never task readiness or acceptance","content":{"application/json":{"schema":{"type":"array","items":{"$ref":"#/components/schemas/LaunchBatch"}}}}},"409":{"description":"Changed, held or uncertain; inspect before proceeding","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}}}
+    post: {"operationId":"confirmLaunch","description":"Confirms a captured two-minute preview. Reservation precedes every possible effect; repeated confirmations never spawn again.","responses":{"200":{"description":"Recorded result; never task readiness or acceptance","content":{"application/json":{"schema":{"$ref":"#/components/schemas/LaunchBatch"}}}},"409":{"description":"Changed, held or uncertain; inspect before proceeding","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}},"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","properties":{"requestId":{"type":"string","format":"uuid"},"previewDigest":{"type":"string"},"confirm":{"const":true}},"required":["requestId","previewDigest","confirm"],"additionalProperties":false}}}}}
+  /api/v1/launches/{id}/inspect:
+    post: {"operationId":"inspectLaunch","description":"","responses":{"200":{"description":"Recorded result; never task readiness or acceptance","content":{"application/json":{"schema":{"$ref":"#/components/schemas/LaunchInstance"}}}},"409":{"description":"Changed, held or uncertain; inspect before proceeding","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}},"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","properties":{},"required":[],"additionalProperties":false}}}},"parameters":[{"in":"path","name":"id","required":true,"schema":{"type":"string"}}]}
+  /api/v1/launches/{id}/reconcile:
+    post: {"operationId":"reconcileLaunch","description":"Explicit human acknowledgement of possible prior and background effects. No retry, adoption or cleanup.","responses":{"200":{"description":"Recorded result; never task readiness or acceptance","content":{"application/json":{"schema":{"$ref":"#/components/schemas/LaunchInstance"}}}},"409":{"description":"Changed, held or uncertain; inspect before proceeding","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}},"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","properties":{"requestId":{"type":"string","format":"uuid"},"confirmInspected":{"const":true},"note":{"type":"string"}},"required":["requestId","confirmInspected","note"],"additionalProperties":false}}}},"parameters":[{"in":"path","name":"id","required":true,"schema":{"type":"string"}}]}
+  /api/v1/terminals/socket:
+    get: {"operationId":"terminalSocket","description":"Exact WebSocket upgrade path; rejects query strings, missing/null/foreign Origin and foreign Host. Send single-use ticket in the first JSON frame within five seconds. No bearer or ticket URL. See docs/TERMINAL-PROTOCOL.md for frames, processed-credit and heartbeat contract. Next and the host share one runtime broker.","responses":{"101":{"description":"WebSocket upgrade; first-frame authentication still required"},"403":{"description":"Upgrade refused"}}}
   /api/v1/interactions:
     post: {"operationId":"sendTerminalInput","description":"Literal input to the exact current worker; delivery is not completion. Unknown transport is never replayed.","requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/InteractionInput"}}}},"responses":{"200":{"description":"Recorded decision or delivery","content":{"application/json":{"schema":{"$ref":"#/components/schemas/InteractionRecord"}}}},"409":{"description":"Stale, uncertain or unsafe state; inspect without retrying input","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}}}
   /api/v1/checkpoints:
@@ -992,11 +1031,8 @@ paths:
   /api/v1/events:
     post:
       operationId: recordTurnEvent
-      summary: Record a turn-complete event from a CLI's own hook
-      description: Called by hooks/altcli-turn-complete.sh, registered as Claude Code's Stop hook and Codex's notify
-        command on the same host. The event is matched to a registered pane by exact tmux identity and tied to the
-        last command delivered there. It is informational; it authorizes nothing, sends nothing, and never clears a
-        hold. An event from an unregistered pane is kept so a misconfigured hook is visible.
+      summary: Record correlated native lifecycle evidence
+      description: Called by the host CLI hooks. Only exact command, prompt, session, source-turn and worker evidence can advance a run under its frozen policy. Active or unknown background evidence retains ownership. Later ordered completion observations do not resume a paused handoff; recheck requires an explicit action. Missing correlation is diagnostic only.
       requestBody:
         required: true
         content:
@@ -1005,11 +1041,11 @@ paths:
               $ref: '#/components/schemas/EventInput'
       responses:
         '200':
-          description: Event recorded
+          description: Lifecycle receipt; completion remains pending until the exact settled completion is captured
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TurnEvent'
+                $ref: '#/components/schemas/HookReceipt'
         '400':
           description: Invalid event
           content:
@@ -1059,6 +1095,23 @@ components:
       scheme: bearer
       description: Random 256-bit host token (64 hex characters). Never include it in a URL.
   schemas:
+    ProjectRecord: {type: object, properties: {id: {type: string}, name: {type: string}, commonDir: {type: string}, directoryName: {type: string}}, required: [id, name, commonDir, directoryName], additionalProperties: false}
+    TerminalTarget: {"oneOf":[{"type":"object","properties":{"agentId":{"type":"string"},"registrationId":{"type":"string","format":"uuid"}},"required":["agentId","registrationId"],"additionalProperties":false},{"type":"object","properties":{"launchId":{"type":"string","format":"uuid"}},"required":["launchId"],"additionalProperties":false}]}
+    TerminalOpen: {"type":"object","properties":{"target":{"$ref":"#/components/schemas/TerminalTarget"},"clientInstanceId":{"type":"string","format":"uuid"},"cols":{"type":"integer","minimum":0},"rows":{"type":"integer","minimum":0}},"required":["target","clientInstanceId","cols","rows"],"additionalProperties":false}
+    TerminalConnection: {"type":"object","properties":{"connectionId":{"type":"string","format":"uuid"},"ticket":{"type":"string"},"bootId":{"type":"string","format":"uuid"},"label":{"type":"string"},"paneId":{"type":"string"},"sessionId":{"type":"string"}},"required":["connectionId","ticket","bootId","label","paneId","sessionId"],"additionalProperties":false}
+    ManualSession: {"type":"object","properties":{"id":{"type":"string","format":"uuid"},"revision":{"type":"integer","minimum":0},"bootId":{"type":"string","format":"uuid"},"clientInstanceId":{"type":"string","format":"uuid"},"connectionId":{"type":"string","format":"uuid"},"generation":{"type":"string","format":"uuid"},"target":{"$ref":"#/components/schemas/TerminalTarget"},"live":{"type":"boolean"},"reconciliationRequired":{"type":"boolean"},"inputMayHaveOccurred":{"type":"boolean"},"bytes":{"type":"integer","minimum":0},"createdAt":{"type":"string"},"updatedAt":{"type":"string"},"reason":{"type":"string"},"panes":{"type":"array","items":{"type":"object","properties":{"identity":{"$ref":"#/components/schemas/PaneIdentity"},"cwd":{"type":"string"},"processes":{"type":"array","items":{"$ref":"#/components/schemas/ProcessRecord"}},"agent":{"type":"boolean"},"command":{"type":"string"},"dead":{"type":"boolean"}},"required":["identity","cwd","processes"],"additionalProperties":false}},"runs":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"commandId":{"type":"string"},"priorStatus":{"type":"string"}},"required":["id","commandId","priorStatus"],"additionalProperties":false}},"humanDecision":{"type":"object","properties":{"requestId":{"type":"string","format":"uuid"},"note":{"type":"string","minLength":1,"maxLength":1000},"at":{"type":"string"}},"required":["requestId","note","at"],"additionalProperties":false}},"required":["id","revision","bootId","clientInstanceId","connectionId","generation","target","live","reconciliationRequired","inputMayHaveOccurred","bytes","createdAt","updatedAt","reason","panes","runs"],"additionalProperties":false}
+    KeyboardInput: {"type":"object","properties":{"requestId":{"type":"string","format":"uuid"},"action":{"enum":["acquire","release","releaseSettled"]},"expectedGeneration":{"type":"string","format":"uuid"},"transfer":{"type":"boolean"},"confirmReady":{"type":"boolean"}},"required":["requestId","action","expectedGeneration"],"additionalProperties":false}
+    KeyboardResult: {"type":"object","properties":{"generation":{"type":"string","format":"uuid"},"manualSession":{"anyOf":[{"$ref":"#/components/schemas/ManualSession"},{"type":"null"}]},"writer":{"type":"boolean"},"reason":{"type":"string"}},"required":["generation","manualSession","writer","reason"],"additionalProperties":false}
+    NativeInput: {"type":"object","properties":{"generation":{"type":"string","format":"uuid"},"seq":{"type":"integer","minimum":0},"encoding":{"enum":["utf8","binary"]},"data":{"type":"string"}},"required":["generation","seq","encoding","data"],"additionalProperties":false}
+    ManualReconcile: {"oneOf":[{"type":"object","properties":{"requestId":{"type":"string","format":"uuid"},"manualSessionId":{"type":"string","format":"uuid"},"expectedRevision":{"type":"integer","minimum":1},"confirmReady":{"const":true}},"required":["requestId","manualSessionId","expectedRevision","confirmReady"],"additionalProperties":false},{"type":"object","properties":{"requestId":{"type":"string","format":"uuid"},"manualSessionId":{"type":"string","format":"uuid"},"expectedRevision":{"type":"integer","minimum":1},"confirmInspected":{"const":true},"note":{"type":"string","minLength":1,"maxLength":1000}},"required":["requestId","manualSessionId","expectedRevision","confirmInspected","note"],"additionalProperties":false}]}
+    LaunchProfile: {"type":"object","properties":{"id":{"type":"string","format":"uuid"},"revision":{"type":"integer","minimum":0},"label":{"type":"string"},"executable":{"type":"string"},"args":{"type":"array","items":{"type":"string"}},"adapterHint":{"enum":["codex","claude","manual"]},"enabled":{"type":"boolean"}},"required":["id","revision","label","executable","args","adapterHint","enabled"],"additionalProperties":false}
+    LaunchProfileInput: {"type":"object","properties":{"label":{"type":"string"},"executable":{"type":"string"},"args":{"type":"array","items":{"type":"string"}},"adapterHint":{"enum":["codex","claude","manual"]},"enabled":{"type":"boolean"},"expectedRevision":{"type":"integer","minimum":0}},"required":["label","executable","args","adapterHint","enabled"],"additionalProperties":false}
+    LaunchItem: {"type":"object","properties":{"id":{"type":"string","format":"uuid"},"projectId":{"type":"string"},"worktreeId":{"type":"string"},"worktree":{"$ref":"#/components/schemas/WorktreeIdentity"},"commonDir":{"type":"string"},"branch":{"anyOf":[{"type":"string"},{"type":"null"}]},"head":{"type":"string"},"profile":{"$ref":"#/components/schemas/LaunchProfile"},"executable":{"type":"string"},"sessionName":{"type":"string"},"environmentDigest":{"type":"string"}},"required":["id","projectId","worktreeId","worktree","commonDir","branch","head","profile","executable","sessionName","environmentDigest"],"additionalProperties":false}
+    LaunchPreviewInput: {"type":"object","properties":{"projectId":{"type":"string"},"items":{"type":"array","items":{"type":"object","properties":{"worktreeId":{"type":"string"},"profileId":{"type":"string","format":"uuid"},"count":{"type":"integer","minimum":1,"maximum":6}},"required":["worktreeId","profileId","count"],"additionalProperties":false}}},"required":["projectId","items"],"additionalProperties":false}
+    LaunchPreview: {"type":"object","properties":{"requestId":{"type":"string","format":"uuid"},"digest":{"type":"string"},"expiresAt":{"type":"string"},"items":{"type":"array","items":{"$ref":"#/components/schemas/LaunchItem"}},"blockers":{"type":"array","items":{"type":"string"}}},"required":["requestId","digest","expiresAt","items","blockers"],"additionalProperties":false}
+    LaunchInstance: {"type":"object","properties":{"id":{"type":"string","format":"uuid"},"projectId":{"type":"string"},"worktreeId":{"type":"string"},"worktree":{"$ref":"#/components/schemas/WorktreeIdentity"},"commonDir":{"type":"string"},"branch":{"anyOf":[{"type":"string"},{"type":"null"}]},"head":{"type":"string"},"profile":{"$ref":"#/components/schemas/LaunchProfile"},"executable":{"type":"string"},"sessionName":{"type":"string"},"environmentDigest":{"type":"string"},"status":{"enum":["applying","starting","running","exited","uncertain","reconciled","failed"]},"phase":{"enum":["reserved","creating","created","configured","marked","executing","observed"]},"message":{"type":"string"},"identity":{"anyOf":[{"$ref":"#/components/schemas/PaneIdentity"},{"type":"null"}]},"placeholder":{"anyOf":[{"$ref":"#/components/schemas/PaneIdentity"},{"type":"null"}]},"sessionId":{"anyOf":[{"type":"string"},{"type":"null"}]},"windowId":{"anyOf":[{"type":"string"},{"type":"null"}]},"updatedAt":{"type":"string"},"humanDecision":{"type":"object","properties":{"requestId":{"type":"string","format":"uuid"},"note":{"type":"string"},"at":{"type":"string"}},"required":["requestId","note","at"],"additionalProperties":false}},"required":["id","projectId","worktreeId","worktree","commonDir","branch","head","profile","executable","sessionName","environmentDigest","status","phase","message","identity","placeholder","sessionId","windowId","updatedAt"],"additionalProperties":false}
+    LaunchBatch: {"type":"object","properties":{"requestId":{"type":"string","format":"uuid"},"previewDigest":{"type":"string"},"items":{"type":"array","items":{"$ref":"#/components/schemas/LaunchInstance"}},"createdAt":{"type":"string"}},"required":["requestId","previewDigest","items","createdAt"],"additionalProperties":false}
+    TerminalFrame: {"oneOf":[{"type":"object","properties":{"type":{"const":"reset"},"generation":{"type":"string","format":"uuid"},"cols":{"type":"integer","minimum":0},"rows":{"type":"integer","minimum":0},"bootId":{"type":"string","format":"uuid"},"native":{"type":"boolean"},"reason":{"type":"string"}},"required":["type","generation","cols","rows","bootId","native","reason"],"additionalProperties":false},{"type":"object","properties":{"type":{"const":"out"},"generation":{"type":"string","format":"uuid"},"sequence":{"type":"integer","minimum":0},"bytes":{"type":"integer","minimum":0},"data":{"type":"string"}},"required":["type","generation","sequence","bytes","data"],"additionalProperties":false},{"type":"object","properties":{"type":{"const":"keyboard"},"generation":{"type":"string","format":"uuid"},"manualSessionId":{"anyOf":[{"type":"string","format":"uuid"},{"type":"null"}]},"writer":{"type":"boolean"},"reason":{"type":"string"}},"required":["type","generation","manualSessionId","writer","reason"],"additionalProperties":false},{"type":"object","properties":{"type":{"const":"active"},"paneId":{"type":"string"},"command":{"type":"string"},"sessionId":{"type":"string"},"label":{"type":"string"},"size":{"type":"string","pattern":"^[0-9]+x[0-9]+$","description":"Effective tmux window size, columns x rows; other clients may influence it."}},"required":["type","paneId","command","sessionId","label"],"additionalProperties":false},{"type":"object","properties":{"type":{"const":"hb"}},"required":["type"],"additionalProperties":false},{"type":"object","properties":{"type":{"const":"closed"},"reason":{"type":"string"}},"required":["type","reason"],"additionalProperties":false}]}
     AgentId:
       type: string
       pattern: ^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$
@@ -1238,6 +1291,13 @@ components:
           $ref: '#/components/schemas/PaneIdentity'
         backgroundState:
           enum: [clear, active, unknown]
+        backgroundSummary:
+          $ref: '#/components/schemas/BackgroundSummary'
+        completionSequence:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+          description: Claude turn_complete only. Ordered Stop observation within the exact source turn; duplicates are idempotent, older observations cannot replace newer evidence.
         prompt:
           type: string
           maxLength: 2000
@@ -1923,6 +1983,7 @@ components:
     ConsoleState:
       type: object
       properties:
+        manualSessions: {type: array, items: {$ref: "#/components/schemas/ManualSession"}}
         interactions: {"type":"array","items":{"$ref":"#/components/schemas/InteractionRecord"}}
         checkpoints: {"type":"array","items":{"$ref":"#/components/schemas/InputCheckpoint"}}
         groups:
@@ -2373,6 +2434,8 @@ components:
       description: The host's effective global configuration as read at startup. Read-only; the access token is never included.
       properties:
         mode: {$ref: '#/components/schemas/AdapterMode'}
+        terminalEnabled: {type: boolean}
+        launchEnabled: {type: boolean}
         inputEnabled: {type: boolean}
         legacyEnabled: {type: boolean, description: Whether the deprecated staging relay may be shown as a console preference.}
         dataDir: {type: string, description: Controller data (SQLite store, journal, plans, assignments); the adapter mode is appended to the configured base.}
@@ -2434,11 +2497,41 @@ components:
         revision: {"type":"integer"}
       required: ["phase","handoff","group","cwd","worktree","branch","consent","setup","logPath","taskBaseSha","acceptedSha","candidateSha","candidateAuthor","expectedParentSha","turn","findings","latestPublication","next","request","policy","workerId","revision"]
       additionalProperties: false
+    BackgroundSummary:
+      type: object
+      properties:
+        tasks: {"type":["integer","null"],"minimum":0,"maximum":100000}
+        crons: {"type":["integer","null"],"minimum":0,"maximum":100000}
+        taskTypes: {"type":"array","maxItems":5,"uniqueItems":true,"items":{"enum":["local_bash","local_agent","remote_agent","in_process_teammate","unknown"]}}
+      required: [tasks, crons, taskTypes]
+      additionalProperties: false
+    BlockedHandoff:
+      type: object
+      properties:
+        commandId: {"type":"string","format":"uuid"}
+        revision: {"type":"string","format":"uuid"}
+        backgroundState: {"enum":["clear","active","unknown"]}
+        backgroundSummary: {"$ref":"#/components/schemas/BackgroundSummary"}
+        publishedSha: {"type":["string","null"]}
+        publicationError: {"type":["string","null"]}
+        gate: {"type":"string"}
+      required: [commandId, revision, backgroundState, publishedSha, publicationError, gate]
+      additionalProperties: false
+    HookReceipt:
+      type: object
+      properties:
+        accepted: {"type":"boolean"}
+        reason: {"type":"string"}
+        event: {"oneOf":[{"$ref":"#/components/schemas/TurnEvent"},{"type":"null"}]}
+        completion: {"enum":["pending","finished"],"description":"Completion captured by the controller. Finished does not mean a paused run resumed or the task succeeded."}
+      required: [accepted, reason, event]
+      additionalProperties: false
     RelayRun:
       type: "object"
       properties:
         interaction: {"$ref":"#/components/schemas/InteractionHold"}
         restoredCheckpoint: {"type":"boolean"}
+        blockedHandoff: {"$ref":"#/components/schemas/BlockedHandoff"}
         id: {"type":"string","format":"uuid"}
         repository: {"type":"string"}
         lockKey: {"type":"string"}
@@ -2473,6 +2566,7 @@ components:
         continuation: {"type":"boolean"}
         baselineProcesses: {"oneOf":[{"type":"null"},{"type":"array","items":{"type":"object","properties":{"pid":{"type":"string"},"command":{"type":"string"}},"required":["pid","command"],"additionalProperties":false}}]}
         baselineWorktree: {"type":["string","null"]}
+        completion: {"$ref":"#/components/schemas/EventInput"}
         implementation: {"$ref":"#/components/schemas/ImplementationTurn"}
         planning: {"$ref":"#/components/schemas/PlanTurn"}
       required: ["commandId","runId","agentId","input","wireText","status","sessionId","sourceTurnId","continuation","baselineProcesses","baselineWorktree"]
@@ -2481,9 +2575,10 @@ components:
       type: "object"
       properties:
         runId: {"type":"string","format":"uuid"}
-        action: {"enum":["pause","takeover","continue"]}
+        action: {"enum":["pause","takeover","continue","recheck"]}
         confirmReady: {"const":true}
         expectedCommandId: {"type":"string","format":"uuid"}
+        expectedRevision: {"type":"string","format":"uuid","description":"Required with recheck, together with expectedCommandId and confirmReady. Matches the current blocked handoff observation."}
       required: ["runId","action"]
       additionalProperties: false
     Ok:
@@ -2711,7 +2806,7 @@ components:
       - status
     InteractionInput: {"type":"object","properties":{"requestId":{"type":"string","format":"uuid"},"runId":{"type":"string","format":"uuid"},"commandId":{"type":"string","format":"uuid"},"agentId":{"$ref":"#/components/schemas/AgentId"},"registrationId":{"type":"string","format":"uuid"},"sessionId":{"type":"string"},"sourceTurnId":{"type":"string"},"expectedRevision":{"type":"integer","minimum":0},"confirmPresent":{"const":true},"purpose":{"enum":["detail","answer","key"]},"text":{"type":"string","description":"Literal text, at most 2000 UTF-8 bytes; no command markers or terminal controls."},"key":{"enum":["Enter","Escape"]},"confirmInterrupt":{"const":true}},"required":["requestId","runId","commandId","agentId","registrationId","sessionId","sourceTurnId","expectedRevision","confirmPresent","purpose"],"additionalProperties":false,"description":"detail/answer require text and forbid key/confirmInterrupt. key forbids text; Escape requires confirmInterrupt=true. Reserves the whole-run hold before terminal bytes; does not grant new work or commit authority."}
     InteractionRecord: {"type":"object","properties":{"input":{"$ref":"#/components/schemas/InteractionInput"},"repository":{"type":"string"},"status":{"enum":["recorded","sending","delivered","rejected","uncertain"]},"createdAt":{"type":"string"},"updatedAt":{"type":"string"},"error":{"type":["string","null"]}},"required":["input","repository","status","createdAt","updatedAt","error"],"additionalProperties":false}
-    InteractionHold: {"type":"object","properties":{"revision":{"type":"integer","minimum":0},"active":{"type":"boolean"},"fault":{"type":"boolean"},"disposition":{"enum":["complete","automatic","waiting","plan"]}},"required":["revision","active","fault"],"additionalProperties":false}
+    InteractionHold: {"type":"object","properties":{"origin":{"const":"keyboard"},"revision":{"type":"integer","minimum":0},"active":{"type":"boolean"},"fault":{"type":"boolean"},"disposition":{"enum":["complete","automatic","waiting","plan"]}},"required":["revision","active","fault"],"additionalProperties":false}
     CheckpointInput: {"type":"object","properties":{"requestId":{"type":"string","format":"uuid"},"runId":{"type":"string","format":"uuid"},"commandId":{"type":"string","format":"uuid"},"expectedRevision":{"type":"integer","minimum":0},"action":{"enum":["review_input","restore"]},"confirmReady":{"const":true}},"required":["requestId","runId","commandId","expectedRevision","action","confirmReady"],"additionalProperties":false}
     ExternalActivity: {"type":"object","properties":{"agentId":{"$ref":"#/components/schemas/AgentId"},"sessionId":{"type":"string"},"sourceTurnId":{"type":"string"},"cliPid":{"type":"string"},"startedAt":{"type":"string"},"state":{"enum":["working","clear","unknown"]},"startEvidence":{"type":"string"},"finishEvidence":{"type":"string"}},"required":["agentId","sessionId","sourceTurnId","cliPid","startedAt","state","startEvidence"],"additionalProperties":false}
     InputCheckpoint: {"type":"object","properties":{"runId":{"type":"string","format":"uuid"},"commandId":{"type":"string","format":"uuid"},"revision":{"type":"integer","minimum":0},"kind":{"enum":["interaction","waiting"]},"fingerprint":{"type":"string"},"branch":{"type":["string","null"]},"result":{"type":"string"},"sessions":{"type":"array","items":{"$ref":"#/components/schemas/SessionRegistration"}},"processes":{"type":"object","additionalProperties":{"type":"array","items":{"$ref":"#/components/schemas/ProcessRecord"}}},"external":{"type":"object","additionalProperties":{"$ref":"#/components/schemas/ExternalActivity"}},"fault":{"type":"boolean"},"reason":{"type":["string","null"]},"capturedAt":{"type":"string","format":"date-time"}},"required":["runId","commandId","revision","kind","fingerprint","branch","result","sessions","processes","external","fault","reason","capturedAt"],"additionalProperties":false}

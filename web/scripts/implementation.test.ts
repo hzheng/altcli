@@ -14,7 +14,7 @@ import { resolveWorktree } from '../src/server/worktree.ts';
 import { archiveCommit, assertWorktreeInput, branchState, taskBaseline } from '../src/server/commit-handoff.ts';
 import { WorkflowStore } from '../src/server/workflow-store.ts';
 import { parseGroup, parseImplementation, parseStandalone, parseReviewPreview } from '../src/core/implementation-validation.ts';
-import { parseActivityReset, parseHook } from '../src/core/workflow-validation.ts';
+import { parseActivityReset, parseHook, parseRunAction } from '../src/core/workflow-validation.ts';
 import { assertIdentity } from '../src/core/policy.ts';
 import type { SessionRegistration } from '../src/contracts/api.ts';
 import { codexCompletion, codexStartState } from '../../hooks/protocol.mjs';
@@ -74,6 +74,94 @@ async function complete(id: string, more: Partial<HookEvent> = {}) {
   return plane.recordEvent(input);
 }
 const run = (id: string) => plane.workflow.run(id)!;
+
+const claudeNative = { cliPid: '101', startedAt: '2026-09-25T01:00:00.000Z' };
+const recheck = (id: string) => ({ runId: id, action: 'recheck' as const, confirmReady: true as const, expectedCommandId: id, expectedRevision: run(id).blockedHandoff!.revision });
+async function blockedClaude(clear = false) {
+  const input = request({ agentId: 'claude' }); await plane.submitImplementation(input);
+  const sha = publish(input.requestId, true);
+  await plane.recordEvent(event(input.requestId, { ...claudeNative, event: 'turn_started' }));
+  const active = event(input.requestId, { ...claudeNative, completionSequence: 1, backgroundState: 'active', backgroundSummary: { tasks: 1, crons: 0, taskTypes: ['local_bash'] } });
+  const receipt = await plane.recordEvent(active);
+  assert.equal(receipt.completion, 'pending');
+  if (clear) await plane.recordEvent(event(input.requestId, { ...claudeNative, completionSequence: 2 }));
+  return { input, sha, active };
+}
+test('ordered Claude background completion stays paused until an explicit, current recheck relays once', async () => {
+  const { input, sha, active } = await blockedClaude(); const id = input.requestId;
+  assert.equal(run(id).blockedHandoff!.publishedSha, sha); assert.equal(journal().length, 0);
+  assert.deepEqual(run(id).blockedHandoff!.backgroundSummary, active.backgroundSummary);
+  const stale = recheck(id);
+  await assert.rejects(async () => plane.action(stale), /correlated clear completion/);
+  const clear = event(id, { ...claudeNative, completionSequence: 3 });
+  assert.equal((await plane.recordEvent(clear)).completion, 'finished');
+  const revision = run(id).blockedHandoff!.revision;
+  await plane.recordEvent(active); // duplicate older receipt
+  await plane.recordEvent({ ...active, completionSequence: 2 }); // previously unseen older observation
+  await plane.recordEvent(clear); // exact retry after a lost response
+  assert.equal(run(id).blockedHandoff!.revision, revision);
+  assert.equal(run(id).status, 'paused'); assert.equal(sent.length, 1);
+  await assert.rejects(async () => plane.action(stale), /current completion evidence/);
+  const action = recheck(id);
+  const results = await Promise.allSettled([plane.action(action), plane.action(action)]);
+  assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);
+  assert.equal(sent.length, 2); assert.equal(journal().length, 1); assert.equal(run(id).implementation!.candidateSha, sha);
+  assert.equal(plane.workflow.execution(run(id).currentCommandId)!.agentId, 'codex');
+  await assert.rejects(async () => plane.action(action), /current completion evidence/); assert.equal(sent.length, 2);
+});
+for (const invalidation of ['pause', 'restart', 'new prompt', 'changed worker', 'dirty checkout', 'changed publication', 'manual input'] as const) {
+  test(`blocked handoff recheck refuses ${invalidation} and retains ownership`, async () => {
+    const { input } = await blockedClaude(true); const id = input.requestId; const action = recheck(id);
+    if (invalidation === 'pause') plane.action({ runId: id, action: 'pause' });
+    if (invalidation === 'restart') {
+      store.close(); store = new Store(join(directory, 'metadata')); plane = new ControlPlane(new Controller(config(), store, adapter));
+    }
+    if (invalidation === 'new prompt') await plane.recordEvent(event(id, { ...claudeNative, event: 'turn_started', commandId: undefined, sourceTurnId: 'unrelated', prompt: 'unrelated input' }));
+    if (invalidation === 'changed worker') adapter.foregrounds.set('claude', '999');
+    if (invalidation === 'dirty checkout') appendFileSync(join(root, 'app.txt'), 'uncommitted writer\n');
+    if (invalidation === 'changed publication') writeFileSync(plane.workflow.execution(id)!.implementation!.resultPath, '{}');
+    if (invalidation === 'manual input') plane.workflow.beginKeyboard(id);
+    await assert.rejects(async () => plane.action(action));
+    assert.equal(sent.length, 1); assert.equal(run(id).status, 'paused'); assert.equal(journal().length, 0);
+    assert.equal(plane.workflow.owner(`${root}/.git/index`), id);
+  });
+}
+test('activity racing the publication recheck cannot dispatch', async () => {
+  const { input } = await blockedClaude(true); const id = input.requestId; const action = recheck(id);
+  const inspect = adapter.inspect.bind(adapter); let raced = false;
+  adapter.inspect = async pane => {
+    if (!raced) { raced = true; await plane.recordEvent(event(id, { ...claudeNative, completionSequence: 3, backgroundState: 'active' })); }
+    return inspect(pane);
+  };
+  await assert.rejects(async () => plane.action(action), /activity invalidated/);
+  assert.equal(run(id).blockedHandoff!.backgroundState, 'active'); assert.equal(sent.length, 1);
+});
+test('conflicting payload at one completion sequence requires reconciliation even after a later clear Stop', async () => {
+  const { input, active } = await blockedClaude(); const id = input.requestId; const action = recheck(id);
+  const conflict = await plane.recordEvent({ ...active, backgroundState: 'clear' });
+  assert.equal(conflict.accepted, false); assert.match(conflict.reason, /identity conflict/);
+  assert.equal(run(id).blockedHandoff, undefined);
+  await plane.recordEvent(event(id, { ...claudeNative, completionSequence: 2 }));
+  await assert.rejects(async () => plane.action(action), /current completion evidence/);
+  assert.equal(run(id).status, 'paused'); assert.equal(sent.length, 1);
+});
+test('Codex recheck obtains fresh process evidence without replaying its completion or command', async () => {
+  const input = request(); await plane.submitImplementation(input); publish(input.requestId, true);
+  adapter.trees.set('codex', [{ pid: '900', command: 'node' }]);
+  await complete(input.requestId, { cliPid: '100', startedAt: claudeNative.startedAt, backgroundState: 'unknown' });
+  const action = recheck(input.requestId);
+  await assert.rejects(async () => plane.action(action), /correlated clear completion/);
+  adapter.trees.set('codex', []);
+  await plane.action(action); assert.equal(sent.length, 2); assert.equal(journal().length, 1);
+});
+test('completion diagnostics and explicit recheck require the bounded contract', () => {
+  assert.throws(() => parseRunAction({ runId: randomUUID(), action: 'recheck', confirmReady: true, expectedCommandId: randomUUID() }));
+  const base = { source: 'claude', event: 'turn_complete', paneId: '%1' };
+  for (const completionSequence of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) assert.throws(() => parseHook({ ...base, completionSequence }));
+  assert.throws(() => parseHook({ ...base, backgroundSummary: { tasks: 1, crons: 0, taskTypes: ['private text'] } }));
+  assert.throws(() => parseHook({ ...base, backgroundSummary: { tasks: 1, crons: 0, taskTypes: [], prompt: 'private' } }));
+  assert.equal(parseHook({ ...base, completionSequence: 1 }).completionSequence, 1);
+});
 
 test('direct Start binds discovered solo identity without a registration step; stale consent sends nothing', async () => {
   const template = request(); plane.removeGroup(group.id); plane.remove('codex'); plane.remove('claude');
@@ -392,7 +480,7 @@ test('v4 migration preserves historical pair IDs and creates versioned groups', 
   store.db.prepare('DELETE FROM groups').run(); store.db.pragma('user_version = 4'); store.close();
   store = new Store(join(directory, 'metadata'));
   assert.equal(store.groups()[0]!.id, group.id); assert.equal(store.groups()[0]!.legacyPairId, group.id);
-  assert.deepEqual(store.groups()[0]!.members, ['codex', 'claude']); assert.equal(store.db.pragma('user_version', { simple: true }), 13);
+  assert.deepEqual(store.groups()[0]!.members, ['codex', 'claude']); assert.equal(store.db.pragma('user_version', { simple: true }), 14);
 });
 test('a relay note reaches only the peer\'s review assignment and needs a relay', async () => {
   const input = request({ reviewNote: 'Please check the retry path first.' }); await plane.submitImplementation(input);
@@ -1293,6 +1381,20 @@ test('completion wins the preflight race: rejected input restores the saved disp
   publish(input.runId); await complete(input.runId); assert.equal(run(input.runId).status, 'paused'); release();
   assert.equal((await pending).status, 'rejected'); assert.equal(run(input.runId).status, 'completed'); assert.equal(sent.length, 1);
 });
+for (const handoff of [false, true]) test(`external start during input preflight retains ownership and prevents continuation (handoff=${handoff})`, async () => {
+  const input = await interactionStart({ handoff }); let release!: () => void; let entered!: () => void;
+  const started = new Promise<void>((r) => { entered = r; }); const gate = new Promise<void>((r) => { release = r; });
+  adapter.preflight = async () => { entered(); await gate; };
+  const pending = plane.submitInteraction(input); await started;
+  publish(input.runId, handoff); await complete(input.runId);
+  assert.equal(run(input.runId).status, 'paused');
+  assert.equal(plane.interactions.checkpoint(input.runId), undefined);
+  await plane.recordEvent(externalEvent(input.runId));
+  release(); assert.equal((await pending).status, 'rejected');
+  assert.equal(run(input.runId).status, 'paused'); assert.equal(run(input.runId).interaction?.fault, true);
+  assert.equal(plane.workflow.owner(`${root}/.git/index`), input.runId);
+  assert.equal(plane.interactions.checkpoint(input.runId), undefined); assert.equal(sent.length, 1);
+});
 test('an uncorrelated native start cannot be attributed to even identical reserved text', async () => {
   const input = await interactionStart(); await plane.submitInteraction(input);
   await plane.recordEvent(externalEvent(input.runId, { prompt: input.text }));
@@ -1317,6 +1419,8 @@ test('restore requires a pre-existing validated boundary and exact external fini
   const review = run(input.requestId).currentCommandId; publish(review, true); await complete(review);
   assert.equal(run(input.requestId).status, 'waiting'); const external = externalEvent(input.requestId);
   await plane.recordEvent(external); assert.equal(run(input.requestId).status, 'paused');
+  // This settled waiting checkpoint keeps its guidance when unrelated activity pauses the run.
+  assert.match(run(input.requestId).reason, /External native activity paused the settled checkpoint/);
   await assert.rejects(plane.reconcileCheckpoint(checkpointDecision(input.requestId, 'restore')), /checkpoint is incomplete/);
   await plane.recordEvent({ ...external, event: 'turn_complete' });
   const decision = checkpointDecision(input.requestId, 'restore'); await plane.reconcileCheckpoint(decision); await plane.reconcileCheckpoint(decision);
@@ -1419,4 +1523,57 @@ test('a released run leaves no checkpoint to scan or restore', async () => {
   assert.equal(plane.interactions.activeCheckpoints().length, 0);
   assert.equal((await plane.state()).checkpoints!.length, 0);
   plane.interactions.prune(); assert.equal(plane.interactions.checkpoint(input.requestId), undefined);
+});
+
+/** Simulated wire socket; the actual custom-host WebSocket path has a separate real-host probe. */
+async function takeNativeKeyboard() {
+  plane.config.terminalEnabled = true;
+  const session = (await plane.state()).sessions.find(s => s.id === 'codex')!;
+  const { EventEmitter } = await import('node:events');
+  class Socket extends EventEmitter {
+    readyState = 1; bufferedAmount = 0; generation = '';
+    send(text: string) { const f = JSON.parse(text); if (f.type === 'reset') this.generation = f.generation; }
+    close() { if (this.readyState !== 1) return; this.readyState = 3; this.emit('close'); }
+    terminate() { this.close(); }
+  }
+  const opened = await plane.terminals.open({ target: { agentId: session.id, registrationId: session.registrationId }, cols: 80, rows: 24, clientInstanceId: randomUUID() });
+  const socket = new Socket(); plane.terminals.connect(socket as unknown as import('ws').WebSocket);
+  socket.emit('message', Buffer.from(JSON.stringify({ ticket: opened.ticket })), false);
+  for (let n = 0; n < 50 && !socket.generation; n++) await new Promise(r => setTimeout(r, 5));
+  const result = await plane.terminals.keyboard(opened.connectionId, { requestId: randomUUID(), action: 'acquire', expectedGeneration: socket.generation, confirmReady: true });
+  return { opened, result };
+}
+test('native keyboard holds a running implementation completion once; release does not dispatch its saved successor', async () => {
+  checkpointPanes(); const input = request(); await plane.submitImplementation(input);
+  const keyboard = await takeNativeKeyboard();
+  assert.equal(run(input.requestId).interaction?.origin, 'keyboard');
+  publish(input.requestId, true); await complete(input.requestId); await complete(input.requestId);
+  assert.equal(run(input.requestId).status, 'paused'); assert.equal(run(input.requestId).interaction?.disposition, 'automatic'); assert.equal(sent.length, 1);
+  const released = await plane.terminals.keyboard(keyboard.opened.connectionId, { requestId: randomUUID(), action: 'releaseSettled', expectedGeneration: keyboard.result.generation, confirmReady: true });
+  assert.equal(released.manualSession?.reconciliationRequired, false, released.reason); assert.equal(sent.length, 1);
+  await plane.reconcileCheckpoint(checkpointDecision(input.requestId)); assert.equal(sent.length, 2);
+  await plane.terminals.shutdown();
+});
+test('native keyboard preserves a waiting checkpoint rather than recapturing intervening edits', async () => {
+  checkpointPanes(); const input = request({ autoContinue: false }); await plane.submitImplementation(input); publish(input.requestId, true); await complete(input.requestId);
+  const review = run(input.requestId).currentCommandId; publish(review, true); await complete(review);
+  const checkpoint = plane.interactions.checkpoint(input.requestId)!;
+  const keyboard = await takeNativeKeyboard();
+  assert.equal(plane.interactions.checkpoint(input.requestId)!.fingerprint, checkpoint.fingerprint);
+  assert.equal(run(input.requestId).interaction?.disposition, 'waiting');
+  appendFileSync(join(root, 'app.txt'), 'manual edit\n');
+  const released = await plane.terminals.keyboard(keyboard.opened.connectionId, { requestId: randomUUID(), action: 'releaseSettled', expectedGeneration: keyboard.result.generation, confirmReady: true });
+  assert.equal(released.manualSession?.reconciliationRequired, true); assert.match(released.reason, /changed/); assert.equal(sent.length, 2);
+  await assert.rejects(plane.reconcileCheckpoint(checkpointDecision(input.requestId, 'restore')), /Manual terminal input/);
+  plane.interactions.invalidate(input.requestId, 'Fixture checkpoint requires takeover.');
+  const retainedRun = run(input.requestId), retainedCheckpoint = plane.interactions.checkpoint(input.requestId)!;
+  assert.equal(retainedCheckpoint.fault, true);
+  const manual = plane.authority.pending()[0]!;
+  await plane.reconcileManual({ requestId: randomUUID(), manualSessionId: manual.id, expectedRevision: manual.revision, confirmInspected: true,
+    note: 'Inspected changed checkout and possible effects; affected run still needs takeover.' });
+  assert.equal(plane.authority.blocked, false);
+  assert.deepEqual(run(input.requestId), retainedRun); assert.deepEqual(plane.interactions.checkpoint(input.requestId), retainedCheckpoint);
+  assert.equal(run(input.requestId).interaction?.origin, 'keyboard'); assert.equal(sent.length, 2);
+  await assert.rejects(plane.reconcileCheckpoint(checkpointDecision(input.requestId)), /checkpoint is incomplete/);
+  await plane.terminals.shutdown();
 });

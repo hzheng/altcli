@@ -71,3 +71,13 @@ None of this reopens the central choice: lightweight planning documents kept out
 ### Terminal input follow-ups
 
 [ADR-0019](adr/ADR-0019-terminal-input-and-checkpoints.md) defines manual literal input and the whole-run checkpoint. Native input acknowledgments, permission-dialog semantics, portable capability/version records, safe automatic consumption of queued prompts, and autonomous app control remain deferred. Prompt equality, recent history and a pending reservation cannot resolve native attribution. Installed-provider compatibility must be observed; the manual controls do not certify same-turn steering or dialog semantics.
+
+## Native transport implementation evidence
+
+The approved WebSocket alternative replaces the HTTP-stream candidate after its
+browser connection-limit failure. The owner approved captured text wherever native
+observers could resize workers. ADR-0020/0021 own these decisions; they do not settle
+larger-group rollout or provider capability questions. Deployment acceptance through
+the actual remote proxy, physical Safari/IME and installed CLI versions remains
+open; see VALIDATION.md. The owner chose on September 24 to have setup enable
+both flags.

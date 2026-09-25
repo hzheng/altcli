@@ -10,13 +10,21 @@ export function parseStart(value: unknown): StartInput {
     ...(autoContinue !== undefined ? { autoContinue } : {}), ...(turnLimit !== undefined ? { turnLimit: turnLimit as number } : {}) };
 }
 export function parseHook(value: unknown): HookEvent {
-  const { commandId, sourceTurnId, identity, backgroundState, reporterPid, cliPid, startedAt, event, ...rest } = object(value);
+  const { commandId, sourceTurnId, identity, backgroundState, backgroundSummary, completionSequence, reporterPid, cliPid, startedAt, event, ...rest } = object(value);
   if (!['session_started', 'turn_started', 'turn_complete', 'turn_interrupted', 'outcome'].includes(String(event))) throw new AppError('INVALID_EVENT', 'Unknown lifecycle event.');
   if (event === 'session_started' && (commandId !== undefined || sourceTurnId !== undefined)) throw new AppError('INVALID_EVENT', 'Session startup cannot certify a command or turn.');
   const legacy = parseEvent({ ...rest, event: event === 'session_started' || event === 'turn_started' || event === 'turn_interrupted' ? 'turn_complete' : event });
   if (event === 'turn_interrupted' && (legacy.source !== 'codex' || !sourceTurnId || !identity || !cliPid || !startedAt || !legacy.sessionId || legacy.settled === true || legacy.outcome)) throw new AppError('INVALID_EVENT', 'Interruption requires exact Codex turn evidence and cannot certify completion.');
   if (sourceTurnId !== undefined && (typeof sourceTurnId !== 'string' || !/^[A-Za-z0-9:_-]{1,200}$/.test(sourceTurnId))) throw new AppError('INVALID_EVENT', 'Invalid source turn identity.');
   if (backgroundState !== undefined && !['clear', 'active', 'unknown'].includes(String(backgroundState))) throw new AppError('INVALID_EVENT', 'Invalid background state.');
+  if (completionSequence !== undefined && (event !== 'turn_complete' || legacy.source !== 'claude' || !Number.isSafeInteger(completionSequence) || (completionSequence as number) < 1)) throw new AppError('INVALID_EVENT', 'Invalid completion sequence.');
+  if (backgroundSummary !== undefined) {
+    const summary = object(backgroundSummary);
+    if (Object.keys(summary).sort().join(',') !== 'crons,taskTypes,tasks' ||
+      [summary.tasks, summary.crons].some(n => n !== null && (!Number.isInteger(n) || (n as number) < 0 || (n as number) > 100000)) ||
+      !Array.isArray(summary.taskTypes) || summary.taskTypes.length > 5 || new Set(summary.taskTypes).size !== summary.taskTypes.length ||
+      summary.taskTypes.some(t => !['local_bash', 'local_agent', 'remote_agent', 'in_process_teammate', 'unknown'].includes(t))) throw new AppError('INVALID_EVENT', 'Invalid background summary.');
+  }
   if (reporterPid !== undefined && (typeof reporterPid !== 'string' || !/^\d{1,10}$/.test(reporterPid))) throw new AppError('INVALID_EVENT', 'Invalid reporter process id.');
   if (cliPid !== undefined && (typeof cliPid !== 'string' || !/^\d{1,10}$/.test(cliPid))) throw new AppError('INVALID_EVENT', 'Invalid CLI process id.');
   if (startedAt !== undefined && (typeof startedAt !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(startedAt) || !Number.isFinite(Date.parse(startedAt)))) throw new AppError('INVALID_EVENT', 'Invalid activity start time.');
@@ -32,15 +40,18 @@ export function parseHook(value: unknown): HookEvent {
     ...(commandId !== undefined ? { commandId: requestId(commandId) } : {}),
     ...(sourceTurnId !== undefined ? { sourceTurnId: sourceTurnId as string } : {}),
     ...(pane ? { identity: pane } : {}), ...(backgroundState !== undefined ? { backgroundState: backgroundState as HookEvent['backgroundState'] } : {}),
+    ...(backgroundSummary !== undefined ? { backgroundSummary: backgroundSummary as HookEvent['backgroundSummary'] } : {}),
+    ...(completionSequence !== undefined ? { completionSequence: completionSequence as number } : {}),
     ...(reporterPid !== undefined ? { reporterPid: reporterPid as string } : {}), ...(cliPid !== undefined ? { cliPid: cliPid as string } : {}), ...(startedAt !== undefined ? { startedAt: startedAt as string } : {}) };
 }
 export function parseRunAction(value: unknown): RunAction {
   const body = object(value);
-  if (Object.keys(body).some((k) => !['runId', 'action', 'confirmReady', 'expectedCommandId'].includes(k))) throw new AppError('UNKNOWN_FIELD', 'Unknown field.');
-  if (!['pause','takeover','continue'].includes(String(body.action))) throw new AppError('INVALID_ACTION', 'Unknown run action.');
+  if (Object.keys(body).some((k) => !['runId', 'action', 'confirmReady', 'expectedCommandId', 'expectedRevision'].includes(k))) throw new AppError('UNKNOWN_FIELD', 'Unknown field.');
+  if (!['pause','takeover','continue','recheck'].includes(String(body.action))) throw new AppError('INVALID_ACTION', 'Unknown run action.');
   if (body.action !== 'pause' && body.confirmReady !== true) throw new AppError('READINESS_REQUIRED', 'Inspect every participant and stop all writers before changing ownership.');
   return { runId: requestId(body.runId), action: body.action as RunAction['action'], ...(body.confirmReady === true ? { confirmReady: true } : {}),
-    ...(body.action === 'continue' ? { expectedCommandId: requestId(body.expectedCommandId) } : {}) };
+    ...(['continue', 'recheck'].includes(String(body.action)) ? { expectedCommandId: requestId(body.expectedCommandId) } : {}),
+    ...(body.action === 'recheck' ? { expectedRevision: requestId(body.expectedRevision) } : {}) };
 }
 export function parseWorkspaceReset(value: unknown): WorkspaceReset {
   const body = object(value);

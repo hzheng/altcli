@@ -1,6 +1,26 @@
 # AltCLI roadmap
 
-**Implementation update: September 19, 2026.** The local commit path now implements
+**Implementation update: September 24, 2026.** Native terminals and explicit agent
+launching are implemented; setup enables their host flags (absent means off); see the
+[milestone status](#native-terminals-and-agent-launch) below. Image attachments
+are deferred by the owner's September 24 direction. Installed-host and physical
+device acceptance remain open.
+
+The completion follow-up removes `stop_hook_active` from background-task
+classification and retains exact Claude turn bindings until acknowledged clear
+completion. Ordered Stop observations preserve deduplication and reject stale
+evidence. Implementation runs paused at this gate show the observed publication,
+bounded task/cron counts and task types. **Recheck and relay** explicitly revalidates
+current completion, participants, publication and checkout before applying the
+frozen policy once. It does not recover explicit pauses, restart, uncertain delivery
+or manual-input holds. Installed-hook acceptance remains open; see VALIDATION.
+
+The input-preflight follow-up retains ownership when unrelated native work starts
+after completion has paused an input hold, before a checkpoint can be captured.
+Rejecting that pending input cannot release the checkout or dispatch a peer;
+settled waiting checkpoints keep their explicit restore path.
+
+The local commit path now implements
 the entry-layer group migration, Steps 1–2, and settled-boundary role/policy changes
 from Step 3. Recovery pauses without replay and uses explicit takeover; automated
 restart reconciliation remains deferred. Eligible agents need no registration UI;
@@ -23,7 +43,7 @@ installed-agent host acceptance is not claimed. The older milestones below
 describe the `46f228b` staging baseline. Task phases Plan/Implementation are distinct
 from those older milestone headings.
 
-Updated September 16, 2026. Source implementation and acceptance are separate.
+Source implementation and acceptance are recorded separately.
 Current architecture: [ADR-0011](docs/adr/ADR-0011-server-owned-relay-runs.md).
 Historical pre-hardening roadmap: [snapshot](docs/history/2026-09-16-pre-hardening/ROADMAP.md).
 
@@ -71,8 +91,8 @@ semantics. Do not make these automatic by trusting outcome prose alone.
 
 ## Optional later branches
 
-Full browser terminal (xterm.js/node-pty) only when snapshot interaction proves
-insufficient. Third AI supervisor only after deterministic ownership and reliable
+The xterm.js/node-pty terminal is implemented under ADR-0020; its host release
+gates are listed below. Third AI supervisor only after deterministic ownership and reliable
 lifecycle evidence; advisory first, bounded actions, no unrestricted terminal tool.
 Native Swift/iOS consumes the host API later; it does not execute local coding CLIs.
 
@@ -191,4 +211,36 @@ Publish/fetch exact code handoffs through a designated remote; optionally link o
 
 **Exit:** no worker consumes an unpublished commit, no comparison of unrelated absolute index paths, and no PR requirement for transport. Multi-host planning additionally needs explicit N-draft transfer/barrier semantics; ignored files never become a remote protocol by assumption.
 
-Native iOS, richer terminals, **AI supervision**, generalized workflow construction, advisor/quorum planning policies, N-agent implementation, and parallel alternative implementations remain later choices. A third or fourth ordinary planner is explicitly in scope and is not part of that supervisor deferral.
+Native iOS, optional terminal graphics output, **AI supervision**, generalized workflow construction, advisor/quorum planning policies, N-agent implementation, and parallel alternative implementations remain later choices. A third or fourth ordinary planner is explicitly in scope and is not part of that supervisor deferral.
+
+## Native terminals and agent launch
+
+Scope follows [ADR-0020](docs/adr/ADR-0020-native-terminals.md) and
+[ADR-0021](docs/adr/ADR-0021-project-entry-and-agent-launch.md). Milestone labels
+below correspond to the enhanced terminal/launch plan. The owner explicitly
+deferred image attachments on September 24; M4A/M4B do not gate the remaining
+terminal and launch implementation.
+
+| Milestone | Source status | Remaining acceptance |
+| --- | --- | --- |
+| M0: transport and host | One Next/ControlPlane owner, authenticated WebSocket, PTY/tmux attachment and isolated probes implemented. | Run the native CI matrix on the supported Linux/macOS hosts. |
+| M1: observation and layout | In-place terminals, labelled snapshot fallback, N terminal cards and one independent control pane implemented. Badges distinguish another browser, another terminal, a replaced CLI and unresolved manual input; the status line shows the effective window size, and Settings shows keyboard scope and terminal limits. Optional placements: a wide-screen side control pane, a phone control drawer and a per-card Use <agent> in control pane shortcut, all still one control pane. | Physical-device rendering and accessibility acceptance. |
+| M2: native input | Explicit keyboard ownership, literal keys/Unicode, touch modifiers, guarded text paste, in-page expansion, bounded resize and optional screen-reader mode implemented. Late input responses cannot affect a replacement keyboard generation; leaving the surface drops unsent queued text. A writer follows deliberate tmux session navigation with an updated label (observers never follow; target loss closes), and control-pane drafts including the Plan brief stay editable under a keyboard hold. | Installed CLI menus/questions and physical Safari/IME. |
+| M3: holds and recovery | Durable server-wide manual barriers, exact checkpoints, transfer, release, disconnect and explicit human reconciliation implemented. | Supervised installed-provider completion/restoration and host restart demonstration. |
+| M4: profiles and launch | Repository-directory entry, versioned literal argv profiles, batch launch, partial-result inspection and a separate launch action after verified worktree creation implemented. | Real installed CLI startup, readiness and workflow demonstration in a disposable checkout. |
+| M4A/M4B: image attachments | Deferred: native upload/insertion and control-pane reuse. | Separate implementation and provider acceptance; no attachment support is advertised. |
+| M5: remote/mobile/security | Automated browser, ownership and private-tmux checks exist; exact observed results are in VALIDATION. | Actual private HTTPS/WSS proxy, physical iPhone, network switching, two-device input and installed-host fault acceptance. |
+| M6: docs and guarded release | Maintained protocol, setup, acceptance checklist and host flags are present; setup writes both as true by the owner's September 24 decision. | Settled host rollout, upgrade/rollback and deployed acceptance. |
+
+The September 24 follow-up adds the missing visible focus escape, optional
+screen-reader output, text-paste action and warning, expansion, resize admission limits and
+generation-safe browser input handling. Snapshot timestamps appear only with
+snapshot output. Three launched instances still do not enable three-agent
+workflow execution.
+
+Use [TESTING](docs/TESTING.md#terminal-and-launch-release-checklist) for the
+remaining demonstrations and [VALIDATION](VALIDATION.md) for commands that
+actually ran. Setup writes `ALTCLI_ENABLE_TERMINAL` and `ALTCLI_ENABLE_AGENT_LAUNCH`
+as true; set them false on a deployment you have not accepted. Adopt backend changes only when no delivery is active;
+disabling either flag preserves unresolved ownership. Larger-group and
+remote-worker scope remains as described in Steps 7–8.

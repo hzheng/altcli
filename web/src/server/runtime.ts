@@ -6,6 +6,7 @@ import { Controller } from './controller.ts';
 import { ControlPlane } from './control-plane.ts';
 import { MockAdapter, mockSessions } from './adapters/mock.ts';
 import { TmuxAdapter, createRunner } from './adapters/tmux.ts';
+import { terminalHost } from './terminal-gateway.ts';
 import { assertExternalDataDir } from './paths.ts';
 const runtime = globalThis as typeof globalThis & { altcliControlPlane?: ControlPlane };
 export function controller(): ControlPlane {
@@ -17,5 +18,6 @@ export function controller(): ControlPlane {
   const adapter = config.mode === 'mock' ? new MockAdapter() : new TmuxAdapter(createRunner(config.tmuxBin, config.tmuxSocket));
   const plane = new ControlPlane(new Controller(config, store, adapter));
   runtime.altcliControlPlane = plane;
+  terminalHost().gateway = plane.terminals;
   return plane;
 }

@@ -614,14 +614,14 @@ test('the store version advances for the new operation owners: unresolved integr
   store.saveWorktreeIntegration({ input: integration, status: 'uncertain', message: 'fixture', updatedAt: new Date().toISOString(), commit: null });
   const discard = { ...await catalog.previewDiscard(target), confirmBranch: 'feature/finished', confirm: true as const };
   store.saveWorktreeDiscard({ input: discard, status: 'uncertain', message: 'fixture', updatedAt: new Date().toISOString() });
-  assert.equal(store.db.pragma('user_version', { simple: true }), 13);
+  assert.equal(store.db.pragma('user_version', { simple: true }), 14);
   store.close(); store = new Store(config.dataDir); catalog = new ProjectCatalog(store, config);
-  assert.equal(store.db.pragma('user_version', { simple: true }), 13);
+  assert.equal(store.db.pragma('user_version', { simple: true }), 14);
   assert.deepEqual(store.worktreeIntegrations().map((op) => [op.input.requestId, op.status]), [[integration.requestId, 'uncertain']]);
   assert.deepEqual(store.worktreeDiscards().map((op) => [op.input.requestId, op.status]), [[discard.requestId, 'uncertain']]);
   assert.throws(() => catalog.assertWorktreeReady(root), /squash integration/); assert.throws(() => catalog.assertWorktreeReady(request.path), /discard/);
   await assert.rejects(catalog.create(await input('another')), /owns this project/);
-  store.db.pragma('user_version = 14'); store.close();
+  store.db.pragma('user_version = 15'); store.close();
   assert.throws(() => new Store(config.dataDir), /Unsupported database version/);
   store = new Store(join(directory, 'fresh-metadata')); // afterEach closes this one
 });
@@ -801,7 +801,7 @@ test('v10 full-branch squash records remain valid batch boundaries after upgrade
   const legacy = JSON.parse(JSON.stringify(result)); delete legacy.input.through; delete legacy.input.previousCommit;
   store.saveWorktreeIntegration(legacy); store.db.pragma('user_version = 10'); store.close();
   store = new Store(config.dataDir); catalog = new ProjectCatalog(store, config);
-  assert.equal(store.db.pragma('user_version', { simple: true }), 13);
+  assert.equal(store.db.pragma('user_version', { simple: true }), 14);
   assert.equal((await catalog.previewRemoval(target)).integratedCommit, result.commit);
   writeFileSync(join(request.path, 'later.txt'), 'later batch\n'); git(request.path, 'add', '.'); git(request.path, 'commit', '-m', 'later');
   const next = await catalog.previewIntegration(target);

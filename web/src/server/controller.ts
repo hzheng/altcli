@@ -12,6 +12,7 @@ export class Controller {
   readonly config: Config;
   readonly store: Store;
   readonly adapter: TerminalAdapter;
+  inputGuard?: () => void;
   constructor(config: Config, store: Store, adapter: TerminalAdapter) {
     this.config = config; this.store = store; this.adapter = adapter;
     this.store.recoverInterrupted();
@@ -75,6 +76,7 @@ export class Controller {
   }
   removePair(id: string): void { this.store.removePair(id); }
   async submit(input: CommandInput, options: { wireText?: string; beforeSend?: () => Promise<void> } = {}): Promise<CommandRecord> {
+    this.inputGuard?.();
     const session = this.store.sessions().find((s) => s.id === input.agentId);
     if (!session) throw new AppError("NOT_REGISTERED", "Register this session first.", 404);
     if (!this.config.inputEnabled) throw new AppError("READ_ONLY", "Real input is disabled. Enable it on the host only after completing the local checks.", 403);
@@ -90,6 +92,7 @@ export class Controller {
     try {
       await this.adapter.preflight(session);
       await options.beforeSend?.();
+      this.inputGuard?.();
     } catch (error) {
       record = { ...record, status: "rejected", error: messageOf(error), updatedAt: new Date().toISOString() };
       this.store.update(record);

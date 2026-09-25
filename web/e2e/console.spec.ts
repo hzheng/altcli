@@ -96,7 +96,7 @@ test('Unknown offers an explicit status reset beside the warning, preserving the
   const before = await state(request);
   await unlock(page, TOKEN, false);
   // Reset status sits beside the agent's own status line; choose its pane first so it is shown on narrow screens too.
-  await page.getByRole('navigation', { name: 'Command target' }).getByRole('button', { name: 'Claude Code', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Viewed terminal' }).getByRole('button', { name: 'Claude Code', exact: true }).click();
   const row = pane(page, 'Claude Code').locator('.pane-status');
   const reset = row.getByRole('button', { name: 'Reset status', exact: true });
   await expect(reset).toBeEnabled(); await reset.click();
@@ -104,7 +104,7 @@ test('Unknown offers an explicit status reset beside the warning, preserving the
   await expect(pane(page, 'Claude Code').getByRole('region', { name: 'Reset agent status' })).toContainText('empty prompt with no background writers');
   await page.getByRole('button', { name: 'Cancel status reset' }).click(); expect(resets).toBe(0);
   await reset.click(); await page.getByRole('button', { name: 'I checked the terminal — mark Ready' }).click();
-  await expect(page.getByRole('status')).toContainText('Status reset to Ready');
+  await expect(page.locator('.feedback[role="status"]:visible')).toContainText('Status reset to Ready');
   await expect(row.locator('.state')).toHaveText('ready'); await expect(row).toContainText('confirmed by you');
   await expect(reset).toHaveCount(0); expect(resets).toBe(1);
   const after = await state(request);
@@ -115,7 +115,7 @@ test('readiness is explicit and a delivered command retains execution ownership'
   const ready = page.getByLabel('Ready to send', { exact: true }); await expect(ready).not.toBeChecked();
   const relay = page.getByRole('button', { name: 'Relay Codex ↗', exact: true }); await expect(relay).toBeDisabled();
   await ready.check(); await relay.click();
-  await expect(page.getByRole('status')).toContainText('DELIVERED'); await openController(page); await expect(page.getByRole('region', { name: 'Who controls the agents' })).toBeVisible();
+  await expect(page.locator('.feedback[role="status"]:visible')).toContainText('DELIVERED'); await openController(page); await expect(page.getByRole('region', { name: 'Who controls the agents' })).toBeVisible();
   await expect(relay).toBeDisabled();
   const run = (await state(request)).runs.find((r) => r.status === 'running')!;
   await complete(request, run.currentCommandId, 'accept_without_improvement');
@@ -140,7 +140,7 @@ test('history export downloads this worktree\'s runs and journal as JSON through
   expect(exported.turns.map((t: { commandId: string }) => t.commandId)).toContain(run.currentCommandId);
   expect(Array.isArray(exported.journal)).toBe(true);
   expect(requests).toHaveLength(1); expect(decodeURIComponent(requests[0]!)).toContain(`repository=${run.repository}`);
-  await expect(page.getByRole('status')).toContainText(/Exported \d+ runs? and \d+ journal entr(y|ies)/);
+  await expect(page.locator('.feedback[role="status"]:visible')).toContainText(/Exported \d+ runs? and \d+ journal entr(y|ies)/);
   // The endpoint is bearer-gated like every other route.
   expect((await request.get('/api/v1/history/export')).status()).toBe(401);
   expect((await request.get('/api/v1/history/export?repository=relative', { headers })).status()).toBe(400);
@@ -186,11 +186,11 @@ test('unregistered agents are immediately usable; inline name saves on Enter and
   const original = (await state(request)).sessions.find((session) => session.identity.paneId === '%3')!;
   const name = detail.getByLabel('Name for Codex %3'); await expect(name).toHaveValue('demo');
   await name.fill('Other Codex'); await name.press('Enter');
-  await expect(page.getByRole('status')).toContainText('Renamed "demo" to "Other Codex"');
+  await expect(page.locator('.feedback[role="status"]:visible')).toContainText('Renamed "demo" to "Other Codex"');
   await name.fill('Cancelled'); await name.press('Escape'); await expect(name).toHaveValue('Other Codex');
   expect((await state(request)).sessions.find((session) => session.id === original.id)!.label).toBe('Other Codex');
   await name.fill('Renamed Codex'); await name.blur();
-  await expect(page.getByRole('status')).toContainText('Renamed "Other Codex" to "Renamed Codex"');
+  await expect(page.locator('.feedback[role="status"]:visible')).toContainText('Renamed "Other Codex" to "Renamed Codex"');
   expect((await state(request)).sessions.find((session) => session.id === original.id)).toEqual({ ...original, label: 'Renamed Codex' });
   await page.screenshot({ path: info.outputPath('workspace-inline-name.png'), fullPage: true });
   await openTab(page, 'Console');
@@ -346,7 +346,7 @@ test('a finished response displays idle while background-work safety keeps the c
   const run = (await state(request)).runs.find((r) => r.id === id)!;
   expect(run.status).toBe('paused'); expect(run.currentCommandId).toBe(id);
   // While the paused controller still holds the command, the peer's status reset says why it is unavailable instead of only greying out.
-  await page.getByRole('navigation', { name: 'Command target' }).getByRole('button', { name: 'Claude Code', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Viewed terminal' }).getByRole('button', { name: 'Claude Code', exact: true }).click();
   const claude = pane(page, 'Claude Code');
   await expect(claude.getByRole('button', { name: 'Reset status', exact: true })).toBeDisabled();
   await expect(claude.locator('.reset-reason')).toContainText('Take over the paused controller first');
@@ -394,7 +394,7 @@ test('an automatic workspace group creates a persistent run without browser sche
   await expect(page.getByLabel('Workspace group members')).toHaveText('Codex ⇄ Claude Code');
   await openTab(page, 'Console');
   await page.getByLabel('Auto-relay', { exact: true }).check(); await page.getByLabel('Ready to send', { exact: true }).check();
-  await page.getByRole('button', { name: 'Relay Codex ↗', exact: true }).click(); await expect(page.getByRole('status')).toContainText('DELIVERED');
+  await page.getByRole('button', { name: 'Relay Codex ↗', exact: true }).click(); await expect(page.locator('.feedback[role="status"]:visible')).toContainText('DELIVERED');
   const run = (await state(request)).runs.find((r) => r.status === 'running')!;
   expect(run.pairId).toBe(group.id);
   await page.getByRole('button', { name: 'Lock', exact: true }).click();
@@ -409,7 +409,7 @@ test('an automatic workspace group creates a persistent run without browser sche
   expect(correction.agentId).toBe('codex'); expect(correction.input.kind).toBe('instruction'); expect(correction.input.handoff).toBe(true);
   expect(correction.input.text).toContain('Address objection: The delete path can remove records outside the selected project.');
   // The reviewer's turn is over: its objection stays labeled on its pane while the author's correction is in flight.
-  await page.getByRole('navigation', { name: 'Command target' }).getByRole('button', { name: /Claude Code/ }).click();
+  await page.getByRole('navigation', { name: 'Viewed terminal' }).getByRole('button', { name: /Claude Code/ }).click();
   await expect(page.getByText('strong_objection: The delete path can remove records outside the selected project.', { exact: true })).toBeVisible();
 });
 test('two browser pages cannot create two continuations from the same event', async ({ page, context, request }) => {
@@ -431,7 +431,7 @@ test('two browser pages cannot create two continuations from the same event', as
 test('pause and takeover are distinct and uncertain transport is not retried', async ({ page }) => {
   await unlock(page); await page.getByLabel(/Instruction to/).fill('mock:uncertain');
   await page.getByLabel('Ready to send', { exact: true }).check(); await page.getByRole('button', { name: 'Send Codex', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('UNCERTAIN'); await openController(page); await expect(page.getByRole('heading', { name: /^Controller paused/ })).toBeVisible();
+  await expect(page.locator('.feedback[role="status"]:visible')).toContainText('UNCERTAIN'); await openController(page); await expect(page.getByRole('heading', { name: /^Controller paused/ })).toBeVisible();
   // The card says which command it owns, so a paused run is recognisable without guessing.
   await expect(page.getByRole('region', { name: 'Who controls the agents' })).toContainText('Codex: “mock:uncertain”');
   await expect(page.getByRole('region', { name: 'Who controls the agents' })).toContainText('Agents: Codex'); await expect(page.getByRole('region', { name: 'Who controls the agents' })).toContainText('The controller is paused, not the agents');
@@ -439,7 +439,7 @@ test('pause and takeover are distinct and uncertain transport is not retried', a
   await page.getByRole('button', { name: 'Take over from the controller…', exact: true }).click();
   await expect(page.getByText(/Pause does not interrupt any process/)).toBeVisible();
   await page.getByRole('button', { name: 'I checked every participant; give me control', exact: true }).click();
-  await expect(page.getByRole('region', { name: 'Who controls the agents' })).toHaveCount(0); await expect(page.getByRole('status')).toContainText('Nothing was replayed');
+  await expect(page.getByRole('region', { name: 'Who controls the agents' })).toHaveCount(0); await expect(page.locator('.feedback[role="status"]:visible')).toContainText('Nothing was replayed');
 });
 test('a rejected completion does not label the active pane with an older accepted outcome', async ({ page, request }) => {
   const previous = crypto.randomUUID();
@@ -466,7 +466,7 @@ test('a rejected completion does not label the active pane with an older accepte
 test('unknown Claude background status pauses instead of treating a response as idle', async ({ page, request }) => {
   await unlock(page); await page.getByRole('navigation', { name: 'Command target' }).getByRole('button', { name: /Claude Code/ }).click();
   await page.getByLabel('Ready to send', { exact: true }).check(); await page.getByRole('button', { name: 'Relay Claude Code ↗', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('DELIVERED');
+  await expect(page.locator('.feedback[role="status"]:visible')).toContainText('DELIVERED');
   const current = await state(request); const run = current.runs.find((r) => r.status === 'running')!;
   const session = current.sessions.find((s) => s.id === 'claude')!;
   const lifecycle = { source: 'claude', commandId: run.currentCommandId, paneId: session.identity.paneId,
@@ -507,7 +507,7 @@ test('reset clears saved names and selection without hiding live agents or touch
   await expect(detail.getByLabel('Name for Codex %3')).toHaveValue('Other Codex');
   await detail.getByRole('button', { name: 'Reset other', exact: true }).click();
   await detail.getByRole('button', { name: 'Confirm reset other', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('Reset other: cleared 1 saved name(s) and 0 group setting(s)');
+  await expect(page.locator('.feedback[role="status"]:visible')).toContainText('Reset other: cleared 1 saved name(s) and 0 group setting(s)');
   await expect(detail.getByLabel('Name for Codex %3')).toHaveValue('demo');
   await expect(detail.getByLabel('Include demo')).toBeChecked();
   // Only that checkout was forgotten: the project workspace keeps its agents and group, and history is untouched.
@@ -515,7 +515,7 @@ test('reset clears saved names and selection without hiding live agents or touch
   expect(after.sessions.filter((session) => session.repository === '/demo/project').map((s) => s.id)).toEqual(['codex', 'claude']); expect(after.pairs.map((p) => p.id)).toEqual(['main-review']);
   expect(after.panes.find((pane) => pane.identity.paneId === '%3')!.registeredAs).toBeNull();
   await detail.getByLabel('Name for Codex %3').fill('Fresh Codex'); await detail.getByLabel('Name for Codex %3').press('Enter');
-  await expect(page.getByRole('status')).toContainText('Renamed "demo" to "Fresh Codex"');
+  await expect(page.locator('.feedback[role="status"]:visible')).toContainText('Renamed "demo" to "Fresh Codex"');
   await openTab(page, 'Console'); await expect(page.getByLabel('Fresh Codex output')).toBeVisible();
 });
 test('checkboxes save solo, pair and larger groups without silently truncating selection', async ({ page, request }, info) => {
@@ -597,7 +597,7 @@ test('with no saved registrations a workspace opens directly into a usable read-
   await expect(page.getByRole('heading', { name: 'Agent console', exact: true })).toBeVisible();
   await expect(page.getByLabel('demo output').first()).toBeVisible();
   // The existing narrow-screen layout shows only the active pane, even with Parallel selected.
-  await page.getByRole('navigation', { name: 'Command target' }).getByRole('button', { name: 'demo', exact: true }).nth(1).click();
+  await page.getByRole('navigation', { name: 'Viewed terminal' }).getByRole('button', { name: 'demo', exact: true }).nth(1).click();
   await expect(page.getByLabel('demo output').last()).toBeVisible();
   const after = await state(request); expect(after.panes.every((pane) => !pane.registeredAs)).toBe(true);
   expect(after.executions).toEqual([]);
@@ -630,7 +630,7 @@ test('the stale-agent warning offers a confirmed workspace reset when no run own
   await warning.getByRole('button', { name: 'Reset workspace…', exact: true }).click();
   await page.screenshot({ path: info.outputPath('inline-workspace-reset.png'), fullPage: true });
   await warning.getByRole('button', { name: 'Confirm workspace reset', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('cleared 2 saved name(s)'); await expect(warning).toHaveCount(0);
+  await expect(page.locator('.feedback[role="status"]:visible')).toContainText('cleared 2 saved name(s)'); await expect(warning).toHaveCount(0);
   expect(resets).toEqual([{ repository: '/demo/project', confirmReady: true }]);
   const after = await state(request);
   expect(after.panes.filter((pane) => ['%0','%1'].includes(pane.identity.paneId)).every((pane) => !pane.registeredAs)).toBe(true);

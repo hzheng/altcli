@@ -1,5 +1,8 @@
 # ADR-0001: Build a tmux-backed web controller for Codex and Claude Code
 
+> September 24 extension: ADR-0020 now specifies the optional native terminal and shared keyboard barrier; ADR-0021 permits explicitly confirmed session creation. Worker destruction remains outside this feature.
+
+
 > **September 14 follow-on:** AltCLI is the project name. TypeScript is now confirmed for both sides, and the user requested a Next.js web stack and an iOS reservation. [ADR-0002](ADR-0002-typescript-web-stack.md) resolves the original open stack choices; [ADR-0003](ADR-0003-manual-dispatch-boundary.md) records the scaffold's manual dispatch boundary. The historical wording below is retained; it is not the latest stack-selection status. The exact original is archived under `docs/history/2026-09-13/`.
 
 **Date:** September 13, 2026  

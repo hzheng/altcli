@@ -1,5 +1,8 @@
 # ADR-0019: Terminal input and evidence-bound checkpoints
 
+> September 24 extension: ADR-0020 adds native keyboard-origin whole-run holds plus a durable server-wide manual barrier. Original correlation, fault and checkpoint restoration conditions remain; keyboard release never resumes a run.
+
+
 Date: 2026-09-22. Status: implementation proposal from the approved terminal-input plan; validation limits are recorded in [VALIDATION](../../VALIDATION.md).
 
 ## Decision

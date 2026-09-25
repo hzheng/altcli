@@ -1,19 +1,25 @@
 'use client';
+import { ManualInputRecovery } from './ManualInputRecovery';
+import { BlockedHandoff } from './BlockedHandoff';
 import { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import type { CommandRecord, HostConfig, SessionRegistration } from '../contracts/api';
 import type { ActivityReset, HistoryExport, ManagedSession, RelayRun, Workspace, WorkspaceDiscovery, WorkspaceResetResult, WorkflowState } from '../contracts/workflow';
 import type { ProjectWorktree } from '../contracts/projects';
+import { TERMINAL_LIMITS } from '../contracts/terminals';
 import { api, HttpError } from '../client/api';
 import { MemoryContext, useRemembered, type PageMemory } from '../client/memory';
 import { nameOf, workspaceKey, Workspaces } from './Workspaces';
 import { RunPolicy } from './Implementation';
 import { PlanningProgress } from './PlanningProgress';
 import { PaneActions } from './PaneActions';
+import { LaunchProfiles } from './LaunchProfiles';
+import { NativeTerminal } from './NativeTerminal';
 import { PlanSetup } from './PlanSetup';
 import { CheckpointControls, InteractionComposer } from './InteractionControls';
 import { RunSettingsBar, useRunSettings, type Phase } from './RunSettings';
 const PREFERENCE = 'altcli.autoRelay';
 const LAYOUT = 'altcli.paneLayout';
+const CONTROL_PLACEMENT = 'altcli.controlPlacement';
 const TURN_LIMIT = 'altcli.turnLimit';
 const WORKSPACE = 'altcli.workspace';
 /** Off by default: with the preference on, the token is kept in this browser so reopening the page unlocks without typing it. */
@@ -95,6 +101,7 @@ function Output({ text, label, memoryKey }: { text: string; label: string; memor
 export function Console() {
   // Page memory for drafts and choices. Lock replaces it: hooks that stay mounted above the unlock form must not keep old values.
   const [memory, setMemory] = useState<PageMemory>(() => new Map());
+  const [clientInstanceId] = useState(() => crypto.randomUUID());
   const [token, setToken] = useState(''); const [draftToken, setDraftToken] = useState('');
   const [stayUnlocked, setStayUnlocked] = useState(false);
   const [state, setState] = useState<WorkflowState | null>(null);
@@ -108,6 +115,10 @@ export function Console() {
   const [resetFor, setResetFor] = useState<string | null>(null);
   const [statusReset, setStatusReset] = useState<Omit<ActivityReset, 'confirmReady'> | null>(null);
   const [layout, setLayout] = useState<'parallel' | 'focus'>('parallel');
+  // Alternate placements of the one control pane: beside the stage on wide screens, or a drawer on phones. Never a second composer.
+  const [controlPlacement, setControlPlacement] = useState<'below' | 'side'>('below');
+  const [controlDrawer, setControlDrawer] = useState(false);
+  const controlPane = useRef<HTMLElement>(null); const drawerToggle = useRef<HTMLButtonElement>(null);
   const [turnLimit, setTurnLimit] = useState(String(DEFAULT_TURN_LIMIT));
   const [legacy, setLegacy] = useState(false);
   const [phase, setPhase] = useState<Phase>('implementation');
@@ -119,7 +130,7 @@ export function Console() {
   const [config, setConfig] = useState<HostConfig | null>(null); const [configError, setConfigError] = useState('');
   const submission = useRef(false); const generation = useRef(0); const readNumber = useRef(0); const discoveryRead = useRef(0);
   const scrolls = useRef<Partial<Record<Tab, number>>>({});
-  useEffect(() => { try { if (localStorage.getItem(PREFERENCE) === 'false') setAutoContinue(false); if (localStorage.getItem(LAYOUT) === 'focus') setLayout('focus');
+  useEffect(() => { try { if (localStorage.getItem(PREFERENCE) === 'false') setAutoContinue(false); if (localStorage.getItem(LAYOUT) === 'focus') setLayout('focus'); if (localStorage.getItem(CONTROL_PLACEMENT) === 'side') setControlPlacement('side');
     // A remembered token unlocks on load; the server still checks it on every request, and a refused one is forgotten.
     if (localStorage.getItem(STAY_UNLOCKED) === 'true') { setStayUnlocked(true); const saved = localStorage.getItem(SAVED_TOKEN); if (saved && /^[0-9a-f]{64}$/i.test(saved)) setToken(saved); }
     const limit = localStorage.getItem(TURN_LIMIT); if (limit && /^\d+$/.test(limit)) setTurnLimit(limit);
@@ -188,6 +199,7 @@ export function Console() {
   const planSettings = useRunSettings(memory, `run:${scope}`, git, members, 'plan');
   const [agentsOpen, setAgentsOpen] = useRemembered(`agents:${ws}`, false, memory);
   const [historyOpen, setHistoryOpen] = useRemembered(`history:${ws}`, false, memory);
+  const [controlChoice, setControlChoice] = useRemembered<string | null>(`control:${ws}`, null, memory);
   const [paneChoice, setPaneChoice] = useRemembered<string | null>(`pane:${ws}`, null, memory);
   const [latestOpen, setLatestOpen] = useRemembered(`latest:${ws}`, false, memory);
   const [controllerOpen, setControllerOpen] = useRemembered(`controller:${ws}`, false, memory);
@@ -204,15 +216,23 @@ export function Console() {
   const working = projectSessions.find((s) => ['working', 'sending'].includes(statuses.get(s.id)?.badge ?? ''))?.id ?? null;
   const lastActive = [...projectSessions].sort((a, b) => (statuses.get(b.id)?.when ?? '').localeCompare(statuses.get(a.id)?.when ?? ''))[0]?.id ?? null;
   // One displayed pane drives Focus and the narrow layout. An explicit choice sticks; until one is made, the view follows a working agent.
-  const current = visible.find((s) => s.id === paneChoice) ?? visible.find((s) => s.id === working) ?? visible.find((s) => s.id === lastActive) ?? visible[0];
-  const displayed = current?.id;
+  const viewed = visible.find((s) => s.id === paneChoice) ?? visible.find((s) => s.id === working) ?? visible.find((s) => s.id === lastActive) ?? visible[0];
+  const displayed = viewed?.id;
+  const current = visible.find(s => s.id === controlChoice) ?? visible[0];
   const groupInstances = visible.map((s) => [s.id, state?.instances.find((i) => i.agentId === s.id)?.status]);
   const readinessKey = JSON.stringify([pair, card?.agents, current?.id, current?.registrationId, groupInstances]);
   useEffect(() => { setReady(false); setResetFor(null); setStatusReset(null); }, [readinessKey, project]);
   // Readiness and confirmations attest to what was on screen, so any view switch revokes them. Drafts and choices stay.
-  const viewKey = JSON.stringify([tab, phase, layout, displayed]);
+  const viewKey = JSON.stringify([tab, phase, layout, displayed, current?.id]);
   useEffect(() => { setConsent(''); setReady(false); setResetFor(null); setStatusReset(null); setViewEpoch((epoch) => epoch + 1); }, [viewKey]);
   const chooseLayout = (next: 'parallel' | 'focus') => { setLayout(next); try { localStorage.setItem(LAYOUT, next); } catch { /* preference only */ } };
+  const chooseControlPlacement = (next: 'below' | 'side') => { setControlPlacement(next); try { localStorage.setItem(CONTROL_PLACEMENT, next); } catch { /* preference only */ } };
+  const focusControlPane = () => controlPane.current?.focus();
+  // Opening moves focus into the drawer; closing returns it to the toggle so the keyboard destination stays clear.
+  const toggleDrawer = (open: boolean) => { setControlDrawer(open); requestAnimationFrame(() => open ? focusControlPane() : drawerToggle.current?.focus()); };
+  /** Retargets the one control pane only; it sends nothing and readiness is revoked by the target change. */
+  const retargetControl = (id: string, label: string) => { setControlChoice(id); setConsent(''); setReady(false);
+    setMessage(`AltCLI control now targets ${label}. Nothing was sent.`); focusControlPane(); };
   const stale = !!error || clock - updated > 10000;
   const inputRun = owned[0] && (owned[0].implementation || owned[0].planning || owned[0].standalone) ? owned[0] : null;
   // A reading that is not current cannot back a confirmation; readiness must be given again once it is.
@@ -223,7 +243,11 @@ export function Console() {
   const identityBlockedReason = resetAgents.length ? `Reset workspace required for ${resetAgents.map((s) => s.label).join(', ')}. Inspect the panes and use Reset workspace above before sending.`
     : unknownAgents.length ? `The host cannot confirm the CLI process for ${unknownAgents.map((s) => s.label).join(', ')}. Recheck before sending.` : '';
   // Gates shared by every card of this checkout, then each card's own agent.
-  const sharedReason = identityBlockedReason || (stale ? 'The console is not current. Wait for it to reconnect.' : '')
+  const manualHeld = !!state?.manualSessions?.length;
+  // Distinguishes a live keyboard elsewhere from an unresolved record for the terminal badges.
+  const liveManual = state?.manualSessions?.find((m) => m.live);
+  const keyboardHolder = liveManual ? liveManual.clientInstanceId === clientInstanceId ? 'this-browser' as const : 'other-browser' as const : manualHeld ? 'unresolved' as const : null;
+  const sharedReason = (manualHeld ? 'Manual terminal input holds dispatch across this server. Release and reconcile it first.' : '') || identityBlockedReason || (stale ? 'The console is not current. Wait for it to reconnect.' : '')
     || (setupHeld ? 'A worktree operation is applying or uncertain. Reconcile it in Projects before starting work.' : '')
     || (!state?.inputEnabled ? 'Read-only console: the host has disabled input.' : '')
     || (owned.length ? 'The controller is driving the agents in this checkout. Wait for it to finish, or pause it and take over above.' : '')
@@ -258,6 +282,7 @@ export function Console() {
     if (stayUnlocked) try { localStorage.setItem(SAVED_TOKEN, entered); } catch { /* preference only */ }
   }
   function lock() {
+    void api(token, 'terminals/revoke', {body:{clientInstanceId}}).catch(() => {});
     try { localStorage.removeItem(SAVED_TOKEN); } catch { /* preference only */ }
     generation.current++; readNumber.current++; discoveryRead.current++; setToken(''); setDraftToken(''); setState(null); setDiscovery(null); setTab(null); setReady(false);
     setMessage(''); setError(''); setDiscoveryError(''); setUnknownRequest(null); setResetFor(null); setConsent(''); setConfig(null); setConfigError('');
@@ -300,12 +325,12 @@ export function Console() {
       if (!(caught instanceof HttpError) || caught.status >= 500) setUnknownRequest(requestId);
     } finally { await refresh(); submission.current = false; setBusy(false); }
   }
-  async function action(run: RelayRun, operation: 'pause' | 'takeover' | 'continue') {
+  async function action(run: RelayRun, operation: 'pause' | 'takeover' | 'continue' | 'recheck') {
     if (submission.current) return;
     submission.current = true; setBusy(true);
     try {
-      await api(token, 'runs', { body: { runId: run.id, action: operation, ...(operation !== 'pause' ? { confirmReady: true } : {}), ...(operation === 'continue' ? { expectedCommandId: run.currentCommandId } : {}) } });
-      setMessage(operation === 'continue' ? 'Next turn requested.' : operation === 'pause' ? 'Controller paused. The current agent was not interrupted.' : 'You now control the agents in this checkout. Nothing was replayed or marked successful.');
+      await api(token, 'runs', { body: { runId: run.id, action: operation, ...(operation !== 'pause' ? { confirmReady: true } : {}), ...(['continue', 'recheck'].includes(operation) ? { expectedCommandId: run.currentCommandId } : {}), ...(operation === 'recheck' ? { expectedRevision: run.blockedHandoff?.revision } : {}) } });
+      setMessage(operation === 'recheck' ? 'Handoff rechecked; the frozen continuation policy was applied.' : operation === 'continue' ? 'Next turn requested.' : operation === 'pause' ? 'Controller paused. The current agent was not interrupted.' : 'You now control the agents in this checkout. Nothing was replayed or marked successful.');
       if (operation === 'pause') setTakeover(run.id); else { setTakeover(null); setReady(false); }
     } catch (caught) { setMessage(caught instanceof Error ? caught.message : 'Action failed.'); }
     finally { await refresh(); submission.current = false; setBusy(false); }
@@ -388,12 +413,17 @@ export function Console() {
       : <div className="page-heading compact"><h1>Agent console</h1>{connection}</div>}
     {error && <div className="notice error" role="alert">{error} <button onClick={() => void refresh()}>Refresh</button></div>}
     {state && <>
+      {state.manualSessions?.map(manual => <ManualInputRecovery key={`${manual.id}:${manual.revision}`} manual={manual} disabled={busy || !state.inputEnabled}
+        decide={input => guarded(async () => { try {
+          await api(token, 'terminals/reconcile', {body:input});
+          setMessage('Manual input decision recorded. Review saved checkpoints or take over affected runs before continuing.');
+        } catch(e) {setMessage(e instanceof Error ? e.message : 'Reconciliation failed.');} await refresh();})} />)}
     <div className="section-panel" hidden={tab !== 'workspaces'}>
       {feedback}
       <Workspaces token={token} disabled={busy} discovery={discovery} discoveryError={discoveryError} onRecheck={() => recheck()}
         inputEnabled={state.inputEnabled} runs={state.runs} selectedRoot={project ?? null} onSelectWorktree={chooseWorktree}
         deliveryRepositories={state.reservations.map((reservation) => reservation.repository)}
-        sessions={sessions} pairs={groups} lockedRepositories={[...setupHolds, ...state.runs.filter((run) => ['running','waiting','paused'].includes(run.status)).map((run) => run.repository)]}
+        launchEnabled={config?.launchEnabled === true} terminalEnabled={config?.terminalEnabled === true} clientInstanceId={clientInstanceId} manualHeld={manualHeld} sessions={sessions} pairs={groups} lockedRepositories={[...setupHolds, ...state.runs.filter((run) => ['running','waiting','paused'].includes(run.status)).map((run) => run.repository)]}
         selectedKey={workspace?.key ?? null} onSelectWorkspace={chooseWorkspace} viewEpoch={viewEpoch}
         onChanged={async (notice) => { setMessage(notice); await Promise.all([refresh(), recheck()]); }} />
     </div>
@@ -426,7 +456,7 @@ export function Console() {
         <p className="muted">{selectedTree?.error ?? card?.agents.find((agent) => agent.reason && (agent.kind === 'codex' || agent.kind === 'claude'))?.reason ?? (project ? <>Start coding CLIs in <span className="mono">{project}</span>, then Recheck in Projects. Collaborators need the same directory. No registration is needed.</> : 'Choose a project and worktree with running coding agents. Nothing is sent until you explicitly start work.')}</p>
         <button type="button" className="primary" onClick={() => showTab('workspaces')}>Open Projects</button></section>}
       {!!projectSessions.length && <>
-        <RunSettingsBar settings={settings} git={git} members={members} sessions={sessions} displayed={displayed} disabled={busy || !!sharedReason} notice={settingsNotice} legacy={!!showLegacy} onPhase={setPhase}
+        <RunSettingsBar settings={settings} git={git} members={members} sessions={sessions} displayed={current?.id} disabled={busy || !!sharedReason} notice={settingsNotice} legacy={!!showLegacy} onPhase={setPhase}
           controller={{ state: owned[0] ? owned[0].status === 'paused' ? 'paused' : owned[0].status === 'waiting' ? 'waiting for you' : 'driving' : 'idle', attention: ['paused', 'waiting'].includes(owned[0]?.status ?? ''),
             open: controllerOpen, onToggle: () => setControllerOpen(!controllerOpen), content: <>
       {owned.map((run) => <section key={run.id} className="panel run-card" aria-label="Who controls the agents">
@@ -439,6 +469,8 @@ export function Console() {
           return text || target ? <p className="run-command">{target ? <>{turn?.status === 'delivered' || turn?.status === 'finished' ? 'Sent to' : 'For'} <strong>{target}</strong>{text ? ': ' : ''}</> : ''}{text && <span className="command-text" title={text}>“{text.length > 160 ? `${text.slice(0, 160)}…` : text}”</span>}</p> : null;
         })()}
         <p>{run.reason}</p>
+        {run.status === 'paused' && run.blockedHandoff && <BlockedHandoff key={`${run.blockedHandoff.revision}:${viewEpoch}`} handoff={run.blockedHandoff}
+          disabled={busy || stale || !state.inputEnabled || !!state.manualSessions?.some(s => s.live || s.reconciliationRequired)} onRecheck={() => void action(run, 'recheck')} />}
         <p className="fine run-meaning">The controller is this server: while it drives this checkout it decides what these agents are sent next and judges their completions. Agents: {run.participants.map((p) => `${p.label} ${statuses.get(p.id)?.badge ?? 'unknown'}`).join(' · ')}.{run.status === 'paused' ? ' The controller is paused, not the agents.' : ''}</p>
         {run.implementation && <p className="mono">{run.implementation.policy} · {run.implementation.branch} · turn {run.implementation.turn} · accepted {run.implementation.acceptedSha.slice(0, 12)}{run.implementation.candidateSha ? ` · candidate ${run.implementation.candidateSha.slice(0, 12)}` : ''}</p>}
         {run.planning && <PlanningProgress token={token} run={run} git={card?.git} disabled={busy || stale || !state.inputEnabled} refresh={refresh} onMessage={setMessage} onStop={() => void action(run, 'pause')} viewEpoch={viewEpoch} />}
@@ -461,14 +493,22 @@ export function Console() {
       {!owned.length && !latestRun && <p className="fine">The controller is not driving this checkout: no command is in flight, and nothing it drove earlier involves the agents shown here.</p>}
             </> }} />
         {/* Watch zone: a recessed stage of terminal captures. Commands sit under each capture or below the stage, never over it. */}
+        <div className={`workbench${controlPlacement === 'side' ? ' side' : ''}`}>
         <div className="terminal-stage">
-        <div className="target-row"><h2 className="stage-title"><span aria-hidden="true">🖥️</span> Live terminals <span className="stage-cue">captured output · commands below</span></h2>
-          {/* The tab picks the command recipient (and Plan's default first implementer), not only the displayed pane. */}
-          <div className="stage-target"><span className="target-caption">Target</span><nav className="agent-tabs" aria-label="Command target">{visible.map((s) => <button key={s.id} className={s.id === current?.id ? 'selected' : ''} aria-pressed={s.id === current?.id} onClick={() => select(s.id)}>
+        <div className="target-row"><h2 className="stage-title"><span aria-hidden="true">🖥️</span> {config?.terminalEnabled ? <>Native terminals <span className="stage-cue">native CLI · type here after taking keyboard · controls below</span></> : <>Live terminals <span className="stage-cue">captured output · controls below</span></>}</h2>
+          {/* Viewing and choosing the controller recipient are independent. */}
+          <div className="stage-target"><span className="target-caption">View</span><nav className="agent-tabs" aria-label="Viewed terminal">{visible.map((s) => <button key={s.id} className={s.id === displayed ? 'selected' : ''} aria-pressed={s.id === displayed} onClick={() => select(s.id)}>
             <Icon badge={statuses.get(s.id)?.badge ?? 'unknown'} />{s.label}</button>)}</nav></div>
           <div className="row-tools"><div className="segmented" role="group" aria-label="Pane layout">
               <button className={layout === 'parallel' ? 'selected' : 'quiet'} aria-pressed={layout === 'parallel'} onClick={() => chooseLayout('parallel')}>Parallel</button>
-              <button className={layout === 'focus' ? 'selected' : 'quiet'} aria-pressed={layout === 'focus'} onClick={() => chooseLayout('focus')}>Focus</button></div></div></div>
+              <button className={layout === 'focus' ? 'selected' : 'quiet'} aria-pressed={layout === 'focus'} onClick={() => chooseLayout('focus')}>Focus</button></div>
+            {/* Wide screens only (CSS): where the one control pane sits. */}
+            <div className="segmented control-placement" role="group" aria-label="Control pane placement">
+              <button className={controlPlacement === 'below' ? 'selected' : 'quiet'} aria-pressed={controlPlacement === 'below'} onClick={() => chooseControlPlacement('below')}>Control below</button>
+              <button className={controlPlacement === 'side' ? 'selected' : 'quiet'} aria-pressed={controlPlacement === 'side'} onClick={() => chooseControlPlacement('side')}>Control beside</button></div>
+            {/* Phones only (CSS): the same control pane as a bottom drawer. */}
+            <button type="button" ref={drawerToggle} className="quiet drawer-toggle" aria-expanded={controlDrawer} aria-controls="altcli-control"
+              onClick={() => toggleDrawer(!controlDrawer)}>{controlDrawer ? 'Close control drawer' : 'Open control drawer'}</button></div></div>
         <section className={`panes ${layout}`} aria-label="Agent output">{visible.map((s) => {
           const snapshot = state.snapshots.find((p) => p.agentId === s.id);
           const execution = state.executions.find((e) => e.agentId === s.id);
@@ -481,7 +521,9 @@ export function Console() {
           const location = locationOf(s);
           return <article key={s.id} aria-label={`${s.label} pane`} hidden={layout === 'focus' && s.id !== displayed} className={`pane ${s.id === displayed ? 'active' : ''}`}>
             <div className="pane-heading"><h2><Icon badge={status.badge} />{s.label}</h2><span className="mono muted pane-meta">{s.agentType}{location ? ` · ${location}` : ''}</span>
-              <span className="badge">{execution ? execution.status.toUpperCase() : 'NO ACTIVE CONTROLLER TURN'}</span></div>
+              <span className="badge">{execution ? execution.status.toUpperCase() : 'NO ACTIVE CONTROLLER TURN'}</span>
+              {visible.length > 1 && <button type="button" className="quiet use-control" disabled={s.id === current?.id} title={s.id === current?.id ? `${s.label} is already the AltCLI control target.` : undefined}
+                onClick={() => retargetControl(s.id, s.label)}>Use {s.label} in control pane</button>}</div>
             <div className="pane-status"><span className="state">{status.badge}</span><span className="pane-detail" title={status.detail}>{status.detail}</span>
               {status.when && <span className="mono muted">{timeOf(status.when)}</span>}
               {activity?.state === 'unknown' && <button type="button" disabled={!!resetBlock} title={resetBlock || 'Restore Ready after inspecting this terminal.'}
@@ -489,17 +531,19 @@ export function Console() {
               {activity?.state === 'unknown' && resetBlock && <span className="reset-reason">Reset status is unavailable: {resetBlock}</span>}</div>
             {resetPrompt(s.id)}
             {visibleOutcome?.outcome && <div className={`outcome ${visibleOutcome.outcome}`}>{visibleOutcome.outcome}: {visibleOutcome.reason}</div>}
-            <Output label={`${s.label} output`} memoryKey={`scroll:${ws}:${s.id}`} text={(snapshot?.status === 'unavailable' ? snapshot.error : snapshot?.text) || 'Waiting for a capture'} />
+            {config?.terminalEnabled && s.registrationId ? <NativeTerminal token={token} target={{agentId:s.id,registrationId:s.registrationId}} clientInstanceId={clientInstanceId} viewEpoch={viewEpoch} label={s.label} capturedAt={snapshot?.capturedAt}
+              holder={keyboardHolder} cliChanged={state.instances.find((i) => i.agentId === s.id)?.status === 'replaced'} affected={state.runs.filter(r=>['running','waiting','paused'].includes(r.status)).map(r=>`${r.id} · ${r.status}`)} held={manualHeld} inputEnabled={state.inputEnabled} refresh={refresh} fallback={<Output label={`${s.label} output`} memoryKey={`scroll:${ws}:${s.id}`} text={(snapshot?.status === 'unavailable' ? snapshot.error : snapshot?.text) || 'Waiting for a capture'} />} /> : <Output label={`${s.label} output`} memoryKey={`scroll:${ws}:${s.id}`} text={(snapshot?.status === 'unavailable' ? snapshot.error : snapshot?.text) || 'Waiting for a capture'} />}
             {/* A tmux-style status line: the boundary between the capture above and any command section below. */}
-            <div className="pane-footer"><span className="mono">{s.identity.paneId}</span><span>{snapshot ? `Captured ${new Date(snapshot.capturedAt).toLocaleTimeString()}` : ''}</span></div>
-            {inputRun && !showLegacy && <InteractionComposer token={token} state={state} run={inputRun} agent={s} draftKey={`draft:${scope}:${s.id}`} disabled={busy || stale || setupHeld || !state.inputEnabled || !!identityBlockedReason || !!cardReason(s)} viewEpoch={viewEpoch} refresh={refresh} />}
-            {actionable && !inputRun && phase === 'implementation' && !showLegacy && <PaneActions {...common} group={pair} agent={s} settings={implementationSettings}
-              blockedReason={sharedReason || cardReason(s)} draftKey={`draft:${scope}:${s.id}`} />}
-            {actionable && showLegacy && s.id === current?.id && <p className="fine pane-hint">The staging fallback is on: use its composer below.</p>}
+            <div className="pane-footer"><span className="mono">{s.identity.paneId}</span><span>{(!config?.terminalEnabled || !s.registrationId) && snapshot ? `Captured ${new Date(snapshot.capturedAt).toLocaleTimeString()}` : ''}</span></div>
           </article>;
         })}</section>
         </div>
-        {phase === 'plan' && !inputRun && !showLegacy && <>{commandDivider}<PlanSetup {...common} group={pair && members.length ? pair : undefined} settings={planSettings} displayed={displayed}
+        <section ref={controlPane} id="altcli-control" tabIndex={-1} className={`control-pane${controlDrawer ? ' drawer' : ''}`} aria-label="AltCLI control"
+          onKeyDown={(e) => { if (controlDrawer && e.key === 'Escape') { e.stopPropagation(); toggleDrawer(false); } }}>
+          <div className="control-heading"><h2>AltCLI control</h2>{controlDrawer && <button type="button" className="quiet drawer-close" onClick={() => toggleDrawer(false)}>Close drawer</button>}</div><nav className="agent-tabs" aria-label="Command target">{visible.map(s => <button type="button" key={s.id} aria-pressed={s.id === current?.id} onClick={() => {setControlChoice(s.id);setConsent('');setReady(false);}}>{s.label}</button>)}</nav>
+          {current && inputRun && !showLegacy && <InteractionComposer key={current.id} token={token} state={state} run={inputRun} agent={current} draftKey={`draft:${scope}:${current.id}`} disabled={busy || stale || setupHeld || manualHeld || !state.inputEnabled || !!identityBlockedReason || !!cardReason(current)} viewEpoch={viewEpoch} refresh={refresh} />}
+          {current && actionable && !inputRun && phase === 'implementation' && !showLegacy && <PaneActions key={current.id} {...common} group={pair} agent={current} settings={implementationSettings} blockedReason={sharedReason || cardReason(current)} draftKey={`draft:${scope}:${current.id}`} />}
+        {phase === 'plan' && !inputRun && !showLegacy && <>{commandDivider}<PlanSetup {...common} group={pair && members.length ? pair : undefined} settings={planSettings} displayed={current?.id}
           blockedReason={sharedReason || cardReason(current)} draftKey={`plan:${scope}`} /></>}
         {showLegacy && commandDivider}
         {showLegacy && <section className="composer command-zone"><div className="section-heading"><h2>Legacy staging: send to {current?.label}</h2><span className="badge">{owned.length ? 'EXECUTION OWNED' : 'MANUAL START'}</span></div>
@@ -522,6 +566,8 @@ export function Console() {
             <span className="muted">1–200, default {DEFAULT_TURN_LIMIT}; frozen into the run when it starts.</span></label>}
           {!pair && <p className="fine">No group in use: Send &amp; relay is unavailable and Relay reviews without a partner. Choose a group in Projects to relay between two agents.</p>}
         </section>}
+        </section>
+        </div>
         <details className="panel status" open={agentsOpen} onToggle={(e) => setAgentsOpen(e.currentTarget.open)}>
           <summary><h2>Agents in this checkout</h2><span className="muted">{projectSessions.length}</span></summary>
           <table><thead><tr><th>Agent</th><th>State</th><th>Detail</th><th>When</th></tr></thead>
@@ -568,6 +614,12 @@ export function Console() {
             ['Task worktrees', config.worktreeDir, '', '~/.altcli/<repo>/<branch>'],
             ['Integration branches', `${config.integrationBranches.join(', ')} + each project's default branch`, 'ALTCLI_INTEGRATION_BRANCHES', 'main, master'],
             ['Adapter', config.mode === 'mock' ? 'mock (simulated panes)' : 'tmux', 'ALTCLI_ADAPTER', 'tmux'],
+            ['Native terminals', config.terminalEnabled ? 'enabled' : 'disabled', 'ALTCLI_ENABLE_TERMINAL', 'false'],
+            ['Agent launch', config.launchEnabled ? 'enabled' : 'disabled', 'ALTCLI_ENABLE_AGENT_LAUNCH', 'false'],
+            ...(config.terminalEnabled ? [
+              ['Keyboard scope', 'One browser writer per tmux server; AltCLI dispatch, setup and launch stay held until release and reconciliation', '', 'server-wide'],
+              ['Terminal limits', `${TERMINAL_LIMITS.hostConnections} connections per host, ${TERMINAL_LIMITS.sessionConnections} per session; ${TERMINAL_LIMITS.inputFrame / 1024} KiB input frames, 256 KiB paste; ${TERMINAL_LIMITS.outputHigh / 1024 / 1024} MiB output credit; ${TERMINAL_LIMITS.ticketMs / 1000} s ticket, ${TERMINAL_LIMITS.leaseMs / 1000} s heartbeat lease`, '', 'fixed'],
+            ] : []),
             ['Console input', config.inputEnabled ? 'enabled' : 'read-only', 'ALTCLI_ENABLE_INPUT', 'true'],
             ['Deprecated staging relay', config.legacyEnabled ? 'allowed' : 'disabled', 'ALTCLI_ENABLE_LEGACY_RELAY', 'false'],
             ['Allowed origins', config.allowedOrigins.join(', '), 'ALTCLI_ALLOWED_ORIGINS', 'http://127.0.0.1:8787, http://localhost:8787'],
@@ -581,6 +633,7 @@ export function Console() {
       {state && <section className="panel" aria-label="Console preferences">
         <div className="section-heading"><h2>Console preferences</h2><span className="badge">THIS PAGE</span></div>
         <p className="muted">Preferences for this browser page. They never start work on their own.</p>
+        <LaunchProfiles token={token} enabled={config?.launchEnabled === true && state?.inputEnabled === true} />
         <label className="readiness"><input type="checkbox" aria-label="Stay unlocked on this device" checked={stayUnlocked} onChange={(e) => rememberToken(e.target.checked)} />
           Stay unlocked on this device: keep the host access token in this browser so reopening the page does not ask for it. Anyone who can use this browser profile can then open the console; the host still checks the token on every request. <strong>Lock</strong> always forgets the token.</label>
         {state.legacyEnabled ? <label className="readiness"><input type="checkbox" aria-label="Staging fallback" checked={!!showLegacy} disabled={pair?.sessions.length !== 2} onChange={(e) => setLegacy(e.target.checked)} />Show the deprecated staging fallback in the Console for the current two-member group (supervised relay; no branch handoffs or fixed roles). It applies to <span className="mono">{project ? nameOf(project) : 'the selected checkout'}</span> and is forgotten on Lock.</label>
@@ -590,8 +643,8 @@ export function Console() {
     <div className="section-panel" hidden={tab !== 'about'}>
       <section className="panel about" aria-label="How this works">
         <div className="section-heading"><h2>How this works</h2></div>
-        <p>AltCLI is a host-resident console for coding agents running in tmux panes. It never runs an agent itself: you start the CLIs, and the console coordinates the turns.</p>
-        <p>In the Console, each card acts on the agent above it. Send delivers an instruction; After send can add one handoff commit, or a commit and one review by the named peer. Current changes snapshots work as it stands, and Committed review asks this agent to review a committed range. Every action names its recipients and needs a fresh readiness confirmation.</p>
+        <p>AltCLI is a host-resident console for coding agents running in tmux panes. You can start CLIs yourself or explicitly preview and confirm profile launches when the host enables that feature. The console coordinates their turns.</p>
+        <p>The AltCLI control pane acts on its selected recipient, independently of the terminal being viewed. Send delivers an instruction; After send can add one handoff commit, or a commit and one review by the named peer. Current changes snapshots work as it stands, and Committed review asks this agent to review a committed range. Every action names its recipients and needs a fresh readiness confirmation.</p>
         <p>The server owns every run, validates and deduplicates correlated completions, and pauses on unknown background work. No effect in this page sends commands. A completed chain is not final task acceptance.</p>
         <p>Viewing another worktree never changes a running relay. Pause a run before manual terminal takeover. Locking this view or disconnecting your phone does not interrupt workers.</p>
         <p className="fine">Plan produces documents and an approval checkpoint; Implementation runs committed handoffs on a task branch. Integration branches are starting points only. The detailed design lives in the repository’s README, docs/WORKFLOWS.md and the ADRs.</p>
