@@ -316,10 +316,11 @@ Agents you already run in tmux inside a checkout need none of this; they are
 discovered as described in [Select a project, worktree and group](#select-a-project-worktree-and-group).
 To launch agents from AltCLI:
 
-1. In **Projects**, enter the repository's absolute path under **Repository directory**
-   and choose **Add project**.
-2. In **Settings → Launch profiles**, choose **Use claude preset** or **Use codex
-   preset** (or **New profile**). The preset fills the label, the executable
+1. In **Projects**, enter the absolute path of the repository's main checkout under
+   **Main/default starting checkout** (or choose **Browse…**, open the folder and
+   **Select this directory**), check the branch shown, and choose **Add project**.
+2. In **Settings → Console preferences → Launch profiles**, choose **New ▾** and then
+   **Claude preset**, **Codex preset** or **Other**. The preset fills the label, the executable
    name and the adapter hint. Add literal arguments with **Add argument**, keep
    **Enabled** checked, and choose **Save profile**. The executable is a name found
    on PATH or an absolute path; there is no shell parsing, and saving runs nothing.
@@ -327,11 +328,13 @@ To launch agents from AltCLI:
    worktrees included; **Create task worktree** can open it for the new one).
    **Add launch row**, pick the profile and a count, and add a second row for
    another CLI.
-4. **Preview launch** lists each session name (`<profile>-<branch>-<id>`), the
+4. **Preview launch** lists each session name (`<profile>-<branch>`, numbered `-2`, `-3`…
+   when taken), the
    literal executable and arguments and the commit. Resolve any listed blocker,
    then confirm with **Launch N sessions** before the two-minute preview expires.
 5. Each launch shows its status. Use **Open terminal** to watch startup; answering
-   a first-run prompt, such as folder trust, needs **Take keyboard…**. Startup is not
+   a first-run prompt, such as folder trust, needs the keyboard: choose the launch in its
+   **Keyboard** selector and confirm. Startup is not
    readiness. **Inspect** rereads a launch's state; an unresolved one also offers
    **Reconcile after host inspection…**. Nothing is retried.
 6. Open the checkout's card. The launched agents appear there with checkboxes, and

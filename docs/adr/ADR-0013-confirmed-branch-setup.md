@@ -1,6 +1,8 @@
 # ADR-0013: Confirmed branch and task-worktree setup
 
 > September 24 extension: ADR-0021 separately permits confirmed session launching in an existing or newly ready checkout. It does not combine branch/worktree consent, copy dirty source files or prepare environments.
+>
+> September 25 extension: [Confirmed closing of launched sessions](#confirmed-closing-of-launched-sessions) adds a fifth, narrow end-of-task exception: **Finish branch** closes only the tmux sessions AltCLI itself launched for a linked task worktree, then hands over to the existing removal or discard.
 
 
 Date: September 19, 2026
@@ -261,6 +263,66 @@ write is a compare-and-set on the snapshot it was computed from, so an
 inspection that overlaps a finish (or a finish that overlaps a restart) returns
 the record that moved on instead of overwriting it. SQLite v10 prevents older
 servers from ignoring an uncertain integration or discard owner.
+
+### Confirmed closing of launched sessions
+
+User requirement, September 25, 2026: finishing a task branch must not require typing in a
+terminal. Each linked task worktree offers **Finish branch…**, which closes the tmux sessions
+AltCLI launched there (ADR-0021) and can then continue with the existing confirmed removal
+(branch kept) or discard (branch deleted, exact branch name typed in the app). This is the fifth
+exception. It never runs automatically, merges nothing, and never closes anything else.
+
+**Scope.** A session is closable only when a durable launch record for this exact worktree
+matches the live server (pid, start time and socket), session ID and full-UUID `@altcli_launch`
+marker; every current window and pane is enumerated and inside the worktree; and no window is
+linked into another session. The pane process may differ from launch time (a restarted CLI is
+shown with its current process evidence). Additional splits or windows are included only when
+previewed and wholly in scope. Names, prefixes, shortened labels and directories alone never
+prove ownership; a reused name is never adopted. Everything else is listed with its reason and
+stays the user's to close; non-launched panes still block removal and discard as before.
+
+**Preview.** A read-only preview lists each launched session with every pane: agent label,
+activity, the pane's own process and every descendant or terminal-attached process with its
+start time (known CLI helpers labelled, not dropped); other panes in the worktree; and Git
+facts: exact task and main/default refs and tips, ahead/behind counts, uncommitted changes,
+and integration classified as *integrated* (ancestry, verified squash checkpoint or exact
+single-commit patch match, the removal evidence), *not proven*, or *inspection unavailable*.
+Different tips alone never mean unmerged work. The server keeps the preview and a digest of the
+safety-relevant evidence (identities, session scope, activity class, task processes,
+occupancy, run ownership); the browser confirms by request ID, digest and acknowledgements.
+
+**Gates.** Refused while the worktree's run is running or waiting (pause first; pause never
+interrupts workers), while a delivery is planned, dispatching or uncertain, while any keyboard
+or manual-input barrier is pending, while a launch reservation or another setup/Finish
+operation owns the project, and for the main checkout or integration branches. Working or
+unknown activity, or task processes beyond the CLI, require an explicit *stop these sessions
+anyway* acknowledgement; it is termination consent, not a claim that work completed. Removal
+additionally needs proven integration and a clean worktree.
+
+**Execution.** The operation and its owner are persisted before any tmux command, in the same
+transaction that rechecks the gates (SQLite v15 prevents older servers from ignoring it). The
+evidence is recomputed and must match the digest; before each kill the exact session is
+re-verified, and a changed session stops further mutation. Native observer connections to those
+panes are closed first. Each session is persisted as possibly executed, then closed with
+`kill-session -t <session ID>` (argument array, never `kill-server` or a name), and its absence
+is verified on the original server; an unreachable or restarted server is not proof unless the
+original server process is gone. Processes retained before the kill are checked afterwards by
+PID and start time; survivors or missing evidence keep the owner. The launch record is retired,
+its history kept.
+
+**Paused runs and the Git step.** A paused run keeps ownership; sessions may close, nothing is
+accepted or replayed, and removal or discard wait until the user takes the run over after
+checking its writers stopped. The operation keeps the worktree's owner through applying,
+uncertain, attention (survivors), awaiting-Git and Git states, so Start, continuation, setup,
+launch and other end-of-task operations are refused meanwhile; keyboard acquisition waits only
+while a step may be acting. The Git step shows a fresh removal or discard preview and runs that
+existing operation as the finish's only admitted child, bound by request ID; an uncertain child
+keeps the parent owner and is inspected by its own ID, never reissued. Compare-and-set
+revisions keep overlapping confirm, continue and inspect calls from acting twice. Ownership is
+released only by verified success, a verified no-effect failure, an explicit stop before the Git
+step, or a recorded human inspection decision after the session step's effects are
+reconciled. Restart turns in-flight steps uncertain; inspection is read-only and never repeats a
+kill or Git command.
 
 ### Branch consent and Plan approval are separate gates
 

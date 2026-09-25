@@ -51,6 +51,14 @@ and preserves the draft. Another browser's ownership and unresolved manual recor
 still require separate recovery. Normal dispatch gates apply after release; this
 does not resume held runs or transfer keyboard authority.
 
+September 25 update: the browser presents the one writer as a single **Keyboard** selector in
+the shared terminal area instead of per-card buttons. Choosing a pane still asks for the same
+confirmation and uses the broker's serialized acquire/transfer; it never grants from an effect,
+never releases one pane before acquiring another, and a cancelled or outdated choice sends
+nothing. **Nobody** is the plain release; the strict settled release stays a separate confirmed
+action. Keyboard acquisition also waits while a Finish branch step may be acting on sessions or
+Git ([ADR-0013](ADR-0013-confirmed-branch-setup.md#confirmed-closing-of-launched-sessions)).
+
 See
 [the protocol](../TERMINAL-PROTOCOL.md) for limits, recovery and deployment checks.
 This amends ADR-0001's optional terminal boundary and extends ADR-0019; it does

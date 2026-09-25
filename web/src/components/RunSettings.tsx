@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import type { BranchConsent, CollaborationPolicy, WorkspaceGit } from '../contracts/implementation';
 import type { ManagedSession } from '../contracts/workflow';
 import { useRemembered, type PageMemory } from '../client/memory';
+import { HelpTip } from './Hint';
 
 export type Phase = 'plan' | 'implementation';
 const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
@@ -89,10 +90,10 @@ export function RunSettingsBar({ settings, git, members, sessions, displayed, di
   const off = disabled;
   return <section className="run-settings" id="run-settings" aria-label={planning ? 'Plan settings' : 'Implementation settings'}>
     <div className="run-summary">
-      <span className="muted">Next run</span>
-      <div className="segmented" role="group" aria-label="Start phase">
-        <button type="button" className={planning ? 'selected' : 'quiet'} aria-pressed={planning} onClick={() => onPhase('plan')}>1 · Plan</button>
-        <button type="button" className={!planning ? 'selected' : 'quiet'} aria-pressed={!planning} onClick={() => onPhase('implementation')}>2 · Implementation</button></div>
+      <span className="phase-caption"><span className="muted">Phase:</span><HelpTip label="About Phase" help="Prepares the next run when nothing owns this checkout; an active run's phase is set by the server." /></span>
+      <div className="segmented" role="group" aria-label="Phase">
+        <button type="button" className={planning ? 'selected' : 'quiet'} aria-pressed={planning} onClick={() => onPhase('plan')}>Plan</button>
+        <button type="button" className={!planning ? 'selected' : 'quiet'} aria-pressed={!planning} onClick={() => onPhase('implementation')}>Implementation</button></div>
       {legacy ? <span className="summary-text">Deprecated staging fallback is on; these settings apply to committed actions only.</span> : notice ? <span className="summary-text">{notice}</span> : <span className="summary-text" title={summary.join(' · ')}>{summary.join(' · ')}</span>}
       {!notice && !legacy && warning && <span className="badge warning" title={warning}>{warning}</span>}
       <span className="row-toggles"><button type="button" className={`quiet controller-toggle${controller.attention ? ' attention' : ''}`} aria-expanded={controller.open} aria-controls="controller-panel" onClick={controller.onToggle}><span aria-hidden="true">{controller.open ? '▾' : '▸'}</span> Controller · {controller.state}</button>

@@ -1,6 +1,6 @@
 import { expect, test, type Page, type APIRequestContext } from '@playwright/test';
 import type { WorkspaceDiscovery, WorkflowState } from '../src/contracts/workflow';
-import type { ProjectWorktree, WorktreeCreateInput, WorktreeCreation, WorktreeDiscard, WorktreePreview } from '../src/contracts/projects';
+import type { DirectoryListing, FinishPreview, ProjectWorktree, TaskFinish, WorktreeCreateInput, WorktreeCreation, WorktreeDiscard, WorktreePreview } from '../src/contracts/projects';
 
 const token = 'a'.repeat(64); // test fixture only
 const headers = { Authorization: `Bearer ${token}` };
@@ -153,9 +153,9 @@ test('squash into main previews the exact operation and message, requires confir
     return route.fulfill({ json: { input: route.request().postDataJSON(), status: 'integrated', message: 'Squashed feature/finished into main as 0123456789ab. Use Check removal when you are done.', updatedAt: new Date().toISOString(), commit: '0123456789ab' + 'f'.repeat(28) } });
   });
   await page.getByRole('button', { name: 'Recheck', exact: true }).click();
-  // The three lifecycle actions read top to bottom: squash, removal check, discard; the branch is not repeated in the visible labels.
+  // The lifecycle actions read top to bottom: squash, finish branch, removal check, discard; the branch is not repeated in the visible labels.
   const card = page.getByRole('list', { name: 'Available worktrees' }).getByRole('listitem').filter({ hasText: 'finished' });
-  await expect(card.getByRole('button')).toHaveText(['finished0 AGENTS/home/fixture/tasks/finishedBranch: feature/finishedNo agents · start coding CLIs here, then Recheck', 'Squash into main', 'Check removal', 'Discard…', 'Launch agents…']);
+  await expect(card.getByRole('button')).toHaveText(['finished0 AGENTS/home/fixture/tasks/finishedBranch: feature/finishedNo agents · start coding CLIs here, then Recheck', 'Squash into main', 'Finish branch…', 'Check removal', 'Discard…', 'Launch agents…']);
   await page.getByRole('button', { name: 'Squash feature/finished into main', exact: true }).click();
   const region = page.getByRole('region', { name: 'Squash feature/finished', exact: true });
   await expect(region).toContainText('Squash 2 commits from feature/finished (bbbbbbb..aaaaaaa) into main');
@@ -391,4 +391,84 @@ test('batch advice sends exact revisions as a read-only instruction without conf
   const text = String(advice[0]!.text);
   for (const literal of [target.head!, base, previous, target.path, 'Do not modify files, commit, merge', 'Keep tests with their behavior.']) expect(text).toContain(literal);
   await expect(page.getByRole('button', { name: 'Confirm squash', exact: true })).toBeVisible();
+});
+
+test('adding a project browses host folders, shows the checkout it will add, and sends exactly that identity', async ({ page, request }) => {
+  await fixture(page, request);
+  const adds: unknown[] = []; page.on('request', (r) => { if (r.method() === 'POST' && new URL(r.url()).pathname === '/api/v1/projects') adds.push(r.postDataJSON()); });
+  await page.getByRole('button', { name: 'Browse…', exact: true }).click();
+  const picker = page.getByRole('region', { name: 'Choose a directory' });
+  await expect(picker.getByRole('list', { name: 'Folders' })).toContainText('project');
+  await expect(picker.getByRole('button', { name: 'Select this directory' })).toBeDisabled();
+  await picker.getByRole('button', { name: 'other Git candidate', exact: true }).click();
+  await expect(picker).toContainText('Main checkout /demo/other · branch main');
+  await picker.getByRole('button', { name: 'Select this directory' }).click();
+  const chosen = page.getByRole('region', { name: 'Chosen checkout' });
+  await expect(chosen).toContainText('Main checkout /demo/other'); await expect(chosen).toContainText('default branch not recorded');
+  await expect(page.getByLabel('Main/default starting checkout')).toHaveValue('/demo/other');
+  await page.getByRole('button', { name: 'Add project', exact: true }).click();
+  await expect.poll(() => adds).toEqual([{ path: '/demo/other', expected: { root: '/demo/other', commonDir: '/demo/other/.git', branch: 'main' } }]);
+});
+test('a typed linked worktree or non-default branch is shown before adding, and the verified main checkout is one click away', async ({ page, request }) => {
+  await fixture(page, request);
+  const listing = (path: string, checkout: Partial<DirectoryListing['checkout']>): DirectoryListing => ({ path, parent: '/home/fixture', home: '/home/fixture', entries: [], truncated: false, checkoutError: null,
+    checkout: { root: path, commonDir: '/home/fixture/repo/.git', kind: 'main', branch: 'main', head: 'a'.repeat(40), defaultBranch: 'main', mainCheckout: null, mainCheckoutNote: null, ...checkout } });
+  await page.route('**/api/v1/directories', (route) => { const { path } = route.request().postDataJSON();
+    return route.fulfill({ json: path === '/home/fixture/tasks/login' ? listing(path, { kind: 'linked', branch: 'feature/login', mainCheckout: '/home/fixture/repo' }) : listing(path, { branch: 'feature/other' }) }); });
+  const adds: unknown[] = [];
+  await page.route('**/api/v1/projects', (route) => { adds.push(route.request().postDataJSON()); return route.fulfill({ json: { id: 'project-x', name: 'repo', commonDir: '/home/fixture/repo/.git', directoryName: 'repo' } }); });
+  await page.getByLabel('Main/default starting checkout').fill('/home/fixture/tasks/login');
+  await page.getByRole('button', { name: 'Add project', exact: true }).click();
+  const chosen = page.getByRole('region', { name: 'Chosen checkout' });
+  await expect(chosen).toContainText('linked task worktree'); expect(adds).toEqual([]);
+  await chosen.getByRole('button', { name: 'Use main checkout /home/fixture/repo instead' }).click();
+  await expect(chosen).toContainText('It is on feature/other, not the default branch main.');
+  await page.getByRole('button', { name: 'Add project', exact: true }).click();
+  await expect.poll(() => adds).toEqual([{ path: '/home/fixture/repo', expected: { root: '/home/fixture/repo', commonDir: '/home/fixture/repo/.git', branch: 'feature/other' } }]);
+});
+test('Finish branch previews app sessions, needs the stop acknowledgement, closes them, then removes through a fresh confirmation', async ({ page, request }, info) => {
+  const inventory = await fixture(page, request); const project = inventory.projects![0]!;
+  const target = tree('/home/fixture/tasks/finished', 'feature/finished'); project.worktrees.push(target);
+  const proc = (pid: string, command: string) => ({ pid, command, started: `start-${pid}`, infrastructure: false });
+  const shown: FinishPreview = { projectId: project.id, worktreeId: target.id, requestId: crypto.randomUUID(), digest: 'd'.repeat(64), worktree: target.identity!, branch: 'feature/finished',
+    sessions: [{ launchId: crypto.randomUUID(), sessionName: 'CX-feature-finished', sessionId: '$3', windowId: '@3', server: { pid: '1', started: '2', socketPath: '/tmp/fixture' }, closable: true, reason: null, clients: 1,
+      panes: [{ paneId: '%5', windowId: '@3', cwd: target.path, command: 'codex', dead: false, agent: 'CX-feature-finished', activity: 'working', root: proc('100', 'codex'), processes: [proc('100', 'codex'), proc('101', 'npm')] }] },
+      { launchId: crypto.randomUUID(), sessionName: 'CC-feature-finished', sessionId: '$4', windowId: '@4', server: { pid: '1', started: '2', socketPath: '/tmp/fixture' }, closable: false, reason: 'A window is shared with another session. Close it yourself.', clients: 0, panes: [] }],
+    others: [{ paneId: '%9', location: 'mine:0.0', command: 'zsh' }],
+    git: { branch: 'feature/finished', head: target.head!, targetRef: 'refs/heads/main', targetHead: 'b'.repeat(40), ahead: 2, behind: 1, dirty: false, changeCount: 0, integration: 'integrated', integratedBy: 'squash', integratedCommit: 'b'.repeat(40), note: null },
+    run: null, blockers: [], active: true };
+  const bodies: Record<string, unknown[]> = { confirm: [], continue: [] };
+  const record = (status: TaskFinish['status'], message: string, revision: number): TaskFinish => ({ requestId: shown.requestId, input: { requestId: shown.requestId, digest: shown.digest, outcome: 'remove', stopActive: true, confirm: true },
+    preview: shown, status, step: 'sessions', revision, message, child: null, updatedAt: new Date().toISOString(),
+    sessions: [{ sessionId: '$3', sessionName: 'CX-feature-finished', launchId: shown.sessions[0]!.launchId, status: 'closed', retained: [], survivors: [], evidence: 'clear' }] });
+  await page.route('**/api/v1/projects/worktrees/finish/preview', (route) => route.fulfill({ json: shown }));
+  await page.route('**/api/v1/projects/worktrees/finish', (route) => { bodies.confirm!.push(route.request().postDataJSON());
+    const op = record('awaiting_git', '1 app session closed. Continue to preview the removal (branch kept), or stop here.', 3); project.finishes = [op]; return route.fulfill({ json: op }); });
+  const removal = { projectId: project.id, worktreeId: target.id, requestId: crypto.randomUUID(), worktree: target.identity, branch: target.branch, head: target.head, targetRef: 'refs/heads/main', targetHead: 'b'.repeat(40), integratedBy: 'squash', integratedCommit: 'b'.repeat(40) };
+  await page.route('**/api/v1/projects/worktrees/removal/preview', (route) => route.fulfill({ json: removal }));
+  await page.route('**/api/v1/projects/worktrees/finish/continue', (route) => { bodies.continue!.push(route.request().postDataJSON());
+    const op = record('done', 'Worktree removed. Its branch, commits and run history are retained.', 5); project.finishes = [op]; project.worktrees = project.worktrees.filter((w) => w.id !== target.id); return route.fulfill({ json: op }); });
+  await page.getByRole('button', { name: 'Recheck', exact: true }).click();
+  await page.getByRole('button', { name: 'Finish feature/finished', exact: true }).click();
+  const panel = page.getByRole('region', { name: 'Finish feature/finished', exact: true });
+  await expect(panel).toContainText('CX-feature-finished'); await expect(panel).toContainText('running npm 101');
+  await expect(panel).toContainText('not closed: A window is shared with another session.'); await expect(panel).toContainText('zsh (mine:0.0)');
+  await expect(panel).toContainText('2 ahead, 1 behind main'); await expect(panel).toContainText('Integration proven: squash commit');
+  await expect(panel.getByRole('img', { name: 'Working' })).toBeVisible();
+  const close = panel.getByRole('button', { name: 'Close 1 session', exact: true });
+  await panel.getByLabel('Close the sessions, then remove the worktree (the branch is kept)').check();
+  await expect(close).toBeDisabled(); expect(bodies.confirm).toEqual([]);
+  await panel.getByRole('checkbox', { name: /Stop these sessions anyway/ }).check();
+  await page.screenshot({ path: info.outputPath('finish-branch.png'), fullPage: true });
+  await close.click();
+  await expect.poll(() => bodies.confirm).toEqual([{ requestId: shown.requestId, digest: shown.digest, outcome: 'remove', stopActive: true, confirm: true }]);
+  const holding = page.getByRole('region', { name: 'Finishing feature/finished', exact: true });
+  await expect(holding).toContainText('awaiting git');
+  // While Finish branch owns the worktree, the separate end-of-task actions wait for it.
+  await expect(page.getByRole('button', { name: 'Check removal of feature/finished', exact: true })).toBeDisabled();
+  await holding.getByRole('button', { name: 'Continue: check removal', exact: true }).click();
+  await holding.getByRole('region', { name: 'Confirm removal of feature/finished' }).getByRole('button', { name: 'Confirm removal', exact: true }).click();
+  await expect.poll(() => bodies.continue).toEqual([{ requestId: shown.requestId, revision: 3, removal: { ...removal, confirm: true } }]);
+  await expect(page.getByRole('button', { name: 'Open finished', exact: true })).toHaveCount(0);
+  expect(bodies.confirm).toHaveLength(1);
 });

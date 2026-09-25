@@ -53,7 +53,7 @@ test('one control pane keeps per-target drafts; After send maps to a plain Send,
   await page.route('**/api/v1/implementation', async (route) => { starts.push(route.request().postDataJSON()); await route.fulfill({ json: { status: 'delivered', error: null } }); });
   await page.route('**/api/v1/instructions', async (route) => { sent.push(route.request().postDataJSON()); await route.fulfill({ json: { status: 'delivered', error: null } }); });
   await openGroup(page, group);
-  await expect(page.getByRole('region', { name: 'AltCLI control', exact: true })).toHaveCount(1);
+  await expect(page.getByRole('region', { name: 'Control', exact: true })).toHaveCount(1);
   await expect(page.locator('article.pane .pane-actions')).toHaveCount(0);
   const claude = await openCard(page, 'Claude');
   await claude.getByLabel('Instruction for Claude').fill('Fix the parser.');
@@ -159,8 +159,8 @@ test('drafts, choices and disclosures survive tab, layout, phase, section and wo
   await expand(codex, 'Committed review'); await codex.getByLabel('Review context for Codex (optional)').fill('Check the parser.');
   const claude = await openCard(page, 'Claude'); await claude.getByLabel('Instruction for Claude').fill('Claude draft');
   await editSettings(page); await page.getByLabel('Implementation branch').selectOption('new'); await page.getByLabel('New branch name').fill('task/draft');
-  await page.getByRole('button', { name: '1 · Plan', exact: true }).click(); await page.getByLabel('Shared task brief').fill('Plan draft');
-  await page.getByRole('button', { name: '2 · Implementation', exact: true }).click();
+  await page.getByRole('group', { name: 'Phase' }).getByRole('button', { name: 'Plan', exact: true }).click(); await page.getByLabel('Shared task brief').fill('Plan draft');
+  await page.getByRole('group', { name: 'Phase' }).getByRole('button', { name: 'Implementation', exact: true }).click();
   await page.getByRole('button', { name: 'Focus', exact: true }).click(); await openCard(page, 'Codex'); await page.getByRole('button', { name: 'Parallel', exact: true }).click();
   // Visit another workspace and come back: each keeps its own drafts, never another's.
   await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Projects', exact: true }).click();
@@ -173,7 +173,7 @@ test('drafts, choices and disclosures survive tab, layout, phase, section and wo
   await expect(back.getByLabel('Review context for Codex (optional)')).toBeVisible(); await expect(back.getByLabel('Review context for Codex (optional)')).toHaveValue('Check the parser.');
   await expect((await openCard(page, 'Claude')).getByLabel('Instruction for Claude')).toHaveValue('Claude draft');
   await expect(page.getByLabel('New branch name')).toBeVisible(); await expect(page.getByLabel('New branch name')).toHaveValue('task/draft');
-  await page.getByRole('button', { name: '1 · Plan', exact: true }).click(); await expect(page.getByLabel('Shared task brief')).toHaveValue('Plan draft');
+  await page.getByRole('group', { name: 'Phase' }).getByRole('button', { name: 'Plan', exact: true }).click(); await expect(page.getByLabel('Shared task brief')).toHaveValue('Plan draft');
   // Projects keeps its own selection and creation draft across a Console round trip.
   await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Projects', exact: true }).click();
   await page.getByRole('button', { name: 'Project other', exact: true }).click();
@@ -209,7 +209,13 @@ test('Settings shows the effective host configuration and the console preference
   await expect(page.locator('summary').filter({ hasText: /^(Advanced|How this works)$/ })).toHaveCount(0);
   const sections = page.getByRole('navigation', { name: 'Sections' });
   await sections.getByRole('button', { name: 'Settings', exact: true }).click();
+  // Console preferences is the first subtab and opens by default; Host configuration is one click away.
+  const subtabs = page.getByRole('navigation', { name: 'Settings sections' });
+  await expect(subtabs.getByRole('button')).toHaveText(['Console preferences', 'Host configuration']);
+  await expect(subtabs.getByRole('button', { name: 'Console preferences', exact: true })).toHaveAttribute('aria-pressed', 'true');
   const host = page.getByRole('region', { name: 'Host configuration' });
+  await expect(page.getByRole('region', { name: 'Console preferences' })).toBeVisible(); await expect(host).toBeHidden();
+  await subtabs.getByRole('button', { name: 'Host configuration', exact: true }).click();
   await expect(host).toContainText('READ AT START'); await expect(host).toContainText('restart the host');
   const row = (name: string) => host.getByRole('row').filter({ has: page.getByRole('cell', { name, exact: true }) });
   await expect(row('Adapter')).toContainText('mock (simulated panes)'); await expect(row('Adapter')).toContainText('ALTCLI_ADAPTER (set)');
@@ -218,6 +224,7 @@ test('Settings shows the effective host configuration and the console preference
   await expect(row('Integration branches')).toContainText(`main, master + each project's default branch`);
   await expect(row('Deprecated staging relay')).toContainText('allowed');
   await expect(host).not.toContainText('a'.repeat(64)); // the token never reaches the page
+  await subtabs.getByRole('button', { name: 'Console preferences', exact: true }).click();
   const preferences = page.getByRole('region', { name: 'Console preferences' });
   await expect(preferences.getByLabel('Staging fallback', { exact: true })).toBeEnabled();
   await sections.getByRole('button', { name: 'About', exact: true }).click();
@@ -287,7 +294,7 @@ test('one Send control is selectable for either agent below the terminal stage',
     const send = (await openCard(page, name)).getByRole('button', { name: `Send ${name}`, exact: true });
     await send.scrollIntoViewIfNeeded();
     await expect(send).toBeInViewport({ ratio: 1 });
-    await expect(page.getByRole('region', { name: 'AltCLI control', exact: true }).locator('.pane-actions')).toHaveCount(1);
+    await expect(page.getByRole('region', { name: 'Control', exact: true }).locator('.pane-actions')).toHaveCount(1);
     // A safety margin, so added chrome above the panes fails here before it clips a Send button.
     const box = (await send.boundingBox())!;
     expect(900 - (box.y + box.height), `${name} Send margin`).toBeGreaterThanOrEqual(16);
@@ -319,11 +326,25 @@ test('terminal captures are taller, grow with the window, and stand apart from s
   await page.setViewportSize({ width: 1440, height: 1200 });
   await expect.poll(() => height('Codex')).toBeGreaterThan(parallel);
 });
+test('terminal tool help starts at its control and stays inside the pane', async ({ page }, info) => {
+  test.skip(info.project.name !== 'desktop', 'Hover bubbles are measured in a desktop window.');
+  await unlock(page);
+  const tools = page.getByRole('region', { name: 'Codex terminal', exact: true }).locator('.terminal-tools > .hint');
+  const card = (await pane(page, 'Codex').boundingBox())!;
+  await expect(tools.last().getByRole('button', { name: 'Terminal tools help' })).toBeVisible();
+  for (const hint of await tools.all()) {
+    const control = hint.locator('> :first-child'); await control.hover();
+    const at = (await control.boundingBox())!, bubble = (await hint.getByRole('tooltip').boundingBox())!;
+    const name = await control.getAttribute('aria-label');
+    expect(Math.abs(bubble.x - at.x), `${name} bubble starts at its control`).toBeLessThanOrEqual(1);
+    expect(bubble.x + bubble.width, `${name} bubble fits the pane`).toBeLessThanOrEqual(card.x + card.width);
+  }
+});
 test('Plan setup sits below the terminal stage, behind a command divider', async ({ page, request }, info) => {
   test.skip(info.project.name !== 'desktop', 'The Plan screenshot is taken on a desktop window.');
   await page.setViewportSize({ width: 1440, height: 900 });
   const group = await post(request, 'groups', { name: 'Plan divider', members: ['codex','claude'] });
-  await openGroup(page, group); await page.getByRole('button', { name: '1 · Plan', exact: true }).click();
+  await openGroup(page, group); await page.getByRole('group', { name: 'Phase' }).getByRole('button', { name: 'Plan', exact: true }).click();
   const setup = page.getByRole('region', { name: 'Plan setup' });
   await expect(setup).toBeVisible();
   expect(await setup.evaluate((el) => ({
@@ -392,17 +413,17 @@ test('Use <agent> in control pane retargets the one control pane, focuses it and
   await page.getByRole('navigation', { name: 'Viewed terminal' }).getByRole('button', { name: 'Claude', exact: true }).click();
   const shortcut = pane(page, 'Claude').getByRole('button', { name: 'Use Claude in control pane', exact: true });
   await shortcut.click();
-  await expect(page.getByRole('region', { name: 'AltCLI control', exact: true })).toBeFocused();
+  await expect(page.getByRole('region', { name: 'Control', exact: true })).toBeFocused();
   await expect(page.getByRole('navigation', { name: 'Command target' }).getByRole('button', { name: 'Claude', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByText('AltCLI control now targets Claude. Nothing was sent.', { exact: true }).filter({ visible: true })).toBeVisible();
+  await expect(page.getByText('Control now targets Claude. Nothing was sent.', { exact: true }).filter({ visible: true })).toBeVisible();
   await expect(shortcut).toBeDisabled();
-  await expect(page.getByRole('region', { name: 'AltCLI control', exact: true })).toHaveCount(1);
+  await expect(page.getByRole('region', { name: 'Control', exact: true })).toHaveCount(1);
   expect(await commands()).toBe(before);
 });
 test('on wide screens the one control pane can sit beside the stage; the choice is remembered and narrower windows stack it', async ({ page }, info) => {
   test.skip(info.project.name !== 'desktop', 'The side placement applies from 1280 CSS pixels.');
   await page.setViewportSize({ width: 1440, height: 900 }); await unlock(page);
-  const stage = page.locator('.terminal-stage'), control = page.getByRole('region', { name: 'AltCLI control', exact: true });
+  const stage = page.locator('.terminal-stage'), control = page.getByRole('region', { name: 'Control', exact: true });
   const placement = page.getByRole('group', { name: 'Control pane placement' });
   await placement.getByRole('button', { name: 'Control beside', exact: true }).click();
   const beside = async () => { const s = (await stage.boundingBox())!, c = (await control.boundingBox())!; return c.x >= s.x + s.width && c.y < s.y + s.height; };
@@ -419,11 +440,11 @@ test('on wide screens the one control pane can sit beside the stage; the choice 
 test('on phones the one control pane opens as a bottom drawer and returns focus to its toggle', async ({ page }, info) => {
   test.skip(info.project.name !== 'iphone', 'The drawer placement applies at phone widths.');
   await unlock(page);
-  const control = page.getByRole('region', { name: 'AltCLI control', exact: true });
+  const control = page.getByRole('region', { name: 'Control', exact: true });
   await page.getByRole('button', { name: 'Open control drawer', exact: true }).click();
   await expect(control).toBeFocused();
   expect(await control.evaluate((el) => getComputedStyle(el).position)).toBe('fixed');
-  await expect(control.getByRole('heading', { name: 'AltCLI control', exact: true })).toBeInViewport();
+  await expect(control.getByRole('heading', { name: 'Control', exact: true })).toBeInViewport();
   await expect(control).toHaveCount(1); await expect(page.getByRole('textbox', { name: /^Instruction for / })).toHaveCount(1);
   await page.keyboard.press('Escape');
   await expect(page.getByRole('button', { name: 'Open control drawer', exact: true })).toBeFocused();

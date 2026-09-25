@@ -120,6 +120,16 @@ Explicit worktree removal has its own preview, exact integration evidence, clean
 tracked/nonignored state, occupancy checks and durable uncertainty owner under
 ADR-0013. Ignored files are deleted with the checkout after a confirmation warning;
 removal never uses force and retains the branch and history.
+**Finish branch** (ADR-0013, September 25) is the only path that closes tmux sessions: it
+closes only sessions AltCLI launched for that worktree, proven by server identity, session ID
+and the full-UUID launch marker, after a preview whose evidence digest must still match and an
+explicit acknowledgement when work may be running. It kills by session ID with an argument
+array, never by name or `kill-server`, keeps survivors and uncertain results owned, and then
+reuses the confirmed removal or discard unchanged. Sessions the user opened are never closed.
+The host directory browser used to add a project is read-only: it lists immediate folder names
+(bounded, directories only, symbolic links shown with their destination) and Git's
+classification of the listed directory to token holders. It reads no file contents and creates
+nothing; adding still re-inspects the path and refuses a changed checkout, repository or branch.
 These checks do not prevent a malicious same-user path race or configured Git
 filters from running during an ordinary checkout; use trusted repository settings.
 

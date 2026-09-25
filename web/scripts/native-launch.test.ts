@@ -11,6 +11,7 @@ import { ProjectCatalog } from '../src/server/projects.ts';
 import { LaunchService, launchEnvironment, childEnvironmentArgs } from '../src/server/launches.ts';
 import { loadConfig, resolveExecutable } from '../src/server/config.ts';
 import { createRunner, listPanes } from '../src/server/adapters/tmux.ts';
+import { sessionNamesOf } from '../src/core/session-names.ts';
 const wait=(ms:number)=>new Promise(r=>setTimeout(r,ms));
 for(const existing of [false,true])test(`private tmux service launch: ${existing?'existing contaminated':'fresh absent'} server, argv, environment, instant exit and durable reservation`,async()=>{
   const directory=await realpath(await mkdtemp(join(tmpdir(),'altcli-launch-'))),root=join(directory,'repo');await mkdir(root);
@@ -27,13 +28,14 @@ for(const existing of [false,true])test(`private tmux service launch: ${existing
       for(const [key,value] of Object.entries({ALTCLI_TOKEN:'fixture-secret',NEXT_FAKE_SECRET:'fixture-secret',UNRELATED_SERVICE_SECRET:'fixture-secret',GIT_INDEX_FILE:'/dummy/custom-index',PATH:'/stale/path',TMUX:'stale',TMUX_PANE:'%999',...credentials}))await run(['set-environment','-g',key,value]);
     }else assert.deepEqual(await listPanes(run),[]);
     const project=await catalog.add({path:root});const tree=(await catalog.discover([],[]))[0]!.worktrees[0]!;
-    const launches=new LaunchService(config,store,catalog,authority,()=>{});
+    const launches=new LaunchService(config,store,catalog,authority,()=>{},async()=>sessionNamesOf(await listPanes(run)));
     const file=join(directory,'fixture.mjs'),result=join(directory,'result.json');
     await writeFile(file,"import{writeFileSync}from'node:fs';import{spawnSync}from'node:child_process';writeFileSync(process.argv[2],JSON.stringify({args:process.argv.slice(3),cwd:process.cwd(),keys:Object.keys(process.env),tmux:process.env.TMUX,pane:process.env.TMUX_PANE,git:spawnSync('git',['--version']).status}));\n");
     const args=['','space value','é次','quote\"','$(no-shell)',';',String.raw`\;`,'--flag=value'];
     const profile=(await launches.profile({label:'Literal fixture',executable:process.execPath,args:[file,result,...args],adapterHint:'manual',enabled:true}))!;
     const preview=await launches.preview({projectId:project.id,items:[{worktreeId:tree.id,profileId:profile.id,count:1}]});
     const input={requestId:preview.requestId,previewDigest:preview.digest,confirm:true};const batch=await launches.confirm(input);const item=batch.items[0]!;
+    assert.equal(item.sessionName,'Literal-fixture-main','the default name is profile and branch, without a random suffix');
     for(let n=0;n<100;n++){try{await readFile(result);break;}catch{}await wait(20);}
     const output=JSON.parse(await readFile(result,'utf8'));
     assert.deepEqual(output.args,args);assert.equal(output.cwd,root);assert.ok(output.tmux && output.tmux!=='stale');assert.equal(output.pane,item.placeholder?.paneId);assert.equal(output.git,0);
@@ -61,7 +63,7 @@ test('private tmux: an exited launcher with a surviving detached child retains i
   const git=(...args:string[])=>execFileSync('git',['-C',root,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','-c','commit.gpgsign=false','-c','core.hooksPath=/dev/null',...args],{stdio:'ignore'});
   git('init','-b','main');await writeFile(join(root,'base'),'fixture');git('add','base');git('commit','-m','fixture');
   const config=loadConfig({ALTCLI_TOKEN:'a'.repeat(64),ALTCLI_DATA_DIR:join(directory,'data'),ALTCLI_TMUX_SOCKET:join(directory,'t.sock'),ALTCLI_ENABLE_AGENT_LAUNCH:'true'});
-  const store=new Store(config.dataDir),catalog=new ProjectCatalog(store,config),launches=new LaunchService(config,store,catalog,new InputAuthority(store),()=>{}),run=createRunner('tmux',config.tmuxSocket);
+  const store=new Store(config.dataDir),catalog=new ProjectCatalog(store,config),launches=new LaunchService(config,store,catalog,new InputAuthority(store),()=>{},async()=>sessionNamesOf(await listPanes(run))),run=createRunner('tmux',config.tmuxSocket);
   let childPid:number|undefined;
   try{
     const program=join(directory,'background.mjs'),result=join(directory,'child-pid');
@@ -90,14 +92,15 @@ test('private tmux: failures at every startup boundary retain ownership and neve
   const run=createRunner(tmux,config.tmuxSocket),store=new Store(config.dataDir),authority=new InputAuthority(store),catalog=new ProjectCatalog(store,config);
   try{
     const project=await catalog.add({path:root}),tree=(await catalog.discover([],[]))[0]!.worktrees[0]!;
-    let launches=new LaunchService(config,store,catalog,authority,()=>{});
+    const names=async()=>sessionNamesOf(await listPanes(run));
+    let launches=new LaunchService(config,store,catalog,authority,()=>{},names);
     const profile=(await launches.profile({label:'Fault fixture',executable:process.execPath,args:[program,effect],adapterHint:'manual',enabled:true}))!;
     for(const [step,after] of [['new-session',true],['destroy-unattached',true],['update-environment',true],['mouse',true],['remain-on-exit',true],['@altcli_launch',true],['respawn-pane',false],['respawn-pane',true]] as const){
       await writeFile(fault,JSON.stringify({step,after}));
       const preview=await launches.preview({projectId:project.id,items:[{worktreeId:tree.id,profileId:profile.id,count:1}]});
       const confirm={requestId:preview.requestId,previewDigest:preview.digest,confirm:true},batch=await launches.confirm(confirm),item=batch.items[0]!;
       assert.equal(item.status,'uncertain',`${step}: ${item.message}`);assert.ok(store.db.prepare('SELECT 1 FROM launch_reservations').get());
-      await launches.confirm(confirm);launches=new LaunchService(config,store,catalog,authority,()=>{});await launches.confirm(confirm);
+      await launches.confirm(confirm);launches=new LaunchService(config,store,catalog,authority,()=>{},names);await launches.confirm(confirm);
       assert.equal((await launches.inspect(item.id)).status,'uncertain','missing post-execution identity must not be adopted');
       const phases:Record<string,string>={'new-session':'creating','destroy-unattached':'created','update-environment':'created','mouse':'created','remain-on-exit':'created','@altcli_launch':'configured','respawn-pane':'executing'};
       assert.equal(item.phase,phases[step],`${step}: ${item.message}`);
@@ -106,5 +109,56 @@ test('private tmux: failures at every startup boundary retain ownership and neve
       await launches.reconcile(item.id,{requestId:randomUUID(),confirmInspected:true,note:'Private fixture inspected at injected fault; no retry.'});
     }
     assert.equal((await run(['list-sessions','-F','#{session_id}'])).trim().split('\n').length,8,'one retained session per confirmation, including the lost creation response');
+    // Each retained session keeps its name, so later launches of the same profile and branch take the next free number.
+    assert.deepEqual((await run(['list-sessions','-F','#{session_name}'])).trim().split('\n').sort(),['Fault-fixture-main',...[2,3,4,5,6,7,8].map(n=>`Fault-fixture-main-${n}`)].sort());
   }finally{await run(['kill-server']).catch(()=>{});store.close();await rm(directory,{recursive:true,force:true});}
+});
+test('private tmux: Finish branch closes only the proven launched session by ID and reports a detached survivor', async () => {
+  const { FinishCoordinator, tmuxFinishHost } = await import('../src/server/finish.ts');
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'altcli-finish-'))), root = join(directory, 'repo'), task = join(directory, 'task'); await mkdir(root);
+  const git = (...args: string[]) => execFileSync('git', ['-C', root, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args], { stdio: 'ignore' });
+  git('init', '-b', 'main'); await writeFile(join(root, 'base'), 'fixture'); git('add', 'base'); git('commit', '-m', 'fixture'); git('worktree', 'add', '-b', 'feature/finished', task);
+  const config = loadConfig({ ALTCLI_TOKEN: 'a'.repeat(64), ALTCLI_DATA_DIR: join(directory, 'data'), ALTCLI_TMUX_SOCKET: join(directory, 't.sock'), ALTCLI_ENABLE_AGENT_LAUNCH: 'true' });
+  const run = createRunner('tmux', config.tmuxSocket), store = new Store(config.dataDir), authority = new InputAuthority(store), catalog = new ProjectCatalog(store, config);
+  const launches = new LaunchService(config, store, catalog, authority, () => {}, async () => sessionNamesOf(await listPanes(run)));
+  let childPid: number | undefined;
+  try {
+    // A user's own session in the worktree, which Finish branch must never close.
+    await run(['-f', '/dev/null', 'new-session', '-d', '-s', 'mine', '-c', task, '/bin/sleep', '300']);
+    const program = join(directory, 'worker.mjs'), pidFile = join(directory, 'child-pid');
+    await writeFile(program, "import{spawn}from'node:child_process';import{writeFileSync}from'node:fs';const child=spawn(process.execPath,['-e','setTimeout(()=>{},300000)'],{detached:true,stdio:'ignore'});writeFileSync(process.argv[2],String(child.pid));child.unref();setTimeout(()=>{},300000);\n");
+    const project = await catalog.add({ path: root }), tree = (await catalog.discover([], []))[0]!.worktrees.find((w) => w.path === task)!;
+    const profile = (await launches.profile({ label: 'Worker', executable: process.execPath, args: [program, pidFile], adapterHint: 'manual', enabled: true }))!;
+    const preview = await launches.preview({ projectId: project.id, items: [{ worktreeId: tree.id, profileId: profile.id, count: 2 }] });
+    const batch = await launches.confirm({ requestId: preview.requestId, previewDigest: preview.digest, confirm: true });
+    const [first, second] = batch.items as [typeof batch.items[0], typeof batch.items[0]];
+    assert.deepEqual([first.sessionName, second.sessionName], ['Worker-feature-finished', 'Worker-feature-finished-2']);
+    for (let n = 0; n < 100; n++) { const value = await readFile(pidFile, 'utf8').catch(() => ''); if (value) { childPid = Number(value); break; } await wait(20); }
+    assert.ok(childPid);
+    // A non-CLI program keeps its launch reservation until inspected; an unresolved launch refuses Finish branch.
+    for (const item of batch.items) await launches.reconcile(item.id, { requestId: randomUUID(), confirmInspected: true, note: 'Fixture worker inspected on the private server.' });
+    // A split inside the worktree stays in scope; a window linked into the user's session takes the second launch out of scope.
+    await run(['split-window', '-d', '-t', first.sessionId!, '-c', task, '/bin/sleep', '300']);
+    await run(['link-window', '-d', '-s', `${second.windowId}`, '-t', 'mine:']);
+    const finish = new FinishCoordinator({ config, store, projects: catalog, launches, authority, host: tmuxFinishHost(config, () => listPanes(run)),
+      owner: () => null, delivery: () => false, agents: async () => [], closeTerminals: async () => {},
+      remove: (input, parent) => catalog.remove(input, async () => {}, async () => 0, parent), discard: (input, parent) => catalog.discard(input, async () => {}, async () => 0, parent),
+      reconcileChild: (kind, id) => kind === 'removal' ? catalog.reconcileRemoval(id) : catalog.reconcileDiscard(id) });
+    const shown = await finish.preview({ projectId: project.id, worktreeId: tree.id });
+    const scoped = shown.sessions.find((s) => s.sessionId === first.sessionId)!, linked = shown.sessions.find((s) => s.sessionId === second.sessionId)!;
+    assert.equal(scoped.closable, true, scoped.reason ?? ''); assert.equal(scoped.panes.length, 2);
+    assert.ok(scoped.panes.some((p) => p.processes.some((q) => q.pid === String(childPid))), 'the detached child is retained evidence while it is a descendant');
+    assert.equal(linked.closable, false); assert.match(linked.reason!, /shared with another session/);
+    assert.ok(shown.others.some((o) => o.location.startsWith('mine:')), 'the user session is occupancy, never a target');
+    assert.equal(shown.active, true);
+    const done = await finish.confirm({ requestId: shown.requestId, digest: shown.digest, outcome: 'close', stopActive: true, confirm: true });
+    const sessions = (await run(['list-sessions', '-F', '#{session_id}'])).trim().split('\n');
+    assert.ok(!sessions.includes(first.sessionId!), 'the proven session is gone'); assert.ok(sessions.includes(second.sessionId!), 'the out-of-scope launch is untouched');
+    assert.ok((await run(['list-sessions', '-F', '#{session_name}'])).includes('mine'));
+    assert.equal(done.status, 'attention', done.message); assert.deepEqual(done.sessions[0]!.survivors.map((p) => p.pid), [String(childPid)]);
+    assert.ok(launches.batches().flatMap((b) => b.items).find((i) => i.id === first.id)!.closed);
+    process.kill(childPid!, 'SIGKILL'); childPid = undefined; await wait(100);
+    const cleared = await finish.reconcile({ requestId: done.requestId, revision: done.revision, action: 'inspect' });
+    assert.equal(cleared.status, 'done', cleared.message);
+  } finally { if (childPid) try { process.kill(childPid, 'SIGKILL'); } catch { /* already gone */ } await run(['kill-server']).catch(() => {}); store.close(); await rm(directory, { recursive: true, force: true }); }
 });

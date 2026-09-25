@@ -41,7 +41,11 @@ uses bearer-authenticated HTTP, at most 4 KiB per frame, 32 KiB server queue and
 are contiguous and receipts are limited to the latest 64 in one generation.
 Conflicting/expired duplicates or uncertain responses are never replayed.
 Browser input queues belong to one connection generation. A late success or
-failure from a retired generation cannot stall or revoke the new keyboard.
+failure from a retired generation cannot stall or revoke the new keyboard. A grant
+or release replaces the generation while output acknowledgments and heartbeats for
+the old one may still be in flight; the server ignores those for the connection's
+last few retired generations (any other generation still closes it), and a keyboard
+decision completes in the browser only once the new generation's reset is applied.
 Leaving the terminal, changing views or collapsing an expanded terminal drops
 unsent queued text. One input event (for example a paste above 4 KiB) spans several
 frames. If its first frame was already sent, its remaining frames are still sent,
@@ -66,20 +70,29 @@ navigated writer; nothing falls back to another session. Incompatible
 
 A keyboard writer is a full tmux client, so it may deliberately navigate to another
 session. The attachment then follows: the status line shows the actual session,
-pane and command and notes the navigation. The card's agent and the AltCLI control
+pane and command and notes the navigation. The card's agent and the Control
 target do not change, and the server-wide manual hold still covers every session.
 A session reached by navigation keeps its own lifetime settings. If it uses
 `destroy-unattached`, detaching the browser there (release, close or Lock) can
 destroy it, just as a desktop client leaving it would.
 
-**Take keyboard** requires explicit confirmation and creates a fresh writable
-attachment. It participates in normal tmux sizing. There is one writer across the
+The one **Keyboard** selector in the shared terminal area (radios on wide screens, a single
+select on phones; Projects launch terminals use the same selector) chooses the writer. Choosing
+a pane requires explicit confirmation naming the old and new targets and affected runs; it opens
+that pane's observer connection if needed, then requests the grant, creating a fresh writable
+attachment. A pending choice is shown as pending; cancel, Lock, a view change or a newer choice
+before the request is sent sends nothing, and a lost response is reconciled from the server's
+report, never replayed. Moving the keyboard between this browser's panes freezes the old pane's
+input first and uses the broker's serialized transfer, never a client-side release-then-acquire.
+The checked selection is always the server-confirmed writer; another browser's ownership or an
+unresolved record is shown as status, never as **Nobody**. The grant It participates in normal tmux sizing. There is one writer across the
 configured server, and a durable manual barrier holds AltCLI dispatch, setup and
 launch before claim. It does not stop an already computing worker or external
 terminal clients. All current modern runs get whole-run input holds. Legacy runs
 must settle or be deliberately taken over first.
 
-Release stops admission and drains admitted input. **Release and record settled**
+**Nobody (observe only)** is the plain release: it stops admission and drains admitted input.
+**Release and record settled…**, beside the selector, is the separately confirmed strict release; it
 also performs fresh inventory, activity, background-work and checkpoint checks.
 A failed check still releases the keyboard, retaining the barrier and reason.
 Disconnect, Lock, expiry and restart always retain the barrier. Transfer/recovery
@@ -136,23 +149,30 @@ by hand.
 The browser separates terminal view, DOM focus, AltCLI command recipient and
 keyboard grant. Control-pane drafts, including the Plan brief, stay editable while
 a keyboard or manual barrier holds dispatch; only their actions are blocked, with
-the reason shown. Ctrl+Shift+Escape moves focus to AltCLI control. Touch keys and
+the reason shown. Ctrl+Shift+Escape leaves terminal focus for the visible Control region (or the
+phone drawer toggle, or the nearest Keyboard selector); the terminal shows this hint while it has
+focus, and it never sends input or changes keyboard ownership. Focus moves on the
+shortcut's first key release, so xterm also sees that release and does not ignore the
+next inserted text (IME, emoji, phone keyboards) when the user returns. Touch keys and
 one-shot Ctrl/Alt modifiers send bytes only under a grant; modifiers clear on
 blur, view change and revocation. The visual viewport refits for mobile keyboards
 and rotation. Alternate-screen wheel-to-arrow translation is suppressed when
 mouse reporting is off. OSC clipboard/title changes are consumed; HTTP(S) links
 require explicit confirmation. Output is never controller instructions or HTML.
 
-Each card's badge states one of: **Keyboard here**, **Disconnected**, **Controlled
-in another browser**, **Keyboard in another terminal** (another card of this page),
-**Manual CLI/shell** (the registered CLI process was replaced, for example it exited
-to a shell), **Observing · manual input unresolved**, or **Observing**. The status
+Each card's badge is a compact emoji whose accessible name is one of: **Keyboard here** ⌨️,
+**Disconnected** 🔌, **Controlled in another browser** 🔒, **Keyboard in another terminal** ↔️
+(another card of this page), **Manual CLI/shell** ⚠️ (the registered CLI process was replaced,
+for example it exited to a shell), **Observing · manual input unresolved** or **held** ⚠️, or
+**Observing** 👁️. Help text (on hover, keyboard focus and tap) says what it means and what to do;
+actionable failures stay visible in the status line. The page's connection indicator works the
+same way (🟢 Connected, 🔴 Not current, ⏳ Connecting); it is not agent activity or readiness. The status
 line shows the actual pane, foreground command and effective window size. If focus
 moved elsewhere while a keyboard grant was pending, the terminal does not take
 focus back; it reports **Keyboard ready for <name>** instead. With native terminals
 enabled, Settings also shows the server-wide keyboard scope and the terminal limits.
 
-The one AltCLI control pane has alternate placements, never a second composer:
+The one Control pane has alternate placements, never a second composer:
 - **Control below / Control beside:** on windows at least 1280 px wide, the pane
   can sit beside the terminal stage. The choice is remembered in this browser;
   narrower windows stack it below.
@@ -161,10 +181,13 @@ The one AltCLI control pane has alternate placements, never a second composer:
 - **Use <agent> in control pane:** each terminal card's shortcut changes only the
   control target, revokes readiness and focuses the pane. It sends nothing.
 
-**Expand terminal** enlarges the existing surface in the page without opening a
-new connection or changing keyboard ownership. **Focus AltCLI control** is a
-visible alternative to Ctrl+Shift+Escape. A focus outline identifies the active
-surface. Snapshot timestamps appear only alongside the captured-text fallback.
+Terminal tools are icon buttons that keep their full accessible names, with help on hover and
+focus, and a **?** legend that also works by tap: **Open terminal** ▶️ / **Reconnect** 🔄 (observe
+only), **Captured text** 📄 / **Show terminal** 🖥️, **Expand terminal** ⤢ / **Collapse terminal** ⤡,
+**Screen reader mode** ♿ and, while writing, **Paste text** 📋. **Expand terminal** enlarges the
+existing surface in the page without opening a new connection or changing keyboard ownership.
+The former visible focus-escape button is gone (September 25 decision); the shortcut and its
+on-focus hint remain. A focus outline identifies the active surface. Snapshot timestamps appear only alongside the captured-text fallback.
 Multiline paste into a terminal without bracketed-paste support requires a
 warning confirmation because newlines can execute immediately; paste above
 16 KiB also requires confirmation. **Paste text** reads the clipboard only on
@@ -181,8 +204,13 @@ physical screen-reader or Safari/IME acceptance.
 
 ## Launch
 
-Project entry accepts an existing absolute directory, canonicalizes Git common
-metadata and remembers empty checkouts. Missing tmux is an empty inventory only
+Project entry accepts an existing absolute directory, typed or chosen with **Browse…**, a
+read-only, bounded host directory listing (`POST /api/v1/directories`: immediate folders only,
+hidden ones on request, symbolic links shown with their destination, `.git` presence only as a
+hint). Git classifies the listed directory itself: main or linked checkout, actual branch and
+the locally recorded default branch; a linked worktree offers its verified main checkout. Adding
+sends the shown checkout, repository and branch, and the host refuses when any changed. It
+canonicalizes Git common metadata and remembers empty checkouts. Missing tmux is an empty inventory only
 for a verified absent-server response; permission and malformed metadata failures
 remain errors. No dummy session is created.
 
@@ -209,6 +237,10 @@ controller bearer token. Launch records retain an environment digest, while tmux
 retains the nonsecret launch settings in `pane_start_command`. Never put secrets
 in profile arguments or these settings.
 
+A session is named `<profile>-<branch>` (slugged), numbered `-2`, `-3`… when that name is live on
+the server or held by an unsettled launch anywhere on the host; confirmation refuses a previewed
+name taken since instead of renaming it. The name is never identity.
+
 Successful siblings are retained. Generic startup, immediate exit and uncertain
 steps keep reservations until exact inspection or an explicit human decision.
 Startup is not readiness. Missing markers, server replacement and name reuse are
@@ -216,6 +248,14 @@ never adopted; current absence cannot prove no execution. Human reconciliation
 records a note acknowledging possible prior/background effects. It never retries,
 removes sessions, deletes worktrees or rewrites history. A new launch needs a new
 preview. Mock launches are labelled simulated and appear in mock discovery.
+
+Launched sessions are closed only by **Finish branch** on a linked task worktree
+([ADR-0013](adr/ADR-0013-confirmed-branch-setup.md#confirmed-closing-of-launched-sessions)):
+`POST /api/v1/projects/worktrees/finish/preview`, `…/finish` (confirm), `…/finish/continue` (the
+removal or discard step) and `…/finish/reconcile` (inspect, record a decision, or stop before the
+Git step). Only sessions proven by server identity, session ID and full launch marker, wholly
+inside the worktree, are closed, by session ID; survivors and uncertain results keep the owner.
+A closed launch is retired from terminal and discovery targets and keeps its history.
 
 ## Deployment acceptance
 

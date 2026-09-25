@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import type { WorkflowState } from '../src/contracts/workflow';
 const headers={Authorization:`Bearer ${'a'.repeat(64)}`};
 async function state(request:APIRequestContext):Promise<WorkflowState>{return (await request.get('/api/v1/state',{headers})).json();}
@@ -10,18 +10,34 @@ async function reconcileFixtureKeyboard(request:APIRequestContext) {
     if(fresh)await post(request,'terminals/reconcile',{requestId:crypto.randomUUID(),manualSessionId:m.id,expectedRevision:fresh.revision,confirmReady:true});
   }
 }
+/** The one shared Keyboard selector: radios on wide screens, a single select on phones. Choosing only asks for confirmation. */
+async function chooseKeyboard(page:Page,name:string) {
+  const radios=page.getByRole('radiogroup',{name:'Keyboard input'}),select=page.getByRole('combobox',{name:'Keyboard input'});
+  await expect(radios.or(select)).toBeVisible();
+  if(await radios.isVisible())await radios.getByRole('radio',{name,exact:true}).click();else await select.selectOption({label:name});
+}
+async function takeKeyboard(page:Page,name='Codex') {await chooseKeyboard(page,name);await page.getByRole('region',{name:'Confirm keyboard'}).getByRole('button',{name:'Confirm keyboard'}).click();}
+/** The selector's checked pane is always the server-confirmed writer of this browser. */
+async function expectKeyboard(page:Page,name:string) {
+  const radios=page.getByRole('radiogroup',{name:'Keyboard input'});
+  if(await radios.isVisible())await expect(radios.getByRole('radio',{name,exact:true})).toBeChecked();
+  else await expect(page.getByRole('combobox',{name:'Keyboard input'}).locator('option:checked')).toHaveText(name);
+}
+/** A terminal card's status badge: an emoji whose accessible name states the badge. */
+const badge=(card:Locator,name:string)=>card.getByRole('img',{name,exact:true});
 async function openKeyboard(page:Page) {
   await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
   const card=page.getByRole('region',{name:'Codex terminal',exact:true});
-  await card.getByRole('button',{name:'Open terminal',exact:true}).click();await card.getByRole('button',{name:'Take keyboard…'}).click();await card.getByRole('button',{name:'Confirm keyboard'}).click();
-  await expect(card.getByText('Keyboard here',{exact:true})).toBeVisible();return card;
+  await takeKeyboard(page);
+  await expect(badge(card,'Keyboard here')).toBeVisible();await expectKeyboard(page,'Codex');return card;
 }
 test.beforeEach(async({request})=>{
   const s=await state(request);for(const r of s.runs.filter(r=>['running','waiting','paused'].includes(r.status)))await post(request,'runs',{runId:r.id,action:'takeover',confirmReady:true});
   await reconcileFixtureKeyboard(request);
   await post(request,'workspaces/reset',{repository:'/demo/project',confirmReady:true});await post(request,'sessions',{paneId:'%0',label:'Codex'});await post(request,'sessions',{paneId:'%1',label:'Claude'});
 });
-test.afterEach(async({request})=>{await reconcileFixtureKeyboard(request);});
+// Finish intercepted polling requests before Playwright closes the page, then clear keyboard records.
+test.afterEach(async({page,request})=>{await page.unrouteAll({behavior:'wait'});await reconcileFixtureKeyboard(request);});
 async function prepareKeyboardSend(page:Page,recipient='Codex') {
   await page.route('**/api/v1/workspaces',async route=>{
     const response=await route.fetch(),body=await response.json();
@@ -30,7 +46,7 @@ async function prepareKeyboardSend(page:Page,recipient='Codex') {
   });
   const terminal=await openKeyboard(page);
   await page.getByRole('navigation',{name:'Command target'}).getByRole('button',{name:recipient,exact:true}).click();
-  const control=page.getByRole('region',{name:'AltCLI control',exact:true});
+  const control=page.getByRole('region',{name:'Control',exact:true});
   const draft=control.getByLabel(`Instruction for ${recipient}`);
   await draft.fill('Implement the checked keyboard handoff.');
   await control.getByLabel('After send').selectOption('commit');
@@ -51,7 +67,7 @@ test('Send & commit hands this browser keyboard to a different control recipient
   await expect.poll(()=>starts.length).toBe(1);
   expect(starts[0]).toMatchObject({agentId:'claude',kind:'work',text:'Implement the checked keyboard handoff.',keyboardSettlement:{manualSessionId:expect.any(String),revision:expect.any(Number)}});
   await expect(draft).toHaveValue('');
-  await expect(terminal.getByText('Keyboard here',{exact:true})).toHaveCount(0);
+  await expect(badge(terminal,'Keyboard here')).toHaveCount(0);
   expect((await state(request)).manualSessions).toEqual([]);
 });
 test('Send & commit retains the draft and barrier when settlement fails',async({page,request})=>{
@@ -142,7 +158,7 @@ test('another browser keyboard still blocks Send & commit',async({page})=>{
   const other=await page.context().newPage();
   try {
     await other.goto('/');await other.getByLabel('Host access token').fill('a'.repeat(64));await other.getByRole('button',{name:'Open console'}).click();
-    const control=other.getByRole('region',{name:'AltCLI control',exact:true});
+    const control=other.getByRole('region',{name:'Control',exact:true});
     await control.getByLabel('Instruction for Codex').fill('Do not take another browser keyboard.');
     await control.getByLabel('After send').selectOption('commit');
     await expect(control.getByRole('button',{name:'Send & commit Codex',exact:true})).toBeDisabled();
@@ -162,12 +178,12 @@ test('copy mode keeps the native terminal mounted and its keyboard generation in
   });
   const pane=page.getByRole('article',{name:'Codex pane',exact:true});
   await expect(pane.getByText(/Tmux copy mode/)).toBeVisible();
-  await expect(card.getByText('Keyboard here',{exact:true})).toBeVisible();
+  await expect(badge(card,'Keyboard here')).toBeVisible();
   expect(((await state(request)).manualSessions??[])[0]!.generation).toBe(owner);
   expect(closes).toEqual([]);
   copyMode=false;
   await expect(pane.getByText(/Tmux copy mode/)).toHaveCount(0);
-  await expect(card.getByText('Keyboard here',{exact:true})).toBeVisible();
+  await expect(badge(card,'Keyboard here')).toBeVisible();
   expect(closes).toEqual([]);
 });
 test('a copy-mode peer stays visible and blocks automated input without discarding the draft',async({page})=>{
@@ -179,7 +195,7 @@ test('a copy-mode peer stays visible and blocks automated input without discardi
     body.panes=body.panes.map((p:{identity:{paneId:string}})=>p.identity.paneId==='%1'?{...p,inMode:copyMode}:p);
     await route.fulfill({response,json:body});
   });
-  const control=page.getByRole('region',{name:'AltCLI control',exact:true});
+  const control=page.getByRole('region',{name:'Control',exact:true});
   await expect(control).toContainText('Tmux copy mode');
   await expect(control.getByRole('button',{name:/^Send /}).first()).toBeDisabled();
   await page.getByRole('navigation',{name:'Viewed terminal'}).getByRole('button',{name:'Claude',exact:true}).click();
@@ -197,13 +213,13 @@ test('a copy-mode agent without a saved registration still shows its input block
   });
   await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
   await expect(page.getByRole('article',{name:'Codex pane',exact:true}).getByText(/Tmux copy mode/)).toBeVisible();
-  await expect(page.getByRole('region',{name:'AltCLI control',exact:true})).toContainText('Tmux copy mode');
+  await expect(page.getByRole('region',{name:'Control',exact:true})).toContainText('Tmux copy mode');
 });
 for(const phase of ['implementation','planning'] as const)for(const mode of ['inMode','synchronized'] as const)test(`${phase} readiness is revoked when ${mode} enters and clears between workspace polls`,async({page})=>{
   await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
-  const control=page.getByRole('region',{name:'AltCLI control',exact:true});
+  const control=page.getByRole('region',{name:'Control',exact:true});
   if(phase==='planning') {
-    await page.getByRole('button',{name:'1 · Plan',exact:true}).click();await page.getByLabel('Shared task brief').fill('Plan this task.');
+    await page.getByRole('group',{name:'Phase'}).getByRole('button',{name:'Plan',exact:true}).click();await page.getByLabel('Shared task brief').fill('Plan this task.');
   } else {
     await control.getByLabel('Instruction for Codex').fill('Keep readiness tied to pane state.');await control.getByLabel('After send').selectOption('nothing');
   }
@@ -227,9 +243,12 @@ test('native terminal opens only on click; keyboard, input, release and Lock ret
   await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
   const card=page.getByRole('region',{name:'Codex terminal',exact:true});await expect(card).toBeVisible();
   expect((await state(request)).manualSessions).toEqual([]);
-  await card.getByRole('button',{name:'Open terminal',exact:true}).click();await expect(card.getByRole('button',{name:'Take keyboard…'})).toBeEnabled();
-  await card.getByRole('button',{name:'Take keyboard…'}).click();await card.getByRole('button',{name:'Confirm keyboard'}).click();
-  await expect(card.getByText('Keyboard here',{exact:true})).toBeVisible();
+  await card.getByRole('button',{name:'Open terminal',exact:true}).click();await expect(badge(card,'Observing')).toBeVisible();
+  // Choosing a pane only asks; cancelling grants nothing.
+  await chooseKeyboard(page,'Codex');await page.getByRole('region',{name:'Confirm keyboard'}).getByRole('button',{name:'Cancel',exact:true}).click();
+  expect((await state(request)).manualSessions).toEqual([]);
+  await takeKeyboard(page);
+  await expect(badge(card,'Keyboard here')).toBeVisible();
   await card.locator('.xterm-helper-textarea').focus();await page.keyboard.insertText('é次');
   await expect.poll(async()=>((await state(request)).manualSessions??[])[0]?.bytes).toBe(5);
   const ctrl=card.getByRole('button',{name:'Ctrl next key'}),alt=card.getByRole('button',{name:'Alt next key'});
@@ -241,11 +260,11 @@ test('native terminal opens only on click; keyboard, input, release and Lock ret
   // Recipient selection does not transfer the keyboard or change which terminal is being observed.
   await page.getByRole('navigation',{name:'Command target'}).getByRole('button',{name:'Claude',exact:true}).click();
   await expect(ctrl).toHaveAttribute('aria-pressed','false');
-  await expect(card.getByText('Keyboard here',{exact:true})).toBeVisible();
+  await expect(badge(card,'Keyboard here')).toBeVisible();
   await page.screenshot({path:info.outputPath('native-keyboard.png'),fullPage:true});
-  await card.getByRole('button',{name:'Release and record settled…'}).click();await card.getByRole('button',{name:'Confirm settled release'}).click();
+  await page.getByRole('button',{name:'Release and record settled…'}).click();await page.getByRole('region',{name:'Confirm settled release'}).getByRole('button',{name:'Confirm settled release'}).click();
   await expect.poll(async()=>(await state(request)).manualSessions?.length).toBe(0);
-  await card.getByRole('button',{name:'Take keyboard…'}).click();await card.getByRole('button',{name:'Confirm keyboard'}).click();await expect(card.getByText('Keyboard here',{exact:true})).toBeVisible();
+  await takeKeyboard(page);await expect(badge(card,'Keyboard here')).toBeVisible();
   await page.getByRole('button',{name:'Lock',exact:true}).click();await expect(page.getByRole('button',{name:'Open console'})).toBeVisible();
   await expect.poll(async()=>((await state(request)).manualSessions??[])[0]?.live).toBe(false);
   expect((await state(request)).manualSessions![0]!.reconciliationRequired).toBe(true);
@@ -254,28 +273,35 @@ test('native terminal opens only on click; keyboard, input, release and Lock ret
 test('repository entry, literal profile editor, preview and explicit duplicate-profile launch use the real mock API',async({page,request},info)=>{
   await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
   const sections=page.getByRole('navigation',{name:'Sections'});await sections.getByRole('button',{name:'Settings',exact:true}).click();
-  const profiles=page.getByRole('region',{name:'Launch profiles'});await profiles.getByRole('button',{name:'Use codex preset'}).click();
+  const profiles=page.getByRole('region',{name:'Launch profiles'});await profiles.getByRole('button',{name:'New',exact:true}).click();await profiles.getByRole('menuitem',{name:'Codex preset'}).click();
   const label=`Fixture ${info.project.name}`;await profiles.getByLabel('Profile label',{exact:true}).fill(label);await profiles.getByRole('button',{name:'Add argument',exact:true}).click();await profiles.getByLabel('Argument 1',{exact:true}).fill('literal ;');await profiles.getByRole('button',{name:'Save profile'}).click();
-  await expect(profiles.getByRole('button',{name:`${label} · revision 1`})).toBeVisible();
-  await profiles.getByRole('button',{name:`${label} · revision 1`}).click();await profiles.getByRole('button',{name:'Save profile'}).click();
-  await expect(profiles.getByRole('button',{name:`${label} · revision 2`})).toBeVisible();
-  await sections.getByRole('button',{name:'Projects',exact:true}).click();await page.getByLabel('Repository directory').fill(`/demo/native-${info.project.name}`);await page.getByRole('button',{name:'Add project',exact:true}).click();
+  const revisionOf=async()=>((await (await request.get('/api/v1/launch-profiles',{headers})).json()) as {label:string;revision:number}[]).find(p=>p.label===label)?.revision;
+  // Saved profiles sit in one row by label; the revision stays internal but still guards every save.
+  await expect(profiles.getByRole('group',{name:'Saved profiles'}).getByRole('button',{name:label,exact:true})).toBeVisible();await expect(profiles).not.toContainText('revision');expect(await revisionOf()).toBe(1);
+  await profiles.getByRole('button',{name:label,exact:true}).click();await profiles.getByRole('button',{name:'Save profile'}).click();
+  await expect.poll(revisionOf).toBe(2);
+  await sections.getByRole('button',{name:'Projects',exact:true}).click();await page.getByLabel('Main/default starting checkout').fill(`/demo/native-${info.project.name}`);await page.getByRole('button',{name:'Add project',exact:true}).click();
   await page.getByRole('button',{name:`Project native-${info.project.name}`,exact:true}).click();
   const trees=page.getByRole('region',{name:`Project worktrees native-${info.project.name}`});await trees.getByRole('button',{name:'Launch agents…'}).click();
   await trees.getByRole('button',{name:'Add launch row'}).click();const saved=await (await request.get('/api/v1/launch-profiles',{headers})).json();const profile=saved.find((p:{label:string})=>p.label===label);
   await trees.getByLabel('Launch profile 1').selectOption(profile.id);await trees.getByLabel('Count',{exact:true}).fill('2');await trees.getByRole('button',{name:'Preview launch'}).click();
   await expect(trees.getByRole('table')).toContainText('literal ;');
+  // Short session names: profile and branch, numbered only when taken, never a random UUID fragment. Exact allocation is covered
+  // by the server and private-tmux tests; other tests on this server may have moved the mock branch.
+  const names=await trees.getByRole('table').locator('tbody tr td:first-child').allTextContents();
+  expect(names).toHaveLength(2);expect(new Set(names).size).toBe(2);
+  for(const name of names){expect(name.startsWith(`Fixture-${info.project.name}-`)).toBe(true);expect(name).not.toMatch(/-[0-9a-f]{8}$/);}
   await trees.getByRole('button',{name:'Launch 2 sessions',exact:true}).click();await expect(trees.getByText('Simulated launch; no program executed.',{exact:true})).toHaveCount(2);
   await page.screenshot({path:info.outputPath('explicit-launch.png'),fullPage:true});
-  await sections.getByRole('button',{name:'Settings',exact:true}).click();await profiles.getByRole('button',{name:`${label} · revision 2`}).click();await profiles.getByRole('button',{name:'Delete profile'}).click();
-  await expect(profiles.getByRole('button',{name:`${label} · revision 2`})).toHaveCount(0);
+  await sections.getByRole('button',{name:'Settings',exact:true}).click();await profiles.getByRole('button',{name:label,exact:true}).click();await profiles.getByRole('button',{name:'Delete profile'}).click();
+  await expect(profiles.getByRole('button',{name:label,exact:true})).toHaveCount(0);
   const batches=await (await request.get('/api/v1/launches',{headers})).json();expect(batches.flatMap((b:{items:{profile:{id:string}}[]})=>b.items).filter((i:{profile:{id:string}})=>i.profile.id===profile.id)).toHaveLength(2);
 });
 test('manual recovery stays visible without agents and requires a note and explicit acknowledgement',async({page,request},info)=>{
   await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
   const card=page.getByRole('region',{name:'Codex terminal',exact:true});
-  await card.getByRole('button',{name:'Open terminal',exact:true}).click();await card.getByRole('button',{name:'Take keyboard…'}).click();await card.getByRole('button',{name:'Confirm keyboard'}).click();
-  await expect(card.getByText('Keyboard here',{exact:true})).toBeVisible();
+  await takeKeyboard(page);
+  await expect(badge(card,'Keyboard here')).toBeVisible();
   await page.getByRole('button',{name:'Lock',exact:true}).click();
   await expect.poll(async()=>((await state(request)).manualSessions??[])[0]?.live).toBe(false);
   // Only the empty-agent display is simulated. The durable barrier and decision use the mock server API.
@@ -305,19 +331,20 @@ for(const failed of [false,true])test(`a delayed ${failed?'failed':'successful'}
   },{times:1});
   try {
     await card.locator('.xterm-helper-textarea').focus();await page.keyboard.insertText('a');await captured;
-    await card.getByRole('button',{name:'Release keyboard',exact:true}).click();
-    await card.getByRole('button',{name:'Transfer / recover keyboard…'}).click();await card.getByRole('button',{name:'Confirm keyboard'}).click();
-    await expect(card.getByText('Keyboard here',{exact:true})).toBeVisible();
+    await chooseKeyboard(page,'Nobody (observe only)');
+    await expect(page.getByRole('region',{name:'Confirm keyboard'})).toHaveCount(0);
+    await takeKeyboard(page);
+    await expect(badge(card,'Keyboard here')).toBeVisible();
     await card.locator('.xterm-helper-textarea').focus();await page.keyboard.insertText('b');
     await expect.poll(async()=>((await state(request)).manualSessions??[])[0]?.bytes).toBe(2);
     release();await done;
     await card.locator('.xterm-helper-textarea').focus();await page.keyboard.insertText('c');
     await expect.poll(async()=>((await state(request)).manualSessions??[])[0]?.bytes).toBe(3);
-    await expect(card.getByText('Keyboard here',{exact:true})).toBeVisible();
+    await expect(badge(card,'Keyboard here')).toBeVisible();
   } finally {release();await done;}
 });
 
-test('native paste warns before unbracketed multiline input and exposes a visible accessible focus escape',async({page,request})=>{
+test('native paste warns before unbracketed multiline input; Ctrl+Shift+Escape leaves terminal focus without input',async({page,request})=>{
   const card=await openKeyboard(page),textarea=card.locator('.xterm-helper-textarea');
   const height=(await card.getByLabel('Codex native output').boundingBox())!.height;
   const owner=((await state(request)).manualSessions??[])[0]!.generation;
@@ -341,7 +368,9 @@ test('native paste warns before unbracketed multiline input and exposes a visibl
   await expect(card.getByText(/Snapshot captured at/)).toHaveCount(0);
   await card.getByRole('button',{name:'Captured text',exact:true}).click();await expect(card.getByText(/Snapshot captured at/)).toBeVisible();
   await card.getByRole('button',{name:'Show terminal',exact:true}).click();
-  await card.getByRole('button',{name:'Focus AltCLI control',exact:true}).click();await expect(page.getByRole('region',{name:'AltCLI control',exact:true})).toBeFocused();
+  await expect(card.getByRole('button',{name:'Focus AltCLI control'})).toHaveCount(0);
+  await textarea.focus();await expect(card.getByRole('status')).toContainText('Ctrl+Shift+Esc: leave terminal focus');
+  await page.keyboard.press('Control+Shift+Escape');await expect(page.getByRole('region',{name:'Control',exact:true})).toBeFocused();
   await page.getByRole('textbox',{name:'Instruction for Codex',exact:true}).fill('A control draft never becomes terminal input.');
   expect(((await state(request)).manualSessions??[])[0]?.bytes).toBe(18);
 });
@@ -353,7 +382,7 @@ test('leaving the terminal drops queued text without replaying it when an admitt
   try {
     await card.locator('.xterm-helper-textarea').focus();await page.keyboard.insertText('a');await captured;
     await page.keyboard.insertText('queued');
-    await card.getByRole('button',{name:'Focus AltCLI control',exact:true}).click();release();await done;
+    await page.keyboard.press('Control+Shift+Escape');release();await done;
     await card.locator('.xterm-helper-textarea').focus();await page.keyboard.insertText('b');
     await expect.poll(async()=>((await state(request)).manualSessions??[])[0]?.bytes).toBe(2);
   } finally {release();await done;}
@@ -371,7 +400,7 @@ test('leaving the terminal finishes a partly sent paste but drops later unsent i
     await textarea.focus();
     await textarea.evaluate((element,text)=>{const data=new DataTransfer();data.setData('text/plain',text);element.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));},text);
     await captured;await page.keyboard.insertText('Z');
-    await card.getByRole('button',{name:'Focus AltCLI control',exact:true}).click();release();await done;
+    await page.keyboard.press('Control+Shift+Escape');release();await done;
     await expect.poll(async()=>((await state(request)).manualSessions??[])[0]?.bytes).toBe(10000);
     await textarea.focus();await page.keyboard.insertText('Q');
     await expect.poll(async()=>((await state(request)).manualSessions??[])[0]?.bytes).toBe(10001);
@@ -400,19 +429,21 @@ test('terminal badges distinguish another browser, another terminal, an unresolv
     await other.goto('/');await other.getByLabel('Host access token').fill('a'.repeat(64));await other.getByRole('button',{name:'Open console'}).click();
     const remote=other.getByRole('region',{name:'Codex terminal',exact:true});
     await remote.getByRole('button',{name:'Open terminal',exact:true}).click();
-    await expect(remote.getByText('Controlled in another browser',{exact:true})).toBeVisible();
+    await expect(badge(remote,'Controlled in another browser')).toBeVisible();
+    await expect(other.getByRole('img',{name:'Keyboard held in another browser',exact:true})).toBeVisible();
     await view.getByRole('button',{name:'Claude',exact:true}).click();
     const sibling=page.getByRole('region',{name:'Claude terminal',exact:true});
     await sibling.getByRole('button',{name:'Open terminal',exact:true}).click();
-    await expect(sibling.getByText('Keyboard in another terminal',{exact:true})).toBeVisible();
+    await expect(badge(sibling,'Keyboard in another terminal')).toBeVisible();
     await view.getByRole('button',{name:'Codex',exact:true}).click();
-    await card.getByRole('button',{name:'Release keyboard',exact:true}).click();
-    await expect(remote.getByText('Observing · manual input unresolved',{exact:true})).toBeVisible();
+    await chooseKeyboard(page,'Nobody (observe only)');
+    await expect(badge(remote,'Observing · manual input unresolved')).toBeVisible();
     // Only the CLI replacement is simulated; everything else uses the mock server API.
     await other.route('**/api/v1/state',async route=>{const response=await route.fetch(),body=await response.json();
       await route.fulfill({response,json:{...body,instances:body.instances.map((i:{agentId:string})=>i.agentId==='codex'?{...i,status:'replaced'}:i)}});});
-    await expect(remote.getByText('Manual CLI/shell',{exact:true})).toBeVisible();
+    await expect(badge(remote,'Manual CLI/shell')).toBeVisible();
     await other.getByRole('navigation',{name:'Sections'}).getByRole('button',{name:'Settings',exact:true}).click();
+    await other.getByRole('navigation',{name:'Settings sections'}).getByRole('button',{name:'Host configuration',exact:true}).click();
     await expect(other.getByRole('cell',{name:'Keyboard scope',exact:true})).toBeVisible();
     await expect(other.getByRole('cell',{name:'Terminal limits',exact:true})).toBeVisible();
   } finally {await other.close();}
@@ -425,21 +456,55 @@ test('a keyboard granted after focus moved elsewhere reports readiness without s
   let release!:()=>void;const gate=new Promise<void>(r=>{release=r;});
   await page.route('**/api/v1/terminals/*/keyboard',async route=>{await gate;await route.continue();},{times:1});
   try {
-    await card.getByRole('button',{name:'Take keyboard…'}).click();await card.getByRole('button',{name:'Confirm keyboard'}).click();
+    await takeKeyboard(page);
     const draft=page.getByRole('textbox',{name:'Instruction for Codex',exact:true});await draft.focus();
     release();
     await expect(card.getByRole('status')).toContainText('Keyboard ready for Codex');
-    await expect(card.getByText('Keyboard here',{exact:true})).toBeVisible();await expect(draft).toBeFocused();
+    await expect(badge(card,'Keyboard here')).toBeVisible();await expect(draft).toBeFocused();
   } finally {release();}
 });
 
 test('a native keyboard hold keeps the Plan brief editable but blocks Start Plan',async({page,request})=>{
   await openKeyboard(page);
-  await page.getByRole('button',{name:'1 · Plan',exact:true}).click();
+  await page.getByRole('group',{name:'Phase'}).getByRole('button',{name:'Plan',exact:true}).click();
   const brief=page.getByLabel('Shared task brief');
   await expect(brief).toBeEditable();await brief.fill('Drafted while the keyboard is held.');
   await expect(brief).toHaveValue('Drafted while the keyboard is held.');
   await expect(page.getByRole('button',{name:'Start Plan',exact:true})).toBeDisabled();
   await expect(page.getByText('Manual terminal input holds dispatch across this server. Release and reconcile it first.').filter({visible:true}).first()).toBeVisible();
   expect(((await state(request)).manualSessions??[])[0]?.bytes).toBe(0);
+});
+
+test('the Keyboard selector moves the one writer between panes by one serialized transfer and can show an out-of-view writer',async({page,request})=>{
+  const card=await openKeyboard(page);
+  const decisions:string[]=[];page.on('request',r=>{if(/\/terminals\/[^/]+\/keyboard$/.test(r.url()))decisions.push(r.postDataJSON().action);});
+  await chooseKeyboard(page,'Claude');
+  const confirm=page.getByRole('region',{name:'Confirm keyboard'});
+  await expect(confirm).toContainText('Move the keyboard from Codex to Claude');
+  await confirm.getByRole('button',{name:'Confirm keyboard'}).click();
+  await expect.poll(async()=>{const live=((await state(request)).manualSessions??[]).find(m=>m.live);return live&&'agentId' in live.target?live.target.agentId:null;}).toBe('claude');
+  await expectKeyboard(page,'Claude');
+  expect(decisions,'a transfer is one broker decision, never release-then-acquire').toEqual(['acquire']);
+  await expect(badge(card,'Keyboard in another terminal')).toBeVisible();
+  // On a phone only one pane shows: the selector offers to show the writer without changing authority.
+  const show=page.getByRole('button',{name:'Show Claude',exact:true});
+  if(await show.isVisible()){await show.click();await expect(badge(page.getByRole('region',{name:'Claude terminal',exact:true}),'Keyboard here')).toBeVisible();}
+  await chooseKeyboard(page,'Nobody (observe only)');
+  await expect.poll(async()=>((await state(request)).manualSessions??[]).some(m=>m.live)).toBe(false);
+  await expectKeyboard(page,'Nobody (observe only)').catch(()=>{}); // an unresolved record may keep the selector on its status
+  expect(decisions).toEqual(['acquire','release']);
+});
+test('cancelling a keyboard request while its terminal is still connecting requests nothing',async({page,request})=>{
+  await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
+  const decisions:string[]=[];page.on('request',r=>{if(/\/terminals\/[^/]+\/keyboard$/.test(r.url()))decisions.push(r.url());});
+  let release!:()=>void;const gate=new Promise<void>(r=>{release=r;});
+  await page.route('**/api/v1/terminals',async route=>{await gate;await route.continue();},{times:1});
+  try {
+    await takeKeyboard(page);
+    await page.getByRole('button',{name:'Cancel keyboard request',exact:true}).click();
+    release();
+    await expect(badge(page.getByRole('region',{name:'Codex terminal',exact:true}),'Observing')).toBeVisible();
+    await expect(page.getByText(/Nothing was requested/).first()).toBeVisible();
+    expect(decisions).toEqual([]);expect((await state(request)).manualSessions).toEqual([]);
+  } finally {release();}
 });

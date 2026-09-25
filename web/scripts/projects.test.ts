@@ -3,7 +3,7 @@ import { beforeEach, afterEach, test } from 'node:test';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { ProjectCatalog } from '../src/server/projects.ts';
 import { Store } from '../src/server/store.ts';
@@ -614,14 +614,14 @@ test('the store version advances for the new operation owners: unresolved integr
   store.saveWorktreeIntegration({ input: integration, status: 'uncertain', message: 'fixture', updatedAt: new Date().toISOString(), commit: null });
   const discard = { ...await catalog.previewDiscard(target), confirmBranch: 'feature/finished', confirm: true as const };
   store.saveWorktreeDiscard({ input: discard, status: 'uncertain', message: 'fixture', updatedAt: new Date().toISOString() });
-  assert.equal(store.db.pragma('user_version', { simple: true }), 14);
+  assert.equal(store.db.pragma('user_version', { simple: true }), 15);
   store.close(); store = new Store(config.dataDir); catalog = new ProjectCatalog(store, config);
-  assert.equal(store.db.pragma('user_version', { simple: true }), 14);
+  assert.equal(store.db.pragma('user_version', { simple: true }), 15);
   assert.deepEqual(store.worktreeIntegrations().map((op) => [op.input.requestId, op.status]), [[integration.requestId, 'uncertain']]);
   assert.deepEqual(store.worktreeDiscards().map((op) => [op.input.requestId, op.status]), [[discard.requestId, 'uncertain']]);
   assert.throws(() => catalog.assertWorktreeReady(root), /squash integration/); assert.throws(() => catalog.assertWorktreeReady(request.path), /discard/);
   await assert.rejects(catalog.create(await input('another')), /owns this project/);
-  store.db.pragma('user_version = 15'); store.close();
+  store.db.pragma('user_version = 16'); store.close();
   assert.throws(() => new Store(config.dataDir), /Unsupported database version/);
   store = new Store(join(directory, 'fresh-metadata')); // afterEach closes this one
 });
@@ -801,7 +801,7 @@ test('v10 full-branch squash records remain valid batch boundaries after upgrade
   const legacy = JSON.parse(JSON.stringify(result)); delete legacy.input.through; delete legacy.input.previousCommit;
   store.saveWorktreeIntegration(legacy); store.db.pragma('user_version = 10'); store.close();
   store = new Store(config.dataDir); catalog = new ProjectCatalog(store, config);
-  assert.equal(store.db.pragma('user_version', { simple: true }), 14);
+  assert.equal(store.db.pragma('user_version', { simple: true }), 15);
   assert.equal((await catalog.previewRemoval(target)).integratedCommit, result.commit);
   writeFileSync(join(request.path, 'later.txt'), 'later batch\n'); git(request.path, 'add', '.'); git(request.path, 'commit', '-m', 'later');
   const next = await catalog.previewIntegration(target);
@@ -834,4 +834,67 @@ test('inspection settles an uncertain squash from the branch history: a buried e
   // Removal and the next batch judge the current history on their own evidence; the failed record is not a checkpoint, the verified first batch still is.
   await assert.rejects(catalog.previewRemoval(target), /not an ancestor/);
   const resumed = await catalog.previewIntegration(target); assert.equal(resumed.previousCommit, squash); assert.equal(resumed.mergeBase, preview.through);
+});
+
+test('the directory browser lists only immediate folders, bounded and read-only; Git alone classifies the listed directory', async () => {
+  const { listDirectory, DIRECTORY_LIMITS } = await import('../src/server/directories.ts');
+  const linked = join(directory, 'linked'); git(root, 'worktree', 'add', '-b', 'task', linked);
+  mkdirSync(join(directory, '.hidden')); writeFileSync(join(directory, 'file.txt'), 'not a folder');
+  symlinkSync(root, join(directory, 'link-to-repo'));
+  // A `.git` file does not mean a linked worktree: a separate Git directory is still a main checkout, and a bogus one is nothing.
+  execFileSync('git', ['init', '-q', '-b', 'main', `--separate-git-dir=${join(directory, 'sep.git')}`, join(directory, 'separate')]);
+  mkdirSync(join(directory, 'fake')); writeFileSync(join(directory, 'fake', '.git'), 'gitdir: /nowhere\n');
+  const before = store.db.prepare('SELECT total_changes() AS count').get(); const status = git(root, 'status', '--porcelain');
+  const listing = await listDirectory({ path: directory }, 'tmux');
+  const names = listing.entries.map((e) => e.name);
+  for (const name of ['fake', 'link-to-repo', 'linked', 'repo', 'separate']) assert.ok(names.includes(name), name);
+  assert.ok(!names.includes('.hidden') && !names.includes('file.txt')); assert.deepEqual(names, [...names].sort((a, b) => a.localeCompare(b)));
+  assert.deepEqual(listing.entries.find((e) => e.name === 'link-to-repo'), { name: 'link-to-repo', path: root, gitCandidate: true, linkedFrom: join(directory, 'link-to-repo') });
+  assert.equal(listing.entries.find((e) => e.name === 'fake')!.gitCandidate, true); assert.equal(listing.checkout, null); assert.equal(listing.parent, dirname(directory));
+  assert.ok((await listDirectory({ path: directory, hidden: true }, 'tmux')).entries.some((e) => e.name === '.hidden'));
+  const main = (await listDirectory({ path: root }, 'tmux')).checkout!;
+  assert.deepEqual({ ...main, commonDir: undefined, head: undefined }, { root, commonDir: undefined, kind: 'main', branch: 'main', head: undefined, defaultBranch: null, mainCheckout: null, mainCheckoutNote: null });
+  assert.equal((await listDirectory({ path: join(directory, 'separate') }, 'tmux')).checkout!.kind, 'main');
+  assert.equal((await listDirectory({ path: join(directory, 'fake') }, 'tmux')).checkout, null);
+  const task = (await listDirectory({ path: linked }, 'tmux')).checkout!;
+  assert.equal(task.kind, 'linked'); assert.equal(task.branch, 'task'); assert.equal(task.mainCheckout, root); assert.equal(task.commonDir, main.commonDir);
+  // The recorded default branch is reported, and a main checkout on another branch says so rather than being assumed on main.
+  git(root, 'update-ref', 'refs/remotes/origin/main', 'HEAD'); git(root, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main'); git(root, 'switch', '-q', '-c', 'feature');
+  assert.deepEqual((({ branch, defaultBranch }) => ({ branch, defaultBranch }))((await listDirectory({ path: root }, 'tmux')).checkout!), { branch: 'feature', defaultBranch: 'main' });
+  git(root, 'switch', '-q', 'main');
+  // A linked worktree of a bare repository has no main checkout to offer.
+  git(directory, 'clone', '-q', '--bare', root, join(directory, 'bare.git')); git(join(directory, 'bare.git'), 'worktree', 'add', '-q', '-b', 'from-bare', join(directory, 'from-bare'), 'main');
+  const bare = (await listDirectory({ path: join(directory, 'from-bare') }, 'tmux')).checkout!;
+  assert.equal(bare.kind, 'linked'); assert.equal(bare.mainCheckout, null); assert.match(bare.mainCheckoutNote!, /bare/);
+  assert.deepEqual(store.db.prepare('SELECT total_changes() AS count').get(), before); assert.deepEqual(store.projects(), []); assert.equal(git(root, 'status', '--porcelain'), status);
+  await assert.rejects(listDirectory({ path: join(directory, 'missing') }, 'tmux'), /does not exist or cannot be read/);
+  await assert.rejects(listDirectory({ path: join(directory, 'file.txt') }, 'tmux'), /does not exist or cannot be read/);
+  await assert.rejects(listDirectory({ path: 'relative/path' }, 'tmux'), /absolute/);
+  await assert.rejects(listDirectory({ path: `${directory}/bad\nname` }, 'tmux'), /single-line/);
+  await assert.rejects(listDirectory({ path: directory, recursive: true }, 'tmux'), /Unknown/);
+  if (process.getuid?.() !== 0) { const locked = join(directory, 'locked'); mkdirSync(locked); chmodSync(locked, 0o000);
+    try { await assert.rejects(listDirectory({ path: locked }, 'tmux'), /cannot be read/); } finally { chmodSync(locked, 0o700); } }
+  // Enumeration and output are bounded: a large directory returns a sorted page and says more exist.
+  const many = join(directory, 'many'); mkdirSync(many); for (let i = 0; i < DIRECTORY_LIMITS.entries + 40; i++) mkdirSync(join(many, `d${String(i).padStart(4, '0')}`));
+  const page = await listDirectory({ path: many }, 'tmux');
+  assert.equal(page.entries.length, DIRECTORY_LIMITS.entries); assert.equal(page.truncated, true);
+});
+test('adding the checkout the browser showed refuses a retargeted symlink, a replaced repository or a switched branch', async () => {
+  const { listDirectory } = await import('../src/server/directories.ts');
+  const other = join(directory, 'other'); mkdirSync(other); git(other, 'init', '-q', '-b', 'main'); writeFileSync(join(other, 'x'), 'x'); git(other, 'add', 'x'); git(other, 'commit', '-q', '-m', 'x');
+  const chosen = join(directory, 'chosen'); symlinkSync(root, chosen);
+  const shown = (await listDirectory({ path: chosen }, 'tmux')).checkout!;
+  const expected = { root: shown.root, commonDir: shown.commonDir, branch: shown.branch };
+  unlinkSync(chosen); symlinkSync(other, chosen);
+  await assert.rejects(catalog.add({ path: chosen, expected }), /changed since you selected it/);
+  git(root, 'switch', '-q', '-c', 'moved');
+  await assert.rejects(catalog.add({ path: root, expected }), /changed since you selected it/);
+  git(root, 'switch', '-q', 'main');
+  await assert.rejects(catalog.add({ path: root, expected: { ...expected, commonDir: join(other, '.git') } }), /changed since you selected it/);
+  assert.deepEqual(store.projects(), []);
+  const added = await catalog.add({ path: root, expected });
+  assert.equal(added.commonDir, shown.commonDir); assert.deepEqual(store.projects().map((p) => p.id), [added.id]);
+  // Path-only entry stays compatible for existing callers and deduplicates by the common directory.
+  assert.deepEqual(await catalog.add({ path: root }), added);
+  await assert.rejects(catalog.add({ path: root, expected: { ...expected, extra: 1 } }), /Unknown/);
 });

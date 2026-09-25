@@ -2064,3 +2064,53 @@ Implementation readiness even when discovery is unchanged.
 
 Fixes remain unstaged. The main-checkout backend was not modified or restarted;
 installed-provider and physical-device acceptance remain untested.
+
+## 2026-09-25 — console usability, directory browsing and Finish branch (plan 88da7f4e)
+
+Implements the twelve-item usability plan (plan document SHA-256
+`46da0cc97f1e072610adb3c03174d2e4e1c00605709547031e91bf766b54e735`): short launch session
+names, the phase selector following a run into Implementation, "Phase: Plan | Implementation",
+read-only host directory browsing for project entry, **Finish branch** (ADR-0013 amendment), one
+shared Keyboard selector, emoji status with hover/focus/tap help, removal of the visible focus
+button (Ctrl+Shift+Esc kept), icon terminal tools, Settings subtabs, hidden profile revisions and
+the profile row with a New menu.
+
+Two latent terminal races surfaced while testing the selector and were fixed: the broker closed a
+connection when an output acknowledgment or heartbeat for the generation a keyboard grant had
+just replaced arrived (now ignored for the connection's last four retired generations; any other
+generation still closes it), and the browser could send the next keyboard decision with a
+generation the server had already replaced (a decision now completes only after the new reset is
+applied). Leaving the terminal with Ctrl+Shift+Esc now moves focus on the first key release,
+because xterm otherwise ignored the next inserted text after returning.
+
+- `web/scripts/finish.test.ts` (10 cases, real Git and SQLite with a fixture tmux/process host):
+  closable scope, digest and acknowledgement gates, survivors and recorded decisions, hard
+  refusals, a paused run with the admitted child removal, an uncertain child never reissued,
+  changes between kills, restart to uncertain, reused names and no-effect failure.
+- `web/scripts/projects.test.ts`: directory listing bounds, symbolic links, separate Git
+  directories, bare repositories, unreadable and oversized directories; Add refuses a
+  retargeted symbolic link, a switched branch or another repository. Store version 15.
+- `web/scripts/terminal-broker.test.ts`: exact short names, cross-worktree name reservation
+  after a stale live read, and the retired-generation frames regression.
+- `web/src/core/session-names.test.ts`: allocation, gaps and the bound.
+- `npm --prefix web run test:native` passed all 16 private-tmux cases, including Finish branch
+  killing only the proven launched session by ID (a split in scope, a linked window refused, a
+  user session untouched, a detached survivor reported until it exits) and the numbered
+  `Fault-fixture-main` … `-8` names across retained sessions.
+- Ruby/Psych parsed all 137 OpenAPI schemas and resolved every internal reference; this is
+  syntax/reference verification, not a full OpenAPI validator.
+- Changed text was screened for credentials; only the existing dummy test token appears.
+
+- `./scripts/check.sh --e2e` passed on Node 24.12.0: 32 hook/setup, 43 smoke, 355 workflow and
+  72 unit tests, TypeScript and production build, then desktop/iPhone Chromium: 259 passed, seven
+  intentional viewport-specific skips (9.3 minutes). New browser cases cover the phase following a
+  transition once (and Lock starting over), Settings subtabs, the profile row and New menu, the
+  Keyboard selector (cancel grants nothing, transfer is one broker decision, cancel during a slow
+  connect requests nothing), the focus shortcut, emoji badges, directory browsing with the exact
+  identity sent on Add, and a route-faked Finish branch panel through its Git step.
+- An earlier full run failed 13 cases; the fixes above and updated selectors resolved them. With
+  `--repeat-each` on one server, two pre-existing tests failed only on repetitions (state left by
+  earlier tests: a moved mock branch, and a Recheck racing a readiness tick); first runs pass.
+
+Not exercised: installed Codex/Claude CLIs, physical iPhone Safari, a deployed proxy and a real
+host Finish branch; the running main-checkout backend was not modified or restarted.

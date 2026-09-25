@@ -24,6 +24,15 @@ existing tmux server. Use CLI credential stores; profiles requiring credential
 or proxy environment variables are unsupported. Only nonsecret host settings
 and configuration paths enter the launch argv.
 
+September 25 update: a launched session is named from its profile and branch
+(`<profile>-<branch>`), numbered `-2`, `-3`… when that name is live on the server or held by an
+unsettled launch anywhere on the host; confirmation refuses a previewed name taken since, rather
+than renaming it. Launch identity remains the session ID and full-UUID marker, never the name.
+Launched sessions are closed only through the separately confirmed Finish branch of
+[ADR-0013](ADR-0013-confirmed-branch-setup.md#confirmed-closing-of-launched-sessions); its history
+is kept. Repository entry can also browse host directories read-only and adds the checkout Git
+reports, refusing when the browsed directory, repository or branch changed since it was shown.
+
 See [the protocol](../TERMINAL-PROTOCOL.md) for API, environment and recovery rules.
 Remote/provider/mobile acceptance remains separate from fake and private-fixture
 validation. Setup enables the feature flags; a missing flag means off.

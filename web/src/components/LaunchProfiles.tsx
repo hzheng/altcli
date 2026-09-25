@@ -2,17 +2,32 @@
 import { useEffect, useState } from 'react';
 import type { LaunchProfile } from '../contracts/launches';
 import { api } from '../client/api';
-const blank = { label:'', executable:'', args:[] as string[], adapterHint:'manual' as LaunchProfile['adapterHint'], enabled:true };
+type Form = Omit<LaunchProfile, 'id' | 'revision'>;
+const blank: Form = { label:'', executable:'', args:[], adapterHint:'manual', enabled:true };
+const PRESETS = { 'Codex preset': { ...blank, label:'Codex', executable:'codex', adapterHint:'codex' }, 'Claude preset': { ...blank, label:'Claude Code', executable:'claude', adapterHint:'claude' }, Other: blank } satisfies Record<string, Form>;
+type Preset = keyof typeof PRESETS;
+const formOf = (p: LaunchProfile): Form => ({ label:p.label, executable:p.executable, args:[...p.args], adapterHint:p.adapterHint, enabled:p.enabled });
+/** Saved profiles in one row; the editor below shows the selected profile (the first by default) or a new draft. Revisions stay internal:
+ * every write still sends expectedRevision, so a stale edit reports its conflict. Choosing a profile or preset never saves or launches. */
 export function LaunchProfiles({token,enabled}:{token:string;enabled:boolean}) {
-  const [profiles,setProfiles]=useState<LaunchProfile[]>([]),[editing,setEditing]=useState<LaunchProfile|null>(null),[form,setForm]=useState(blank),[error,setError]=useState(''),[busy,setBusy]=useState(false);
-  const reload=()=>api<LaunchProfile[]>(token,'launch-profiles').then(setProfiles);
-  useEffect(()=>{void reload().catch(e=>setError(e.message));},[token]);
-  async function save(remove=false) {if(busy)return;setBusy(true);setError('');try{await api(token,`launch-profiles${editing?`/${editing.id}`:''}`,{method:remove?'DELETE':editing?'PATCH':'POST',body:remove?{expectedRevision:editing!.revision}:{...form,...(editing?{expectedRevision:editing.revision}:{})}});setEditing(null);setForm(blank);await reload();}catch(e){setError(e instanceof Error?e.message:'Profile changed.');}finally{setBusy(false);}}
+  const [profiles,setProfiles]=useState<LaunchProfile[]>([]),[selected,setSelected]=useState<string|null>(null),[draft,setDraft]=useState<Preset|null>(null),[form,setForm]=useState<Form>(blank),[menu,setMenu]=useState(false),[error,setError]=useState(''),[busy,setBusy]=useState(false);
+  const editing=draft?null:profiles.find(p=>p.id===selected)??null;
+  function show(p:LaunchProfile|undefined){setDraft(null);setSelected(p?.id??null);setForm(p?formOf(p):blank);}
+  function startNew(preset:Preset){setDraft(preset);setForm({...PRESETS[preset],args:[]});setMenu(false);}
+  const reload=async(choose:string|null)=>{const next=await api<LaunchProfile[]>(token,'launch-profiles');setProfiles(next);show(next.find(p=>p.id===choose)??next[0]);};
+  useEffect(()=>{void reload(null).catch(e=>setError(e.message));},[token]);
+  async function save(remove=false) {if(busy)return;setBusy(true);setError('');try{const result=await api<LaunchProfile|{removed:boolean}>(token,`launch-profiles${editing?`/${editing.id}`:''}`,{method:remove?'DELETE':editing?'PATCH':'POST',body:remove?{expectedRevision:editing!.revision}:{...form,...(editing?{expectedRevision:editing.revision}:{})}});await reload(remove?null:(result as LaunchProfile).id);}catch(e){setError(e instanceof Error?e.message:'Profile changed.');}finally{setBusy(false);}}
   return <section className="panel" aria-label="Launch profiles"><h2>Launch profiles</h2><p>Profiles run a host executable with literal arguments. Saving never executes it. Keep credentials in the host’s CLI setup.</p>
     {!enabled && <p>Profile changes require agent launch and input to be enabled on the host.</p>}
-    <ul>{profiles.map(p=><li key={p.id}><button type="button" onClick={()=>{setEditing(p);setForm({label:p.label,executable:p.executable,args:[...p.args],adapterHint:p.adapterHint,enabled:p.enabled});}}>{p.label} · revision {p.revision}{!p.enabled?' · disabled':''}</button></li>)}</ul>
-    <div className="row-tools">{(['codex','claude'] as const).map(name=><button type="button" disabled={!enabled||busy} key={name} onClick={()=>{setEditing(null);setForm({...blank,label:name==='codex'?'Codex':'Claude Code',executable:name,adapterHint:name});}}>Use {name} preset</button>)}<button type="button" onClick={()=>{setEditing(null);setForm(blank);}}>New profile</button></div>
-    <form onSubmit={e=>{e.preventDefault();void save();}}><label>Profile label<input value={form.label} maxLength={100} onChange={e=>setForm({...form,label:e.target.value})}/></label>
+    <div className="profile-bar">
+      <div className="profile-row" role="group" aria-label="Saved profiles">{profiles.map(p=><button type="button" key={p.id} className={p.id===editing?.id?'selected':''} aria-pressed={p.id===editing?.id} onClick={()=>show(p)}>{p.label}{!p.enabled&&<span className="muted"> · disabled</span>}</button>)}
+        {!profiles.length&&<span className="muted">No saved profiles yet. Choose New to create one.</span>}</div>
+      <span className="new-profile" onBlur={e=>{if(!e.currentTarget.contains(e.relatedTarget))setMenu(false);}} onKeyDown={e=>{if(e.key==='Escape')setMenu(false);}}>
+        <button type="button" aria-haspopup="menu" aria-expanded={menu} disabled={busy} onClick={()=>setMenu(m=>!m)}>New <span aria-hidden="true">▾</span></button>
+        {menu&&<span role="menu" aria-label="New profile" className="new-profile-menu">{(Object.keys(PRESETS) as Preset[]).map(name=><button type="button" role="menuitem" key={name} disabled={!enabled&&name!=='Other'} onClick={()=>startNew(name)}>{name}</button>)}</span>}</span>
+    </div>
+    {(draft||editing)&&<form onSubmit={e=>{e.preventDefault();void save();}}><h3>{editing?`Edit ${editing.label}`:`New profile${draft==='Other'?'':` (${draft})`}`}</h3>
+      <label>Profile label<input value={form.label} maxLength={100} onChange={e=>setForm({...form,label:e.target.value})}/></label>
       <label>Executable<input value={form.executable} maxLength={4096} onChange={e=>setForm({...form,executable:e.target.value})}/></label>
       {form.args.map((arg,i)=><div className="row-tools" key={i}><label>Argument {i+1}<input aria-label={`Argument ${i+1}`} value={arg} maxLength={1024} onChange={e=>setForm({...form,args:form.args.map((a,n)=>n===i?e.target.value:a)})}/></label><button type="button" onClick={()=>setForm({...form,args:form.args.filter((_,n)=>n!==i)})}>Remove argument {i+1}</button></div>)}
       <button type="button" disabled={form.args.length>=32} onClick={()=>setForm({...form,args:[...form.args,'']})}>Add argument</button>
@@ -20,6 +35,7 @@ export function LaunchProfiles({token,enabled}:{token:string;enabled:boolean}) {
       <label><input type="checkbox" checked={form.enabled} onChange={e=>setForm({...form,enabled:e.target.checked})}/>Enabled</label>
       <pre aria-label="Literal argument preview">{JSON.stringify([form.executable,...form.args],null,2)}</pre><p className="fine">No shell parsing, aliases or login files. An explicit shell profile runs with your host permissions; the hint does not grant automation eligibility.</p>
       <button disabled={!enabled||busy||!form.label||!form.executable}>Save profile</button>{editing&&<button type="button" disabled={!enabled||busy} onClick={()=>void save(true)}>Delete profile</button>}
-    </form>{error&&<p role="alert">{error}</p>}
+      {draft&&<button type="button" className="quiet" disabled={busy} onClick={()=>show(profiles.find(p=>p.id===selected)??profiles[0])}>Cancel</button>}
+    </form>}{error&&<p role="alert">{error}</p>}
   </section>;
 }

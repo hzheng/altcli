@@ -13,15 +13,19 @@ Native iOS and a third AI supervisor remain deferred.
 `node scripts/setup.mjs` writes `ALTCLI_ENABLE_TERMINAL=true` and
 `ALTCLI_ENABLE_AGENT_LAUNCH=true` into a new `web/.env.local`; a missing line means
 off, so add them to an older file. With the host flags enabled,
-**Open terminal** observes a card; **Take keyboard** grants the one server-wide
-writer and holds AltCLI dispatch/setup/launch. Automatically sized tmux windows
+**Open terminal** observes a card; the one **Keyboard** selector above the terminals grants the
+one server-wide writer (after confirmation) and holds AltCLI dispatch/setup/launch. Automatically sized tmux windows
 use captured observation to avoid resizing workers. Release and reconciliation
 are explicit; held workflow checkpoints need their own review.
 
-The single AltCLI control pane remembers drafts per recipient independently of
-which terminal you view. Projects accepts a repository directory even with no
-tmux panes. Settings edits executable/argument profiles; **Launch agents…** previews
-exact checkout, commit and program before creating sessions. This is host-shell
+The single Control pane remembers drafts per recipient independently of
+which terminal you view. Projects adds a project by its main/default starting checkout,
+typed or found with **Browse…**, even with no tmux panes. Settings (Console preferences
+first, then Host configuration) edits executable/argument profiles; **Launch agents…**
+previews exact checkout, commit and program before creating sessions named
+`<profile>-<branch>`. **Finish branch…** on a task worktree closes the sessions AltCLI
+launched there after a preview and confirmation, then can remove or discard the worktree
+through the usual confirmations; sessions you opened yourself are never closed. This is host-shell
 power for the authenticated owner. See [the protocol](docs/TERMINAL-PROTOCOL.md)
 and [validation](VALIDATION.md); feature activation is not acceptance.
 

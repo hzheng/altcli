@@ -137,7 +137,7 @@ for (const dirty of [false, true]) test(`another baseline requires preview and c
   await expect((await openCard(page, 'Codex')).getByRole('button', {name:'Send Codex',exact:true})).toBeVisible();
   // A dirty checkout is snapshotted by Claude and relayed to Codex from Claude's card; a clean range is reviewed in Codex's own card.
   const scope = await openCard(page, dirty ? 'Claude' : 'Codex');
-  await expect(page.getByRole('region', {name:'AltCLI control',exact:true}).locator('.pane-actions')).toHaveCount(1);
+  await expect(page.getByRole('region', {name:'Control',exact:true}).locator('.pane-actions')).toHaveCount(1);
   if (dirty) await handOff(scope, 'commit_relay'); else await expand(scope, 'Committed review');
   const send = scope.getByRole('button', { name: dirty ? 'Commit current changes & relay Codex' : 'Relay Codex', exact: true }); const baseline = scope.getByLabel('Review baseline', { exact: true });
   const ready = scope.getByLabel('Ready for implementation');
@@ -460,7 +460,7 @@ for (const phase of ['Plan', 'Implementation'] as const) test(`${phase} applies 
   await openGroup(page, group);
   // Choose the card before confirming anything: choosing a pane is a view switch that revokes readiness.
   const codex = await openCard(page, 'Codex');
-  await page.getByRole('button', { name: phase === 'Plan' ? '1 · Plan' : '2 · Implementation', exact: true }).click();
+  await page.getByRole('group', { name: 'Phase' }).getByRole('button', { name: phase, exact: true }).click();
   await editSettings(page);
   await page.getByLabel('Implementation branch', { exact: true }).selectOption('new');
   await page.getByLabel('New branch name').fill('task/clean-start');
@@ -482,8 +482,8 @@ for (const phase of ['Plan', 'Implementation'] as const) test(`${phase} applies 
     await expect(warning).toContainText('Creating a branch alone does not make the checkout clean');
     await expect(warning).toContainText('choose a Review baseline and use Relay'); await expect(warning).toContainText('Staging fallback');
   } else await expect(warning).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '1 · Plan', exact: true })).toBeEnabled();
-  await expect(page.getByRole('button', { name: '2 · Implementation', exact: true })).toBeEnabled();
+  await expect(page.getByRole('group', { name: 'Phase' }).getByRole('button', { name: 'Plan', exact: true })).toBeEnabled();
+  await expect(page.getByRole('group', { name: 'Phase' }).getByRole('button', { name: 'Implementation', exact: true })).toBeEnabled();
   const start = phase === 'Plan' ? page.getByRole('button', { name: 'Start Plan', exact: true }) : codex.getByRole('button', { name: 'Commit current changes Codex', exact: true });
   await expect(start).toBeDisabled();
   if (phase === 'Implementation') {
@@ -600,13 +600,13 @@ test('an active plain Send may dirty the checkout without displaying a clean-che
   // Owned work has a contextual draft; starting a second assignment or changing follow-up is unavailable.
   const update = page.getByRole('region', { name: 'Input for Codex', exact: true });
   // Active-run input is a command section directly under its own capture.
-  await expect(page.getByRole('region', {name:'AltCLI control',exact:true}).locator('.pane-actions')).toHaveAttribute('aria-label', 'Input for Codex');
+  await expect(page.getByRole('region', {name:'Control',exact:true}).locator('.pane-actions')).toHaveAttribute('aria-label', 'Input for Codex');
   await expect(update.locator('.zone-label')).toHaveText('⌨️ Input to Codex · run in progress');
   await update.getByLabel('Add detail for Codex').fill('Keep this draft while native acknowledgment is pending.');
   await expect(update.getByRole('button', { name: 'Send update to Codex' })).toBeDisabled();
   await expect(update.getByLabel('After send')).toHaveCount(0);
   await page.screenshot({ path: info.outputPath('send-in-progress.png'), fullPage: true });
-  await page.getByRole('button', { name: '1 · Plan', exact: true }).click();
+  await page.getByRole('group', { name: 'Phase' }).getByRole('button', { name: 'Plan', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Uncommitted changes', exact: true })).toHaveCount(0);
 });
 

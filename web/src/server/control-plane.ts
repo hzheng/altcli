@@ -17,6 +17,9 @@ import { discoverWorkspaces } from './workspaces.ts';
 import type { CommitAssignment, Group, GroupInput, GroupSelection, ImplementationRun, ImplementationStart, PolicyChange, PublicationResult, ReviewPreviewInput, StandaloneStart } from '../contracts/implementation.ts';
 import { archiveCommit, assertClean, assertLogPath, assertWorktreeInput, branchState, gitRead, createConsentedBranch, integrationNames, isAncestor, previewCommittedRange, readPublication, taskBaseline, validateExistingLog, validateNewBranch, validateReviewRange } from './commit-handoff.ts';
 import { classifyAgent } from '../core/workspaces.ts';
+import { sessionNamesOf } from '../core/session-names.ts';
+import { listDirectory } from './directories.ts';
+import { FinishCoordinator, tmuxFinishHost } from './finish.ts';
 import { messageOf } from '../core/errors.ts';
 import type { PlanCapture, PlanDecision, PlanningAssignment, PlanStart } from '../contracts/planning.ts';
 import { newPlanning, planAgreed } from './planning-state.ts';
@@ -44,6 +47,7 @@ export class ControlPlane {
   readonly authority: InputAuthority;
   readonly terminals: TerminalBroker;
   readonly launches: LaunchService;
+  readonly finish: FinishCoordinator;
   readonly interactions: InteractionStore;
   get store() { return this.transport.store; }
   get config() { return this.transport.config; }
@@ -79,20 +83,38 @@ export class ControlPlane {
     this.authority = new InputAuthority(this.store);
     this.launches = new LaunchService(this.config, this.store, this.projects, this.authority, tree => {
       if(this.workflow.owner(tree.indexPath) || this.store.activeFor(tree.root)) throw new AppError('WORKTREE_BUSY', 'A run or delivery owns this checkout.', 409);
-    });
+    }, async () => { this.syncMockLaunches(); return sessionNamesOf(await this.adapter.listPanes()); });
     this.transport.inputGuard = () => this.authority.assertAutomated();
     this.terminals = new TerminalBroker({ config: this.config, authority: this.authority,
       resolve: target => this.terminalTarget(target), begin: (input, id, generation, prior) => this.beginKeyboard(input, id, generation, prior),
       reconcile: (input, handoffRequestId) => this.reconcileManual(input, handoffRequestId) });
+    this.finish = new FinishCoordinator({ config: this.config, store: this.store, projects: this.projects, launches: this.launches, authority: this.authority,
+      host: tmuxFinishHost(this.config, () => this.adapter.listPanes()),
+      owner: (indexPath) => { const id = this.workflow.owner(indexPath); const run = id ? this.workflow.run(id) : undefined;
+        return run ? { id: run.id, status: run.status, execution: this.workflow.execution(run.currentCommandId)?.status ?? null } : null; },
+      delivery: (root) => !!this.store.activeFor(root),
+      agents: async () => Promise.all(this.workspaceSessions(await this.workspaces()).map(async (s) => ({ paneId: s.identity.paneId, socketPath: s.identity.socketPath, label: s.label,
+        state: (await this.instance(s)).status === 'current' ? this.activity.read(s).state : 'unknown' as const }))),
+      closeTerminals: (paneIds, reason) => this.terminals.closePanes(paneIds, reason),
+      remove: async (input, parent) => { await this.workspaces(); return this.projects.remove(input, (worktree) => this.removalGuard(worktree), (worktree) => this.archiveJournal(worktree.root), parent); },
+      discard: async (input, parent) => { await this.workspaces(); return this.projects.discard(input, (worktree) => this.removalGuard(worktree), (worktree) => this.archiveJournal(worktree.root), parent); },
+      reconcileChild: (kind, requestId) => kind === 'removal' ? this.projects.reconcileRemoval(requestId) : this.projects.reconcileDiscard(requestId) });
   }
+  /** Finish branch (ADR-0013): preview and confirm closing the app-launched sessions of a task worktree, then its removal or discard. */
+  async previewFinish(value: unknown) { await this.workspaces(); return this.finish.preview(value); }
+  async confirmFinish(value: unknown) { await this.workspaces(); return this.finish.confirm(value); }
+  async continueFinish(value: unknown) { await this.workspaces(); return this.finish.continue(value); }
+  async reconcileFinish(value: unknown) { await this.workspaces(); return this.finish.reconcile(value); }
   /** The effective host configuration for the Settings tab; read-only and without the token. */
   hostConfig(): HostConfig { return describeConfig(this.config); }
+  /** Read-only host directory browsing for choosing a project's starting checkout. */
+  directories(value: unknown) { return listDirectory(value, this.config.mode); }
   private ownedRuns(): RelayRun[] {
     return (this.store.db.prepare('SELECT run_id FROM workflow_owners').all() as { run_id: string }[]).map(row => this.workflow.run(row.run_id)!);
   }
   private assertNativeBoundary(): void {
     const setup = [...this.store.worktreeCreations(), ...this.store.worktreeRemovals(), ...this.store.worktreeIntegrations(), ...this.store.worktreeDiscards()];
-    if (this.store.reservations().length || setup.some(op => ['applying', 'uncertain'].includes(op.status)) ||
+    if (this.store.reservations().length || setup.some(op => ['applying', 'uncertain'].includes(op.status)) || this.finish.busy() ||
       this.store.db.prepare('SELECT 1 FROM launch_reservations LIMIT 1').get() ||
       this.ownedRuns().some(run => (run.implementation && run.implementation.setup !== 'ready') || this.interactions.pending(run.id))) {
       throw new AppError('INPUT_BUSY', 'A delivery, setup or launch is unresolved. Inspect its owner before native input or reconciliation.', 409);
@@ -216,8 +238,12 @@ export class ControlPlane {
   }
   preview(id: string) { return this.transport.preview(id); }
   /** Read-only workspace discovery. Opening or refreshing it never registers a pane, starts a run or touches Git. */
+  /** Mock mode has no tmux: launched sessions are simulated from the launch records. */
+  private syncMockLaunches(): void {
+    if(this.adapter instanceof MockAdapter) this.adapter.launched = this.launches.batches().flatMap(b=>b.items).filter(i=>i.identity&&!i.closed).map(i=>({identity:i.identity!,cwd:i.worktree.root,location:`${i.sessionName}:0.0`,command:i.profile.adapterHint==='manual'?'sh':i.profile.adapterHint,dead:false,inMode:false,synchronized:false}));
+  }
   async workspaces(): Promise<WorkspaceDiscovery> {
-    if(this.adapter instanceof MockAdapter) this.adapter.launched = this.launches.batches().flatMap(b=>b.items).filter(i=>i.identity).map(i=>({identity:i.identity!,cwd:i.worktree.root,location:`${i.sessionName}:0.0`,command:i.profile.adapterHint==='manual'?'sh':i.profile.adapterHint,dead:false,inMode:false,synchronized:false}));
+    this.syncMockLaunches();
     const sessions = this.store.sessions() as ManagedSession[];
     const discovery = await discoverWorkspaces(this.adapter, this.config.mode, sessions, this.config.integrationBranches);
     await Promise.all(discovery.workspaces.flatMap((workspace) => workspace.agents.map(async (agent) => {
@@ -261,7 +287,7 @@ export class ControlPlane {
     for (const pane of panes) {
       // A pane whose directory no longer exists cannot be inside this existing checkout; its raw path still fails closed.
       const cwd = this.config.mode === 'mock' ? pane.cwd : await realpath(pane.cwd).catch(() => pane.cwd);
-      if (cwd === worktree.root || cwd.startsWith(`${worktree.root}/`)) throw new AppError('WORKTREE_IN_USE', 'A tmux pane is still in this worktree. Move or close it yourself, then Recheck.', 409);
+      if (cwd === worktree.root || cwd.startsWith(`${worktree.root}/`)) throw new AppError('WORKTREE_IN_USE', 'A tmux pane is still in this worktree. Finish branch closes sessions AltCLI launched; move or close other panes yourself, then Recheck.', 409);
     }
     if (this.workflow.owner(worktree.indexPath) || this.store.activeFor(worktree.root)) throw new AppError('WORKTREE_BUSY', 'A run or unresolved delivery owns this worktree. Inspect and take over before removal.', 409);
     // Deleting the checkout the CLIs' hooks or skill links point into would silently end every turn observation on the host.
@@ -1077,6 +1103,7 @@ export class ControlPlane {
     if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'Input is disabled by the host.', 403);
     if (this.interactions.duplicateDecision(input)) return;
     const cp = this.interactions.checkpoint(input.runId); const run = this.workflow.run(input.runId);
+    if (run) this.projects.assertWorktreeReady(run.repository);
     if (!cp || !run || cp.fault || cp.commandId !== input.commandId || run.currentCommandId !== input.commandId || cp.revision !== input.expectedRevision ||
       (input.action === 'restore' ? cp.kind !== 'waiting' || !Object.keys(cp.external).length : cp.kind !== 'interaction') ||
       Object.values(cp.external).some((e) => e.state !== 'clear') || this.interactions.pending(run.id) || this.store.activeFor(run.repository) || this.checkpointResult(run) !== cp.result) throw new AppError('CHECKPOINT_CHANGED', 'This checkpoint is incomplete, changed or uncertain. Inspect it; takeover may be required.', 409);
@@ -1106,6 +1133,7 @@ export class ControlPlane {
     else if (input.action === 'recheck') return this.authority.automated(() => this.recheckHandoff(input));
     else if (input.action === 'continue') {
       this.authority.assertAutomated();
+      const owned = this.workflow.run(input.runId); if (owned) this.projects.assertWorktreeReady(owned.repository);
       if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'Input is disabled by the host.', 403);
       if (input.confirmReady !== true || !input.expectedCommandId) throw new AppError('READINESS_REQUIRED', 'Confirm readiness for the current manual handoff.');
       this.workflow.continue(input.runId, input.expectedCommandId); return this.pump(input.runId);

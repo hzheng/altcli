@@ -355,13 +355,14 @@ In Projects, **Ask an agent to suggest batches** sends a standalone read-only ad
 
 ## Manual keyboard and launched sessions
 
-The terminal view and AltCLI control recipient are separate. **Use <agent> in control
+The terminal view and Control recipient are separate. **Use <agent> in control
 pane** on a card retargets the one control pane without sending anything. On wide
 windows the pane can sit beside the terminals (**Control beside**); on phones
 **Open control drawer** shows the same pane as a bottom drawer. **Open terminal** is
-observation; **Take keyboard** requires confirmation and holds dispatch/setup/launch
-across the configured tmux server. It does not interrupt workers already computing.
-Use **Release and record settled** after inspecting all panes. Failed checks,
+observation; choosing a pane in the one **Keyboard** selector requires confirmation and holds
+dispatch/setup/launch across the configured tmux server. It does not interrupt workers already
+computing. **Nobody** releases the keyboard; use **Release and record settled** after inspecting
+all panes. Failed checks,
 disconnect, Lock and restart retain a durable manual barrier. Then review each
 valid saved workflow checkpoint explicitly. Faulted/originally paused runs need
 existing deliberate takeover; they do not become resumable through keyboard input.
@@ -373,3 +374,13 @@ visible and reserved for inspection; successful startup still needs normal agent
 discovery/readiness. Lost responses return the recorded batch on the same request.
 Uncertain launches are inspected, never automatically retried or removed. See
 [TERMINAL-PROTOCOL](TERMINAL-PROTOCOL.md) for scope and recovery.
+
+**Finish branch…** on a linked task worktree closes the sessions AltCLI launched there without
+terminal commands. Its preview lists every pane with activity and processes, other panes you
+must close yourself, and the branch's Git facts (integration proven by ancestry or an exact
+squash patch, not by tip difference). Choose to close only, to remove the worktree afterwards
+(proven integration and clean; branch kept) or to discard it (branch deleted, name typed later).
+Busy sessions need **Stop these sessions anyway**. Survivors or an unverified close keep the
+worktree held until **Inspect again** clears them or you record an inspection decision; a paused
+run must be taken over before the removal or discard step, which shows a fresh preview. See
+[ADR-0013](adr/ADR-0013-confirmed-branch-setup.md#confirmed-closing-of-launched-sessions).

@@ -13,6 +13,8 @@ import type { TerminalGateway } from './terminal-gateway.ts';
 interface Connection {
   id: string; input: TerminalOpen; target: AttachTarget; ticket: string | null; expires: number;
   generation: string; ws?: WebSocket; attachment?: Attachment; native: boolean; writer: boolean; closed: boolean;
+  /** This connection's last few replaced generations: acknowledgments and heartbeats already in flight for them are ignored. */
+  retired: string[];
   manualId: string | null; lastRenew: number; lastAck: number; lastHb: number; checking: boolean;
   sequence: number; acknowledged: number; sentBytes: number; acknowledgedBytes: number;
   credit: Map<number, number>; queued: Buffer[]; queuedBytes: number; paused: boolean;
@@ -52,7 +54,7 @@ export class TerminalBroker implements TerminalGateway {
     const target = await this.services.resolve(input.target); this.enabled();
     if (this.connections.size >= L.hostConnections || [...this.connections.values()].filter(c => c.target.sessionId === target.sessionId).length >= L.sessionConnections) throw new AppError('TERMINAL_LIMIT', 'The host has reached its terminal connection limit. Close an existing terminal first.', 409);
     const id = randomUUID(), ticket = randomBytes(32).toString('hex'), now = Date.now();
-    const c: Connection = { id, input, target, ticket, expires: now + L.ticketMs, generation: randomUUID(), native: false, writer: false, closed: false,
+    const c: Connection = { id, input, target, ticket, expires: now + L.ticketMs, generation: randomUUID(), retired: [], native: false, writer: false, closed: false,
       manualId: null, lastRenew: now, lastAck: now, lastHb: now, checking: false, sequence: 0, acknowledged: 0, sentBytes: 0, acknowledgedBytes: 0,
       credit: new Map(), queued: [], queuedBytes: 0, paused: false, inputSeq: 0, receipts: new Map(), tail: Promise.resolve(), pendingBytes: 0, rateStart: now, rateBytes: 0, resizing: false, lastResize: 0 };
     this.connections.set(id, c);
@@ -75,6 +77,8 @@ export class TerminalBroker implements TerminalGateway {
           try {
             if (isBinary || rawBuffer(frame).length > 16384) throw new Error('Invalid frame');
             const v = JSON.parse(rawBuffer(frame).toString());
+            // A keyboard grant or release replaces the generation while the browser may still be acknowledging the old one.
+            if ((v.type === 'processed' || v.type === 'heartbeat') && c.retired.includes(v.generation)) return;
             if (v.type === 'processed') this.processed(c.id, { generation: v.generation, sequence: v.sequence, processedBytes: v.processedBytes });
             else if (v.type === 'heartbeat') this.heartbeat(c.id, { generation: v.generation });
             else throw new Error('Unsupported frame');
@@ -94,7 +98,7 @@ export class TerminalBroker implements TerminalGateway {
   }
   private async startAttachment(c: Connection, writer: boolean): Promise<void> {
     // Retire callbacks before detaching: the old PTY exits during this awaited close.
-    const old = c.attachment; c.attachment = undefined; c.generation = randomUUID(); await old?.close();
+    const old = c.attachment; c.attachment = undefined; c.retired = [...c.retired, c.generation].slice(-4); c.generation = randomUUID(); await old?.close();
     if (c.closed || c.ws?.readyState !== 1) throw new AppError('TERMINAL_CHANGED', 'Terminal closed before attachment.', 409);
     const target = await this.services.resolve(c.input.target);
     if (JSON.stringify(target.identity) !== JSON.stringify(c.target.identity) || target.sessionId !== c.target.sessionId) throw new AppError('TARGET_CHANGED', 'The terminal target changed.', 409);
@@ -245,6 +249,10 @@ export class TerminalBroker implements TerminalGateway {
     await this.endWriter(c, reason, false);
     const child = c.attachment; c.attachment = undefined; await child?.close();
     c.ws?.close(); c.queued = []; c.receipts.clear(); this.connections.delete(id);
+  }
+  /** Closes observer connections on these panes before Finish branch closes their sessions. A live keyboard already refuses it. */
+  async closePanes(paneIds: Set<string>, reason: string): Promise<void> {
+    await Promise.all([...this.connections.values()].filter(c => paneIds.has(c.target.identity.paneId)).map(c => this.close(c.id, reason)));
   }
   async revoke(clientInstanceId: string): Promise<void> { await Promise.all([...this.connections.values()].filter(c => c.input.clientInstanceId === clientInstanceId).map(c => this.close(c.id, 'Browser locked; reconcile manual input.'))); }
   private tick() {

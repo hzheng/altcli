@@ -553,7 +553,7 @@ test('checkboxes save solo, pair and larger groups without silently truncating s
   await openTab(page, 'Console');
   await expect(page.getByRole('region', { name: 'Implementation settings' })).toContainText('larger-group execution is not enabled yet');
   await expect(page.getByRole('button', { name: /^Send / })).toHaveCount(0);
-  await page.getByRole('button', { name: '1 · Plan', exact: true }).click();
+  await page.getByRole('group', { name: 'Phase' }).getByRole('button', { name: 'Plan', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Plan setup' })).toContainText('Your selection is saved');
   await openTab(page, 'Projects');
   await detail.getByLabel('Include Claude Code', { exact: true }).uncheck();

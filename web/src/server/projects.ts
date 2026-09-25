@@ -5,16 +5,16 @@ import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import type { SessionRegistration } from '../contracts/api.ts';
-import type { Project, ProjectRecord, ProjectWorktree, WorktreeCreateInput, WorktreeCreation, WorktreeDiscard, WorktreeDiscardConfirm, WorktreeDiscardFinish, WorktreeDiscardInput, WorktreeDiscardPreview, WorktreeIntegrateInput, WorktreeIntegrateRequest, WorktreeIntegration, WorktreeIntegrationInput, WorktreeIntegrationPreview, WorktreePreview, WorktreePreviewInput, WorktreeRemoval, WorktreeRemovalInput, WorktreeRemovalPreview, WorktreeRemoveInput } from '../contracts/projects.ts';
+import { FINISH_HOLDING } from '../contracts/projects.ts';
+import type { FinishGit, Project, ProjectRecord, ProjectWorktree, WorktreeCreateInput, WorktreeCreation, WorktreeDiscard, WorktreeDiscardConfirm, WorktreeDiscardFinish, WorktreeDiscardInput, WorktreeDiscardPreview, WorktreeIntegrateInput, WorktreeIntegrateRequest, WorktreeIntegration, WorktreeIntegrationInput, WorktreeIntegrationPreview, WorktreePreview, WorktreePreviewInput, WorktreeRemoval, WorktreeRemovalInput, WorktreeRemovalPreview, WorktreeRemoveInput } from '../contracts/projects.ts';
 import type { Workspace, WorktreeIdentity } from '../contracts/workflow.ts';
 import { AppError, messageOf } from '../core/errors.ts';
-import { parseDiscard, parseDiscardFinish, parseDiscardPreview, parseIntegrate, parseIntegrationPreview, parseWorktreeCreate, parseWorktreePreview, parseRemoval, parseRemovalPreview } from '../core/project-validation.ts';
-import { terminalFields, terminalText } from '../core/terminal-validation.ts';
+import { parseDiscard, parseDiscardFinish, parseDiscardPreview, parseIntegrate, parseIntegrationPreview, parseProjectAdd, parseWorktreeCreate, parseWorktreePreview, parseRemoval, parseRemovalPreview } from '../core/project-validation.ts';
 import { defaultSquashMessage } from '../core/squash-message.ts';
 import { branchState, defaultBranch, integrationNames, validateNewBranch } from './commit-handoff.ts';
 import type { Config } from './config.ts';
 import type { Store } from './store.ts';
-import { gitEnvironment, resolveWorktree, sameWorktree, worktreeFingerprint } from './worktree.ts';
+import { currentBranch, gitEnvironment, resolveWorktree, sameWorktree, worktreeFingerprint } from './worktree.ts';
 
 const idOf = (kind: string, value: unknown) => `${kind}-${createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 24)}`;
 const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical)
@@ -111,22 +111,25 @@ export class ProjectCatalog {
     for (const operation of store.worktreeDiscards().filter((op) => op.status === 'applying')) this.discardFinish(operation, 'uncertain', 'Backend restarted during discard. Inspect its result; nothing is retried.');
     for (const operation of store.worktreeCreations().filter((op) => op.status === 'applying')) this.finish(operation, 'uncertain', 'Backend restarted during worktree creation. Inspect and reconcile; do not retry.');
   }
-  /** Explicit path entry is metadata only: no shell, tmux server creation or Git mutation. */
+  /** Explicit path entry is metadata only: no shell, tmux server creation or Git mutation. With `expected` (what the directory
+   * browser showed), the path is inspected again and a changed checkout, repository or branch refuses instead of adding another. */
   async add(value: unknown): Promise<ProjectRecord> {
     if(!this.config.inputEnabled) throw new AppError('READ_ONLY', 'The host has disabled project changes.', 403);
-    const b = terminalFields(value, ['path']); const path = terminalText(b.path, 4096);
+    const { path, expected } = parseProjectAdd(value);
     if (!isAbsolute(path)) throw new AppError('PROJECT_PATH', 'Enter an absolute repository directory.');
-    let root: string, commonDir: string;
+    let root: string, commonDir: string, branch: string | null;
     if (this.config.mode === 'mock') {
       if (!/^\/demo\/[A-Za-z0-9_-]+$/.test(path)) throw new AppError('MOCK_PROJECT', 'Mock repository paths use /demo/name. No real directory is inspected.');
-      root = path; commonDir = `${path}/.git`;
+      root = path; commonDir = `${path}/.git`; branch = 'main';
     } else {
       const identity = await resolveWorktree(await realpath(path)).catch(() => null);
       if (!identity) throw new AppError('PROJECT_PATH', 'Choose an accessible, non-bare Git checkout.', 409);
-      root = identity.root; commonDir = await commonGitDir(root);
+      root = identity.root; commonDir = await commonGitDir(root); branch = expected ? await currentBranch(root) : null;
       const metadata = await futurePath(this.config.dataDir);
       if (contains(root, metadata) || contains(metadata, root) || contains(commonDir, metadata) || contains(metadata, commonDir)) throw new AppError('PROJECT_PATH', 'Controller metadata and projects must not overlap.', 409);
     }
+    if (expected && (expected.root !== root || expected.commonDir !== commonDir || expected.branch !== branch))
+      throw new AppError('PROJECT_CHANGED', 'The chosen checkout changed since you selected it (its directory, repository or branch). Select it again before adding.', 409);
     const id = idOf('project', commonDir); const existing = this.known.get(id);
     if (existing) { this.store.saveProject(existing); return existing; }
     const name = projectName(commonDir, await this.taskRoot());
@@ -176,7 +179,8 @@ export class ProjectCatalog {
         }
       } catch { error = 'Project Git metadata is unavailable. Its saved identity has been kept; inspect the host and Recheck.'; }
       return { ...project, worktrees: trees, error, removals: this.store.worktreeRemovals().filter((op) => op.input.projectId === project.id), creations: this.store.worktreeCreations().filter((op) => op.input.projectId === project.id),
-        integrations: this.store.worktreeIntegrations().filter((op) => op.input.projectId === project.id), discards: this.store.worktreeDiscards().filter((op) => op.input.projectId === project.id) };
+        integrations: this.store.worktreeIntegrations().filter((op) => op.input.projectId === project.id), discards: this.store.worktreeDiscards().filter((op) => op.input.projectId === project.id),
+        finishes: this.store.taskFinishes().filter((op) => op.preview.projectId === project.id) };
     }));
     return this.views;
   }
@@ -195,6 +199,7 @@ export class ProjectCatalog {
     if (this.store.worktreeDiscards().some((op) => op.input.worktree.root === root && ['applying', 'uncertain'].includes(op.status))) throw new AppError('WORKTREE_SETUP_BUSY', 'This worktree discard is applying or uncertain. Inspect its result in Projects before using it.', 409);
     if (this.store.worktreeIntegrations().some((op) => (op.input.target.root === root || op.input.worktree.root === root) && ['applying', 'uncertain'].includes(op.status))) throw new AppError('WORKTREE_SETUP_BUSY', 'A squash integration involving this checkout is applying or uncertain. Inspect its result in Projects before using it.', 409);
     if (this.store.worktreeCreations().some((op) => op.input.path === root && ['applying', 'uncertain'].includes(op.status))) throw new AppError('WORKTREE_SETUP_BUSY', 'This worktree creation is still applying or uncertain. Inspect and reconcile it in Projects before binding agents or starting work.', 409);
+    if (this.store.taskFinishes().some((op) => op.preview.worktree.root === root && FINISH_HOLDING.includes(op.status))) throw new AppError('WORKTREE_SETUP_BUSY', 'Finish branch owns this worktree. Inspect or complete it in Projects before starting or resuming work here.', 409);
   }
   private async source(input: WorktreePreviewInput) {
     if (this.config.mode === 'mock') throw new AppError('MOCK_WORKTREE', 'Simulated panes cannot create real Git worktrees.', 409);
@@ -315,8 +320,11 @@ export class ProjectCatalog {
       this.store.saveWorktreeRemoval(updated);
     })(); return updated;
   }
-  private projectHeld(projectId: string): boolean {
-    return this.pendingLaunch(projectId) || [...this.store.worktreeCreations(), ...this.store.worktreeRemovals(), ...this.store.worktreeIntegrations(), ...this.store.worktreeDiscards()].some((op) => op.input.projectId === projectId && ['applying', 'uncertain'].includes(op.status));
+  /** Whether a setup, launch or Finish branch operation owns the project. `parent` admits exactly one child operation: the removal or
+   * discard that holding Finish branch recorded, by request ID. Public requests pass none. */
+  projectHeld(projectId: string, parent?: { finish: string; child: string }): boolean {
+    return this.pendingLaunch(projectId) || [...this.store.worktreeCreations(), ...this.store.worktreeRemovals(), ...this.store.worktreeIntegrations(), ...this.store.worktreeDiscards()].some((op) => op.input.projectId === projectId && ['applying', 'uncertain'].includes(op.status))
+      || this.store.taskFinishes().some((op) => op.preview.projectId === projectId && FINISH_HOLDING.includes(op.status) && !(parent && op.requestId === parent.finish && op.child?.requestId === parent.child));
   }
   /** The local integration branch that verification and squash target: main when it exists, else the recorded default. */
   private async integrationRef(path: string, primary: string | null): Promise<{ name: string; targetRef: string; targetHead: string }> {
@@ -348,6 +356,12 @@ export class ProjectCatalog {
     if (!state.clean || state.head !== tree.head || state.branch !== tree.branch) throw new AppError('WORKTREE_DIRTY', 'The worktree contains modified or untracked files, or changed during inspection.', 409);
     const primary = state.primary;
     if (integrationNames(primary, this.config.integrationBranches).includes(tree.branch)) throw new AppError('WORKTREE_REMOVAL', 'An integration branch worktree cannot be removed here.', 409);
+    return { ...input, requestId: randomUUID(), worktree: tree.identity, branch: tree.branch, head: tree.head, ...await this.integrationEvidence(input.projectId, input.worktreeId, tree.path, tree.branch, tree.head, primary) };
+  }
+  /** Read-only integration evidence for a task branch: exact ancestry, a verified squash checkpoint, or one single-parent main commit
+   * whose patch equals the branch's combined changes. Throws NOT_INTEGRATED when none holds; it never judges by tips alone. */
+  private async integrationEvidence(projectId: string, worktreeId: string, path: string, branch: string, head: string, primary: string | null): Promise<Pick<WorktreeRemovalPreview, 'targetRef' | 'targetHead' | 'integratedBy' | 'integratedCommit'>> {
+    const tree = { path, branch, head };
     const refs = (await git(['-C', tree.path, 'for-each-ref', '--format=%(refname)', 'refs/heads/'])).trim().split('\n');
     const targetRef = refs.includes('refs/heads/main') ? 'refs/heads/main' : primary && refs.includes(`refs/heads/${primary}`) ? `refs/heads/${primary}` : null;
     if (!targetRef) throw new AppError('INTEGRATION_UNKNOWN', 'No local main/default branch is available to verify integration. Update it yourself, then Recheck.', 409);
@@ -356,8 +370,8 @@ export class ProjectCatalog {
     if (bases.length !== 1) throw new AppError('INTEGRATION_UNKNOWN', 'The integration baseline is ambiguous.', 409);
     let integratedBy: WorktreeRemovalPreview['integratedBy'] = 'ancestry'; let integratedCommit = tree.head;
     if (bases[0] !== tree.head) {
-      const checkpoint = await this.integrationCheckpoint(input.projectId, input.worktreeId, tree.branch, tree.head, targetRef, targetHead, tree.path);
-      if (checkpoint?.through === tree.head) return { ...input, requestId: randomUUID(), worktree: tree.identity, branch: tree.branch, head: tree.head, targetRef, targetHead, integratedBy: 'squash', integratedCommit: checkpoint.commit };
+      const checkpoint = await this.integrationCheckpoint(projectId, worktreeId, tree.branch, tree.head, targetRef, targetHead, tree.path);
+      if (checkpoint?.through === tree.head) return { targetRef, targetHead, integratedBy: 'squash', integratedCommit: checkpoint.commit };
       const diff = (from: string, to: string) => git(['-C', tree.path, 'diff', '--binary', '--full-index', '--no-renames', '--no-ext-diff', '--no-textconv', '--ignore-submodules=none', '--no-relative', '--src-prefix=a/', '--dst-prefix=b/', from, to, '--']);
       const combined = await diff(bases[0]!, tree.head);
       if (!combined) throw new AppError('INTEGRATION_UNKNOWN', 'No exact integrated commit can be established for this branch.', 409);
@@ -370,11 +384,34 @@ export class ProjectCatalog {
       if (!integratedCommit) throw new AppError('NOT_INTEGRATED', 'The branch is not an ancestor of main and its combined changes do not exactly match a single commit in the latest 500 main/default-branch commits. Removal is unavailable.', 409);
       integratedBy = 'squash';
     }
-    return { ...input, requestId: randomUUID(), worktree: tree.identity, branch: tree.branch, head: tree.head, targetRef, targetHead, integratedBy, integratedCommit };
+    return { targetRef, targetHead, integratedBy, integratedCommit };
+  }
+  /** Read-only Git facts for Finish branch. Unlike the removal preview, live panes and uncommitted files do not stop it: they are shown.
+   * Integration is classified from the removal evidence; inspection errors never establish integration or its absence. */
+  async finishEvidence(projectId: string, worktreeId: string): Promise<{ worktree: WorktreeIdentity; git: FinishGit }> {
+    if (this.config.mode === 'mock') throw new AppError('MOCK_WORKTREE', 'Simulated panes have no real Git worktree to finish.', 409);
+    const { tree, primary } = await this.taskWorktree(projectId, worktreeId, 'finished');
+    const facts: FinishGit = { branch: tree.branch, head: tree.head, targetRef: null, targetHead: null, ahead: null, behind: null, dirty: null, changeCount: null,
+      integration: 'unavailable', integratedBy: null, integratedCommit: null, note: null };
+    const state = await branchState(tree.path).catch(() => null);
+    if (state && (state.head !== tree.head || state.branch !== tree.branch)) return { worktree: tree.identity, git: { ...facts, note: 'The worktree changed during inspection. Preview again.' } };
+    if (state) { facts.dirty = !state.clean; facts.changeCount = state.changeCount; }
+    try {
+      const { targetRef, targetHead } = await this.integrationRef(tree.path, primary);
+      const [behind, ahead] = (await git(['-C', tree.path, 'rev-list', '--left-right', '--count', `${targetHead}...${tree.head}`])).trim().split(/\s+/).map(Number);
+      Object.assign(facts, { targetRef, targetHead, ahead: ahead ?? null, behind: behind ?? null });
+      const evidence = await this.integrationEvidence(projectId, worktreeId, tree.path, tree.branch, tree.head, primary);
+      Object.assign(facts, { integration: 'integrated', integratedBy: evidence.integratedBy, integratedCommit: evidence.integratedCommit });
+    } catch (error) {
+      if (error instanceof AppError && error.code === 'NOT_INTEGRATED') Object.assign(facts, { integration: 'not_proven', note: 'Not an ancestor of main, and its combined changes match none of the latest 500 main commits exactly (the squash check). Integration is not proven.' });
+      else facts.note = `Integration could not be inspected: ${messageOf(error)}`;
+    }
+    if (!state) facts.note = `${facts.note ? `${facts.note} ` : ''}Uncommitted changes could not be inspected.`;
+    return { worktree: tree.identity, git: facts };
   }
   /** One confirmed non-force removal. Guard is supplied by ControlPlane and rechecks live panes and execution ownership;
    * archive keeps the worktree's published handoff content in the journal before anything is deleted. */
-  async remove(raw: WorktreeRemoveInput, guard: (worktree: WorktreeIdentity) => Promise<void>, archive: (worktree: WorktreeIdentity) => Promise<number>): Promise<WorktreeRemoval> {
+  async remove(raw: WorktreeRemoveInput, guard: (worktree: WorktreeIdentity) => Promise<void>, archive: (worktree: WorktreeIdentity) => Promise<number>, parent?: string): Promise<WorktreeRemoval> {
     const input = parseRemoval(raw);
     if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'The host has disabled Git setup and terminal input.', 403);
     const existing = this.store.worktreeRemovals().find((op) => op.input.requestId === input.requestId);
@@ -386,7 +423,7 @@ export class ProjectCatalog {
     if (!project) throw new AppError('PROJECT_CHANGED', 'Recheck this project.', 409);
     const operation: WorktreeRemoval = { input, status: 'applying', message: 'Checking the confirmed worktree removal.', updatedAt: new Date().toISOString() };
     this.store.db.transaction(() => {
-      if (this.projectHeld(input.projectId)) throw new AppError('PROJECT_SETUP_BUSY', 'Another worktree operation owns this project. Inspect its result first.', 409);
+      if (this.projectHeld(input.projectId, parent ? { finish: parent, child: input.requestId } : undefined)) throw new AppError('PROJECT_SETUP_BUSY', 'Another worktree operation owns this project. Inspect its result first.', 409);
       this.store.saveProject(project); this.store.saveWorktreeRemoval(operation);
     }).immediate();
     let attempted = false;
@@ -602,7 +639,7 @@ export class ProjectCatalog {
     return { ...input, requestId: randomUUID(), worktree: tree.identity, branch: tree.branch, head: tree.head, targetRef, targetHead, dirty: !state.clean, changeCount: state.changeCount, fingerprint, unmergedCommits };
   }
   /** One confirmed forced removal plus branch deletion. Guard and archive are supplied by ControlPlane, as for removal. */
-  async discard(raw: WorktreeDiscardConfirm, guard: (worktree: WorktreeIdentity) => Promise<void>, archive: (worktree: WorktreeIdentity) => Promise<number>): Promise<WorktreeDiscard> {
+  async discard(raw: WorktreeDiscardConfirm, guard: (worktree: WorktreeIdentity) => Promise<void>, archive: (worktree: WorktreeIdentity) => Promise<number>, parent?: string): Promise<WorktreeDiscard> {
     const input = parseDiscard(raw);
     if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'The host has disabled Git setup and terminal input.', 403);
     const existing = this.store.worktreeDiscards().find((op) => op.input.requestId === input.requestId);
@@ -614,7 +651,7 @@ export class ProjectCatalog {
     if (!project) throw new AppError('PROJECT_CHANGED', 'Recheck this project.', 409);
     const operation: WorktreeDiscard = { input, status: 'applying', message: 'Checking the confirmed discard.', updatedAt: new Date().toISOString() };
     this.store.db.transaction(() => {
-      if (this.projectHeld(input.projectId)) throw new AppError('PROJECT_SETUP_BUSY', 'Another worktree operation owns this project. Inspect its result first.', 409);
+      if (this.projectHeld(input.projectId, parent ? { finish: parent, child: input.requestId } : undefined)) throw new AppError('PROJECT_SETUP_BUSY', 'Another worktree operation owns this project. Inspect its result first.', 409);
       this.store.saveProject(project); this.store.saveWorktreeDiscard(operation);
     }).immediate();
     const same = (checked: WorktreeDiscardPreview) => isDeepStrictEqual({ ...checked, requestId: input.requestId, confirmBranch: input.branch, confirm: true }, input);

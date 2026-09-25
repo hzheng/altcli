@@ -98,12 +98,20 @@ an unexecuted row open; a mock result cannot fill an installed-host row.
 | Mobile and concurrent access | Use a physical iPhone Safari and a desktop together. Check English/Chinese IME, emoji, multiline paste, screen-reader mode, touch modifiers, expansion, rotation, keyboard visibility, two-client exclusion and focus routing. Chromium phone emulation is only layout/interaction evidence. |
 | Remote path | On the intended private HTTPS/WSS origin, check upgrades, proxy buffering, output load, network switching and reconnect. Record input latency and verify no input replay or automatic workflow continuation. |
 | Settled restart and rollback | With no active delivery, restart the backend and confirm original workers survive, old tickets fail and manual/launch uncertainty remains. Disable flags and verify captures and explicit reconciliation remain available; do not clear ownership rows. |
+| Finish branch | In a disposable linked worktree on a private socket, launch two installed CLIs, split one session, and open a session of your own there. Finish branch must list both launched sessions with their processes, leave yours running, require the stop acknowledgement while one is working, close only the launched ones by ID, report a detached background process as a survivor, and hand over to removal or discard only after a fresh confirmation. Repeat with a paused run (takeover before the Git step) and with a backend restart mid-close (uncertain, inspection only). |
 
 `web/e2e/native.spec.ts` exercises the real mock API and xterm renderer, including
 late input responses after recovery, paste consent, separate control drafts,
-expansion without lease changes and the explicit accessibility controls.
-`web/scripts/terminal-broker.test.ts` covers server resize admission and generation
-checks. Run `./scripts/check.sh`, `./scripts/check.sh --e2e` and the native probes
+expansion without lease changes, the shared Keyboard selector (confirmation, transfer
+between panes as one broker decision, cancel during a slow connect) and the keyboard
+focus escape. `web/scripts/terminal-broker.test.ts` covers server resize admission,
+generation checks and short launch-name allocation across worktrees.
+`web/scripts/finish.test.ts` covers Finish branch against real Git with a fixture tmux
+host (scope proof, digest and acknowledgement gates, survivors, paused runs, the admitted
+child removal/discard, restart and inspection), and the private-tmux case in
+`web/scripts/native-launch.test.ts` (`npm run test:native`) covers the real kill by
+session ID, a split in scope, a linked window refused, a user session left alone and a
+detached survivor. Run `./scripts/check.sh`, `./scripts/check.sh --e2e` and the native probes
 above; inspect the produced screenshots. These local checks do not complete the
 physical device, real-provider or deployed proxy rows.
 

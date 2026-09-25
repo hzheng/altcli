@@ -5,7 +5,7 @@ import type { AgentId, CommandRecord, RelayPair, Reservation, SessionRegistratio
 import { AppError } from "../core/errors.ts";
 import { sameRequest, suggestAgentType } from "../core/policy.ts";
 import type { Group } from "../contracts/implementation.ts";
-import type { ProjectRecord, WorktreeCreation, WorktreeDiscard, WorktreeIntegration, WorktreeRemoval } from '../contracts/projects.ts';
+import type { ProjectRecord, TaskFinish, WorktreeCreation, WorktreeDiscard, WorktreeIntegration, WorktreeRemoval } from '../contracts/projects.ts';
 export class Store {
   readonly db: Database.Database;
   constructor(directory: string) {
@@ -17,7 +17,7 @@ export class Store {
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("busy_timeout = 5000");
     const version = this.db.pragma("user_version", { simple: true }) as number;
-    if (version > 14) throw new Error("Unsupported database version. Do not downgrade this store.");
+    if (version > 15) throw new Error("Unsupported database version. Do not downgrade this store.");
     this.db.transaction(() => {
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -39,6 +39,7 @@ export class Store {
         CREATE TABLE IF NOT EXISTS worktree_removals (id TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS worktree_integrations (id TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS worktree_discards (id TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS task_finishes (id TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE UNIQUE INDEX IF NOT EXISTS worktree_creation_owner ON worktree_creations(project_id) WHERE status IN ('applying', 'uncertain');
         CREATE INDEX IF NOT EXISTS interactions_repository ON interactions(repository);
         CREATE INDEX IF NOT EXISTS interactions_run ON interactions(json_extract(value, '$.input.runId'));
@@ -46,7 +47,7 @@ export class Store {
       if (version === 1) this.migrateFromV1();
       if (version < 5) for (const pair of this.pairs()) this.saveGroup({ id: pair.id, name: pair.name, repository: pair.repository,
         cwd: null, members: pair.sessions, revision: 1, createdAt: pair.createdAt, legacyPairId: pair.id });
-      this.db.exec("PRAGMA user_version = 14"); // older servers must not ignore interaction ownership
+      this.db.exec("PRAGMA user_version = 15"); // older servers must not ignore a Finish branch owner
     })();
   }
   /** v1 had one global reservation in `control` and sessions without agentType. */
@@ -101,6 +102,15 @@ export class Store {
   }
   saveWorktreeDiscard(operation: WorktreeDiscard): void {
     this.db.prepare('INSERT INTO worktree_discards(id,value) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(operation.input.requestId, JSON.stringify(operation));
+  }
+  taskFinishes(): TaskFinish[] {
+    return (this.db.prepare('SELECT value FROM task_finishes ORDER BY rowid').all() as { value: string }[]).map((row) => JSON.parse(row.value));
+  }
+  /** Compare-and-set: the stored revision must still be `expected` (0 for a new record), so a step is never claimed twice. */
+  saveTaskFinish(operation: TaskFinish, expected: number): void {
+    const row = this.db.prepare('SELECT value FROM task_finishes WHERE id=?').get(operation.requestId) as { value: string } | undefined;
+    if ((row ? (JSON.parse(row.value) as TaskFinish).revision : 0) !== expected) throw new AppError('FINISH_CHANGED', 'This Finish branch operation changed meanwhile. Refresh and inspect it.', 409);
+    this.db.prepare('INSERT INTO task_finishes(id,value) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(operation.requestId, JSON.stringify(operation));
   }
   sessions(): SessionRegistration[] {
     // Registration order; an upsert keeps its row, so re-registering a worker does not move it.

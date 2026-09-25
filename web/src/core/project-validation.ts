@@ -1,4 +1,4 @@
-import type { WorktreeCreateInput, WorktreeDiscardConfirm, WorktreeDiscardFinish, WorktreeDiscardInput, WorktreeIntegrateRequest, WorktreeIntegrationInput, WorktreePreviewInput, WorktreeRemovalInput, WorktreeRemoveInput } from '../contracts/projects.ts';
+import type { DirectoryListInput, FinishConfirm, FinishContinue, FinishInput, FinishOutcome, FinishReconcile, ProjectAddInput, WorktreeCreateInput, WorktreeDiscardConfirm, WorktreeDiscardFinish, WorktreeDiscardInput, WorktreeIntegrateRequest, WorktreeIntegrationInput, WorktreePreviewInput, WorktreeRemovalInput, WorktreeRemoveInput } from '../contracts/projects.ts';
 import { AppError } from './errors.ts';
 import { object, requestId } from './validation.ts';
 import { sha } from './implementation-validation.ts';
@@ -86,4 +86,47 @@ export function parseDiscardFinish(value: unknown): WorktreeDiscardFinish {
   const body = object(value); fields(body, ['requestId', 'confirm']);
   if (body.confirm !== true) throw new AppError('CONFIRM_REQUIRED', 'Confirm deleting the remaining branch.');
   return { requestId: requestId(body.requestId), confirm: true };
+}
+
+export function parseDirectoryList(value: unknown): DirectoryListInput {
+  const body = object(value); fields(body, ['path', 'hidden']);
+  if (body.hidden !== undefined && typeof body.hidden !== 'boolean') throw new AppError('INVALID_DIRECTORY', 'hidden must be true or false.');
+  const path = body.path === undefined ? undefined : text(body.path);
+  if (path !== undefined && !path.startsWith('/')) throw new AppError('INVALID_DIRECTORY', 'Enter an absolute directory path.');
+  return { ...(path === undefined ? {} : { path }), ...(body.hidden === undefined ? {} : { hidden: body.hidden }) };
+}
+export function parseProjectAdd(value: unknown): ProjectAddInput {
+  const body = object(value); fields(body, ['path', 'expected']);
+  const path = text(body.path);
+  if (body.expected === undefined) return { path };
+  const expected = object(body.expected); fields(expected, ['root', 'commonDir', 'branch']);
+  return { path, expected: { root: text(expected.root), commonDir: text(expected.commonDir), branch: expected.branch === null ? null : text(expected.branch) } };
+}
+
+export function parseFinishInput(value: unknown): FinishInput {
+  const body = object(value); fields(body, ['projectId', 'worktreeId']);
+  return { projectId: text(body.projectId), worktreeId: text(body.worktreeId) };
+}
+export function parseFinishConfirm(value: unknown): FinishConfirm {
+  const body = object(value); fields(body, ['requestId', 'digest', 'outcome', 'stopActive', 'confirm']);
+  if (body.confirm !== true) throw new AppError('CONFIRM_REQUIRED', 'Confirm closing exactly the previewed sessions.');
+  if (!['close', 'remove', 'discard'].includes(String(body.outcome))) throw new AppError('INVALID_WORKTREE', 'Choose close, remove or discard.');
+  if (typeof body.stopActive !== 'boolean') throw new AppError('INVALID_WORKTREE', 'stopActive must be true or false.');
+  if (typeof body.digest !== 'string' || !/^[0-9a-f]{64}$/.test(body.digest)) throw new AppError('INVALID_WORKTREE', 'Expected the preview digest.');
+  return { requestId: requestId(body.requestId), digest: body.digest, outcome: body.outcome as FinishOutcome, stopActive: body.stopActive, confirm: true };
+}
+export function parseFinishContinue(value: unknown): FinishContinue {
+  const body = object(value); fields(body, ['requestId', 'revision', 'removal', 'discard']);
+  if (!Number.isSafeInteger(body.revision) || (body.revision as number) < 1) throw new AppError('INVALID_WORKTREE', 'Expected the finish revision.');
+  if ((body.removal === undefined) === (body.discard === undefined)) throw new AppError('INVALID_WORKTREE', 'Continue with exactly one confirmed removal or discard.');
+  return { requestId: requestId(body.requestId), revision: body.revision as number,
+    ...(body.removal !== undefined ? { removal: parseRemoval(body.removal) } : { discard: parseDiscard(body.discard) }) };
+}
+export function parseFinishReconcile(value: unknown): FinishReconcile {
+  const body = object(value); fields(body, ['requestId', 'revision', 'action', 'note']);
+  if (!Number.isSafeInteger(body.revision) || (body.revision as number) < 1) throw new AppError('INVALID_WORKTREE', 'Expected the finish revision.');
+  if (!['inspect', 'decide', 'abandon'].includes(String(body.action))) throw new AppError('INVALID_WORKTREE', 'Choose inspect, decide or abandon.');
+  const note = body.note === undefined ? undefined : text(body.note);
+  if (body.action === 'decide' && (!note?.trim() || note.length > 1000)) throw new AppError('INVALID_WORKTREE', 'Record what you inspected, in at most 1,000 characters.');
+  return { requestId: requestId(body.requestId), revision: body.revision as number, action: body.action as FinishReconcile['action'], ...(note === undefined ? {} : { note }) };
 }

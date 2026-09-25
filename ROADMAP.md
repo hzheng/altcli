@@ -238,6 +238,15 @@ generation-safe browser input handling. Snapshot timestamps appear only with
 snapshot output. Three launched instances still do not enable three-agent
 workflow execution.
 
+The September 25 usability follow-up replaces per-card keyboard buttons with one shared
+Keyboard selector, turns terminal tools and connection states into icons with hover/focus/tap
+help, removes the visible focus-escape button (keeping Ctrl+Shift+Esc and its on-focus hint),
+names launched sessions `<profile>-<branch>`, adds read-only directory browsing for project
+entry, splits Settings into Console preferences and Host configuration, and adds **Finish
+branch** ([ADR-0013](docs/adr/ADR-0013-confirmed-branch-setup.md#confirmed-closing-of-launched-sessions)):
+confirmed closing of app-launched sessions before the existing removal or discard. Physical
+device, installed-CLI and deployed-host acceptance of these remain separate.
+
 Use [TESTING](docs/TESTING.md#terminal-and-launch-release-checklist) for the
 remaining demonstrations and [VALIDATION](VALIDATION.md) for commands that
 actually ran. Setup writes `ALTCLI_ENABLE_TERMINAL` and `ALTCLI_ENABLE_AGENT_LAUNCH`

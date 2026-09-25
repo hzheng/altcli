@@ -11,5 +11,7 @@ export interface LaunchInstance extends LaunchItem {
   phase: 'reserved'|'creating'|'created'|'configured'|'marked'|'executing'|'observed';
   message: string; identity: PaneIdentity|null; sessionId: string|null; windowId: string|null;
   placeholder: PaneIdentity|null; updatedAt: string; humanDecision?: { requestId: string; note: string; at: string };
+  /** Closed by a confirmed Finish branch: no longer a terminal or discovery target; its history is kept. */
+  closed?: { finishId: string; at: string };
 }
 export interface LaunchBatch { requestId: string; previewDigest: string; items: LaunchInstance[]; createdAt: string }

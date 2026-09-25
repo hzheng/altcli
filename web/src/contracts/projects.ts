@@ -18,6 +18,7 @@ export interface Project extends ProjectRecord {
   removals?: WorktreeRemoval[];
   integrations?: WorktreeIntegration[];
   discards?: WorktreeDiscard[];
+  finishes?: TaskFinish[];
 }
 export interface WorktreePreviewInput { projectId: string; sourceWorktreeId: string; branch: string }
 export interface WorktreePreview extends WorktreePreviewInput {
@@ -130,3 +131,109 @@ export interface WorktreeDiscard {
   /** Set by inspection when only `git branch -D` is left: the directory and Git worktree entry are gone and the branch is at the confirmed head. */
   branchRemains?: boolean;
 }
+
+/** Read-only listing of one host directory for choosing a project's starting checkout. Browsing creates and changes nothing. */
+export interface DirectoryListInput { path?: string; hidden?: boolean }
+export interface DirectoryEntry {
+  name: string;
+  /** Where choosing this entry navigates: for a symbolic link, its resolved destination. */
+  path: string;
+  /** A `.git` entry exists. This is only a hint: separate Git directories and submodules also have one, so only the listed
+   * directory itself is classified by Git. */
+  gitCandidate: boolean;
+  /** The link's own path when this entry is a symbolic link to a directory; null otherwise. */
+  linkedFrom: string | null;
+}
+/** Git's classification of the listed directory when it is inside a checkout. A main checkout may be on any branch. */
+export interface CheckoutObservation {
+  root: string;
+  commonDir: string;
+  kind: 'main' | 'linked';
+  branch: string | null;
+  head: string | null;
+  /** The default branch recorded locally (origin/HEAD), or null when not recorded. */
+  defaultBranch: string | null;
+  /** For a linked worktree: the repository's accessible, non-bare main checkout. */
+  mainCheckout: string | null;
+  /** Why no main checkout is offered for a linked worktree. */
+  mainCheckoutNote: string | null;
+}
+export interface DirectoryListing {
+  path: string;
+  parent: string | null;
+  home: string;
+  entries: DirectoryEntry[];
+  /** More entries exist than were read or returned; type a path to go elsewhere. */
+  truncated: boolean;
+  checkout: CheckoutObservation | null;
+  checkoutError: string | null;
+}
+/** What the user saw when choosing a checkout. Add inspects the path again and refuses when any of it changed. */
+export interface ExpectedCheckout { root: string; commonDir: string; branch: string | null }
+export interface ProjectAddInput { path: string; expected?: ExpectedCheckout }
+
+/** Finish branch: close the tmux sessions AltCLI launched for one linked task worktree, then optionally remove it (branch kept) or
+ * discard it (branch deleted) through the existing confirmed operations. Nothing here merges, and nothing runs automatically. */
+export type FinishOutcome = 'close' | 'remove' | 'discard';
+export interface FinishInput { projectId: string; worktreeId: string }
+/** A process seen in a launched pane. `started` guards against PID reuse; `infrastructure` marks known CLI helpers, which are still
+ * terminated and still count as survivors, but do not by themselves mean the pane is busy. */
+export interface FinishProcess { pid: string; command: string; started: string | null; infrastructure: boolean }
+export interface FinishPane {
+  paneId: string; windowId: string; cwd: string; command: string; dead: boolean;
+  /** The registered agent label in this pane, if any, and its current activity. */
+  agent: string | null; activity: 'working' | 'ready' | 'idle' | 'interrupted' | 'unknown' | null;
+  /** The pane's own process (the CLI), then its descendants and other processes on its terminal. */
+  root: FinishProcess | null; processes: FinishProcess[];
+}
+export interface FinishSession {
+  launchId: string; sessionName: string; sessionId: string; windowId: string;
+  server: { pid: string; started: string; socketPath: string };
+  closable: boolean; reason: string | null; clients: number; panes: FinishPane[];
+}
+export interface FinishGit {
+  branch: string; head: string; targetRef: string | null; targetHead: string | null;
+  /** Commits on the task branch not in the target, and the reverse; different tips alone do not mean unmerged work. */
+  ahead: number | null; behind: number | null; dirty: boolean | null; changeCount: number | null;
+  integration: 'integrated' | 'not_proven' | 'unavailable'; integratedBy: 'ancestry' | 'squash' | null; integratedCommit: string | null; note: string | null;
+}
+export interface FinishPreview extends FinishInput {
+  requestId: string;
+  /** Digest of the evidence a session stop consents to: identities, session scope, activity and processes, occupancy. */
+  digest: string;
+  worktree: WorktreeIdentity; branch: string;
+  sessions: FinishSession[];
+  /** Other panes in this worktree. AltCLI never closes them; they still block removal and discard. */
+  others: { paneId: string; location: string; command: string }[];
+  git: FinishGit;
+  run: { id: string; status: string } | null;
+  /** Hard refusals: nothing can be confirmed until they are resolved. */
+  blockers: string[];
+  /** Working or unknown activity, or task processes beyond the CLI: stopping needs an explicit acknowledgement. */
+  active: boolean;
+}
+export interface FinishConfirm { requestId: string; digest: string; outcome: FinishOutcome; stopActive: boolean; confirm: true }
+export interface FinishSessionResult {
+  sessionId: string; sessionName: string; launchId: string;
+  /** attempted: the kill may have run and its result was not recorded; uncertain: absence could not be verified. */
+  status: 'pending' | 'attempted' | 'closed' | 'uncertain' | 'skipped';
+  /** Processes seen immediately before the kill, and those still alive afterwards (same PID and start time). */
+  retained: FinishProcess[]; survivors: FinishProcess[];
+  evidence: 'clear' | 'survivors' | 'unknown' | null;
+}
+export type FinishStatus = 'applying' | 'uncertain' | 'attention' | 'awaiting_git' | 'git_applying' | 'git_uncertain' | 'done' | 'failed';
+export interface TaskFinish {
+  requestId: string; input: FinishConfirm; preview: FinishPreview;
+  status: FinishStatus; step: 'sessions' | 'git';
+  /** Compare-and-set revision: overlapping confirm, continue and reconcile calls never execute a step twice. */
+  revision: number;
+  message: string; sessions: FinishSessionResult[];
+  /** The removal or discard this finish started, inspected by its own request ID and never reissued. */
+  child: { kind: 'removal' | 'discard'; requestId: string } | null;
+  decision?: { note: string; at: string };
+  updatedAt: string;
+}
+export interface FinishContinue { requestId: string; revision: number; removal?: WorktreeRemoveInput; discard?: WorktreeDiscardConfirm }
+export interface FinishReconcile { requestId: string; revision: number; action: 'inspect' | 'decide' | 'abandon'; note?: string }
+/** Statuses that keep this finish as the worktree's owner. */
+export const FINISH_HOLDING: readonly FinishStatus[] = ['applying', 'uncertain', 'attention', 'awaiting_git', 'git_applying', 'git_uncertain'];

@@ -221,10 +221,27 @@ test('profile previews freeze revisions; launch confirmations are idempotent and
   const profile=(await plane.launches.profile({label:'Codex',executable:'codex',args:['','a b',';'],adapterHint:'codex',enabled:true}))!;
   const input={projectId:p.id,items:[{worktreeId:tree.id,profileId:profile.id,count:2}]};const preview=await plane.launches.preview(input);
   const confirmation={requestId:preview.requestId,previewDigest:preview.digest,confirm:true};const batch=await plane.launches.confirm(confirmation);
-  assert.equal(batch.items.length,2);assert.notEqual(batch.items[0]!.sessionName,batch.items[1]!.sessionName);assert.deepEqual(await plane.launches.confirm(confirmation),batch);
+  assert.equal(batch.items.length,2);assert.deepEqual(batch.items.map(i=>i.sessionName),['Codex-main','Codex-main-2'],'short names: profile and branch, numbered when taken');assert.deepEqual(await plane.launches.confirm(confirmation),batch);
   assert.equal((await plane.workspaces()).workspaces.find(w=>w.cwd==='/demo/new')?.agents.length,2);
   const next=await plane.launches.preview(input);await plane.launches.profile({label:'Changed',executable:'codex',args:[],adapterHint:'codex',enabled:true,expectedRevision:profile.revision},profile.id);
   await assert.rejects(plane.launches.confirm({requestId:next.requestId,previewDigest:next.digest,confirm:true}),/changed/);assert.equal(plane.launches.batches().length,1);
+});
+test('short session names stay unique across worktrees: live names are skipped, and a name reserved after the live read refuses the confirm',async()=>{
+  const first=await plane.projects.add({path:'/demo/first'}),second=await plane.projects.add({path:'/demo/second'});const trees=await plane.projects.discover([],[]);
+  const tree=(id:string)=>trees.find(x=>x.id===id)!.worktrees[0]!;
+  const profile=(await plane.launches.profile({label:'Codex',executable:'codex',args:[],adapterHint:'codex',enabled:true}))!;
+  const previewOf=(project:string)=>plane.launches.preview({projectId:project,items:[{worktreeId:tree(project).id,profileId:profile.id,count:1}]});
+  const a=await previewOf(first.id),b=await previewOf(second.id);assert.equal(a.items[0]!.sessionName,'Codex-main');assert.equal(b.items[0]!.sessionName,'Codex-main');
+  // B's live listing is read, then A reserves and starts the same name before B's reservation transaction.
+  const launches=plane.launches as unknown as {sessionNames:()=>Promise<Set<string>>};const real=launches.sessionNames;let raced=false;
+  launches.sessionNames=async()=>{const stale=await real();if(!raced){raced=true;await plane.launches.confirm({requestId:a.requestId,previewDigest:a.digest,confirm:true});}return stale;};
+  try{await assert.rejects(plane.launches.confirm({requestId:b.requestId,previewDigest:b.digest,confirm:true}),/reserved a previewed session name/);}finally{launches.sessionNames=real;}
+  assert.deepEqual(plane.launches.batches().flatMap(x=>x.items).map(i=>i.sessionName),['Codex-main']);
+  // A later preview sees the live name and numbers past it; a name taken after preview refuses instead of being renamed.
+  const c=await previewOf(second.id);assert.equal(c.items[0]!.sessionName,'Codex-main-2');
+  const d=await previewOf(first.id);assert.equal(d.items[0]!.sessionName,'Codex-main-2');
+  await plane.launches.confirm({requestId:c.requestId,previewDigest:c.digest,confirm:true});
+  await assert.rejects(plane.launches.confirm({requestId:d.requestId,previewDigest:d.digest,confirm:true}),/now in use|reserved a previewed/);
 });
 test('a discovered project launches without path re-entry and is remembered only on confirmation',async()=>{
   const p=(await plane.workspaces()).projects![0]!,tree=p.worktrees[0]!;
@@ -269,4 +286,12 @@ test('late observer attachment and old identity-check failure cannot replace or 
   holdWatch=true;for(let n=0;n<150&&!rejectWatch;n++)await settle();assert.ok(rejectWatch,'watcher must have started');
   const released=await plane.terminals.keyboard(c.opened.connectionId,{requestId:randomUUID(),expectedGeneration:owner.generation,action:'release'});
   holdWatch=false;rejectWatch();await settle();assert.equal(c.socket.readyState,1);assert.equal(released.writer,false);
+});
+test('acknowledgments and heartbeats in flight for a replaced generation are ignored; an unknown generation still closes the connection',async()=>{
+  const c=await connect();const owned=await grant(c);assert.notEqual(owned.generation,c.generation);
+  c.socket.frame({type:'processed',generation:c.generation,sequence:1,processedBytes:10});c.socket.frame({type:'heartbeat',generation:c.generation});await settle();
+  assert.equal(c.socket.readyState,1,'a frame for the generation the grant replaced is not a protocol violation');
+  await plane.terminals.input(c.opened.connectionId,{generation:owned.generation,seq:1,encoding:'utf8',data:'x'});
+  c.socket.frame({type:'heartbeat',generation:randomUUID()});await settle();
+  assert.equal(c.socket.readyState,3,'a generation this connection never had still fails closed');
 });

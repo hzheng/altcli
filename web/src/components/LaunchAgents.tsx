@@ -1,10 +1,13 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { LaunchBatch, LaunchInstance, LaunchPreview, LaunchProfile } from '../contracts/launches';
 import type { ProjectWorktree } from '../contracts/projects';
 import { api, HttpError } from '../client/api';
-import { NativeTerminal } from './NativeTerminal';
-export function LaunchAgents({token,projectId,tree,enabled,inputEnabled,terminalEnabled,held,clientInstanceId,onChanged,viewEpoch=0,requested=0}:{token:string;projectId:string;tree:ProjectWorktree;enabled:boolean;inputEnabled:boolean;terminalEnabled:boolean;held:boolean;clientInstanceId:string;onChanged:(notice:string)=>Promise<void>;viewEpoch?:number;requested?:number}) {
+import type { ManualSession } from '../contracts/terminals';
+import { NativeTerminal, type NativeTerminalHandle } from './NativeTerminal';
+import { KeyboardSelector, keyboardOwnerOf } from './KeyboardSelector';
+export function LaunchAgents({token,projectId,tree,enabled,inputEnabled,terminalEnabled,held,clientInstanceId,onChanged,viewEpoch=0,requested=0,manualSessions,refreshState,busy:outerBusy=false,affected=[]}:{token:string;projectId:string;tree:ProjectWorktree;enabled:boolean;inputEnabled:boolean;terminalEnabled:boolean;held:boolean;clientInstanceId:string;onChanged:(notice:string)=>Promise<void>;viewEpoch?:number;requested?:number;manualSessions?:ManualSession[];refreshState?:()=>Promise<void>;busy?:boolean;affected?:string[]}) {
+  const handle=useRef<NativeTerminalHandle|null>(null);
   const [open,setOpen]=useState(false),[profiles,setProfiles]=useState<LaunchProfile[]>([]),[rows,setRows]=useState<{profileId:string;count:number}[]>([]),[preview,setPreview]=useState<LaunchPreview|null>(null),[batches,setBatches]=useState<LaunchBatch[]>([]);
   const [busy,setBusy]=useState(false),[error,setError]=useState(''),[unknown,setUnknown]=useState<string|null>(null),[terminal,setTerminal]=useState<string|null>(null),[inspectId,setInspectId]=useState<string|null>(null),[note,setNote]=useState('');
   const refresh=async()=>{setBatches(await api<LaunchBatch[]>(token,'launches'));};
@@ -29,7 +32,9 @@ export function LaunchAgents({token,projectId,tree,enabled,inputEnabled,terminal
       {terminalEnabled&&item.identity&&<button type="button" onClick={()=>setTerminal(terminal===item.id?null:item.id)}>{terminal===item.id?'Close terminal':'Open terminal'}</button>}
       {!['running','reconciled','failed','applying'].includes(item.status)&&<button type="button" onClick={()=>{setInspectId(item.id);setNote('');}}>Reconcile after host inspection…</button>}</div>
       {inspectId===item.id&&<div><p>Inspect the original operation, all possible sessions and background effects on the host. A missing session does not prove the program never ran. This releases the reservation and retains that uncertainty in history.</p><label>Inspection note<input value={note} maxLength={1000} onChange={e=>setNote(e.target.value)}/></label><button type="button" disabled={!note.trim()||busy} onClick={()=>void act(async()=>{await api(token,`launches/${item.id}/reconcile`,{body:{requestId:crypto.randomUUID(),confirmInspected:true,note}});setInspectId(null);await refresh();await onChanged('Launch reconciled by human inspection. Nothing was replayed.');})}>Record inspected reconciliation</button><button type="button" onClick={()=>setInspectId(null)}>Cancel</button></div>}
-      {terminal===item.id&&<NativeTerminal token={token} target={{launchId:item.id}} clientInstanceId={clientInstanceId} viewEpoch={viewEpoch} label={item.sessionName} held={held} inputEnabled={inputEnabled} refresh={refresh} fallback={<LaunchCapture token={token} id={item.id} />}/>}
+      {terminal===item.id&&<><KeyboardSelector options={[{key:item.id,label:item.sessionName,inView:true}]} handle={key=>key===item.id?handle.current??undefined:undefined} affected={affected} disabled={outerBusy||!inputEnabled} viewEpoch={viewEpoch} refresh={refreshState??refresh}
+        owner={keyboardOwnerOf(manualSessions,clientInstanceId,target=>'launchId' in target&&target.launchId===item.id?{key:item.id,label:item.sessionName}:undefined)} />
+        <NativeTerminal ref={handle} token={token} target={{launchId:item.id}} clientInstanceId={clientInstanceId} viewEpoch={viewEpoch} label={item.sessionName} held={held} refresh={refresh} fallback={<LaunchCapture token={token} id={item.id} />}/></>}
     </div>)}{error&&<p role="alert">{error}</p>}
   </div>;
 }

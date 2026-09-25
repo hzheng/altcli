@@ -14,6 +14,8 @@ import { PlanningProgress } from './PlanningProgress';
 import { PaneActions } from './PaneActions';
 import { LaunchProfiles } from './LaunchProfiles';
 import { NativeTerminal, type NativeTerminalHandle } from './NativeTerminal';
+import { KeyboardSelector, keyboardOwnerOf } from './KeyboardSelector';
+import { StatusIcon } from './Hint';
 import { PlanSetup } from './PlanSetup';
 import { CheckpointControls, InteractionComposer } from './InteractionControls';
 import { RunSettingsBar, useRunSettings, type Phase } from './RunSettings';
@@ -115,6 +117,10 @@ export function Console() {
   const [resetFor, setResetFor] = useState<string | null>(null);
   const [statusReset, setStatusReset] = useState<Omit<ActivityReset, 'confirmReady'> | null>(null);
   const [layout, setLayout] = useState<'parallel' | 'focus'>('parallel');
+  // Phone widths show only the active pane (CSS); the Keyboard selector offers to show a writer that is out of view.
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => { const query = window.matchMedia('(max-width: 760px)'); const update = () => setNarrow(query.matches); update();
+    query.addEventListener('change', update); return () => query.removeEventListener('change', update); }, []);
   // Alternate placements of the one control pane: beside the stage on wide screens, or a drawer on phones. Never a second composer.
   const [controlPlacement, setControlPlacement] = useState<'below' | 'side'>('below');
   const [controlDrawer, setControlDrawer] = useState(false);
@@ -122,7 +128,6 @@ export function Console() {
   const terminals = useRef(new Map<string, NativeTerminalHandle>());
   const [turnLimit, setTurnLimit] = useState(String(DEFAULT_TURN_LIMIT));
   const [legacy, setLegacy] = useState(false);
-  const [phase, setPhase] = useState<Phase>('implementation');
   // One readiness slot for the whole console: the exact displayed state a confirmation was given for, so at most one card is ready.
   const [consent, setConsent] = useState('');
   const [recheckRevision, setRecheckRevision] = useState(0); const [viewEpoch, setViewEpoch] = useState(0);
@@ -204,6 +209,11 @@ export function Console() {
   const [paneChoice, setPaneChoice] = useRemembered<string | null>(`pane:${ws}`, null, memory);
   const [latestOpen, setLatestOpen] = useRemembered(`latest:${ws}`, false, memory);
   const [controllerOpen, setControllerOpen] = useRemembered(`controller:${ws}`, false, memory);
+  // The phase shown for the next run is remembered per workspace, like its drafts, so returning to a workspace shows its own choice.
+  const [phase, setPhase] = useRemembered<Phase>(`phase:${ws}`, 'implementation', memory);
+  // The run/transition whose phase this workspace last followed: each transition is applied once, so a later click is never overridden.
+  const [followedPhase, setFollowedPhase] = useRemembered<string | null>(`phaseFollowed:${ws}`, null, memory);
+  const [settingsTab, setSettingsTab] = useRemembered<'preferences' | 'host'>('settingsTab', 'preferences', memory);
   const showLegacy = legacy && state?.legacyEnabled && pair?.sessions.length === 2;
   const visible = pair ? projectSessions.filter((s) => pair.sessions.includes(s.id)) : projectSessions;
   const inputBlocks = new Map(projectSessions.flatMap(s => {
@@ -219,6 +229,17 @@ export function Console() {
   // A finished run is current status only while its frozen participants are the agents shown here; a run of removed or
   // renamed-away agents is history and stays reachable under Command history.
   const latestRun = owned[0] ?? state?.runs.find((r) => r.repository === project && r.participants.every((p) => projectSessions.some((s) => s.id === p.id)));
+  // The owned run's actual phase: a Plan run gains `implementation` in place when its frozen transition begins (planning data remains).
+  // Only this worktree's owned run counts, never a completed run or another worktree.
+  const phaseRun = owned[0];
+  const runPhase: Phase | null = phaseRun?.implementation ? 'implementation' : phaseRun?.planning ? 'plan' : null;
+  const runPhaseKey = phaseRun && runPhase ? `${phaseRun.id}:${runPhase === 'plan' ? 'plan' : phaseRun.planning?.frozen?.transitionId ?? 'implementation'}` : null;
+  // View state only: this never sends, continues or decides anything. A plan key never rolls back a run already followed into Implementation.
+  useEffect(() => {
+    if (!runPhase || !runPhaseKey || runPhaseKey === followedPhase) return;
+    if (runPhase === 'plan' && followedPhase?.startsWith(`${phaseRun!.id}:`)) return;
+    setFollowedPhase(runPhaseKey); setPhase(runPhase);
+  }, [runPhase, runPhaseKey, followedPhase, phaseRun, setFollowedPhase, setPhase]);
   const newest = state?.runs.find((r) => r.repository === project);
   const runMark = JSON.stringify(newest ? [newest.id, newest.status] : null);
   const statuses = new Map(state ? projectSessions.map((s) => [s.id, statusOf(s, latestRun, state)] as const) : []);
@@ -241,7 +262,7 @@ export function Console() {
   const toggleDrawer = (open: boolean) => { setControlDrawer(open); requestAnimationFrame(() => open ? focusControlPane() : drawerToggle.current?.focus()); };
   /** Retargets the one control pane only; it sends nothing and readiness is revoked by the target change. */
   const retargetControl = (id: string, label: string) => { setControlChoice(id); setConsent(''); setReady(false);
-    setMessage(`AltCLI control now targets ${label}. Nothing was sent.`); focusControlPane(); };
+    setMessage(`Control now targets ${label}. Nothing was sent.`); focusControlPane(); };
   const stale = !!error || clock - updated > 10000;
   const inputRun = owned[0] && (owned[0].implementation || owned[0].planning || owned[0].standalone) ? owned[0] : null;
   // A reading that is not current cannot back a confirmation; readiness must be given again once it is.
@@ -265,6 +286,9 @@ export function Console() {
       return terminal.releaseForSend(liveManual, requestId);
     },
   } : undefined;
+  // The one server-wide keyboard as the server reports it; the selector's checked pane is only ever this browser's confirmed writer.
+  const keyboardOwner = keyboardOwnerOf(state?.manualSessions, clientInstanceId, () => keyboardAgent && { key: keyboardAgent.id, label: keyboardAgent.label });
+  const affectedRuns = (state?.runs ?? []).filter((r) => ['running','waiting','paused'].includes(r.status)).map((r) => `${r.id} · ${r.status}`);
   const dispatchReason = identityBlockedReason
     || (groupInputBlock ? `${groupInputBlock.label}: ${inputBlocks.get(groupInputBlock.id)}` : '') || (stale ? 'The console is not current. Wait for it to reconnect.' : '')
     || (setupHeld ? 'A worktree operation is applying or uncertain. Reconcile it in Projects before starting work.' : '')
@@ -409,7 +433,12 @@ export function Console() {
   const feedback = message && <p className="feedback" role="status">{message}</p>;
   // Separates the terminal stage from a group-wide command section below it; decorative, the section names itself.
   const commandDivider = <div className="command-divider" aria-hidden="true"><span>⌨️ Command</span></div>;
-  const connection = <div className="connection">{stale ? 'Not current' : 'Connected'}<small>{updated ? new Date(updated).toLocaleTimeString() : 'Connecting'}</small></div>;
+  // Connection to this host only; it says nothing about agent activity or readiness. The last update moves into the help text.
+  const lastUpdate = updated ? new Date(updated).toLocaleTimeString() : 'never';
+  const connection = <div className="connection">{!updated && !error
+    ? <StatusIcon icon="⏳" label="Connecting" align="end" help="Connecting to the host. Actions stay disabled until the first update arrives." />
+    : stale ? <StatusIcon icon="🔴" label="Not current" align="end" help={`Not current: ${error || 'no update for more than 10 seconds'}. Last update ${lastUpdate}. Actions that depend on current state stay disabled until the console reconnects.`} />
+    : <StatusIcon icon="🟢" label="Connected" align="end" help={`Connected to the host. Last update ${lastUpdate}; the console refreshes every 2 seconds.`} />}</div>;
   const actionable = !!pair && members.length <= 2;
   const settings = phase === 'plan' ? planSettings : implementationSettings;
   const settingsNotice = !pair ? 'Select at least one agent in Projects to start.' : members.length > 2
@@ -445,7 +474,7 @@ export function Console() {
       <Workspaces token={token} disabled={busy} discovery={discovery} discoveryError={discoveryError} onRecheck={() => recheck()}
         inputEnabled={state.inputEnabled} runs={state.runs} selectedRoot={project ?? null} onSelectWorktree={chooseWorktree}
         deliveryRepositories={state.reservations.map((reservation) => reservation.repository)}
-        launchEnabled={config?.launchEnabled === true} terminalEnabled={config?.terminalEnabled === true} clientInstanceId={clientInstanceId} manualHeld={manualHeld} sessions={sessions} pairs={groups} lockedRepositories={[...setupHolds, ...state.runs.filter((run) => ['running','waiting','paused'].includes(run.status)).map((run) => run.repository)]}
+        launchEnabled={config?.launchEnabled === true} terminalEnabled={config?.terminalEnabled === true} clientInstanceId={clientInstanceId} manualHeld={manualHeld} manualSessions={state.manualSessions} refreshState={refresh} sessions={sessions} pairs={groups} lockedRepositories={[...setupHolds, ...state.runs.filter((run) => ['running','waiting','paused'].includes(run.status)).map((run) => run.repository)]}
         selectedKey={workspace?.key ?? null} onSelectWorkspace={chooseWorkspace} viewEpoch={viewEpoch}
         onChanged={async (notice) => { setMessage(notice); await Promise.all([refresh(), recheck()]); }} />
     </div>
@@ -517,7 +546,7 @@ export function Console() {
         {/* Watch zone: a recessed stage of terminal captures. Commands sit under each capture or below the stage, never over it. */}
         <div className={`workbench${controlPlacement === 'side' ? ' side' : ''}`}>
         <div className="terminal-stage">
-        <div className="target-row"><h2 className="stage-title"><span aria-hidden="true">🖥️</span> {config?.terminalEnabled ? <>Native terminals <span className="stage-cue">native CLI · type here after taking keyboard · controls below</span></> : <>Live terminals <span className="stage-cue">captured output · controls below</span></>}</h2>
+        <div className="target-row"><h2 className="stage-title"><span aria-hidden="true">🖥️</span> {config?.terminalEnabled ? <>Native terminals <span className="stage-cue">native CLI · choose the keyboard pane below · controls below</span></> : <>Live terminals <span className="stage-cue">captured output · controls below</span></>}</h2>
           {/* Viewing and choosing the controller recipient are independent. */}
           <div className="stage-target"><span className="target-caption">View</span><nav className="agent-tabs" aria-label="Viewed terminal">{visible.map((s) => <button key={s.id} className={s.id === displayed ? 'selected' : ''} aria-pressed={s.id === displayed} onClick={() => select(s.id)}>
             <Icon badge={statuses.get(s.id)?.badge ?? 'unknown'} />{s.label}</button>)}</nav></div>
@@ -531,6 +560,9 @@ export function Console() {
             {/* Phones only (CSS): the same control pane as a bottom drawer. */}
             <button type="button" ref={drawerToggle} className="quiet drawer-toggle" aria-expanded={controlDrawer} aria-controls="altcli-control"
               onClick={() => toggleDrawer(!controlDrawer)}>{controlDrawer ? 'Close control drawer' : 'Open control drawer'}</button></div></div>
+        {config?.terminalEnabled && visible.some((s) => s.registrationId) && <KeyboardSelector owner={keyboardOwner} affected={affectedRuns} disabled={busy || !state.inputEnabled} viewEpoch={viewEpoch} refresh={refresh}
+          options={visible.filter((s) => s.registrationId).map((s) => ({ key: s.id, label: s.label, inView: s.id === displayed || (layout === 'parallel' && !narrow) }))}
+          handle={(key) => terminals.current.get(key)} onShow={select} />}
         <section className={`panes ${layout}`} aria-label="Agent output">{visible.map((s) => {
           const snapshot = state.snapshots.find((p) => p.agentId === s.id);
           const execution = state.executions.find((e) => e.agentId === s.id);
@@ -544,7 +576,7 @@ export function Console() {
           return <article key={s.id} aria-label={`${s.label} pane`} hidden={layout === 'focus' && s.id !== displayed} className={`pane ${s.id === displayed ? 'active' : ''}`}>
             <div className="pane-heading"><h2><Icon badge={status.badge} />{s.label}</h2><span className="mono muted pane-meta">{s.agentType}{location ? ` · ${location}` : ''}</span>
               <span className="badge">{execution ? execution.status.toUpperCase() : 'NO ACTIVE CONTROLLER TURN'}</span>
-              {visible.length > 1 && <button type="button" className="quiet use-control" disabled={s.id === current?.id} title={s.id === current?.id ? `${s.label} is already the AltCLI control target.` : undefined}
+              {visible.length > 1 && <button type="button" className="quiet use-control" disabled={s.id === current?.id} title={s.id === current?.id ? `${s.label} is already the Control target.` : undefined}
                 onClick={() => retargetControl(s.id, s.label)}>Use {s.label} in control pane</button>}</div>
             <div className="pane-status"><span className="state">{status.badge}</span><span className="pane-detail" title={status.detail}>{status.detail}</span>
               {status.when && <span className="mono muted">{timeOf(status.when)}</span>}
@@ -555,15 +587,15 @@ export function Console() {
             {inputBlocks.has(s.id) && <p className="notice" role="status">{inputBlocks.get(s.id)}</p>}
             {visibleOutcome?.outcome && <div className={`outcome ${visibleOutcome.outcome}`}>{visibleOutcome.outcome}: {visibleOutcome.reason}</div>}
             {config?.terminalEnabled && s.registrationId ? <NativeTerminal ref={handle => {if(handle)terminals.current.set(s.id,handle);else terminals.current.delete(s.id);}} token={token} target={{agentId:s.id,registrationId:s.registrationId}} clientInstanceId={clientInstanceId} viewEpoch={viewEpoch} label={s.label} capturedAt={snapshot?.capturedAt}
-              holder={keyboardHolder} cliChanged={state.instances.find((i) => i.agentId === s.id)?.status === 'replaced'} affected={state.runs.filter(r=>['running','waiting','paused'].includes(r.status)).map(r=>`${r.id} · ${r.status}`)} held={manualHeld} inputEnabled={state.inputEnabled} refresh={refresh} fallback={<Output label={`${s.label} output`} memoryKey={`scroll:${ws}:${s.id}`} text={(snapshot?.status === 'unavailable' ? snapshot.error : snapshot?.text) || 'Waiting for a capture'} />} /> : <Output label={`${s.label} output`} memoryKey={`scroll:${ws}:${s.id}`} text={(snapshot?.status === 'unavailable' ? snapshot.error : snapshot?.text) || 'Waiting for a capture'} />}
+              holder={keyboardHolder} cliChanged={state.instances.find((i) => i.agentId === s.id)?.status === 'replaced'} held={manualHeld} refresh={refresh} fallback={<Output label={`${s.label} output`} memoryKey={`scroll:${ws}:${s.id}`} text={(snapshot?.status === 'unavailable' ? snapshot.error : snapshot?.text) || 'Waiting for a capture'} />} /> : <Output label={`${s.label} output`} memoryKey={`scroll:${ws}:${s.id}`} text={(snapshot?.status === 'unavailable' ? snapshot.error : snapshot?.text) || 'Waiting for a capture'} />}
             {/* A tmux-style status line: the boundary between the capture above and any command section below. */}
             <div className="pane-footer"><span className="mono">{s.identity.paneId}</span><span>{(!config?.terminalEnabled || !s.registrationId) && snapshot ? `Captured ${new Date(snapshot.capturedAt).toLocaleTimeString()}` : ''}</span></div>
           </article>;
         })}</section>
         </div>
-        <section ref={controlPane} id="altcli-control" tabIndex={-1} className={`control-pane${controlDrawer ? ' drawer' : ''}`} aria-label="AltCLI control"
+        <section ref={controlPane} id="altcli-control" tabIndex={-1} className={`control-pane${controlDrawer ? ' drawer' : ''}`} aria-label="Control"
           onKeyDown={(e) => { if (controlDrawer && e.key === 'Escape') { e.stopPropagation(); toggleDrawer(false); } }}>
-          <div className="control-heading"><h2>AltCLI control</h2>{controlDrawer && <button type="button" className="quiet drawer-close" onClick={() => toggleDrawer(false)}>Close drawer</button>}</div><nav className="agent-tabs" aria-label="Command target">{visible.map(s => <button type="button" key={s.id} aria-pressed={s.id === current?.id} onClick={() => {setControlChoice(s.id);setConsent('');setReady(false);}}>{s.label}</button>)}</nav>
+          <div className="control-heading"><h2>Control</h2>{controlDrawer && <button type="button" className="quiet drawer-close" onClick={() => toggleDrawer(false)}>Close drawer</button>}</div><nav className="agent-tabs" aria-label="Command target">{visible.map(s => <button type="button" key={s.id} aria-pressed={s.id === current?.id} onClick={() => {setControlChoice(s.id);setConsent('');setReady(false);}}>{s.label}</button>)}</nav>
           {current && inputRun && !showLegacy && <InteractionComposer key={current.id} token={token} state={state} run={inputRun} agent={current} draftKey={`draft:${scope}:${current.id}`} disabled={busy || stale || setupHeld || manualHeld || !state.inputEnabled || !!identityBlockedReason || !!cardReason(current)} viewEpoch={viewEpoch} refresh={refresh} />}
           {current && actionable && !inputRun && phase === 'implementation' && !showLegacy && <PaneActions key={current.id} {...common} group={pair} agent={current} settings={implementationSettings} blockedReason={implementationReason || cardReason(current)} keyboardHandoff={keyboardHandoff} viewEpoch={viewEpoch} draftKey={`draft:${scope}:${current.id}`} />}
         {phase === 'plan' && !inputRun && !showLegacy && <>{commandDivider}<PlanSetup {...common} group={pair && members.length ? pair : undefined} settings={planSettings} displayed={current?.id}
@@ -625,7 +657,20 @@ export function Console() {
       </>}
     </div>
     <div className="section-panel" hidden={tab !== 'settings'}>
-      <section className="panel settings-panel" aria-label="Host configuration">
+      {/* Both sections stay mounted, so switching keeps unsaved profile edits. */}
+      <nav className="section-tabs settings-tabs" aria-label="Settings sections">
+        <button type="button" className={settingsTab === 'preferences' ? 'selected' : ''} aria-pressed={settingsTab === 'preferences'} onClick={() => setSettingsTab('preferences')}>Console preferences</button>
+        <button type="button" className={settingsTab === 'host' ? 'selected' : ''} aria-pressed={settingsTab === 'host'} onClick={() => setSettingsTab('host')}>Host configuration</button></nav>
+      {state && <section className="panel" aria-label="Console preferences" hidden={settingsTab !== 'preferences'}>
+        <div className="section-heading"><h2>Console preferences</h2><span className="badge">THIS PAGE</span></div>
+        <p className="muted">Preferences for this browser page. They never start work on their own.</p>
+        <LaunchProfiles token={token} enabled={config?.launchEnabled === true && state?.inputEnabled === true} />
+        <label className="readiness"><input type="checkbox" aria-label="Stay unlocked on this device" checked={stayUnlocked} onChange={(e) => rememberToken(e.target.checked)} />
+          Stay unlocked on this device: keep the host access token in this browser so reopening the page does not ask for it. Anyone who can use this browser profile can then open the console; the host still checks the token on every request. <strong>Lock</strong> always forgets the token.</label>
+        {state.legacyEnabled ? <label className="readiness"><input type="checkbox" aria-label="Staging fallback" checked={!!showLegacy} disabled={pair?.sessions.length !== 2} onChange={(e) => setLegacy(e.target.checked)} />Show the deprecated staging fallback in the Console for the current two-member group (supervised relay; no branch handoffs or fixed roles). It applies to <span className="mono">{project ? nameOf(project) : 'the selected checkout'}</span> and is forgotten on Lock.</label>
+          : <p className="fine">The deprecated staging fallback is disabled by the host (<span className="mono">ALTCLI_ENABLE_LEGACY_RELAY</span>).</p>}
+      </section>}
+      <section className="panel settings-panel" aria-label="Host configuration" hidden={settingsTab !== 'host'}>
         <div className="section-heading"><h2>Host configuration</h2><span className="badge">READ AT START</span></div>
         <p className="muted">These values come from environment variables when the host starts (<span className="mono">web/.env.local</span> written by <span className="mono">node scripts/setup.mjs</span>, or the shell). Change one there and restart the host; this page shows what is in effect now. Each row names its variable.</p>
         {configError && <p className="notice error" role="alert">{configError}</p>}
@@ -653,21 +698,12 @@ export function Console() {
         </tbody></table></div>}
         {!config && !configError && <p className="muted">Reading the host configuration…</p>}
       </section>
-      {state && <section className="panel" aria-label="Console preferences">
-        <div className="section-heading"><h2>Console preferences</h2><span className="badge">THIS PAGE</span></div>
-        <p className="muted">Preferences for this browser page. They never start work on their own.</p>
-        <LaunchProfiles token={token} enabled={config?.launchEnabled === true && state?.inputEnabled === true} />
-        <label className="readiness"><input type="checkbox" aria-label="Stay unlocked on this device" checked={stayUnlocked} onChange={(e) => rememberToken(e.target.checked)} />
-          Stay unlocked on this device: keep the host access token in this browser so reopening the page does not ask for it. Anyone who can use this browser profile can then open the console; the host still checks the token on every request. <strong>Lock</strong> always forgets the token.</label>
-        {state.legacyEnabled ? <label className="readiness"><input type="checkbox" aria-label="Staging fallback" checked={!!showLegacy} disabled={pair?.sessions.length !== 2} onChange={(e) => setLegacy(e.target.checked)} />Show the deprecated staging fallback in the Console for the current two-member group (supervised relay; no branch handoffs or fixed roles). It applies to <span className="mono">{project ? nameOf(project) : 'the selected checkout'}</span> and is forgotten on Lock.</label>
-          : <p className="fine">The deprecated staging fallback is disabled by the host (<span className="mono">ALTCLI_ENABLE_LEGACY_RELAY</span>).</p>}
-      </section>}
     </div>
     <div className="section-panel" hidden={tab !== 'about'}>
       <section className="panel about" aria-label="How this works">
         <div className="section-heading"><h2>How this works</h2></div>
         <p>AltCLI is a host-resident console for coding agents running in tmux panes. You can start CLIs yourself or explicitly preview and confirm profile launches when the host enables that feature. The console coordinates their turns.</p>
-        <p>The AltCLI control pane acts on its selected recipient, independently of the terminal being viewed. Send delivers an instruction; After send can add one handoff commit, or a commit and one review by the named peer. Current changes snapshots work as it stands, and Committed review asks this agent to review a committed range. Every action names its recipients and needs a fresh readiness confirmation.</p>
+        <p>The Control pane acts on its selected recipient, independently of the terminal being viewed. Send delivers an instruction; After send can add one handoff commit, or a commit and one review by the named peer. Current changes snapshots work as it stands, and Committed review asks this agent to review a committed range. Every action names its recipients and needs a fresh readiness confirmation.</p>
         <p>The server owns every run, validates and deduplicates correlated completions, and pauses on unknown background work. No effect in this page sends commands. A completed chain is not final task acceptance.</p>
         <p>Viewing another worktree never changes a running relay. Pause a run before manual terminal takeover. Locking this view or disconnecting your phone does not interrupt workers.</p>
         <p className="fine">Plan produces documents and an approval checkpoint; Implementation runs committed handoffs on a task branch. Integration branches are starting points only. The detailed design lives in the repository’s README, docs/WORKFLOWS.md and the ADRs.</p>

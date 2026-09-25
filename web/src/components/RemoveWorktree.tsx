@@ -4,6 +4,8 @@ import type { Project, ProjectWorktree, WorktreeDiscard, WorktreeDiscardPreview,
 import { api, HttpError } from '../client/api';
 import { MAX_MESSAGE_JSON_BYTES, messageJsonBytes } from '../core/squash-message';
 import { SquashAdvice } from './SquashAdvice';
+import { FinishBranch } from './FinishBranch';
+import { FINISH_HOLDING } from '../contracts/projects';
 
 interface ActionProps { project: Project; tree: ProjectWorktree; token: string; disabled: boolean; disabledReason?: string; onChanged: (notice: string) => Promise<void>;
   /** Increases whenever the view changes; hiding a confirmation revokes it. */
@@ -13,21 +15,24 @@ interface ActionProps { project: Project; tree: ProjectWorktree; token: string; 
 interface DeletionProps extends ActionProps { hint?: string }
 const nameFor = (tree: ProjectWorktree) => tree.branch ?? tree.path.split('/').filter(Boolean).pop() ?? tree.path;
 /** Any applying or uncertain operation on the project holds every lifecycle action until it is inspected. */
-const isHeld = (project: Project) => [...project.creations, ...(project.removals ?? []), ...(project.integrations ?? []), ...(project.discards ?? [])].some((op) => ['applying', 'uncertain'].includes(op.status));
+const isHeld = (project: Project) => [...project.creations, ...(project.removals ?? []), ...(project.integrations ?? []), ...(project.discards ?? [])].some((op) => ['applying', 'uncertain'].includes(op.status))
+  || (project.finishes ?? []).some((op) => FINISH_HOLDING.includes(op.status));
 const short = (sha: string) => sha.slice(0, 12);
 const refName = (ref: string) => ref.replace('refs/heads/', '');
 
-/** The three confirmed end-of-task operations on a linked worktree, each with its own server preview and confirmation. */
+/** The confirmed end-of-task operations on a linked worktree, each with its own server preview and confirmation. Finish branch
+ * closes the sessions AltCLI launched there, then hands over to removal or discard. */
 export function WorktreeActions(props: ActionProps & { deletionReason?: string; deletionHint?: string }) {
   return <div className="worktree-actions">
     <IntegrateWorktree {...props} />
+    <FinishBranch {...props} disabled={!!props.deletionReason} disabledReason={props.deletionReason} />
     <RemoveWorktree {...props} disabled={!!props.deletionReason} disabledReason={props.deletionReason} hint={props.deletionHint} />
     <DiscardWorktree {...props} disabled={!!props.deletionReason} disabledReason={props.deletionReason} hint={props.deletionHint} />
   </div>;
 }
 const holdReason = (disabled: boolean, disabledReason: string | undefined, held: boolean, unknown: boolean, busy: boolean, what: string) =>
   disabled ? disabledReason || `${what} is unavailable. Recheck the worktree.`
-    : held ? 'A worktree operation is applying or uncertain. Inspect its result below first.'
+    : held ? 'A worktree operation is applying, uncertain or waiting (Finish branch). Inspect or complete it first.'
     : unknown ? `The last ${what.toLowerCase()} response is unknown. Inspect its result before continuing.`
     : busy ? 'Checking or applying this operation. Wait for it to finish.' : '';
 
