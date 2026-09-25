@@ -86,6 +86,29 @@ Disconnect, Lock, expiry and restart always retain the barrier. Transfer/recover
 creates a new generation and preserves earlier evidence. No raw terminal bytes
 are stored: only ownership, identities, affected commands, timestamps and counts.
 
+Implementation actions in the control pane can combine a checked settled release
+with a new Send, commit or review. This is available only for this browser's
+connected agent terminal, one live manual session, and no affected run checkpoints.
+The readiness checkbox confirms empty prompts and no background writers across
+all host panes and names both the released keyboard and the control recipient.
+The click stops local input and refuses pending input or paste. Its `releaseSettled`
+request includes `expectedRevision` as well as `expectedGeneration`; input after
+confirmation rejects the release. `expectedRevision` is optional for standalone
+settled release and invalid for acquire or plain release. Strict reconciliation
+must succeed before the new request is submitted through ordinary dispatch gates.
+For a combined action, `handoffRequestId` binds settlement to the frozen command.
+The returned manual session revision travels with that command as `keyboardSettlement`.
+The server checks it at admission, before branch setup and immediately before
+delivery. New native lifecycle observations, keyboard changes or a backend restart
+invalidate it. Only the initial command uses this evidence; correlated successors
+use their normal lifecycle gates. A duplicate command still returns its receipt.
+There is no retry on an uncertain release; changed draft, target, activity or view cancels
+the pending send and retains the draft. Other browsers, disconnected/unresolved
+records and held runs retain their separate recovery actions.
+Copy-mode and synchronized-input changes revoke Plan and Implementation readiness
+on the state poll, even when workspace discovery has not changed. Clearing the mode
+requires a fresh readiness confirmation.
+
 Reconciliation never resumes a run. Validated original checkpoints need their
 existing explicit review action; previously paused/faulted runs need takeover.
 The settled check requires unchanged pane identities, known idle/ready activity

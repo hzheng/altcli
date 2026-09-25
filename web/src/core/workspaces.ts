@@ -16,7 +16,8 @@ export function classifyAgent(pane: PaneState & { location: string }, sessions: 
   else if (pane.synchronized) reason = "The pane has synchronized input enabled.";
   const name = kind === "codex" || kind === "claude" ? KIND_LABEL[kind] : pane.command || "?";
   const tmuxName = kind === "codex" || kind === "claude" ? pane.location.split(":")[0] : undefined;
-  return { identity: pane.identity, location: pane.location, command: pane.command, kind, eligible: reason === null, reason,
+  return { identity: pane.identity, location: pane.location, command: pane.command, kind, eligible: reason === null,
+    observable: !pane.dead && (kind === 'codex' || kind === 'claude'), reason,
     label: registered?.label ?? (tmuxName || `${name} ${pane.identity.paneId}`), registeredAs: registered?.id ?? null };
 }
 const indexKey = (w: WorktreeIdentity) => `${w.root}\0${w.gitDir}\0${w.indexPath}`;

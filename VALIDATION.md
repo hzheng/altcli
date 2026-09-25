@@ -1964,3 +1964,103 @@ Other paused runs retain their existing recovery guidance.
 Browser e2e and installed-CLI acceptance were not rerun for this server-only fix.
 The live backend runs from the main checkout; it was not restarted from this
 feature worktree.
+
+## 2026-09-25 — copy-mode terminal visibility
+
+Live, verified coding CLIs remain in their workspace group while tmux copy mode
+or synchronized input blocks automation. Their native terminals remain mounted,
+the console shows the input blocker, and mode changes revoke readiness consent
+without discarding drafts or transferring keyboard authority. Unknown processes,
+dead panes and changed identities retain their existing checks.
+
+- Two new workflow regressions reproduced group/session loss before the fix and
+  passed afterwards, covering both registered and unregistered discovery identities.
+  Two implementation regressions keep the selected peer visible while refusing
+  dispatch before any run is created. These use simulated terminal metadata.
+- `./scripts/check.sh` passed with Node 24.12.0: 32 hook/setup, 43 smoke, 330
+  workflow and 69 unit cases, TypeScript and the production build. The first
+  targeted attempt used the shell's newer Node and hit the existing SQLite native
+  module ABI mismatch; using the installed project Node version resolved it
+  without reinstalling dependencies.
+- The four targeted desktop/iPhone Chromium browser cases passed. They simulate
+  only the pane mode flag and exercise mock-server terminal/keyboard authority,
+  retained connections, blocked automated input and retained drafts.
+- The full `./scripts/check.sh --e2e` gate passed, including 215 desktop/iPhone
+  Chromium browser cases with seven intentional viewport-specific skips.
+- `npm --prefix web run test:native` passed all 15 private-tmux cases. The extended
+  attachment case enters real copy mode, keeps its writer connected and exits
+  with `q`, verifying that the worker receives no extra bytes.
+- System Ruby/Psych parsed the OpenAPI YAML and resolved its 118 unique schema
+  references; this is syntax/reference verification, not a full OpenAPI validator.
+
+The live backend runs from the main checkout and was not restarted from this
+feature worktree. Installed-provider, remote proxy and physical iPhone acceptance
+were not exercised.
+
+## 2026-09-25 — checked keyboard handoff from Implementation actions
+
+An explicit control action can release this browser's connected keyboard, verify
+strict host-wide settlement, then submit its frozen instruction. Confirmation
+binds the current keyboard revision; pending input, later input, settlement
+failure, uncertain release, or a changed draft/target/view sends nothing and keeps
+the draft. Other browsers and affected run checkpoints retain separate recovery.
+
+- Two broker regressions failed before implementation and passed afterwards:
+  input after confirmation retains the grant, and an exact settled release has
+  an idempotent receipt and excludes old-generation input. These use mock
+  attachments and disposable SQLite stores.
+- All 22 focused desktop/iPhone Chromium cases passed, including 20 new handoff
+  cases. They exercise the mock server's keyboard authority, stale input,
+  pending input, uncertain responses and cancellation (including changing a
+  draft back to its original value). Implementation dispatch is intercepted;
+  they do not claim installed-CLI or real Git handoff acceptance.
+- `./scripts/check.sh` passed with Node 24.12.0: 32 hook/setup, 43 smoke, 332
+  workflow and 69 unit cases, TypeScript and the production build. The final
+  browser-response guard also passed a fresh production build and TypeScript.
+- `./scripts/check.sh --e2e` passed, including the full desktop/iPhone Chromium
+  suite: 237 passed and seven intentional viewport-specific skips (7.7 minutes).
+- `npm --prefix web run test:native` passed all 15 private-tmux cases on a
+  separate rerun. The first run alongside other checks passed 14 and failed in
+  the existing exited-pane fixture at tmux `respawn-pane` with `fork failed:
+  Device not configured`, before the application assertions. No test was weakened.
+- Ruby/Psych parsed the OpenAPI YAML and resolved its 118 unique schema
+  references; this is syntax/reference verification, not a full OpenAPI validator.
+
+The live backend still runs from the main checkout; it was not restarted or
+modified. Applying this feature requires integration and a settled backend
+restart. Installed-provider, remote proxy and physical iPhone acceptance were
+not exercised.
+
+## 2026-09-25 — settlement freshness and pane-mode readiness review fixes
+
+Checked keyboard release now binds its strict settlement to one command request.
+Admission, branch setup and delivery reject evidence invalidated by native
+activity, keyboard changes or a backend restart. Returning a duplicate receipt
+and advancing a correlated successor preserve their existing semantics. The
+browser cancels a pending handoff when newly observed activity changes, and
+state-poll copy-mode/synchronized-input changes revoke both Plan and
+Implementation readiness even when discovery is unchanged.
+
+- Four server regressions first failed with missing rejections and passed after
+  the fix. Nine added regressions cover admission races, request binding,
+  duplicate receipts, keyboard changes, restart, delivery, branch setup and
+  automatic successors. These use disposable SQLite/Git and simulated lifecycle
+  events and terminal delivery.
+- All 12 focused desktop/iPhone Chromium cases passed: the delayed-release
+  activity race, both pane modes in both phases, and successful keyboard handoff
+  with settlement evidence. State-mode/activity changes and Implementation
+  dispatch are intercepted; keyboard release uses the mock backend. An initial
+  assertion expected capitalized activity text and was corrected to check the
+  displayed event detail.
+- `./scripts/check.sh` passed on Node 24.12.0: 32 hook/setup, 43 smoke, 341
+  workflow and 69 unit tests, TypeScript and production build.
+- `./scripts/check.sh --e2e` passed its full checks and desktop/iPhone Chromium
+  suite: 247 passed, seven intentional viewport-specific skips (8.4 minutes).
+- `npm --prefix web run test:native` passed all 15 private-tmux cases.
+- Ruby/Psych parsed all 122 OpenAPI schemas and resolved internal references;
+  this is syntax/reference verification, not a full OpenAPI validator.
+- Changed text was screened for credentials; only dummy test tokens and record
+  identifiers were retained. No credentials were found or withheld.
+
+Fixes remain unstaged. The main-checkout backend was not modified or restarted;
+installed-provider and physical-device acceptance remain untested.

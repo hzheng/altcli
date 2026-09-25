@@ -1,6 +1,7 @@
 import type { GroupInput, GroupSelection, ImplementationStart, PolicyChange, ReviewPreviewInput, StandaloneStart } from '../contracts/implementation.ts';
 import { AppError } from './errors.ts';
 import { agentId, object, promptText, requestId, singleLine } from './validation.ts';
+import { parseKeyboardSettlement } from './terminal-validation.ts';
 
 const invalid = (message: string): never => { throw new AppError('INVALID_IMPLEMENTATION', message); };
 export function sha(value: unknown): string {
@@ -34,7 +35,7 @@ export function parseGroupSelection(value: unknown): GroupSelection {
 }
 export function parseImplementation(value: unknown): ImplementationStart {
   const b = object(value);
-  if (Object.keys(b).some((k) => !['requestId','groupId','groupRevision','registrations','agentId','kind','text','handoff','policy','workerId','autoContinue','turnLimit','pauseOnObjection','logPath','branch','reviewBase','reviewNote','confirmReady'].includes(k))) return invalid('Unknown implementation field.');
+  if (Object.keys(b).some((k) => !['requestId','groupId','groupRevision','registrations','agentId','kind','text','handoff','policy','workerId','autoContinue','turnLimit','pauseOnObjection','logPath','branch','reviewBase','reviewNote','confirmReady','keyboardSettlement'].includes(k))) return invalid('Unknown implementation field.');
   if (!Number.isInteger(b.groupRevision) || Number(b.groupRevision) < 1) return invalid('Confirm the current group revision.');
   const registrations = object(b.registrations);
   if (Object.keys(registrations).length < 1 || Object.keys(registrations).length > 2) return invalid('Confirm the exact selected registrations.');
@@ -55,6 +56,7 @@ export function parseImplementation(value: unknown): ImplementationStart {
   const reviewNote = b.reviewNote === undefined || b.reviewNote === '' ? undefined : promptText(b.reviewNote);
   if (reviewNote && (!b.handoff || b.kind === 'review')) return invalid('A relay note needs a relay to a peer; review context goes in text.');
   return { requestId: requestId(b.requestId), groupId: agentId(b.groupId), groupRevision: Number(b.groupRevision), registrations: instances, agentId: agentId(b.agentId), kind: b.kind as ImplementationStart['kind'],
+    ...(b.keyboardSettlement === undefined ? {} : { keyboardSettlement: parseKeyboardSettlement(b.keyboardSettlement) }),
     ...(text ? { text } : {}), handoff: b.handoff, policy: b.policy as ImplementationStart['policy'], ...(b.workerId !== undefined ? { workerId: agentId(b.workerId) } : {}),
     autoContinue: b.autoContinue, turnLimit: Number(b.turnLimit), ...(b.pauseOnObjection !== undefined ? { pauseOnObjection: b.pauseOnObjection } : {}), ...(b.logPath !== undefined ? { logPath: logPath(b.logPath) } : {}),
     branch: { branch: branch.branch as string | null, head: sha(branch.head), ...(branch.newBranch !== undefined ? { newBranch: branch.newBranch as string } : {}), ...(branch.taskBase !== undefined ? { taskBase: sha(branch.taskBase) } : {}) },
@@ -62,12 +64,13 @@ export function parseImplementation(value: unknown): ImplementationStart {
 }
 export function parseStandalone(value: unknown): StandaloneStart {
   const b = object(value);
-  if (Object.keys(b).some((k) => !['requestId','groupId','groupRevision','registrations','agentId','text','policy','workerId','confirmReady'].includes(k))) return invalid('Unknown standalone instruction field.');
+  if (Object.keys(b).some((k) => !['requestId','groupId','groupRevision','registrations','agentId','text','policy','workerId','confirmReady','keyboardSettlement'].includes(k))) return invalid('Unknown standalone instruction field.');
   if (!Number.isSafeInteger(b.groupRevision) || Number(b.groupRevision) < 1) return invalid('Confirm the current group revision.');
   const registrations = Object.fromEntries(Object.entries(object(b.registrations)).map(([id, generation]) => [agentId(id), requestId(generation)]));
   if (Object.keys(registrations).length < 1 || Object.keys(registrations).length > 2) return invalid('Confirm the exact selected registrations.');
   if (!['solo','peer','worker_reviewer'].includes(String(b.policy)) || b.confirmReady !== true) return invalid('Confirm the policy and readiness of every agent sharing this checkout.');
   return { requestId: requestId(b.requestId), groupId: agentId(b.groupId), groupRevision: Number(b.groupRevision), registrations,
+    ...(b.keyboardSettlement === undefined ? {} : { keyboardSettlement: parseKeyboardSettlement(b.keyboardSettlement) }),
     agentId: agentId(b.agentId), text: promptText(b.text), policy: b.policy as StandaloneStart['policy'],
     ...(b.workerId !== undefined ? { workerId: agentId(b.workerId) } : {}), confirmReady: true };
 }

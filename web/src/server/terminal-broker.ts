@@ -25,7 +25,7 @@ export interface TerminalServices {
   attach?: typeof attachTmux; // Injectable native boundary for fault/flow-control fixtures.
   resolve(target: TerminalTarget): Promise<AttachTarget>;
   begin(input: TerminalOpen, connectionId: string, generation: string, prior?: ManualSession): Promise<ManualSession>;
-  reconcile(input: ManualReconcile): Promise<ManualSession>;
+  reconcile(input: ManualReconcile, handoffRequestId?: string): Promise<ManualSession>;
 }
 /** Ephemeral PTYs/credit/input queues; only authority metadata is durable. */
 export class TerminalBroker implements TerminalGateway {
@@ -223,11 +223,16 @@ export class TerminalBroker implements TerminalGateway {
         } catch (error) { this.authority.release(record.id, 'Keyboard setup did not settle; inspect before automating.'); throw error; }
       });
     }
+    if (input.expectedRevision !== undefined) {
+      const manual = c.manualId ? this.authority.get(c.manualId) : null;
+      if (!c.writer || !manual?.live || manual.connectionId !== c.id || manual.generation !== c.generation || manual.revision !== input.expectedRevision)
+        throw new AppError('MANUAL_CHANGED', 'Manual input changed. Inspect the terminal and confirm readiness again.', 409);
+    }
     await this.endWriter(c, 'Keyboard released; manual input requires reconciliation.', true);
     let manual = c.manualId ? this.authority.get(c.manualId) : null;
     let reason = manual?.reason ?? 'Observing.';
     if (input.action === 'releaseSettled' && manual) {
-      try { manual = await this.services.reconcile({ requestId: randomUUID(), manualSessionId: manual.id, expectedRevision: manual.revision, confirmReady: true }); reason = manual.reason; }
+      try { manual = await this.services.reconcile({ requestId: randomUUID(), manualSessionId: manual.id, expectedRevision: manual.revision, confirmReady: true }, input.handoffRequestId); reason = manual.reason; }
       catch (error) { reason = `Released; barrier retained. ${messageOf(error)}`; }
     }
     const result = { generation: c.generation, manualSession: manual, writer: false, reason };

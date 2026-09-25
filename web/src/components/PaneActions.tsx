@@ -3,6 +3,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import type { CommandRecord } from '../contracts/api';
 import type { Group, ReviewPreview, WorkspaceGit } from '../contracts/implementation';
 import type { ManagedSession, WorkflowState } from '../contracts/workflow';
+import type { KeyboardSettlement, ManualSession } from '../contracts/terminals';
 import { api, HttpError } from '../client/api';
 import { useRemembered } from '../client/memory';
 import { paneRequest, sendAction, type AfterSend, type PaneAction } from '../core/pane-actions';
@@ -92,6 +93,8 @@ export interface PaneActionsProps {
   settings: RunSettings;
   /** First reason every action in this card is blocked (shared checkout gates, then this agent's own), or empty. */
   blockedReason: string;
+  keyboardHandoff?: { manual: ManualSession; label: string; release: (requestId: string) => Promise<KeyboardSettlement> };
+  viewEpoch: number;
   busy: boolean;
   /** Runs one request under the console-wide submission guard. */
   submit: (work: () => Promise<void>) => Promise<void>;
@@ -132,8 +135,16 @@ export function PaneActions(p: PaneActionsProps) {
     enabled: canReview && clean, recheck: p.recheck, memoryKey: `${p.draftKey}:review`, onPreview: revoke });
   const registrations = Object.fromEntries(members.map((id) => [id, p.state.sessions.find((session) => session.id === id)?.registrationId ?? '']));
   const instances = members.map((id) => p.state.instances.find((instance) => instance.agentId === id)?.status);
-  const key = JSON.stringify(['pane', agent.id, agent.registrationId, group.id, group.revision, registrations, instances, p.agentsKey, git ?? null, p.workspaceError,
+  const stateKey = JSON.stringify(['pane', agent.id, agent.registrationId, group.id, group.revision, registrations, instances, p.agentsKey, git ?? null, p.workspaceError,
     s.consent, after, handoffOnly, snapshot.consent, review.consent, p.runMark, p.recheck]);
+  const manual = p.keyboardHandoff?.manual;
+  const key = JSON.stringify([stateKey, manual ? [manual.id, manual.connectionId, manual.generation, manual.revision, text, note, context] : null]);
+  // A release changes keyboard state itself; everything else the click authorized must stay exact while it waits.
+  const intent = JSON.stringify([stateKey, p.state.activities, p.token, p.viewEpoch, text, note, context]);
+  const intentRef = useRef({ key: intent, revision: 0 });
+  if (intentRef.current.key !== intent) intentRef.current = { key: intent, revision: intentRef.current.revision + 1 };
+  const mounted = useRef(true);
+  useEffect(() => {mounted.current = true;return () => {mounted.current = false;};}, []);
   keyRef.current = key;
   // Once the displayed checkout, settings or range change, returning to old values must not revive consent.
   const consented = useRef(key);
@@ -158,13 +169,22 @@ export function PaneActions(p: PaneActionsProps) {
     if (reasonFor(action) || !git) return;
     if ((action === 'commit_relay' || action === 'relay') && (!range || range.head !== git.head)) return;
     const requestId = crypto.randomUUID();
+    const intentRevision = intentRef.current.revision;
     const request = paneRequest({ action, requestId, groupId: group.id, groupRevision: group.revision, registrations, agentId: agent.id, policy: s.selectedPolicy, workerId: s.workerId,
       text: action === 'commit' || action === 'commit_relay' ? '' : action === 'relay' ? context : text, reviewNote: note, branch: s.branch(), automatic: s.automatic, turnLimit: s.limit,
       pauseOnObjection: s.pauseOnObjection, logPath: s.logPath, reviewBase: range?.base });
     p.setConsent(() => ''); setStartError('');
     await p.submit(async () => {
+      let dispatched = false;
       try {
-        const record = await api<CommandRecord>(p.token, request.path, { body: request.body });
+        let body = request.body;
+        if (p.keyboardHandoff) {
+          const keyboardSettlement = await p.keyboardHandoff.release(requestId);
+          if (!mounted.current || intentRef.current.revision !== intentRevision) throw Error('Keyboard released, but the draft, target or displayed state changed. Inspect and confirm readiness again; nothing was sent.');
+          body = { ...body, keyboardSettlement };
+        }
+        dispatched = true;
+        const record = await api<CommandRecord>(p.token, request.path, { body });
         if (record.status === 'rejected') setStartError(`REJECTED: ${record.error ?? 'The server refused this start.'}`);
         else {
           p.onMessage(`${record.status.toUpperCase()}: ${record.error ?? `${action === 'send' ? 'Standalone instruction' : 'Implementation'} started. The server owns this run.`}`);
@@ -173,7 +193,7 @@ export function PaneActions(p: PaneActionsProps) {
         }
       } catch (error) {
         setStartError(error instanceof Error ? error.message : 'Start failed.');
-        if (!(error instanceof HttpError) || error.status >= 500) p.onUncertain(requestId);
+        if (dispatched && (!(error instanceof HttpError) || error.status >= 500)) p.onUncertain(requestId);
       } finally { await Promise.all([p.refresh(), p.onRecheck()]); }
     });
   }
@@ -215,7 +235,7 @@ export function PaneActions(p: PaneActionsProps) {
     {!canSend && <p className="fine">Reviewer: reviews without editing project files. Change roles in settings.</p>}
     <div className="ready-row">
       <label className="readiness"><input type="checkbox" aria-label="Ready for implementation" checked={ready} disabled={inputOff} onChange={(e) => p.setConsent(() => e.target.checked ? key : '')} />
-        <span>All agents in this checkout are settled: empty prompts, no background writers. {canSend && <span className="muted">({relevant.join(' · ')})</span>}</span></label>
+        <span>{p.keyboardHandoff ? `All panes on this host are settled: empty prompts, no background writers. This action releases the ${p.keyboardHandoff.label} keyboard, verifies settlement, then sends to ${name}.` : 'All agents in this checkout are settled: empty prompts, no background writers.'} {canSend && <span className="muted">({relevant.join(' · ')})</span>}</span></label>
       {canSend && <button type="button" className="primary" title={title(sendReason, sendHelp)} aria-describedby={`${ids}-line`} disabled={!!sendReason} onClick={() => void start(sendChoice)}>{sendLabel}</button>}
     </div>
     {canSend && <p className="fine pane-line" id={`${ids}-line`}>{sendReason && sendReason !== NOT_READY ? sendReason : authorization}

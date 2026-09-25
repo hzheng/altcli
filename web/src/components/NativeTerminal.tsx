@@ -1,11 +1,13 @@
 'use client';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useImperativeHandle, useRef, useState, type ReactNode, type Ref } from 'react';
 import type { Terminal } from '@xterm/xterm';
-import type { TerminalConnection, TerminalFrame, TerminalTarget, KeyboardResult } from '../contracts/terminals';
+import type { TerminalConnection, TerminalFrame, TerminalTarget, KeyboardResult, KeyboardSettlement, ManualSession } from '../contracts/terminals';
 import { api } from '../client/api';
 
+export interface NativeTerminalHandle { releaseForSend: (manual: ManualSession, requestId: string) => Promise<KeyboardSettlement> }
 /** Native bytes stay in this component. No replay, persistence, automatic grant or URL credentials. */
-export function NativeTerminal({ token, target, clientInstanceId, label, fallback, capturedAt, held, holder, cliChanged = false, affected = [], inputEnabled, refresh, viewEpoch = 0 }: {
+export function NativeTerminal({ ref, token, target, clientInstanceId, label, fallback, capturedAt, held, holder, cliChanged = false, affected = [], inputEnabled, refresh, viewEpoch = 0 }: {
+  ref?: Ref<NativeTerminalHandle>;
   token: string; target: TerminalTarget; clientInstanceId: string; label: string; fallback: ReactNode;
   capturedAt?: string; held: boolean; affected?: string[]; inputEnabled: boolean; refresh: () => Promise<void>; viewEpoch?: number;
   /** Who holds the server-wide keyboard when this card does not: another browser, another card here, or an unresolved record. */
@@ -194,6 +196,26 @@ export function NativeTerminal({ token, target, clientInstanceId, label, fallbac
     } catch(error) {pendingGrant.current = null; setNotice(error instanceof Error ? error.message : 'Keyboard decision uncertain. Inspect server state.');}
     finally {setBusy(false);void refreshRef.current();}
   }
+  useImperativeHandle(ref, () => ({ releaseForSend: async (manual, requestId) => {
+    const c = live.current;
+    if (!c?.writer || !connected || busy || c.id !== manual.connectionId || c.generation !== manual.generation || manual.clientInstanceId !== clientInstanceId)
+      throw Error('Keyboard ownership changed. Inspect the terminal and confirm readiness again.');
+    if (c.sending || c.queue.length || pasting) throw Error('Terminal input is still pending. Wait for it to finish, then inspect and confirm readiness again.');
+    // Freeze local input before release. Never truncate a pending paste or replay an uncertain decision.
+    c.writer = false; setWriter(false); setBusy(true); setConfirm(false); pendingGrant.current = null; clearTransient();
+    if (terminal.current) terminal.current.options.disableStdin = true;
+    try {
+      const result = await api<KeyboardResult>(token, `terminals/${c.id}/keyboard`, {body:{requestId:crypto.randomUUID(),action:'releaseSettled',expectedGeneration:manual.generation,expectedRevision:manual.revision,handoffRequestId:requestId,confirmReady:true}}).catch(error => {
+        // A lost response may have released ownership. Reconnect only as an observer; never restore input here.
+        loseInput('Keyboard handoff stopped. Inspect manual input before sending.', c);
+        throw error;
+      });
+      setNotice(result.reason);
+      if (result.writer !== false || result.manualSession?.id !== manual.id || result.manualSession.live !== false || result.manualSession.reconciliationRequired !== false || result.manualSession.settlement?.requestId !== requestId)
+        throw Error(result.reason || 'Manual input could not be settled. Inspect the terminal before sending.');
+      return { manualSessionId: manual.id, revision: result.manualSession.revision };
+    } finally {setBusy(false);void refreshRef.current();}
+  }}));
   return <section className={`native-terminal${expanded?' expanded':''}`} data-expanded={expanded} aria-label={`${label} terminal`} onBlurCapture={e=>{if(!e.currentTarget.contains(e.relatedTarget))clearTransient();}}
     onPasteCapture={event=>{
       if(!mount.current?.contains(event.target as Node))return;

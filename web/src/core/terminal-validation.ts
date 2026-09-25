@@ -1,4 +1,4 @@
-import type { KeyboardInput, ManualReconcile, NativeInput, TerminalOpen, TerminalTarget } from '../contracts/terminals.ts';
+import type { KeyboardInput, KeyboardSettlement, ManualReconcile, NativeInput, TerminalOpen, TerminalTarget } from '../contracts/terminals.ts';
 import { TERMINAL_LIMITS } from '../contracts/terminals.ts';
 import { AppError } from './errors.ts';
 import { object, requestId } from './validation.ts';
@@ -29,11 +29,19 @@ export function parseTerminalOpen(value: unknown): TerminalOpen {
   return { target, ...terminalSize(b), clientInstanceId: requestId(b.clientInstanceId) };
 }
 export function parseKeyboard(value: unknown): KeyboardInput {
-  const b = terminalFields(value, ['requestId', 'action', 'expectedGeneration', 'transfer', 'confirmReady']);
+  const b = terminalFields(value, ['requestId', 'action', 'expectedGeneration', 'transfer', 'confirmReady', 'expectedRevision', 'handoffRequestId']);
   if (!['acquire', 'release', 'releaseSettled'].includes(String(b.action)) || (b.transfer !== undefined && typeof b.transfer !== 'boolean') || (b.confirmReady !== undefined && typeof b.confirmReady !== 'boolean')) throw new AppError('TERMINAL_INPUT', 'Invalid keyboard decision.');
   if (b.action !== 'release' && b.confirmReady !== true) throw new AppError('CONFIRM_REQUIRED', 'Confirm the server-wide keyboard operation.');
+  if (b.expectedRevision !== undefined && b.action !== 'releaseSettled') throw new AppError('TERMINAL_INPUT', 'A keyboard revision applies only to a settled release.');
+  if (b.handoffRequestId !== undefined && (b.action !== 'releaseSettled' || b.expectedRevision === undefined)) throw new AppError('TERMINAL_INPUT', 'A handoff requires a checked settled release.');
   return { requestId: requestId(b.requestId), action: b.action as KeyboardInput['action'], expectedGeneration: requestId(b.expectedGeneration),
+    ...(b.expectedRevision === undefined ? {} : { expectedRevision: terminalNumber(b.expectedRevision, 1, Number.MAX_SAFE_INTEGER) }),
+    ...(b.handoffRequestId === undefined ? {} : { handoffRequestId: requestId(b.handoffRequestId) }),
     ...(b.transfer === undefined ? {} : { transfer: b.transfer as boolean }), ...(b.confirmReady === undefined ? {} : { confirmReady: b.confirmReady as boolean }) };
+}
+export function parseKeyboardSettlement(value: unknown): KeyboardSettlement {
+  const b = terminalFields(value, ['manualSessionId', 'revision']);
+  return { manualSessionId: requestId(b.manualSessionId), revision: terminalNumber(b.revision, 1, Number.MAX_SAFE_INTEGER) };
 }
 export function parseNativeInput(value: unknown): NativeInput {
   const b = terminalFields(value, ['generation', 'seq', 'encoding', 'data']);

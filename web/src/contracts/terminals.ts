@@ -10,10 +10,16 @@ export interface ManualSession {
   inputMayHaveOccurred: boolean; bytes: number; createdAt: string; updatedAt: string; reason: string;
   panes: ManualPane[]; runs: { id: string; commandId: string; priorStatus: string }[];
   humanDecision?: { requestId: string; note: string; at: string };
+  settlement?: { requestId: string; nativeRevision: number; keyboardRevision: number };
 }
+export interface KeyboardSettlement { manualSessionId: string; revision: number }
 export interface KeyboardInput {
   requestId: string; action: 'acquire' | 'release' | 'releaseSettled'; expectedGeneration: string;
   transfer?: boolean; confirmReady?: boolean;
+  /** For a checked releaseSettled handoff: input since confirmation invalidates the release. */
+  expectedRevision?: number;
+  /** Exact subsequent command authorized by this checked release. */
+  handoffRequestId?: string;
 }
 export interface KeyboardResult { generation: string; manualSession: ManualSession | null; writer: boolean; reason: string }
 export type ManualReconcile = { requestId: string; manualSessionId: string; expectedRevision: number } &

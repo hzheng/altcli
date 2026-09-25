@@ -61,6 +61,32 @@ test('workspace groups and unbound agents are automatic, stable and read-only', 
   assert.deepEqual((await plane.state()).groups.find((group) => group.cwd === '/demo/other')!.members, ['solo']);
   assert.deepEqual(store.groups(), []);
 });
+for (const flag of ['inMode', 'synchronized'] as const) test(`${flag} retains observed agents and group membership without authorizing input`, async () => {
+  const inspect = adapter.inspect.bind(adapter), list = adapter.listPanes.bind(adapter);
+  let blocked = false;
+  adapter.inspect = async id => ({ ...await inspect(id), [flag]: blocked });
+  adapter.listPanes = async () => Promise.all((await list()).map(async pane => ({ ...pane, ...await adapter.inspect(pane.identity.paneId) })));
+  const initial = await plane.state();
+  const before = store.db.prepare('SELECT total_changes() AS count').get();
+  blocked = true;
+  const current = await plane.state();
+  assert.deepEqual(current.groups, initial.groups);
+  assert.deepEqual(current.sessions, initial.sessions, 'unregistered discovery identities also survive copy mode');
+  for (const workspace of (await plane.workspaces()).workspaces) for (const agent of workspace.agents) {
+    assert.equal(agent.eligible, false);
+    if (['codex', 'claude'].includes(agent.kind)) assert.ok(agent.session);
+    else assert.equal(agent.session, undefined);
+  }
+  const solo = current.sessions.find(session => session.identity.paneId === '%3')!;
+  assert.equal((await plane.terminalTarget({ agentId: solo.id, registrationId: solo.registrationId })).identity.paneId, '%3');
+  const group = current.groups.find(group => group.cwd === '/demo/project')!;
+  await assert.rejects(plane.selectGroup(group.id, { members: ['codex', 'claude'], expectedRevision: group.revision,
+    registrations: Object.fromEntries(current.sessions.map(session => [session.id, session.registrationId])) }), /copy mode|synchronized/);
+  assert.deepEqual(sent, []);
+  assert.deepEqual(store.db.prepare('SELECT total_changes() AS count').get(), before);
+  blocked = false;
+  assert.deepEqual((await plane.state()).groups, initial.groups);
+});
 test('rename changes only the label, rejects stale edits and preserves historical run attribution', async () => {
   const original = store.sessions()[0] as ManagedSession;
   const input = parseRenameSession({ label: 'Primary Codex', expectedLabel: original.label, expectedRegistrationId: original.registrationId });

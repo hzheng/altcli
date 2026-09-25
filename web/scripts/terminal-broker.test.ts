@@ -12,6 +12,7 @@ import { ControlPlane } from '../src/server/control-plane.ts';
 import { InputAuthority } from '../src/server/input-authority.ts';
 import { MockAdapter, mockSessions } from '../src/server/adapters/mock.ts';
 import { loadConfig } from '../src/server/config.ts';
+import { parseStandalone } from '../src/core/implementation-validation.ts';
 import type { TerminalFrame, TerminalConnection } from '../src/contracts/terminals.ts';
 class Socket extends EventEmitter {
   readyState=1; bufferedAmount=0; frames:TerminalFrame[]=[];
@@ -27,6 +28,56 @@ afterEach(async()=>{await plane.terminals.shutdown();store.close();rmSync(direct
 const settle=()=>new Promise(r=>setTimeout(r,10));
 async function connect():Promise<{opened:TerminalConnection;socket:Socket;generation:string}>{const s=(await plane.state()).sessions[0]!;const opened=await plane.terminals.open({target:{agentId:s.id,registrationId:s.registrationId},cols:80,rows:24,clientInstanceId:randomUUID()});const socket=new Socket();plane.terminals.connect(socket as unknown as WebSocket);socket.frame({ticket:opened.ticket});await settle();const reset=socket.frames.find(f=>f.type==='reset');assert.ok(reset?.type==='reset');return {opened,socket,generation:reset.generation};}
 const grant=(c:Awaited<ReturnType<typeof connect>>,transfer=false)=>plane.terminals.keyboard(c.opened.connectionId,{requestId:randomUUID(),expectedGeneration:c.generation,action:'acquire',confirmReady:true,transfer});
+async function settledStart() {
+  const c=await connect(),owned=await grant(c);
+  const requestId=randomUUID();
+  const released=await plane.terminals.keyboard(c.opened.connectionId,{requestId:randomUUID(),expectedGeneration:owned.generation,expectedRevision:owned.manualSession!.revision,action:'releaseSettled',confirmReady:true,handoffRequestId:requestId});
+  const settled=released.manualSession!;assert.equal(settled.settlement?.requestId,requestId);
+  const state=await plane.state(),group=state.groups.find(g=>g.cwd==='/demo/project')!;
+  return {c,input:{requestId,groupId:group.id,groupRevision:group.revision,registrations:Object.fromEntries(state.sessions.filter(s=>group.members.includes(s.id)).map(s=>[s.id,s.registrationId])),agentId:'codex',policy:'peer' as const,text:'Checked handoff',confirmReady:true as const,keyboardSettlement:{manualSessionId:settled.id,revision:settled.revision}}};
+}
+async function externalStart() {
+  const s=(await plane.state()).sessions.find(s=>s.id==='codex')!;
+  await plane.recordEvent({source:'codex',event:'turn_started',paneId:s.identity.paneId,socketPath:s.identity.socketPath,identity:s.identity,prompt:'External work after settlement.',sessionId:'external',sourceTurnId:randomUUID(),startedAt:new Date().toISOString()});
+}
+test('settlement evidence rejects new native activity before handoff admission',async()=>{
+  const {input}=await settledStart();await externalStart();
+  await assert.rejects(plane.submitStandalone(input),/settlement.*changed/i);
+  assert.equal(plane.workflow.runs().length,0);
+});
+test('settlement evidence is checked again after asynchronous admission inspection',async t=>{
+  const {input}=await settledStart();let changed=false;
+  t.mock.method(plane.adapter,'preflight',async()=>{if(!changed){changed=true;await externalStart();}});
+  await assert.rejects(plane.submitStandalone(input),/settlement.*changed/i);
+  assert.equal(plane.workflow.runs().length,0);
+});
+test('settlement evidence belongs to one request and duplicate delivery still returns its receipt',async()=>{
+  const {input}=await settledStart();
+  await assert.rejects(plane.submitStandalone({...input,requestId:randomUUID()}),/settlement.*changed/i);
+  const record=await plane.submitStandalone(parseStandalone(input));assert.equal(record.status,'delivered');
+  await externalStart();assert.deepEqual(await plane.submitStandalone(input),record);
+});
+test('settlement evidence cannot survive another keyboard grant and release',async()=>{
+  const {input}=await settledStart(),other=await connect(),owned=await grant(other);
+  await plane.terminals.keyboard(other.opened.connectionId,{requestId:randomUUID(),action:'releaseSettled',expectedGeneration:owned.generation,confirmReady:true});
+  assert.equal(plane.authority.blocked,false);
+  await assert.rejects(plane.submitStandalone(input),/settlement.*changed/i);
+});
+test('settlement evidence cannot survive a backend restart',async()=>{
+  const {input}=await settledStart();await plane.terminals.shutdown();
+  plane=new ControlPlane(new Controller(plane.config,store,new MockAdapter()));
+  await assert.rejects(plane.submitStandalone(input),/settlement.*changed/i);
+  assert.equal(plane.workflow.runs().length,0);
+});
+test('settlement evidence is checked at delivery after the run has claimed ownership',async t=>{
+  const {input}=await settledStart();const processes=plane.adapter.processes.bind(plane.adapter);let changed=false;
+  t.mock.method(plane.adapter,'processes',async(...args:Parameters<typeof processes>)=>{
+    if(plane.workflow.runs().length&&!changed){changed=true;await externalStart();}return processes(...args);
+  });
+  const record=await plane.submitStandalone(input);
+  assert.equal(changed,true);assert.equal(record.status,'rejected');assert.match(record.error!,/settlement.*changed/i);
+  assert.equal(plane.workflow.runs()[0]!.status,'paused');
+});
 test('resize admission bounds native inspection concurrency and frequency and preserves dimension clamps',async t=>{
   let finish!:()=>void,hold=true;const sizes:number[][]=[];
   plane.terminals.services.attach=async(_config,target)=>({pid:1,write:()=>{},resize:(cols,rows)=>{sizes.push([cols,rows]);},pause:()=>{},resume:()=>{},close:async()=>{},active:async()=>{if(hold)await new Promise<void>(r=>{finish=r;});return {paneId:target.identity.paneId,sessionId:target.sessionId,label:target.label,command:'fixture'};}});
@@ -82,6 +133,24 @@ test('release is durable, blocks new turns before claim, and explicit settled re
   await assert.rejects(plane.submit({requestId:randomUUID(),agentId:'codex',kind:'relay',confirmReady:true}),/Manual terminal input/);assert.equal(plane.workflow.runs().length,0);
   const m=plane.authority.pending()[0]!;await plane.reconcileManual({requestId:randomUUID(),manualSessionId:m.id,expectedRevision:m.revision,confirmReady:true});assert.equal(plane.authority.blocked,false);assert.equal(plane.workflow.runs().length,0);
   await plane.terminals.close(c.opened.connectionId);assert.equal(plane.authority.blocked,false,'closing settled observer must not revive barrier');
+});
+test('checked settled release refuses input after confirmation and leaves the keyboard held',async()=>{
+  const c=await connect(),owned=await grant(c);
+  await plane.terminals.input(c.opened.connectionId,{generation:owned.generation,seq:1,encoding:'utf8',data:'x'});
+  await assert.rejects(plane.terminals.keyboard(c.opened.connectionId,{requestId:randomUUID(),action:'releaseSettled',expectedGeneration:owned.generation,expectedRevision:owned.manualSession!.revision,confirmReady:true}),/Manual input changed/);
+  assert.equal(plane.authority.pending()[0]!.live,true);
+  assert.equal(plane.workflow.runs().length,0);
+});
+test('checked settled release binds the current writer revision and retains idempotent receipts',async()=>{
+  const c=await connect(),owned=await grant(c);
+  const input={requestId:randomUUID(),action:'releaseSettled',expectedGeneration:owned.generation,expectedRevision:owned.manualSession!.revision,confirmReady:true};
+  const result=await plane.terminals.keyboard(c.opened.connectionId,input);
+  assert.equal(result.writer,false);assert.equal(result.manualSession!.reconciliationRequired,false);
+  assert.deepEqual(await plane.terminals.keyboard(c.opened.connectionId,input),result);
+  assert.equal(plane.authority.blocked,false);assert.equal(plane.workflow.runs().length,0);
+  await assert.rejects(plane.terminals.input(c.opened.connectionId,{generation:owned.generation,seq:1,encoding:'utf8',data:'x'}));
+  for(const action of ['acquire','release'])await assert.rejects(plane.terminals.keyboard(c.opened.connectionId,{...input,requestId:randomUUID(),expectedGeneration:result.generation,action}),/revision.*settled release/);
+  await assert.rejects(plane.terminals.keyboard(c.opened.connectionId,{...input,requestId:randomUUID(),expectedRevision:undefined,handoffRequestId:randomUUID()}),/checked settled release/);
 });
 test('two clients serialize decisions; transfer revokes the old generation and preserves unresolved input',async()=>{
   const first=await connect(),second=await connect();const owner=await grant(first);

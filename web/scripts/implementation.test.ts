@@ -75,6 +75,47 @@ async function complete(id: string, more: Partial<HookEvent> = {}) {
 }
 const run = (id: string) => plane.workflow.run(id)!;
 
+async function keyboardStart() {
+  const input=request();const session=store.sessions().find(s=>s.id==='codex') as ManagedSession;
+  const manual=await plane.terminals.services.begin({target:{agentId:session.id,registrationId:session.registrationId},clientInstanceId:randomUUID(),cols:80,rows:24},randomUUID(),randomUUID());
+  const released=plane.authority.release(manual.id,'Fixture release');
+  const settled=await plane.reconcileManual({requestId:randomUUID(),manualSessionId:manual.id,expectedRevision:released.revision,confirmReady:true},input.requestId);
+  return {...input,keyboardSettlement:{manualSessionId:manual.id,revision:settled.revision}};
+}
+async function externalKeyboardWork() {
+  const session=store.sessions().find(s=>s.id==='codex') as ManagedSession;
+  await plane.recordEvent({source:'codex',event:'turn_started',paneId:session.identity.paneId,socketPath:session.identity.socketPath,identity:session.identity,prompt:'External work after keyboard settlement',sessionId:'external',sourceTurnId:randomUUID(),startedAt:new Date().toISOString(),cliPid:session.cliPid!});
+}
+test('keyboard settlement rejects changed activity before implementation claims or creates a branch',async()=>{
+  const input=await keyboardStart();input.branch.newBranch='task/new';await externalKeyboardWork();
+  await assert.rejects(plane.submitImplementation(input),/settlement.*changed/i);
+  assert.deepEqual(sent,[]);assert.deepEqual(plane.workflow.runs(),[]);assert.equal(git('branch','--list','task/new'),'');
+});
+test('keyboard settlement is checked again before branch setup after admission',async t=>{
+  const input=await keyboardStart();input.branch.newBranch='task/new';let changed=false;
+  t.mock.method(adapter,'preflight',async()=>{if(plane.workflow.runs().length&&!changed){changed=true;await externalKeyboardWork();}});
+  await assert.rejects(plane.submitImplementation(input),/settlement.*changed/i);
+  assert.equal(changed,true);assert.deepEqual(sent,[]);assert.equal(git('branch','--list','task/new'),'');
+  assert.equal(run(input.requestId).status,'paused');
+});
+test('keyboard settlement authorizes only the initial turn and does not block its correlated successor',async()=>{
+  const input=await keyboardStart();
+  assert.deepEqual(parseImplementation(input),input);
+  const first=await plane.submitImplementation(input);assert.equal(first.status,'delivered');
+  publish(first.id,true);await complete(first.id);
+  assert.equal(sent.length,2);assert.notEqual(run(first.id).currentCommandId,first.id);assert.equal(run(first.id).status,'running');
+});
+
+for (const mode of ['inMode', 'synchronized'] as const) test(`a selected peer in ${mode} remains visible but blocks implementation before dispatch`, async () => {
+  const initial = (await plane.state()).groups.find(g => g.id === group.id)!;
+  const inspect = adapter.inspect.bind(adapter);
+  adapter.inspect = async id => ({ ...await inspect(id), ...(id === '%1' ? { [mode]: true } : {}) });
+  assert.deepEqual((await plane.state()).groups.find(g => g.id === group.id), initial);
+  await assert.rejects(plane.submitImplementation(request()), /copy mode|synchronized/);
+  assert.deepEqual(sent, []);
+  assert.deepEqual(plane.workflow.runs(), []);
+});
+
 const claudeNative = { cliPid: '101', startedAt: '2026-09-25T01:00:00.000Z' };
 const recheck = (id: string) => ({ runId: id, action: 'recheck' as const, confirmReady: true as const, expectedCommandId: id, expectedRevision: run(id).blockedHandoff!.revision });
 async function blockedClaude(clear = false) {

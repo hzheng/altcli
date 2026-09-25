@@ -4,7 +4,7 @@ import type { ManagedSession, WorktreeIdentity } from './workflow.ts';
 export type PlanAction = 'draft' | 'synthesize' | 'review' | 'revise';
 export type PlanOutcome = 'complete' | 'accept' | 'object' | 'blocked';
 /** Implementation membership and branch consent are separate from planning membership/approval. */
-export type PlannedImplementation = Omit<ImplementationStart, 'requestId' | 'text' | 'kind' | 'autoContinue' | 'turnLimit' | 'confirmReady' | 'reviewBase' | 'branch'> & { branch: BranchConsent | null };
+export type PlannedImplementation = Omit<ImplementationStart, 'requestId' | 'text' | 'kind' | 'autoContinue' | 'turnLimit' | 'confirmReady' | 'reviewBase' | 'branch' | 'keyboardSettlement'> & { branch: BranchConsent | null };
 export interface PlanStart {
   requestId: string;
   groupId: string;

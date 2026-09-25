@@ -62,6 +62,12 @@ test('private tmux: observer isolation, native bytes, resize, exact client ident
     writer.resize(70, 20); await delay(100);
     assert.equal((await run(['display-message', '-p', '-t', '%0', '#{window_width}x#{window_height}'])).trim(), '70x19');
     assert.equal((await writer.active()).size, '70x19', 'the status line reports the effective window, not the browser grid');
+    await run(['copy-mode', '-t', '%0']);
+    assert.equal((await inspectPane(run, '%0')).inMode, true);
+    assert.equal((await writer.active()).paneId, '%0', 'copy mode keeps the native writer attached');
+    writer.write(Buffer.from('q'));
+    await eventually(async () => !(await inspectPane(run, '%0')).inMode);
+    assert.deepEqual(await readFile(join(dir, 'bytes')), bytes, 'leaving copy mode must not type q into the worker');
     await writer.close(); writer = undefined;
     assert.deepEqual((await inspectPane(run, '%0')).identity, pane.identity);
     await run(['set-option', '-t', target.sessionId, 'destroy-unattached', 'on']);

@@ -13,7 +13,7 @@ import { RunPolicy } from './Implementation';
 import { PlanningProgress } from './PlanningProgress';
 import { PaneActions } from './PaneActions';
 import { LaunchProfiles } from './LaunchProfiles';
-import { NativeTerminal } from './NativeTerminal';
+import { NativeTerminal, type NativeTerminalHandle } from './NativeTerminal';
 import { PlanSetup } from './PlanSetup';
 import { CheckpointControls, InteractionComposer } from './InteractionControls';
 import { RunSettingsBar, useRunSettings, type Phase } from './RunSettings';
@@ -119,6 +119,7 @@ export function Console() {
   const [controlPlacement, setControlPlacement] = useState<'below' | 'side'>('below');
   const [controlDrawer, setControlDrawer] = useState(false);
   const controlPane = useRef<HTMLElement>(null); const drawerToggle = useRef<HTMLButtonElement>(null);
+  const terminals = useRef(new Map<string, NativeTerminalHandle>());
   const [turnLimit, setTurnLimit] = useState(String(DEFAULT_TURN_LIMIT));
   const [legacy, setLegacy] = useState(false);
   const [phase, setPhase] = useState<Phase>('implementation');
@@ -205,6 +206,14 @@ export function Console() {
   const [controllerOpen, setControllerOpen] = useRemembered(`controller:${ws}`, false, memory);
   const showLegacy = legacy && state?.legacyEnabled && pair?.sessions.length === 2;
   const visible = pair ? projectSessions.filter((s) => pair.sessions.includes(s.id)) : projectSessions;
+  const inputBlocks = new Map(projectSessions.flatMap(s => {
+    // By pane identity: discovered agents without a saved registration have no registeredAs.
+    const pane = state?.panes.find(p => p.identity.socketPath === s.identity.socketPath && p.identity.paneId === s.identity.paneId);
+    const reason = pane?.inMode ? 'Tmux copy mode. Automated input is blocked; exit copy mode in the terminal to resume.'
+      : pane?.synchronized ? 'Tmux synchronized input is enabled. Disable it before using automated input.' : null;
+    return reason ? [[s.id, reason] as const] : [];
+  }));
+  const groupInputBlock = visible.find(s => inputBlocks.has(s.id));
   const owned = (state?.runs ?? []).filter((r) => r.repository === project && ['running','waiting','paused'].includes(r.status));
   const transportHold = state?.reservations.find((r) => r.repository === project);
   // A finished run is current status only while its frozen participants are the agents shown here; a run of removed or
@@ -220,8 +229,8 @@ export function Console() {
   const displayed = viewed?.id;
   const current = visible.find(s => s.id === controlChoice) ?? visible[0];
   const groupInstances = visible.map((s) => [s.id, state?.instances.find((i) => i.agentId === s.id)?.status]);
-  const readinessKey = JSON.stringify([pair, card?.agents, current?.id, current?.registrationId, groupInstances]);
-  useEffect(() => { setReady(false); setResetFor(null); setStatusReset(null); }, [readinessKey, project]);
+  const readinessKey = JSON.stringify([pair, card?.agents, current?.id, current?.registrationId, groupInstances, [...inputBlocks]]);
+  useEffect(() => { setConsent(''); setReady(false); setResetFor(null); setStatusReset(null); }, [readinessKey, project]);
   // Readiness and confirmations attest to what was on screen, so any view switch revokes them. Drafts and choices stay.
   const viewKey = JSON.stringify([tab, phase, layout, displayed, current?.id]);
   useEffect(() => { setConsent(''); setReady(false); setResetFor(null); setStatusReset(null); setViewEpoch((epoch) => epoch + 1); }, [viewKey]);
@@ -247,7 +256,17 @@ export function Console() {
   // Distinguishes a live keyboard elsewhere from an unresolved record for the terminal badges.
   const liveManual = state?.manualSessions?.find((m) => m.live);
   const keyboardHolder = liveManual ? liveManual.clientInstanceId === clientInstanceId ? 'this-browser' as const : 'other-browser' as const : manualHeld ? 'unresolved' as const : null;
-  const sharedReason = (manualHeld ? 'Manual terminal input holds dispatch across this server. Release and reconcile it first.' : '') || identityBlockedReason || (stale ? 'The console is not current. Wait for it to reconnect.' : '')
+  const keyboardTarget = liveManual?.target;
+  const keyboardAgent = keyboardTarget && 'agentId' in keyboardTarget ? visible.find(s => s.id === keyboardTarget.agentId && s.registrationId === keyboardTarget.registrationId) : undefined;
+  const keyboardHandoff = liveManual && state?.manualSessions?.length === 1 && liveManual.clientInstanceId === clientInstanceId && !liveManual.runs.length && keyboardAgent ? {
+    manual: liveManual, label: keyboardAgent.label, release: async (requestId: string) => {
+      const terminal = terminals.current.get(keyboardAgent.id);
+      if (!terminal) throw Error('The keyboard terminal is no longer connected. Inspect manual input before sending.');
+      return terminal.releaseForSend(liveManual, requestId);
+    },
+  } : undefined;
+  const dispatchReason = identityBlockedReason
+    || (groupInputBlock ? `${groupInputBlock.label}: ${inputBlocks.get(groupInputBlock.id)}` : '') || (stale ? 'The console is not current. Wait for it to reconnect.' : '')
     || (setupHeld ? 'A worktree operation is applying or uncertain. Reconcile it in Projects before starting work.' : '')
     || (!state?.inputEnabled ? 'Read-only console: the host has disabled input.' : '')
     || (owned.length ? 'The controller is driving the agents in this checkout. Wait for it to finish, or pause it and take over above.' : '')
@@ -255,6 +274,9 @@ export function Console() {
     || (unknownRequest ? 'A request has an uncertain result. Inspect it above before sending again.' : '')
     || (checking ? 'Wait for Recheck to finish.' : '')
     || (!!pair && !limitValid ? 'Set the staging fallback maximum automatic turns to 1–200.' : '');
+  const manualReason = manualHeld ? 'Manual terminal input holds dispatch across this server. Release and reconcile it first.' : '';
+  const sharedReason = manualReason || dispatchReason;
+  const implementationReason = (keyboardHandoff ? '' : manualReason) || dispatchReason;
   const cardReason = (s?: ManagedSession) => !s ? 'Choose an agent first.' : !s.registrationId ? `Recheck ${s.label} before sending: its identity is not registered.`
     : state?.snapshots.find((snapshot) => snapshot.agentId === s.id)?.status !== 'available' ? `${s.label}'s pane cannot be captured right now. Recheck before sending.` : '';
   const blocked = busy || !!sharedReason || !!cardReason(current);
@@ -395,7 +417,7 @@ export function Console() {
   // Discovery and the saved session share a full pane identity: pane, socket and tmux server.
   const locationOf = (s: ManagedSession) => card?.agents.find((a) => a.identity.paneId === s.identity.paneId && a.identity.socketPath === s.identity.socketPath
     && a.identity.serverPid === s.identity.serverPid && a.identity.serverStarted === s.identity.serverStarted)?.location;
-  const common = { token, state: state!, git, workspaceError, agentsKey: JSON.stringify(card?.agents ?? null), busy, submit: guarded, consent, setConsent, runMark,
+  const common = { token, state: state!, git, workspaceError, agentsKey: JSON.stringify([card?.agents ?? null, [...inputBlocks]]), busy, submit: guarded, consent, setConsent, runMark,
     recheck: recheckRevision, refresh, onRecheck: recheckAll, onMessage: setMessage, onUncertain: setUnknownRequest };
   return <MemoryContext.Provider value={memory}><main className="console-shell">
     <header className="topbar"><div className="wordmark"><span className="brand-mark">A</span> AltCLI</div>
@@ -456,7 +478,7 @@ export function Console() {
         <p className="muted">{selectedTree?.error ?? card?.agents.find((agent) => agent.reason && (agent.kind === 'codex' || agent.kind === 'claude'))?.reason ?? (project ? <>Start coding CLIs in <span className="mono">{project}</span>, then Recheck in Projects. Collaborators need the same directory. No registration is needed.</> : 'Choose a project and worktree with running coding agents. Nothing is sent until you explicitly start work.')}</p>
         <button type="button" className="primary" onClick={() => showTab('workspaces')}>Open Projects</button></section>}
       {!!projectSessions.length && <>
-        <RunSettingsBar settings={settings} git={git} members={members} sessions={sessions} displayed={current?.id} disabled={busy || !!sharedReason} notice={settingsNotice} legacy={!!showLegacy} onPhase={setPhase}
+        <RunSettingsBar settings={settings} git={git} members={members} sessions={sessions} displayed={current?.id} disabled={busy || !!(phase === 'implementation' && !showLegacy ? implementationReason : sharedReason)} notice={settingsNotice} legacy={!!showLegacy} onPhase={setPhase}
           controller={{ state: owned[0] ? owned[0].status === 'paused' ? 'paused' : owned[0].status === 'waiting' ? 'waiting for you' : 'driving' : 'idle', attention: ['paused', 'waiting'].includes(owned[0]?.status ?? ''),
             open: controllerOpen, onToggle: () => setControllerOpen(!controllerOpen), content: <>
       {owned.map((run) => <section key={run.id} className="panel run-card" aria-label="Who controls the agents">
@@ -530,8 +552,9 @@ export function Console() {
                 onClick={() => setStatusReset({ agentId: s.id, registrationId: s.registrationId, expectedUpdatedAt: activity.updatedAt })}>Reset status</button>}
               {activity?.state === 'unknown' && resetBlock && <span className="reset-reason">Reset status is unavailable: {resetBlock}</span>}</div>
             {resetPrompt(s.id)}
+            {inputBlocks.has(s.id) && <p className="notice" role="status">{inputBlocks.get(s.id)}</p>}
             {visibleOutcome?.outcome && <div className={`outcome ${visibleOutcome.outcome}`}>{visibleOutcome.outcome}: {visibleOutcome.reason}</div>}
-            {config?.terminalEnabled && s.registrationId ? <NativeTerminal token={token} target={{agentId:s.id,registrationId:s.registrationId}} clientInstanceId={clientInstanceId} viewEpoch={viewEpoch} label={s.label} capturedAt={snapshot?.capturedAt}
+            {config?.terminalEnabled && s.registrationId ? <NativeTerminal ref={handle => {if(handle)terminals.current.set(s.id,handle);else terminals.current.delete(s.id);}} token={token} target={{agentId:s.id,registrationId:s.registrationId}} clientInstanceId={clientInstanceId} viewEpoch={viewEpoch} label={s.label} capturedAt={snapshot?.capturedAt}
               holder={keyboardHolder} cliChanged={state.instances.find((i) => i.agentId === s.id)?.status === 'replaced'} affected={state.runs.filter(r=>['running','waiting','paused'].includes(r.status)).map(r=>`${r.id} · ${r.status}`)} held={manualHeld} inputEnabled={state.inputEnabled} refresh={refresh} fallback={<Output label={`${s.label} output`} memoryKey={`scroll:${ws}:${s.id}`} text={(snapshot?.status === 'unavailable' ? snapshot.error : snapshot?.text) || 'Waiting for a capture'} />} /> : <Output label={`${s.label} output`} memoryKey={`scroll:${ws}:${s.id}`} text={(snapshot?.status === 'unavailable' ? snapshot.error : snapshot?.text) || 'Waiting for a capture'} />}
             {/* A tmux-style status line: the boundary between the capture above and any command section below. */}
             <div className="pane-footer"><span className="mono">{s.identity.paneId}</span><span>{(!config?.terminalEnabled || !s.registrationId) && snapshot ? `Captured ${new Date(snapshot.capturedAt).toLocaleTimeString()}` : ''}</span></div>
@@ -542,7 +565,7 @@ export function Console() {
           onKeyDown={(e) => { if (controlDrawer && e.key === 'Escape') { e.stopPropagation(); toggleDrawer(false); } }}>
           <div className="control-heading"><h2>AltCLI control</h2>{controlDrawer && <button type="button" className="quiet drawer-close" onClick={() => toggleDrawer(false)}>Close drawer</button>}</div><nav className="agent-tabs" aria-label="Command target">{visible.map(s => <button type="button" key={s.id} aria-pressed={s.id === current?.id} onClick={() => {setControlChoice(s.id);setConsent('');setReady(false);}}>{s.label}</button>)}</nav>
           {current && inputRun && !showLegacy && <InteractionComposer key={current.id} token={token} state={state} run={inputRun} agent={current} draftKey={`draft:${scope}:${current.id}`} disabled={busy || stale || setupHeld || manualHeld || !state.inputEnabled || !!identityBlockedReason || !!cardReason(current)} viewEpoch={viewEpoch} refresh={refresh} />}
-          {current && actionable && !inputRun && phase === 'implementation' && !showLegacy && <PaneActions key={current.id} {...common} group={pair} agent={current} settings={implementationSettings} blockedReason={sharedReason || cardReason(current)} draftKey={`draft:${scope}:${current.id}`} />}
+          {current && actionable && !inputRun && phase === 'implementation' && !showLegacy && <PaneActions key={current.id} {...common} group={pair} agent={current} settings={implementationSettings} blockedReason={implementationReason || cardReason(current)} keyboardHandoff={keyboardHandoff} viewEpoch={viewEpoch} draftKey={`draft:${scope}:${current.id}`} />}
         {phase === 'plan' && !inputRun && !showLegacy && <>{commandDivider}<PlanSetup {...common} group={pair && members.length ? pair : undefined} settings={planSettings} displayed={current?.id}
           blockedReason={sharedReason || cardReason(current)} draftKey={`plan:${scope}`} /></>}
         {showLegacy && commandDivider}

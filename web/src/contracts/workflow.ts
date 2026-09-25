@@ -136,11 +136,13 @@ export interface WorkspaceAgent {
   kind: DiscoveredKind;
   /** A known coding CLI in a safe pane. Shells, unidentified processes and dead, copy-mode or synchronized panes are not. */
   eligible: boolean;
+  /** A live known coding CLI can remain visible in its group while copy mode or synchronized input blocks automation. */
+  observable?: boolean;
   reason: string | null;
   /** The saved label when registered; coding CLIs otherwise use the tmux session name, separate from pane identity. */
   label: string;
   registeredAs: AgentId | null;
-  /** Read-only identity proposal for an eligible pane. Persisted only by an explicit edit or Start. */
+  /** Read-only identity proposal for an observable pane. Persisted only by an explicit edit or Start. */
   session?: ManagedSession;
 }
 /** A canonical current working directory inside a Git worktree, with the live panes found there on one tmux server. */

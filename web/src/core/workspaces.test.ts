@@ -22,6 +22,13 @@ test("only a known coding CLI in a safe pane is eligible; shells and unknown run
   expect(classifyAgent(pane("codex", "/repo", { synchronized: true }), [])).toMatchObject({ eligible: false, reason: expect.stringContaining("synchronized") });
   expect(classifyAgent(pane("codex", "/repo", { dead: true }), [])).toMatchObject({ eligible: false, reason: "The pane's process exited." });
 });
+test('copy mode and synchronized input block automation but preserve live CLI observation', () => {
+  for (const flag of ['inMode', 'synchronized'] as const) {
+    expect(classifyAgent(pane('claude', '/repo', { [flag]: true }), [])).toMatchObject({ eligible: false, observable: true });
+    expect(classifyAgent(pane('zsh', '/repo', { [flag]: true }), [])).toMatchObject({ eligible: false, observable: false });
+    expect(classifyAgent(pane('claude', '/repo', { [flag]: true, dead: true }), [])).toMatchObject({ eligible: false, observable: false });
+  }
+});
 test("a registered pane keeps its registered label and id", () => {
   const p = pane("codex", "/repo");
   const session: SessionRegistration = { id: "main-codex", label: "Main Codex", agentType: "codex", repository: "/repo", expectedCommand: "codex", identity: p.identity, relayPrompt: "relay", registeredAt: "2026-09-19T00:00:00Z" };

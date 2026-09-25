@@ -22,6 +22,206 @@ test.beforeEach(async({request})=>{
   await post(request,'workspaces/reset',{repository:'/demo/project',confirmReady:true});await post(request,'sessions',{paneId:'%0',label:'Codex'});await post(request,'sessions',{paneId:'%1',label:'Claude'});
 });
 test.afterEach(async({request})=>{await reconcileFixtureKeyboard(request);});
+async function prepareKeyboardSend(page:Page,recipient='Codex') {
+  await page.route('**/api/v1/workspaces',async route=>{
+    const response=await route.fetch(),body=await response.json();
+    for(const workspace of body.workspaces)Object.assign(workspace.git,{branch:'task/current',integration:false,taskBase:workspace.git.head});
+    await route.fulfill({response,json:body});
+  });
+  const terminal=await openKeyboard(page);
+  await page.getByRole('navigation',{name:'Command target'}).getByRole('button',{name:recipient,exact:true}).click();
+  const control=page.getByRole('region',{name:'AltCLI control',exact:true});
+  const draft=control.getByLabel(`Instruction for ${recipient}`);
+  await draft.fill('Implement the checked keyboard handoff.');
+  await control.getByLabel('After send').selectOption('commit');
+  await expect(control).toContainText(`releases the Codex keyboard, verifies settlement, then sends to ${recipient}`);
+  await control.getByLabel('Ready for implementation').check();
+  const send=control.getByRole('button',{name:`Send & commit ${recipient}`,exact:true});
+  await expect(send).toBeEnabled();
+  return {terminal,control,draft,send};
+}
+test('Send & commit hands this browser keyboard to a different control recipient exactly once',async({page,request})=>{
+  const {terminal,draft,send}=await prepareKeyboardSend(page,'Claude');
+  const starts:unknown[]=[];
+  await page.route('**/api/v1/implementation',async route=>{
+    expect((await state(request)).manualSessions).toEqual([]);
+    starts.push(route.request().postDataJSON());await route.fulfill({json:{status:'delivered',error:null}});
+  });
+  await send.click();
+  await expect.poll(()=>starts.length).toBe(1);
+  expect(starts[0]).toMatchObject({agentId:'claude',kind:'work',text:'Implement the checked keyboard handoff.',keyboardSettlement:{manualSessionId:expect.any(String),revision:expect.any(Number)}});
+  await expect(draft).toHaveValue('');
+  await expect(terminal.getByText('Keyboard here',{exact:true})).toHaveCount(0);
+  expect((await state(request)).manualSessions).toEqual([]);
+});
+test('Send & commit retains the draft and barrier when settlement fails',async({page,request})=>{
+  const {control,draft,send}=await prepareKeyboardSend(page);
+  const starts:string[]=[];page.on('request',r=>{if(r.url().endsWith('/implementation'))starts.push(r.url());});
+  // Perform a real release but simulate a refused settlement; a successful HTTP response alone cannot authorize dispatch.
+  await page.route('**/api/v1/terminals/*/keyboard',async route=>{
+    const body=route.request().postDataJSON();delete body.expectedRevision;delete body.handoffRequestId;body.action='release';
+    const response=await route.fetch({postData:body}),result=await response.json();
+    await route.fulfill({response,json:{...result,reason:'Released; barrier retained. Agent is still working.'}});
+  });
+  await send.click();
+  await expect(control.getByRole('alert')).toContainText('Agent is still working');
+  await expect(draft).toHaveValue('Implement the checked keyboard handoff.');
+  expect(starts).toEqual([]);
+  expect((await state(request)).manualSessions?.[0]?.reconciliationRequired).toBe(true);
+});
+for(const change of ['draft','restored draft','target','view','activity'] as const)test(`Send & commit cancels dispatch when the ${change} changes during release`,async({page,request})=>{
+  const {control,draft,send}=await prepareKeyboardSend(page);
+  let release!:()=>void,received!:()=>void,finished!:()=>void;
+  const gate=new Promise<void>(r=>{release=r;}),captured=new Promise<void>(r=>{received=r;}),done=new Promise<void>(r=>{finished=r;});
+  const starts:string[]=[];page.on('request',r=>{if(r.url().endsWith('/implementation'))starts.push(r.url());});
+  await page.route('**/api/v1/terminals/*/keyboard',async route=>{const response=await route.fetch();received();await gate;try{await route.fulfill({response});}finally{finished();}},{times:1});
+  try {
+    await send.click();await captured;
+    if(change==='draft'||change==='restored draft') {
+      await draft.fill('A newer draft must survive.');
+      if(change==='restored draft')await draft.fill('Implement the checked keyboard handoff.');
+    } else if(change==='activity') {
+      await page.route('**/api/v1/state',async route=>{const response=await route.fetch(),body=await response.json();
+        body.activities=body.activities.map((a:{agentId:string})=>a.agentId==='codex'?{...a,state:'working',detail:'New external work after settlement.'}:a);
+        await route.fulfill({response,json:body});
+      });
+      await expect(page.getByRole('article',{name:'Codex pane',exact:true})).toContainText('New external work after settlement.');
+    } else if(change==='target')await page.getByRole('navigation',{name:'Command target'}).getByRole('button',{name:'Claude',exact:true}).click();
+    else await page.getByRole('navigation',{name:'Sections'}).getByRole('button',{name:'Projects',exact:true}).click();
+    release();await done;
+    if(change==='view')await page.getByRole('navigation',{name:'Sections'}).getByRole('button',{name:'Console',exact:true}).click();
+    await expect(page.getByRole('button',{name:'Recheck',exact:true}).first()).toBeEnabled();
+    if(change!=='target')await expect(control.getByRole('alert')).toContainText('nothing was sent');
+    else await page.getByRole('navigation',{name:'Command target'}).getByRole('button',{name:'Codex',exact:true}).click();
+    await expect(draft).toHaveValue(change==='draft'?'A newer draft must survive.':'Implement the checked keyboard handoff.');
+    expect(starts).toEqual([]);expect((await state(request)).manualSessions).toEqual([]);
+  } finally {release();await done;}
+});
+test('Send & commit refuses pending native input without releasing or dispatching',async({page,request})=>{
+  const {terminal,control,draft,send}=await prepareKeyboardSend(page);
+  let release!:()=>void,received!:()=>void,finished!:()=>void;
+  const gate=new Promise<void>(r=>{release=r;}),captured=new Promise<void>(r=>{received=r;}),done=new Promise<void>(r=>{finished=r;});
+  const starts:string[]=[];page.on('request',r=>{if(r.url().endsWith('/implementation'))starts.push(r.url());});
+  await page.route('**/api/v1/terminals/*/input',async route=>{const response=await route.fetch();received();await gate;try{await route.fulfill({response});}finally{finished();}},{times:1});
+  try {
+    await terminal.locator('.xterm-helper-textarea').focus();await page.keyboard.insertText('x');await captured;
+    await page.getByRole('button',{name:'Recheck',exact:true}).first().click();
+    await control.getByLabel('Ready for implementation').check();await send.click();
+    await expect(control.getByRole('alert')).toContainText('Terminal input is still pending');
+    expect((await state(request)).manualSessions?.[0]?.live).toBe(true);
+    await expect(draft).toHaveValue('Implement the checked keyboard handoff.');expect(starts).toEqual([]);
+  } finally {release();await done;}
+});
+test('Send & commit refuses native input arriving after confirmation even before polling sees it',async({page,request})=>{
+  const {control,draft,send}=await prepareKeyboardSend(page);
+  const starts:string[]=[];page.on('request',r=>{if(r.url().endsWith('/implementation'))starts.push(r.url());});
+  await page.route('**/api/v1/terminals/*/keyboard',async route=>{
+    const m=(await state(request)).manualSessions![0]!;
+    // This frame was admitted after the readiness snapshot, before the checked release reached the server.
+    await post(request,`terminals/${m.connectionId}/input`,{generation:m.generation,seq:1,encoding:'utf8',data:'x'});
+    const response=await route.fetch();await route.fulfill({response});
+  });
+  await send.click();
+  await expect(control.getByRole('alert')).toContainText('Manual input changed');
+  await expect(draft).toHaveValue('Implement the checked keyboard handoff.');
+  expect(starts).toEqual([]);expect((await state(request)).manualSessions?.[0]?.reconciliationRequired).toBe(true);
+});
+test('Send & commit never dispatches or retries an uncertain release response',async({page,request})=>{
+  const {control,draft,send}=await prepareKeyboardSend(page);
+  const starts:string[]=[];let releases=0;
+  page.on('request',r=>{if(r.url().endsWith('/implementation'))starts.push(r.url());});
+  await page.route('**/api/v1/terminals/*/keyboard',async route=>{releases++;await route.fetch();await route.abort('failed');});
+  await send.click();
+  await expect(control.getByRole('alert')).toBeVisible();
+  await expect(draft).toHaveValue('Implement the checked keyboard handoff.');
+  await expect(page.getByRole('button',{name:'Recheck',exact:true}).first()).toBeEnabled();
+  expect(starts).toEqual([]);expect(releases).toBe(1);expect((await state(request)).manualSessions).toEqual([]);
+});
+test('another browser keyboard still blocks Send & commit',async({page})=>{
+  await prepareKeyboardSend(page);
+  const other=await page.context().newPage();
+  try {
+    await other.goto('/');await other.getByLabel('Host access token').fill('a'.repeat(64));await other.getByRole('button',{name:'Open console'}).click();
+    const control=other.getByRole('region',{name:'AltCLI control',exact:true});
+    await control.getByLabel('Instruction for Codex').fill('Do not take another browser keyboard.');
+    await control.getByLabel('After send').selectOption('commit');
+    await expect(control.getByRole('button',{name:'Send & commit Codex',exact:true})).toBeDisabled();
+    await expect(control.getByLabel('Ready for implementation')).toBeDisabled();
+    await expect(control).toContainText('Release and reconcile it first');
+  } finally {await other.close();}
+});
+test('copy mode keeps the native terminal mounted and its keyboard generation intact',async({page,request})=>{
+  const card=await openKeyboard(page);
+  const owner=((await state(request)).manualSessions??[])[0]!.generation;
+  const closes:string[]=[];page.on('request',r=>{if(/\/terminals\/[^/]+\/close$/.test(r.url()))closes.push(r.url());});
+  let copyMode=true;
+  // Only tmux's mode flag is simulated; terminal attachment and keyboard authority use the mock API.
+  await page.route('**/api/v1/state',async route=>{const response=await route.fetch(),body=await response.json();
+    body.panes=body.panes.map((p:{identity:{paneId:string}})=>p.identity.paneId==='%0'?{...p,inMode:copyMode}:p);
+    await route.fulfill({response,json:body});
+  });
+  const pane=page.getByRole('article',{name:'Codex pane',exact:true});
+  await expect(pane.getByText(/Tmux copy mode/)).toBeVisible();
+  await expect(card.getByText('Keyboard here',{exact:true})).toBeVisible();
+  expect(((await state(request)).manualSessions??[])[0]!.generation).toBe(owner);
+  expect(closes).toEqual([]);
+  copyMode=false;
+  await expect(pane.getByText(/Tmux copy mode/)).toHaveCount(0);
+  await expect(card.getByText('Keyboard here',{exact:true})).toBeVisible();
+  expect(closes).toEqual([]);
+});
+test('a copy-mode peer stays visible and blocks automated input without discarding the draft',async({page})=>{
+  await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
+  const draft=page.getByRole('textbox',{name:'Instruction for Codex',exact:true});
+  await draft.fill('Keep this draft while the peer scrolls.');
+  let copyMode=true;
+  await page.route('**/api/v1/state',async route=>{const response=await route.fetch(),body=await response.json();
+    body.panes=body.panes.map((p:{identity:{paneId:string}})=>p.identity.paneId==='%1'?{...p,inMode:copyMode}:p);
+    await route.fulfill({response,json:body});
+  });
+  const control=page.getByRole('region',{name:'AltCLI control',exact:true});
+  await expect(control).toContainText('Tmux copy mode');
+  await expect(control.getByRole('button',{name:/^Send /}).first()).toBeDisabled();
+  await page.getByRole('navigation',{name:'Viewed terminal'}).getByRole('button',{name:'Claude',exact:true}).click();
+  await expect(page.getByRole('region',{name:'Claude terminal',exact:true})).toBeVisible();
+  await expect(draft).toHaveValue('Keep this draft while the peer scrolls.');
+  copyMode=false;
+  await expect(control).not.toContainText('Tmux copy mode');
+  await expect(draft).toHaveValue('Keep this draft while the peer scrolls.');
+});
+test('a copy-mode agent without a saved registration still shows its input blocker',async({page})=>{
+  // A discovered, unsaved agent is listed in sessions, but its pane carries no registeredAs.
+  await page.route('**/api/v1/state',async route=>{const response=await route.fetch(),body=await response.json();
+    body.panes=body.panes.map((p:{identity:{paneId:string}})=>p.identity.paneId==='%0'?{...p,inMode:true,registeredAs:null}:p);
+    await route.fulfill({response,json:body});
+  });
+  await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
+  await expect(page.getByRole('article',{name:'Codex pane',exact:true}).getByText(/Tmux copy mode/)).toBeVisible();
+  await expect(page.getByRole('region',{name:'AltCLI control',exact:true})).toContainText('Tmux copy mode');
+});
+for(const phase of ['implementation','planning'] as const)for(const mode of ['inMode','synchronized'] as const)test(`${phase} readiness is revoked when ${mode} enters and clears between workspace polls`,async({page})=>{
+  await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
+  const control=page.getByRole('region',{name:'AltCLI control',exact:true});
+  if(phase==='planning') {
+    await page.getByRole('button',{name:'1 · Plan',exact:true}).click();await page.getByLabel('Shared task brief').fill('Plan this task.');
+  } else {
+    await control.getByLabel('Instruction for Codex').fill('Keep readiness tied to pane state.');await control.getByLabel('After send').selectOption('nothing');
+  }
+  const ready=page.getByLabel(`Ready for ${phase}`);
+  const send=control.getByRole('button',{name:phase==='planning'?'Start Plan':'Send Codex',exact:true});
+  await ready.check();await expect(send).toBeEnabled();
+  let blocked=true;
+  // Workspace discovery is unchanged: mode changes arrive only through the faster state poll.
+  await page.route('**/api/v1/state',async route=>{const response=await route.fetch(),body=await response.json();
+    body.panes=body.panes.map((p:{identity:{paneId:string}})=>p.identity.paneId==='%1'?{...p,[mode]:blocked}:p);
+    await route.fulfill({response,json:body});
+  });
+  const reason=mode==='inMode'?'Tmux copy mode':'synchronized';
+  await expect(control).toContainText(reason);await expect(ready).not.toBeChecked();await expect(send).toBeDisabled();
+  blocked=false;
+  await expect(control).not.toContainText(reason);await expect(ready).not.toBeChecked();await expect(send).toBeDisabled();
+  await ready.check();await expect(send).toBeEnabled();
+});
 test('native terminal opens only on click; keyboard, input, release and Lock retain explicit authority',async({page,request},info)=>{
   const bytes:string[]=[];page.on('request',r=>{if(/\/terminals\/[^/]+\/input$/.test(r.url())){const b=r.postDataJSON();bytes.push(Buffer.from(b.data,b.encoding==='binary'?'base64':'utf8').toString());}});
   await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();

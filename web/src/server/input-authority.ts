@@ -6,6 +6,8 @@ import type { Store } from './store.ts';
 /** Shared admission counters plus durable barriers; no live writer never implies safe automation. */
 export class InputAuthority {
   readonly bootId = randomUUID();
+  /** Any keyboard record change invalidates a handoff settled earlier in this boot. */
+  revision = 0;
   readonly store: Store;
   private operations = 0;
   private acquiring = false;
@@ -32,6 +34,7 @@ export class InputAuthority {
   save(session: ManualSession): ManualSession {
     const next = { ...session, revision: session.revision + 1, updatedAt: new Date().toISOString() };
     this.store.db.prepare('INSERT INTO keyboard_sessions(id,value) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(next.id, JSON.stringify(next));
+    this.revision++;
     return next;
   }
   get(id: string): ManualSession {

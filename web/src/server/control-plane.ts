@@ -83,7 +83,7 @@ export class ControlPlane {
     this.transport.inputGuard = () => this.authority.assertAutomated();
     this.terminals = new TerminalBroker({ config: this.config, authority: this.authority,
       resolve: target => this.terminalTarget(target), begin: (input, id, generation, prior) => this.beginKeyboard(input, id, generation, prior),
-      reconcile: input => this.reconcileManual(input) });
+      reconcile: (input, handoffRequestId) => this.reconcileManual(input, handoffRequestId) });
   }
   /** The effective host configuration for the Settings tab; read-only and without the token. */
   hostConfig(): HostConfig { return describeConfig(this.config); }
@@ -141,7 +141,7 @@ export class ControlPlane {
         runs: [...(prior?.runs ?? []), ...runs.filter(r => !known.has(r.id)).map(r => ({ id: r.id, commandId: r.currentCommandId, priorStatus: r.status }))] });
     }).immediate();
   }
-  async reconcileManual(value: ManualReconcile): Promise<ManualSession> {
+  async reconcileManual(value: ManualReconcile, handoffRequestId?: string): Promise<ManualSession> {
     const input = parseManualReconcile(value);
     const duplicate = this.authority.duplicate<ManualSession>(input.requestId, input); if (duplicate) return duplicate;
     const manual = this.authority.get(input.manualSessionId);
@@ -175,12 +175,26 @@ export class ControlPlane {
       this.assertNativeBoundary();
       if (this.authority.busy || this.authority.pending().some(s => s.live) || this.authority.get(manual.id).revision !== manual.revision || this.nativeObservations || this.nativeRevision !== nativeRevision) throw new AppError('MANUAL_CHANGED', 'New input or activity invalidated reconciliation.', 409);
       // This decision releases only the server barrier. Run holds, checkpoints and faults remain untouched.
-      const result = this.authority.save({ ...manual, reconciliationRequired: false, ...('confirmInspected' in input
+      const settled = { ...manual, reconciliationRequired: false };
+      delete settled.settlement;
+      const result = this.authority.save({ ...settled,
+        ...('confirmReady' in input && handoffRequestId ? { settlement: { requestId: handoffRequestId, nativeRevision, keyboardRevision: this.authority.revision + 1 } } : {}),
+        ...('confirmInspected' in input
         ? { humanDecision: { requestId: input.requestId, note: input.note, at: new Date().toISOString() },
           reason: 'Human inspection recorded possible prior and background effects. Server barrier released; affected runs still require checkpoint review or takeover.' }
         : { reason: 'Manual input recorded settled after inspection. Review each saved workflow checkpoint explicitly.' }) });
       this.authority.decide(input.requestId, input, result); return result;
     }).immediate();
+  }
+  private assertKeyboardSettlement(input: Pick<ImplementationStart, 'requestId' | 'keyboardSettlement'>): void {
+    if (!input.keyboardSettlement) return;
+    const evidence = input.keyboardSettlement;
+    const manual = this.authority.sessions().find(s => s.id === evidence.manualSessionId);
+    if (!manual || manual.revision !== evidence.revision || manual.bootId !== this.authority.bootId || manual.live || manual.reconciliationRequired ||
+      manual.settlement?.requestId !== input.requestId || manual.settlement.nativeRevision !== this.nativeRevision ||
+      manual.settlement.keyboardRevision !== this.authority.revision || this.nativeObservations) {
+      throw new AppError('SETTLEMENT_CHANGED', 'Keyboard settlement changed. Inspect the agents and confirm readiness again.', 409);
+    }
   }
   async state(): Promise<WorkflowState> {
     const discovery = await this.workspaces();
@@ -207,7 +221,7 @@ export class ControlPlane {
     const sessions = this.store.sessions() as ManagedSession[];
     const discovery = await discoverWorkspaces(this.adapter, this.config.mode, sessions, this.config.integrationBranches);
     await Promise.all(discovery.workspaces.flatMap((workspace) => workspace.agents.map(async (agent) => {
-      if (!agent.eligible) return;
+      if (!agent.observable) return;
       const existing = sessions.find((session) => session.id === agent.registeredAs);
       const moved = !!existing && ((existing.cwd ?? existing.repository) !== workspace.cwd ||
         (existing.worktree ? !sameWorktree(existing.worktree, workspace.worktree) : existing.repository !== workspace.worktree.root));
@@ -343,14 +357,14 @@ export class ControlPlane {
   private workspaceGroups(discovery: WorkspaceDiscovery): Group[] {
     const sessions = this.store.sessions() as ManagedSession[];
     return discovery.workspaces.map((workspace) => {
-      const eligible = workspace.agents.filter((agent) => agent.eligible);
       const stored = this.store.groups().find((group) => group.repository === workspace.worktree.root &&
         (group.cwd ?? sessions.find((session) => session.id === group.members[0])?.cwd ?? group.repository) === workspace.cwd);
       const owned = this.workflow.runs().find((run) => ['running', 'waiting', 'paused'].includes(run.status) &&
         (run.implementation?.cwd ?? run.planning?.cwd) === workspace.cwd);
       const frozen = owned?.implementation?.group ?? owned?.planning?.group;
       if (frozen) return frozen;
-      const available = eligible.flatMap((agent) => agent.session ? [agent.session.id] : []);
+      // Temporary input modes must not remove a verified CLI from its group or close its terminal.
+      const available = workspace.agents.flatMap((agent) => agent.session ? [agent.session.id] : []);
       const members = stored ? stored.members.filter((id) => available.includes(id)) : available;
       const signature = JSON.stringify([workspace.socketPath, workspace.cwd]);
       const id = stored?.id ?? `workspace-${createHash('sha256').update(signature).digest('hex').slice(0, 20)}`;
@@ -569,10 +583,12 @@ export class ControlPlane {
       return receipt;
     }
     if (this.store.get(input.requestId)) throw new AppError('ID_CONFLICT', 'This request ID belongs to an older command.', 409);
+    this.assertKeyboardSettlement(input);
     const { participants } = await this.implementationGroup({ ...input, kind: 'work', handoff: false, autoContinue: false });
     // Validate length before persisting registrations. Plain Send carries only the user's instruction and correlation marker.
     const command = { requestId: input.requestId, agentId: input.agentId, kind: 'instruction' as const, text: input.text, confirmReady: true as const };
     wireText(command, participants.find((p) => p.id === input.agentId)!);
+    this.assertKeyboardSettlement(input);
     this.bindMembers(participants);
     const turn = this.workflow.start(command, participants, null, undefined, undefined, input);
     await this.pump(turn.runId);
@@ -597,7 +613,9 @@ export class ControlPlane {
       return receipt;
     }
     if (this.store.get(input.requestId)) throw new AppError('ID_CONFLICT', 'This request ID belongs to an older command.', 409);
+    this.assertKeyboardSettlement(input);
     const { implementation, participants } = await this.prepareImplementation(input);
+    this.assertKeyboardSettlement(input);
     this.bindMembers(participants);
     const turn = this.workflow.start({ requestId: input.requestId, agentId: input.agentId, kind: 'instruction', text: input.kind === 'commit' ? `Commit all current staged, unstaged and nonignored untracked project changes as they stand. Do not implement pending requests, relay to another agent, or claim task completion. Record unfinished work and checks in the handoff.${input.handoff ? ' The controller will relay the new snapshot after validating publication and completion.' : ''}` : input.text ?? 'Review the assigned candidate.',
       handoff: input.handoff, autoContinue: input.autoContinue, turnLimit: input.turnLimit, pauseOnObjection: input.pauseOnObjection === true, confirmReady: true }, participants, null, implementation);
@@ -673,6 +691,7 @@ export class ControlPlane {
         if (run.planning) { await this.validateMembers(run.planning.participants, cwd); await assertPlanBaseline(run.planning); await assertPlanArtifacts(run.planning); }
         await this.validateMembers(participants, cwd);
         await assertWorktreeInput(worktree.root, input.branch.branch, input.branch.head, implementation.initialWorktreeFingerprint);
+        this.assertKeyboardSettlement(input);
         if (this.workflow.run(runId)?.status !== 'running') throw new AppError('RUN_PAUSED', 'Setup was paused before the branch operation.', 409);
         if (input.branch.newBranch) await createConsentedBranch(worktree.root, input.branch.newBranch, input.branch.head);
         await assertWorktreeInput(worktree.root, implementation.branch, input.branch.head, implementation.initialWorktreeFingerprint);
@@ -815,6 +834,8 @@ export class ControlPlane {
         if (participant.agentType === 'codex') baseline = await this.adapter.processes(participant).catch(() => null);
         // A handoff instruction is judged against the worktree as it was just before delivery.
         if (this.handsOff(turn)) worktree = await this.readWorktree(participant.worktree!.root).catch(() => null);
+        if (run.standalone) this.assertKeyboardSettlement(run.standalone);
+        if (run.implementation?.request.requestId === turn.commandId) this.assertKeyboardSettlement(run.implementation.request);
         if ((run.implementation || run.planning || run.standalone) && this.workflow.run(run.id)?.status !== 'running') throw new AppError('RUN_PAUSED', 'Run paused before dispatch.', 409);
       } });
       this.workflow.delivered(record.id, record, baseline, worktree);

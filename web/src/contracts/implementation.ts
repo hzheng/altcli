@@ -1,5 +1,6 @@
 import type { ManagedSession, WorktreeIdentity } from './workflow.ts';
 import type { FrozenPlan } from './planning.ts';
+import type { KeyboardSettlement } from './terminals.ts';
 
 export type CollaborationPolicy = 'solo' | 'peer' | 'worker_reviewer';
 export type ImplementationAction = 'work' | 'review' | 'review_and_improve';
@@ -48,6 +49,7 @@ export interface BranchConsent {
   taskBase?: string;
 }
 export interface ImplementationStart {
+  keyboardSettlement?: KeyboardSettlement;
   requestId: string;
   groupId: string;
   groupRevision: number;
@@ -74,7 +76,7 @@ export interface ImplementationStart {
   confirmReady: true;
 }
 /** Plain Send: no branch setup, publication contract, or automatic successor. */
-export type StandaloneStart = Pick<ImplementationStart, 'requestId' | 'groupId' | 'groupRevision' | 'registrations' | 'agentId' | 'policy' | 'workerId' | 'confirmReady'> & { text: string };
+export type StandaloneStart = Pick<ImplementationStart, 'requestId' | 'groupId' | 'groupRevision' | 'registrations' | 'agentId' | 'policy' | 'workerId' | 'confirmReady' | 'keyboardSettlement'> & { text: string };
 export interface ImplementationPolicy {
   policy: CollaborationPolicy;
   workerId: string | null;
