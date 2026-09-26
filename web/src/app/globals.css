@@ -362,15 +362,14 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
 /* Optional placements of the one control pane: beside the stage on wide screens, a bottom drawer on phones. */
 .workbench { min-width: 0; }
 .control-heading { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
-.control-targets { flex-wrap:nowrap; gap:4px; margin-bottom:0; overflow-x:auto; }
-.control-targets button { position:relative; z-index:1; flex:0 0 auto; min-width:0; max-width:100%; border-radius:8px 8px 0 0; background:var(--panel); overflow-wrap:anywhere; }
-.control-targets button[aria-pressed=true] { color:var(--accent); background:var(--command-bg); border-color:var(--command-edge); border-bottom-color:var(--command-bg); }
-.control-body { min-width:0; margin-top:-1px; border:1px solid var(--line); border-radius:0 0 8px 8px; background:var(--command-bg); }
+.control-recipient { color:var(--accent); }
+.control-body { min-width:0; margin-top:.5rem; border:1px solid var(--line); border-radius:8px; background:var(--command-bg); }
 .control-body:empty { display:none; }
 .control-body > .pane-actions { border-top:0; }
 .control-body > .composer { margin-top:0; border:0; border-radius:0; }
 .control-body > .command-divider { margin-top:0; padding-top:12px; }
-.pane-heading .use-control { font-size: 11px; padding: 4px 10px; }
+/* Parallel cards: the heading of an unselected card is a pointer shortcut for the Agent selector. */
+.panes.parallel .pane:not(.active) .pane-heading { cursor: pointer; }
 .control-placement, .drawer-toggle { display: none; }
 @media (min-width: 1280px) {
   .control-placement { display: inline-flex; }

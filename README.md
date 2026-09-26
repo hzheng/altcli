@@ -18,8 +18,10 @@ one server-wide writer (after confirmation) and holds AltCLI dispatch/setup/laun
 use captured observation to avoid resizing workers. Release and reconciliation
 are explicit; held workflow checkpoints need their own review.
 
-The single Control pane uses recipient tabs and remembers drafts independently of
-which terminal you view. Manual-input recovery needs a checked acknowledgement;
+One **Agent** selector above the terminals chooses both the terminal shown and the
+single Control pane's recipient, which keeps a draft per agent. It starts on a working
+agent and then changes only when you choose another; Plan setup addresses the whole
+group. Manual-input recovery needs a checked acknowledgement;
 its wording is recorded without a typed note. Projects adds a project by its main/default starting checkout,
 typed or found with **Browse…**, even with no tmux panes. Settings (Console preferences
 first, then Host configuration) edits executable/argument profiles; **Launch agents…**

@@ -142,7 +142,7 @@ test('Unknown offers an explicit status reset beside the warning, preserving the
   const before = await state(request);
   await unlock(page, TOKEN, false);
   // Reset status sits beside the agent's own status line; choose its pane first so it is shown on narrow screens too.
-  await page.getByRole('navigation', { name: 'Viewed terminal' }).getByRole('button', { name: 'Claude Code', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Agent' }).getByRole('button', { name: 'Claude Code', exact: true }).click();
   const row = pane(page, 'Claude Code').locator('.pane-status');
   await expect(row).toContainText('A backend restart can clear activity evidence.');
   const reset = row.getByRole('button', { name: 'Reset status', exact: true });
@@ -393,7 +393,7 @@ test('a finished response displays idle while background-work safety keeps the c
   const run = (await state(request)).runs.find((r) => r.id === id)!;
   expect(run.status).toBe('paused'); expect(run.currentCommandId).toBe(id);
   // While the paused controller still holds the command, the peer's status reset says why it is unavailable instead of only greying out.
-  await page.getByRole('navigation', { name: 'Viewed terminal' }).getByRole('button', { name: 'Claude Code', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Agent' }).getByRole('button', { name: 'Claude Code', exact: true }).click();
   const claude = pane(page, 'Claude Code');
   await expect(claude.getByRole('button', { name: 'Reset status', exact: true })).toBeDisabled();
   await expect(claude.locator('.reset-reason')).toContainText('Take over the paused controller first');
@@ -456,7 +456,7 @@ test('an automatic workspace group creates a persistent run without browser sche
   expect(correction.agentId).toBe('codex'); expect(correction.input.kind).toBe('instruction'); expect(correction.input.handoff).toBe(true);
   expect(correction.input.text).toContain('Address objection: The delete path can remove records outside the selected project.');
   // The reviewer's turn is over: its objection stays labeled on its pane while the author's correction is in flight.
-  await page.getByRole('navigation', { name: 'Viewed terminal' }).getByRole('button', { name: /Claude Code/ }).click();
+  await page.getByRole('navigation', { name: 'Agent' }).getByRole('button', { name: /Claude Code/ }).click();
   await expect(page.getByText('strong_objection: The delete path can remove records outside the selected project.', { exact: true })).toBeVisible();
 });
 test('two browser pages cannot create two continuations from the same event', async ({ page, context, request }) => {
@@ -511,7 +511,7 @@ test('a rejected completion does not label the active pane with an older accepte
   await expect(page.getByText('accept_without_improvement: Current rejected review.', { exact: true })).toHaveCount(0);
 });
 test('unknown Claude background status pauses instead of treating a response as idle', async ({ page, request }) => {
-  await unlock(page); await page.getByRole('navigation', { name: 'Command target' }).getByRole('button', { name: /Claude Code/ }).click();
+  await unlock(page); await page.getByRole('navigation', { name: 'Agent' }).getByRole('button', { name: /Claude Code/ }).click();
   await page.getByLabel('Ready to send', { exact: true }).check(); await page.getByRole('button', { name: 'Relay Claude Code ↗', exact: true }).click();
   await expect(page.locator('.feedback[role="status"]:visible')).toContainText('DELIVERED');
   const current = await state(request); const run = current.runs.find((r) => r.status === 'running')!;
@@ -647,7 +647,7 @@ test('with no saved registrations a workspace opens directly into a usable read-
   await expect(page.getByRole('heading', { name: 'Agent console', exact: true })).toBeVisible();
   await expect(page.getByLabel('demo output').first()).toBeVisible();
   // The existing narrow-screen layout shows only the active pane, even with Parallel selected.
-  await page.getByRole('navigation', { name: 'Viewed terminal' }).getByRole('button', { name: 'demo', exact: true }).nth(1).click();
+  await page.getByRole('navigation', { name: 'Agent' }).getByRole('button', { name: 'demo', exact: true }).nth(1).click();
   await expect(page.getByLabel('demo output').last()).toBeVisible();
   const after = await state(request); expect(after.panes.every((pane) => !pane.registeredAs)).toBe(true);
   expect(after.executions).toEqual([]);
@@ -675,7 +675,7 @@ test('the stale-agent warning offers a confirmed workspace reset when no run own
   await expect(warning).toContainText('Files, commits, running CLIs and command history are kept');
   await warning.getByRole('button', { name: 'Keep configuration', exact: true }).click(); expect(resets).toHaveLength(0);
   await warning.getByRole('button', { name: 'Reset workspace…', exact: true }).click();
-  await page.getByRole('navigation', { name: 'Command target' }).getByRole('button', { name: 'Claude Code', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Agent' }).getByRole('button', { name: 'Claude Code', exact: true }).click();
   await expect(warning.getByRole('button', { name: 'Confirm workspace reset', exact: true })).toHaveCount(0);
   await warning.getByRole('button', { name: 'Reset workspace…', exact: true }).click();
   await page.screenshot({ path: info.outputPath('inline-workspace-reset.png'), fullPage: true });

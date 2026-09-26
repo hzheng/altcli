@@ -180,8 +180,10 @@ The one Control pane has alternate placements, never a second composer:
   narrower windows stack it below.
 - **Open control drawer:** at phone widths, the same pane opens as a bottom
   drawer. Escape or **Close drawer** returns focus to the toggle.
-- **Use <agent> in control pane:** each terminal card's shortcut changes only the
-  control target, revokes readiness and focuses the pane. It sends nothing.
+- **Agent selector:** the tabs above the terminals choose the terminal shown and the
+  control recipient together (Plan setup addresses the whole group). In Parallel,
+  clicking a card's heading does the same. Selection starts on a working agent, is
+  then held, revokes readiness and sends nothing; it never selects the keyboard writer.
 
 Terminal tools are icon buttons that keep their full accessible names, with help on hover and
 focus, and a **?** legend that also works by tap: **Open terminal** ▶️ / **Reconnect** 🔄 (observe

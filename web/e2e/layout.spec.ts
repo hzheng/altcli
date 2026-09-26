@@ -46,23 +46,25 @@ function mutations(page: Page) {
   });
   return sent;
 }
-test('Control recipient tabs join the selected section and preserve each draft', async ({ page, request }, info) => {
-  const group = await post(request, 'groups', { name: 'Control tabs', members: ['codex','claude'] });
-  await taskBranch(page, 2); await openGroup(page, group);
-  const targets = page.getByRole('navigation', { name: 'Command target' });
-  const background = (element: Locator) => element.evaluate(el => getComputedStyle(el).backgroundColor);
-  for (const name of ['Codex', 'Claude']) {
-    const section = await openCard(page, name), selected = targets.getByRole('button', { name, exact: true });
-    await expect(selected).toHaveAttribute('aria-pressed', 'true');
-    expect(await background(selected)).toBe(await background(section));
-    expect(await background(targets.getByRole('button', { name: name === 'Codex' ? 'Claude' : 'Codex', exact: true }))).not.toBe(await background(section));
-    const tabBox = await selected.boundingBox(), panelBox = await section.boundingBox();
-    expect(Math.abs(tabBox!.y + tabBox!.height - panelBox!.y)).toBeLessThanOrEqual(2);
+test('the Agent selector switches the shown terminal and Control together and keeps each draft', async ({ page, request }, info) => {
+  const group = await post(request, 'groups', { name: 'Agent selector', members: ['codex','claude'] });
+  await taskBranch(page, 2); await openGroup(page, group); await page.getByRole('button', { name: 'Focus', exact: true }).click();
+  const sent = mutations(page);
+  const agents = page.getByRole('navigation', { name: 'Agent' }), control = page.getByRole('region', { name: 'Control', exact: true });
+  for (const [name, other] of [['Codex', 'Claude'], ['Claude', 'Codex']] as const) {
+    const section = await openCard(page, name);
+    await expect(agents.getByRole('button', { name, exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByLabel(`${name} output`)).toBeVisible(); await expect(page.getByLabel(`${other} output`)).toBeHidden();
+    await expect(control.locator('.control-heading h2')).toHaveText(`Control · ${name}`);
     await section.getByLabel(`Instruction for ${name}`).fill(`${name} draft`);
   }
-  const codex = await openCard(page, 'Codex');
-  await expect(codex.getByLabel('Instruction for Codex')).toHaveValue('Codex draft');
-  await page.getByRole('region', { name: 'Control', exact: true }).screenshot({ path: info.outputPath('control-tabs.png') });
+  // Control has no recipient picker of its own, and no card offers a separate retarget shortcut.
+  await expect(control.getByRole('navigation')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /in control pane$/ })).toHaveCount(0);
+  await expect((await openCard(page, 'Codex')).getByLabel('Instruction for Codex')).toHaveValue('Codex draft');
+  await expect((await openCard(page, 'Claude')).getByLabel('Instruction for Claude')).toHaveValue('Claude draft');
+  expect(sent).toEqual([]);
+  await control.screenshot({ path: info.outputPath('control-agent.png') });
 });
 test('one control pane keeps per-target drafts; After send maps to a plain Send, work with commit, or work with commit and relay', async ({ page, request }) => {
   const group = await post(request, 'groups', { name: 'Card actions', members: ['codex','claude'] });
@@ -328,7 +330,7 @@ test('terminal captures are taller, grow with the window, and stand apart from s
   const background = (element: Locator) => element.evaluate((el) => getComputedStyle(el).backgroundColor);
   const stage = page.locator('.terminal-stage');
   await expect(stage.getByRole('heading', { name: /^Native terminals/ })).toBeVisible(); // the e2e hosts enable ALTCLI_ENABLE_TERMINAL
-  await expect(stage.getByRole('navigation', { name: 'Viewed terminal' })).toBeVisible();
+  await expect(stage.getByRole('navigation', { name: 'Agent' })).toBeVisible();
   // Guards only: the watch, command and settings surfaces differ; exact colours are a design choice.
   expect(await background(stage)).not.toBe(await background(page.getByRole('region', { name: 'Implementation settings' })));
   for (const name of ['Codex', 'Claude']) {
@@ -365,6 +367,8 @@ test('Plan setup sits below the terminal stage, behind a command divider', async
   await openGroup(page, group); await page.getByRole('group', { name: 'Phase' }).getByRole('button', { name: 'Plan', exact: true }).click();
   const setup = page.getByRole('region', { name: 'Plan setup' });
   await expect(setup).toBeVisible();
+  // Plan setup is the one control addressed to the whole group, whichever agent is selected.
+  await expect(page.locator('.control-heading h2')).toHaveText('Control · All agents');
   expect(await setup.evaluate((el) => ({
     outside: !el.closest('.terminal-stage'),
     after: !!(document.querySelector('.terminal-stage')!.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING),
@@ -393,7 +397,26 @@ test('the settings row wraps inside its panel at intermediate widths, with the S
     await expect(page.getByLabel('Implementation branch')).toBeVisible(); await settings.getByRole('button', { name: 'Settings', exact: true }).click();
   }
 });
-test('a newly working agent never takes the chosen pane away', async ({ page, request }) => {
+test('the console starts on a working agent, then holds it when another agent starts working', async ({ page, request }) => {
+  const group = await post(request, 'groups', { name: 'Start on working', members: ['codex','claude'] });
+  let busy = 'claude';
+  await page.route('**/api/v1/state', async (route) => {
+    const response = await route.fetch(); const data: WorkflowState = await response.json();
+    data.activities = data.sessions.map((s) => ({ agentId: s.id, state: s.id === busy ? 'working' : 'idle', updatedAt: new Date().toISOString(), detail: 'Native activity.' }));
+    await route.fulfill({ json: data });
+  });
+  await openGroup(page, group); await page.getByRole('button', { name: 'Focus', exact: true }).click();
+  const claude = page.getByRole('navigation', { name: 'Agent' }).getByRole('button', { name: 'Claude', exact: true });
+  await expect(claude).toHaveAttribute('aria-pressed', 'true'); await expect(page.getByLabel('Claude output')).toBeVisible();
+  await expect(page.locator('.control-heading h2')).toHaveText('Control · Claude');
+  // No click was made, yet the selection is held: Codex starting work neither shows its terminal nor retargets Control.
+  busy = 'codex'; await page.getByRole('button', { name: 'Recheck', exact: true }).click();
+  await expect(pane(page, 'Codex').locator('.pane-status .state')).toHaveText('working');
+  await expect(claude).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByLabel('Claude output')).toBeVisible(); await expect(page.getByLabel('Codex output')).toBeHidden();
+  await expect(page.locator('.control-heading h2')).toHaveText('Control · Claude');
+});
+test('a newly working agent never takes the chosen agent away', async ({ page, request }) => {
   const group = await post(request, 'groups', { name: 'Chosen pane', members: ['codex','claude'] });
   let working = false;
   await page.route('**/api/v1/state', async (route) => {
@@ -402,12 +425,12 @@ test('a newly working agent never takes the chosen pane away', async ({ page, re
     await route.fulfill({ json: data });
   });
   await openGroup(page, group); await page.getByRole('button', { name: 'Focus', exact: true }).click();
-  await openCard(page, 'Claude'); await page.getByRole('navigation', {name:'Viewed terminal'}).getByRole('button',{name:'Claude',exact:true}).click(); await expect(page.getByLabel('Claude output')).toBeVisible();
+  await openCard(page, 'Claude'); await expect(page.getByLabel('Claude output')).toBeVisible();
   working = true; await page.getByRole('button', { name: 'Recheck', exact: true }).click();
   await expect(pane(page, 'Codex').locator('.pane-status .state')).toHaveText('working');
   await expect(page.getByLabel('Claude output')).toBeVisible(); await expect(page.getByLabel('Codex output')).toBeHidden();
   await expect(page.getByRole('region', { name: 'Actions for Claude' })).toBeVisible();
-  await expect(page.getByRole('navigation', { name: 'Command target' }).getByRole('button', { name: 'Claude', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('navigation', { name: 'Agent' }).getByRole('button', { name: 'Claude', exact: true })).toHaveAttribute('aria-pressed', 'true');
 });
 test('the console has no horizontal overflow at phone widths', async ({ page, request }, info) => {
   test.skip(info.project.name !== 'iphone', 'Phone widths only.');
@@ -424,17 +447,16 @@ test('the console has no horizontal overflow at phone widths', async ({ page, re
   await page.screenshot({ path: info.outputPath('console-320.png'), fullPage: true });
 });
 
-test('Use <agent> in control pane retargets the one control pane, focuses it and sends nothing', async ({ page, request }) => {
+test('in Parallel, clicking a card heading selects that agent for the terminal and Control and sends nothing', async ({ page, request }, info) => {
+  test.skip(info.project.name !== 'desktop', 'Parallel cards sit side by side in a desktop window.');
   await unlock(page);
   const commands = async () => ((await (await request.get('/api/v1/state', { headers })).json()) as WorkflowState).commands.length;
   const before = await commands();
-  await page.getByRole('navigation', { name: 'Viewed terminal' }).getByRole('button', { name: 'Claude', exact: true }).click();
-  const shortcut = pane(page, 'Claude').getByRole('button', { name: 'Use Claude in control pane', exact: true });
-  await shortcut.click();
-  await expect(page.getByRole('region', { name: 'Control', exact: true })).toBeFocused();
-  await expect(page.getByRole('navigation', { name: 'Command target' }).getByRole('button', { name: 'Claude', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByText('Control now targets Claude. Nothing was sent.', { exact: true }).filter({ visible: true })).toBeVisible();
-  await expect(shortcut).toBeDisabled();
+  await page.getByRole('button', { name: 'Parallel', exact: true }).click(); await openCard(page, 'Codex');
+  await pane(page, 'Claude').locator('.pane-heading h2').click();
+  await expect(pane(page, 'Claude')).toHaveClass(/\bactive\b/); await expect(pane(page, 'Codex')).not.toHaveClass(/\bactive\b/);
+  await expect(page.getByRole('navigation', { name: 'Agent' }).getByRole('button', { name: 'Claude', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.control-heading h2')).toHaveText('Control · Claude');
   await expect(page.getByRole('region', { name: 'Control', exact: true })).toHaveCount(1);
   expect(await commands()).toBe(before);
 });
@@ -462,7 +484,7 @@ test('on phones the one control pane opens as a bottom drawer and returns focus 
   await page.getByRole('button', { name: 'Open control drawer', exact: true }).click();
   await expect(control).toBeFocused();
   expect(await control.evaluate((el) => getComputedStyle(el).position)).toBe('fixed');
-  await expect(control.getByRole('heading', { name: 'Control', exact: true })).toBeInViewport();
+  await expect(control.getByRole('heading', { name: /^Control · / })).toBeInViewport();
   await expect(control).toHaveCount(1); await expect(page.getByRole('textbox', { name: /^Instruction for / })).toHaveCount(1);
   await page.keyboard.press('Escape');
   await expect(page.getByRole('button', { name: 'Open control drawer', exact: true })).toBeFocused();

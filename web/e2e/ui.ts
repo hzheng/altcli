@@ -20,9 +20,9 @@ export async function editSettings(page: Page) {
   const toggle = page.getByRole('region', { name: /^(Implementation|Plan) settings$/ }).getByRole('button', { name: 'Settings', exact: true });
   if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
 }
-/** Choose the command recipient in the single Control pane, independently of terminal view. This revokes readiness. */
+/** Selects an agent: its terminal is shown and the single Control pane addresses it. This revokes readiness. */
 export async function openCard(page: Page, name: string) {
-  await page.getByRole('navigation', { name: 'Command target' }).getByRole('button', { name, exact: true }).click();
+  await page.getByRole('navigation', { name: 'Agent' }).getByRole('button', { name, exact: true }).click();
   return page.getByRole('region', { name: `Actions for ${name}`, exact: true });
 }
 /** An agent's pane by attribute, so a pane hidden by Focus or the phone layout can still be asserted on. */

@@ -355,8 +355,11 @@ In Projects, **Ask an agent to suggest batches** sends a standalone read-only ad
 
 ## Manual keyboard and launched sessions
 
-The terminal view and Control recipient are separate. **Use <agent> in control
-pane** on a card retargets the one control pane without sending anything. On wide
+One **Agent** selector chooses both the terminal shown and the Control recipient;
+in Parallel, clicking a card's heading does the same. It starts on a working agent
+and is then held until you choose another, so a newly working agent never retargets
+Control. Selecting sends nothing and revokes readiness. Plan setup is the exception:
+it addresses the whole group, so the selector only changes the terminal shown. On wide
 windows the pane can sit beside the terminals (**Control beside**); on phones
 **Open control drawer** shows the same pane as a bottom drawer. **Open terminal** is
 observation; choosing a pane in the one **Keyboard** selector requires confirmation and holds

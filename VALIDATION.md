@@ -2601,3 +2601,29 @@ groups and Console sessions still exclude unregistered subdirectory agents.
 
 The running main-checkout backend and user sessions were not changed or
 restarted; test controllers used fresh isolated instances.
+
+## 2026-09-26 — one Agent selector for the terminal and Control
+
+At the owner's request, the stage's **Agent** tabs now choose both the terminal
+shown and the Control recipient. Control's own recipient tabs and each card's
+**Use <agent> in control pane** button were removed; in Parallel, clicking a card's
+heading selects that agent. The selection starts on a working agent (then the last
+active, then the first) and is then held, so a newly working agent never retargets
+Control. Plan setup still addresses the whole group, and Control's heading reads
+**All agents** there. Drafts stay per agent, selecting sends nothing and revokes
+readiness, and the Keyboard selector remains separate. ADR-0020, README, WORKFLOWS,
+TERMINAL-PROTOCOL and the ROADMAP M1 row were updated.
+
+- `npm run typecheck` passed.
+- Targeted Playwright runs on desktop and phone viewports passed: all of
+  `layout.spec.ts`, `native.spec.ts`, `console.spec.ts` and `implementation.spec.ts`.
+  New or rewritten cases cover the joint switch with per-agent drafts, starting on
+  a working agent and holding it without a click, a chosen agent surviving a newly
+  working peer, heading-click selection with no command sent, and the Plan heading.
+  Two assertions first failed on the phone viewport, where selecting another agent
+  hides the previous card. They now check that card after returning to it.
+- A full `./scripts/check.sh --e2e` was started and stopped at the owner's request
+  (full browser runs are reserved for the merge stage). Before it stopped, the
+  32 hook/setup, 43 smoke, 382 workflow and 76 unit tests, type checking and the
+  production build passed. The complete browser suite was not run for this change.
+  Browser coverage uses isolated mock hosts, not physical devices or installed CLIs.

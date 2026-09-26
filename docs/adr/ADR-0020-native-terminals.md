@@ -32,13 +32,15 @@ even with no remaining agents or with feature flags off.
 The browser records the inspection checkbox's acknowledgement as that note;
 typing additional text is not required.
 
-The terminal view, keyboard focus, control recipient and writer are independent.
+The selected agent (the terminal shown and the control recipient, chosen together),
+keyboard focus and writer are independent.
 Copy mode and synchronized input block automated dispatch without removing a live,
 verified CLI from its workspace group or unmounting its terminal. Keep the reason
 visible so the owner can use the native keyboard to leave copy mode. Process,
 instance and directory checks still apply; observation is not readiness.
-One AltCLI control pane retains drafts per target, with recipient tabs visually
-joined to the selected input section.
+One AltCLI control pane retains drafts per target. Its recipient is the agent
+selected above the terminals, which starts on a working agent and is then held until
+the owner chooses another; Plan setup addresses the whole group.
 
 An explicit Implementation action may hand off this browser's connected keyboard
 when there is exactly one manual session and no affected run checkpoints. Its

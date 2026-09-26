@@ -46,7 +46,7 @@ async function prepareKeyboardSend(page:Page,recipient='Codex') {
     await route.fulfill({response,json:body});
   });
   const terminal=await openKeyboard(page);
-  await page.getByRole('navigation',{name:'Command target'}).getByRole('button',{name:recipient,exact:true}).click();
+  await page.getByRole('navigation',{name:'Agent'}).getByRole('button',{name:recipient,exact:true}).click();
   const control=page.getByRole('region',{name:'Control',exact:true});
   const draft=control.getByLabel(`Instruction for ${recipient}`);
   await draft.fill('Implement the checked keyboard handoff.');
@@ -103,13 +103,13 @@ for(const change of ['draft','restored draft','target','view','activity'] as con
         await route.fulfill({response,json:body});
       });
       await expect(page.getByRole('article',{name:'Codex pane',exact:true})).toContainText('New external work after settlement.');
-    } else if(change==='target')await page.getByRole('navigation',{name:'Command target'}).getByRole('button',{name:'Claude',exact:true}).click();
+    } else if(change==='target')await page.getByRole('navigation',{name:'Agent'}).getByRole('button',{name:'Claude',exact:true}).click();
     else await page.getByRole('navigation',{name:'Sections'}).getByRole('button',{name:'Projects',exact:true}).click();
     release();await done;
     if(change==='view')await page.getByRole('navigation',{name:'Sections'}).getByRole('button',{name:'Console',exact:true}).click();
     await expect(page.getByRole('button',{name:'Recheck',exact:true}).first()).toBeEnabled();
     if(change!=='target')await expect(control.getByRole('alert')).toContainText('nothing was sent');
-    else await page.getByRole('navigation',{name:'Command target'}).getByRole('button',{name:'Codex',exact:true}).click();
+    else await page.getByRole('navigation',{name:'Agent'}).getByRole('button',{name:'Codex',exact:true}).click();
     await expect(draft).toHaveValue(change==='draft'?'A newer draft must survive.':'Implement the checked keyboard handoff.');
     expect(starts).toEqual([]);expect((await state(request)).manualSessions).toEqual([]);
   } finally {release();await done;}
@@ -203,8 +203,11 @@ test('a copy-mode peer stays visible and blocks automated input without discardi
   const control=page.getByRole('region',{name:'Control',exact:true});
   await expect(control).toContainText('Tmux copy mode');
   await expect(control.getByRole('button',{name:/^Send /}).first()).toBeDisabled();
-  await page.getByRole('navigation',{name:'Viewed terminal'}).getByRole('button',{name:'Claude',exact:true}).click();
+  // Selecting the peer shows its terminal and addresses it; returning to Codex restores Codex's draft.
+  await page.getByRole('navigation',{name:'Agent'}).getByRole('button',{name:'Claude',exact:true}).click();
   await expect(page.getByRole('region',{name:'Claude terminal',exact:true})).toBeVisible();
+  await expect(control).toContainText('Tmux copy mode');
+  await page.getByRole('navigation',{name:'Agent'}).getByRole('button',{name:'Codex',exact:true}).click();
   await expect(draft).toHaveValue('Keep this draft while the peer scrolls.');
   copyMode=false;
   await expect(control).not.toContainText('Tmux copy mode');
@@ -262,8 +265,11 @@ test('native terminal opens only on click; keyboard, input, release and Lock ret
   await expect.poll(async()=>((await state(request)).manualSessions??[])[0]?.bytes).toBe(8);
   expect(bytes.join('')).toBe('é次\x03\x1bx');
   await ctrl.click();
-  // Recipient selection does not transfer the keyboard or change which terminal is being observed.
-  await page.getByRole('navigation',{name:'Command target'}).getByRole('button',{name:'Claude',exact:true}).click();
+  // Selecting another agent does not transfer the keyboard: the writer is chosen only in the Keyboard selector.
+  // On a phone the Codex card is hidden meanwhile, so its state is checked after returning to it.
+  await page.getByRole('navigation',{name:'Agent'}).getByRole('button',{name:'Claude',exact:true}).click();
+  expect(((await state(request)).manualSessions??[]).map(m=>m.target)).toEqual([expect.objectContaining({agentId:'codex'})]);
+  await page.getByRole('navigation',{name:'Agent'}).getByRole('button',{name:'Codex',exact:true}).click();
   await expect(ctrl).toHaveAttribute('aria-pressed','false');
   await expect(badge(card,'Keyboard here')).toBeVisible();
   await page.screenshot({path:info.outputPath('native-keyboard.png'),fullPage:true});
@@ -450,7 +456,7 @@ test('Paste text uses the current lease and refuses a delayed clipboard result a
 });
 
 test('terminal badges distinguish another browser, another terminal, an unresolved record and a replaced CLI',async({page})=>{
-  const card=await openKeyboard(page),view=page.getByRole('navigation',{name:'Viewed terminal'});
+  const card=await openKeyboard(page),view=page.getByRole('navigation',{name:'Agent'});
   await expect(card.getByRole('status')).toContainText(/\d+×\d+ window/);
   const other=await page.context().newPage();
   try {
@@ -673,7 +679,7 @@ for(const scenario of ['dead','missing','live','lost'] as const)test(`launch cle
   await expandWorktree(page, name); await page.getByRole('button',{name:`Open ${name}`,exact:true}).click();
   const removedPane=page.locator(`article[aria-label="${removed.label} pane"]`),keptPane=page.locator(`article[aria-label="${kept.label} pane"]`);
   await expect(removedPane).toHaveCount(1);await expect(keptPane).toHaveCount(1);
-  await page.getByRole('navigation',{name:'Command target'}).getByRole('button',{name:removed.label,exact:true}).click();
+  await page.getByRole('navigation',{name:'Agent'}).getByRole('button',{name:removed.label,exact:true}).click();
   await page.getByRole('navigation',{name:'Sections'}).getByRole('button',{name:'Projects',exact:true}).click();
   const card=page.getByRole('group',{name:`Launch ${item.sessionName}`,exact:true});
   await card.getByRole('button',{name:'Clean up…',exact:true}).click();
@@ -693,5 +699,5 @@ for(const scenario of ['dead','missing','live','lost'] as const)test(`launch cle
   await expect(keptPane).toHaveCount(1);
   await expect(removedPane).toHaveCount(scenario==='live'?1:0);
   await expect(page.getByRole('region',{name:'Agent identity changed'})).toHaveCount(0);
-  if(scenario!=='live')await expect(page.getByRole('navigation',{name:'Command target'}).getByRole('button',{name:kept.label,exact:true})).toHaveAttribute('aria-pressed','true');
+  if(scenario!=='live')await expect(page.getByRole('navigation',{name:'Agent'}).getByRole('button',{name:kept.label,exact:true})).toHaveAttribute('aria-pressed','true');
 });

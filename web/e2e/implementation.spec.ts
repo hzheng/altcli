@@ -359,7 +359,7 @@ test('reconciliation discovers the restarted peer for the next Commit without a 
   page.on('request', (outgoing) => { if (outgoing.method() === 'POST' && outgoing.url().endsWith('/api/v1/workspaces/reset')) resets.push(outgoing.postDataJSON()); });
   await page.route('**/api/v1/implementation', async (route) => { starts.push(route.request().postDataJSON()); await route.fulfill({ json: { status: 'delivered', error: null } }); });
   await openGroup(page, group);
-  await expect(page.getByRole('navigation', { name: 'Command target' }).getByRole('button', { name: 'Codex', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('navigation', { name: 'Agent' }).getByRole('button', { name: 'Codex', exact: true })).toHaveAttribute('aria-pressed', 'true');
   const warning = page.getByRole('region', { name: 'Agent identity changed' });
   await expect(warning).toContainText('CLI identity changed for Claude');
   await expect(warning).toContainText('rediscovered automatically, keeping names and group settings');

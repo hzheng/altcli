@@ -212,7 +212,6 @@ export function Console() {
   const planSettings = useRunSettings(memory, `run:${scope}`, git, members, 'plan');
   const [agentsOpen, setAgentsOpen] = useRemembered(`agents:${ws}`, false, memory);
   const [historyOpen, setHistoryOpen] = useRemembered(`history:${ws}`, false, memory);
-  const [controlChoice, setControlChoice] = useRemembered<string | null>(`control:${ws}`, null, memory);
   const [paneChoice, setPaneChoice] = useRemembered<string | null>(`pane:${ws}`, null, memory);
   const [latestOpen, setLatestOpen] = useRemembered(`latest:${ws}`, false, memory);
   const [controllerOpen, setControllerOpen] = useRemembered(`controller:${ws}`, false, memory);
@@ -252,24 +251,22 @@ export function Console() {
   const statuses = new Map(state ? projectSessions.map((s) => [s.id, statusOf(s, latestRun, state)] as const) : []);
   const working = projectSessions.find((s) => ['working', 'sending'].includes(statuses.get(s.id)?.badge ?? ''))?.id ?? null;
   const lastActive = [...projectSessions].sort((a, b) => (statuses.get(b.id)?.when ?? '').localeCompare(statuses.get(a.id)?.when ?? ''))[0]?.id ?? null;
-  // One displayed pane drives Focus and the narrow layout. An explicit choice sticks; until one is made, the view follows a working agent.
-  const viewed = visible.find((s) => s.id === paneChoice) ?? visible.find((s) => s.id === working) ?? visible.find((s) => s.id === lastActive) ?? visible[0];
-  const displayed = viewed?.id;
-  const current = visible.find(s => s.id === controlChoice) ?? visible[0];
+  // One selected agent is both the displayed pane (Focus, narrow layout) and the Control recipient. It starts on a working agent and
+  // is then held, so a later working agent never retargets Control; only a click, or that agent leaving the view, changes it.
+  const current = visible.find((s) => s.id === paneChoice) ?? visible.find((s) => s.id === working) ?? visible.find((s) => s.id === lastActive) ?? visible[0];
+  const displayed = current?.id;
+  useEffect(() => { if (displayed && displayed !== paneChoice) setPaneChoice(displayed); }, [displayed, paneChoice, setPaneChoice]);
   const groupInstances = visible.map((s) => [s.id, state?.instances.find((i) => i.agentId === s.id)?.status]);
   const readinessKey = JSON.stringify([pair, card?.agents, current?.id, current?.registrationId, groupInstances, [...inputBlocks]]);
   useEffect(() => { setConsent(''); setReady(false); setResetFor(null); setStatusReset(null); }, [readinessKey, project]);
   // Readiness and confirmations attest to what was on screen, so any view switch revokes them. Drafts and choices stay.
-  const viewKey = JSON.stringify([tab, phase, layout, displayed, current?.id]);
+  const viewKey = JSON.stringify([tab, phase, layout, displayed]);
   useEffect(() => { setConsent(''); setReady(false); setResetFor(null); setStatusReset(null); setViewEpoch((epoch) => epoch + 1); }, [viewKey]);
   const chooseLayout = (next: 'parallel' | 'focus') => { setLayout(next); try { localStorage.setItem(LAYOUT, next); } catch { /* preference only */ } };
   const chooseControlPlacement = (next: 'below' | 'side') => { setControlPlacement(next); try { localStorage.setItem(CONTROL_PLACEMENT, next); } catch { /* preference only */ } };
   const focusControlPane = () => controlPane.current?.focus();
   // Opening moves focus into the drawer; closing returns it to the toggle so the keyboard destination stays clear.
   const toggleDrawer = (open: boolean) => { setControlDrawer(open); requestAnimationFrame(() => open ? focusControlPane() : drawerToggle.current?.focus()); };
-  /** Retargets the one control pane only; it sends nothing and readiness is revoked by the target change. */
-  const retargetControl = (id: string, label: string) => { setControlChoice(id); setConsent(''); setReady(false);
-    setMessage(`Control now targets ${label}. Nothing was sent.`); focusControlPane(); };
   const stale = !!error || clock - updated > 10000;
   const inputRun = owned[0] && (owned[0].implementation || owned[0].planning || owned[0].standalone) ? owned[0] : null;
   // A reading that is not current cannot back a confirmation; readiness must be given again once it is.
@@ -575,8 +572,8 @@ export function Console() {
         <div className={`workbench${controlPlacement === 'side' ? ' side' : ''}`}>
         <div className="terminal-stage">
         <div className="target-row"><h2 className="stage-title"><span aria-hidden="true">🖥️</span> {config?.terminalEnabled ? <>Native terminals <span className="stage-cue">native CLI · choose the keyboard pane below · controls below</span></> : <>Live terminals <span className="stage-cue">captured output · controls below</span></>}</h2>
-          {/* Viewing and choosing the controller recipient are independent. */}
-          <div className="stage-target"><span className="target-caption">View</span><nav className="agent-tabs" aria-label="Viewed terminal">{visible.map((s) => <button key={s.id} className={s.id === displayed ? 'selected' : ''} aria-pressed={s.id === displayed} onClick={() => select(s.id)}>
+          {/* The one agent selector: the shown terminal and the Control recipient together. It never selects the keyboard writer. */}
+          <div className="stage-target"><span className="target-caption">Agent</span><nav className="agent-tabs" aria-label="Agent">{visible.map((s) => <button key={s.id} className={s.id === displayed ? 'selected' : ''} aria-pressed={s.id === displayed} onClick={() => select(s.id)}>
             <Icon badge={statuses.get(s.id)?.badge ?? 'unknown'} />{s.label}</button>)}</nav></div>
           <div className="row-tools"><div className="segmented" role="group" aria-label="Pane layout">
               <button className={layout === 'parallel' ? 'selected' : 'quiet'} aria-pressed={layout === 'parallel'} onClick={() => chooseLayout('parallel')}>Parallel</button>
@@ -602,10 +599,9 @@ export function Console() {
           const resetBlock = resetStatusReason(s);
           const location = locationOf(s);
           return <article key={s.id} aria-label={`${s.label} pane`} hidden={layout === 'focus' && s.id !== displayed} className={`pane ${s.id === displayed ? 'active' : ''}`}>
-            <div className="pane-heading"><h2><Icon badge={status.badge} />{s.label}</h2><span className="mono muted pane-meta">{s.agentType}{location ? ` · ${location}` : ''}</span>
-              <span className="badge">{execution ? execution.status.toUpperCase() : 'NO ACTIVE CONTROLLER TURN'}</span>
-              {visible.length > 1 && <button type="button" className="quiet use-control" disabled={s.id === current?.id} title={s.id === current?.id ? `${s.label} is already the Control target.` : undefined}
-                onClick={() => retargetControl(s.id, s.label)}>Use {s.label} in control pane</button>}</div>
+            {/* A pointer shortcut for the Agent selector above, for Parallel where every card is visible. */}
+            <div className="pane-heading" onClick={() => { if (s.id !== displayed) select(s.id); }}><h2><Icon badge={status.badge} />{s.label}</h2><span className="mono muted pane-meta">{s.agentType}{location ? ` · ${location}` : ''}</span>
+              <span className="badge">{execution ? execution.status.toUpperCase() : 'NO ACTIVE CONTROLLER TURN'}</span></div>
             <div className="pane-status"><span className="state">{status.badge}</span><span className="pane-detail" title={status.detail}>{status.detail}</span>
               {status.when && <span className="mono muted">{timeOf(status.when)}</span>}
               {activity?.state === 'unknown' && <button type="button" disabled={!!resetBlock} title={resetBlock || 'Restore Ready after inspecting this terminal.'}
@@ -623,7 +619,8 @@ export function Console() {
         </div>
         <section ref={controlPane} id="altcli-control" tabIndex={-1} className={`control-pane${controlDrawer ? ' drawer' : ''}`} aria-label="Control"
           onKeyDown={(e) => { if (controlDrawer && e.key === 'Escape') { e.stopPropagation(); toggleDrawer(false); } }}>
-          <div className="control-heading"><h2>Control</h2>{controlDrawer && <button type="button" className="quiet drawer-close" onClick={() => toggleDrawer(false)}>Close drawer</button>}</div><nav className="agent-tabs control-targets" aria-label="Command target">{visible.map(s => <button type="button" key={s.id} aria-pressed={s.id === current?.id} onClick={() => {setControlChoice(s.id);setConsent('');setReady(false);}}>{s.label}</button>)}</nav>
+          {/* Names the recipient chosen by the Agent selector; Plan setup is the one control addressed to the whole group. */}
+          <div className="control-heading"><h2>Control{phase === 'plan' && !inputRun && !showLegacy ? <span className="control-recipient"> · All agents</span> : current && <span className="control-recipient"> · {current.label}</span>}</h2>{controlDrawer && <button type="button" className="quiet drawer-close" onClick={() => toggleDrawer(false)}>Close drawer</button>}</div>
           <div className="control-body">
           {current && inputRun && !showLegacy && <InteractionComposer key={current.id} token={token} state={state} run={inputRun} agent={current} draftKey={`draft:${scope}:${current.id}`} disabled={busy || stale || setupHeld || manualHeld || !state.inputEnabled || !!identityBlockedReason || !!cardReason(current)} viewEpoch={viewEpoch} refresh={refresh} />}
           {current && actionable && !inputRun && phase === 'implementation' && !showLegacy && <PaneActions key={current.id} {...common} group={pair} agent={current} settings={implementationSettings} blockedReason={implementationReason || cardReason(current)} keyboardHandoff={keyboardHandoff} viewEpoch={viewEpoch} draftKey={`draft:${scope}:${current.id}`} />}
@@ -733,7 +730,7 @@ export function Console() {
       <section className="panel about" aria-label="How this works">
         <div className="section-heading"><h2>How this works</h2></div>
         <p>AltCLI is a host-resident console for coding agents running in tmux panes. You can start CLIs yourself or explicitly preview and confirm profile launches when the host enables that feature. The console coordinates their turns.</p>
-        <p>The Control pane acts on its selected recipient, independently of the terminal being viewed. Send delivers an instruction; After send can add one handoff commit, or a commit and one review by the named peer. Current changes snapshots work as it stands, and Committed review asks this agent to review a committed range. Every action names its recipients and needs a fresh readiness confirmation.</p>
+        <p>The Agent selector above the terminals chooses both the terminal shown and the Control pane's recipient; it starts on a working agent and then changes only when you choose another. Plan setup is the exception: it addresses the whole group. Send delivers an instruction; After send can add one handoff commit, or a commit and one review by the named peer. Current changes snapshots work as it stands, and Committed review asks this agent to review a committed range. Every action names its recipients and needs a fresh readiness confirmation.</p>
         <p>The server owns every run, validates and deduplicates correlated completions, and pauses on unknown background work. No effect in this page sends commands. A completed chain is not final task acceptance.</p>
         <p>Viewing another worktree never changes a running relay. Pause a run before manual terminal takeover. Locking this view or disconnecting your phone does not interrupt workers.</p>
         <p className="fine">Plan produces documents and an approval checkpoint; Implementation runs committed handoffs on a task branch. Integration branches are starting points only. The detailed design lives in the repository’s README, docs/WORKFLOWS.md and the ADRs.</p>
