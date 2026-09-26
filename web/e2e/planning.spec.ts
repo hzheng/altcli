@@ -4,7 +4,7 @@ import type { Group, ImplementationRun } from '../src/contracts/implementation';
 import type { PlanDecision, PlanStart } from '../src/contracts/planning';
 import type { RelayRun, WorkflowState } from '../src/contracts/workflow';
 import { newPlanning } from '../src/server/planning-state';
-import { editSettings, expand, openController } from './ui';
+import { expandWorktree, editSettings, expand, openController } from './ui';
 const headers = { Authorization: `Bearer ${'a'.repeat(64)}` };
 async function post(request: APIRequestContext, path: string, data: unknown) {
   const response = await request.post(`/api/v1/${path}`, { headers, data }); expect(response.ok()).toBe(true); return response.json();
@@ -21,7 +21,7 @@ async function openGroup(page: Page, group: Group) {
   await page.goto('/'); await page.getByLabel('Host access token').fill('a'.repeat(64)); await page.getByRole('button', { name: 'Open console' }).click();
   await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Projects', exact: true }).click();
   await page.getByRole('button', { name: `Project ${group.repository.split('/').pop()}`, exact: true }).click();
-  await page.getByRole('button', { name: `Open ${group.cwd!.split('/').pop()}`, exact: true }).click();
+  await expandWorktree(page, group.repository.split('/').pop()!); await page.getByRole('button', { name: `Open ${group.cwd!.split('/').pop()}`, exact: true }).click();
   await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Console', exact: true }).click();
 }
 test('Plan and Implementation are explicit readonly choices; Plan collects independent gate and branch settings', async ({ page, request }, info) => {

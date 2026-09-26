@@ -142,10 +142,19 @@ details.advanced[open] summary { margin-bottom:12px; }
 .workspace-cards .workspace-card { display:flex; flex-direction:column; gap:5px; width:100%; min-width:0; padding:14px 16px; border:0; background:transparent; text-align:left; font-size:12px; font-weight:400; }
 .workspace-card .workspace-title { width:100%; }
 .workspace-card:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+.workspace-cards.worktree-cards { grid-template-columns:minmax(0,1fr); }
+.worktree-cards summary { cursor:pointer; list-style:none; }
+.worktree-cards summary::-webkit-details-marker { display:none; }
+/* Every worktree's trigger buttons share one wrapping row; reasons, opened forms and launch cards follow it at full width. */
+.worktree-controls { display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:0 16px 14px; }
+.worktree-controls .worktree-actions, .worktree-controls .worktree-actions > div, .worktree-controls > .launch-agents { display:contents; }
+.worktree-controls .worktree-actions > div > :not(button), .worktree-controls > .launch-agents > :not(button) { order:1; flex-basis:100%; min-width:0; }
+.worktree-controls .worktree-actions > div > .fine { margin:4px 0 0; }
 .create-worktree { margin-top:20px; }
-.worktree-actions { display:grid; gap:6px; padding:0 16px 14px; }
-.worktree-actions .create-worktree { margin-top:0; }
-.worktree-actions .quiet { justify-self:start; }
+.worktrees-heading { flex-wrap:wrap; }
+.worktrees-heading > div:first-child { margin-right:auto; }
+.worktrees-heading > .create-worktree { display:contents; }
+.worktrees-heading > .create-worktree > :not(button) { flex-basis:100%; min-width:0; max-width:100%; order:1; }
 .worktree-actions .notice { margin-bottom:4px; }
 .worktree-actions .notice label { display:grid; gap:6px; margin:10px 0; }
 .worktree-actions textarea, .worktree-actions input { width:100%; font:inherit; line-height:1.5; background:#101a1d; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:9px 11px; }
@@ -214,7 +223,10 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
 /* Compact console: one heading line, a settings summary, and each agent's actions directly under its output. */
 .page-heading.compact { padding:10px 0 8px; align-items:center; }
 .page-heading.compact h1 { font-size:22px; margin:0; }
-.context-project { display:inline-flex; align-items:baseline; gap:8px; min-width:0; max-width:100%; }
+.context-project { display:flex; flex-direction:column; gap:6px; min-width:0; max-width:100%; }
+.context-switches { display:flex; flex-wrap:wrap; gap:8px 14px; min-width:0; }
+.context-switches label { display:flex; align-items:center; gap:6px; min-width:0; max-width:100%; margin:0; }
+.context-switches select { min-width:0; max-width:260px; width:100%; font:inherit; padding:5px 8px; color:var(--text); background:var(--bg); border:1px solid var(--line); border-radius:6px; }
 .context-project .mono { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .context-actions { margin-left:auto; display:flex; gap:6px; }
 .context-actions button { font-size:11px; }
@@ -346,6 +358,14 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
 /* Optional placements of the one control pane: beside the stage on wide screens, a bottom drawer on phones. */
 .workbench { min-width: 0; }
 .control-heading { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.control-targets { flex-wrap:nowrap; gap:4px; margin-bottom:0; overflow-x:auto; }
+.control-targets button { position:relative; z-index:1; flex:0 0 auto; min-width:0; max-width:100%; border-radius:8px 8px 0 0; background:var(--panel); overflow-wrap:anywhere; }
+.control-targets button[aria-pressed=true] { color:var(--accent); background:var(--command-bg); border-color:var(--command-edge); border-bottom-color:var(--command-bg); }
+.control-body { min-width:0; margin-top:-1px; border:1px solid var(--line); border-radius:0 0 8px 8px; background:var(--command-bg); }
+.control-body:empty { display:none; }
+.control-body > .pane-actions { border-top:0; }
+.control-body > .composer { margin-top:0; border:0; border-radius:0; }
+.control-body > .command-divider { margin-top:0; padding-top:12px; }
 .pane-heading .use-control { font-size: 11px; padding: 4px 10px; }
 .control-placement, .drawer-toggle { display: none; }
 @media (min-width: 1280px) {
@@ -363,6 +383,13 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
 .launch-agents code { white-space: pre-wrap; overflow-wrap: anywhere; }
 .launch-agents table { table-layout: fixed; width: 100%; }
 .launch-agents .row-tools { flex-wrap: wrap; }
+.launch-actions button { margin-left:0; }
+.launch-actions > button { padding:7px 10px; }
+.launch-actions > section, .launch-actions > p { flex-basis:100%; min-width:0; order:1; }
+.launch-agent { display:flex; align-items:flex-end; gap:8px; margin:8px 0; }
+.launch-agent label { flex:1; min-width:0; margin:0; }
+.launch-agent button { flex-shrink:0; padding:10px; }
+.launch-inspection { margin:8px 0; padding:8px; border-left:3px solid currentColor; }
 
 /* Compact status and tool icons (Hint.tsx): help shows on hover, keyboard focus and tap; the bubble never takes clicks. */
 .hint { position:relative; display:inline-flex; align-items:center; }

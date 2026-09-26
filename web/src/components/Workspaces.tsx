@@ -4,7 +4,6 @@ import type { SessionRegistration } from '../contracts/api';
 import type { Group } from '../contracts/implementation';
 import type { ManagedSession, RelayRun, Workspace, WorkspaceDiscovery, WorkspaceResetResult } from '../contracts/workflow';
 import type { ProjectWorktree } from '../contracts/projects';
-import type { ManualSession } from '../contracts/terminals';
 import { api } from '../client/api';
 import { LifecycleResults, WorktreeActions } from './RemoveWorktree';
 import { LaunchAgents } from './LaunchAgents';
@@ -22,9 +21,7 @@ export function groupStatus(w: Workspace): { badge: string; detail: string } {
 }
 interface Props {
   token: string; disabled: boolean;
-  launchEnabled?: boolean; terminalEnabled?: boolean; clientInstanceId?: string; manualHeld?: boolean;
-  /** Pending manual-input records, for the launch terminals' Keyboard selector; refreshState re-reads them after a decision. */
-  manualSessions?: ManualSession[]; refreshState?: () => Promise<void>;
+  launchEnabled?: boolean; manualHeld?: boolean;
   discovery: WorkspaceDiscovery | null; discoveryError: string; onRecheck: () => Promise<void>;
   sessions: SessionRegistration[]; pairs: Group[]; lockedRepositories: string[];
   selectedKey: string | null; onSelectWorkspace: (workspace: Workspace) => void;
@@ -43,6 +40,7 @@ export function Workspaces(props: Props) {
   const [projectId, setProjectId] = useState<string | null>(null);
   const [launchRequest, setLaunchRequest] = useState<{treeId:string; nonce:number}|null>(null);
   const [directoryRoot, setDirectoryRoot] = useState<string | null>(null);
+  const [expandedWorktrees, setExpandedWorktrees] = useState<Record<string, boolean>>({});
   const workspaces = discovery?.workspaces ?? [];
   const projects = discovery?.projects ?? [];
   const project = projects.find((p) => p.id === projectId) ?? projects.find((p) => p.worktrees.some((w) => w.path === selectedRoot)) ?? projects[0];
@@ -68,10 +66,12 @@ export function Workspaces(props: Props) {
         <ul>{discovery.skipped.map((s) => <li key={s.cwd}><span className="mono">{s.cwd}</span> · {s.panes} pane(s) · {s.reason}</li>)}</ul></details>}
     </section>
     {project && <section className="panel workspaces" aria-label={`Project worktrees ${project.name}`}>
-      <div className="section-heading"><div><p className="eyebrow">{project.name}</p><h2>Worktrees</h2></div></div>
+      <div className="section-heading worktrees-heading"><div><p className="eyebrow">{project.name}</p><h2>Worktrees</h2></div>
+      <CreateWorktree onLaunch={props.launchEnabled ? path => {const tree=project.worktrees.find(t=>t.path===path);if(tree){setDirectoryRoot(path);setExpandedWorktrees(previous=>({...previous,[tree.id]:true}));setLaunchRequest({treeId:tree.id,nonce:Date.now()});}} : undefined} key={project.id} project={project} token={props.token} disabled={props.disabled || !props.inputEnabled || !!discoveryError || !!project.error} onChanged={props.onChanged} viewEpoch={props.viewEpoch} />
+      </div>
       <p className="muted">Each worktree has an independent execution lock. Agents in different subdirectories of one checkout still share its index.</p>
       {project.error && <p className="notice error" role="alert">{project.error}</p>}
-      <ul className="workspace-cards" aria-label="Available worktrees">{project.worktrees.map((tree) => {
+      <ul className="workspace-cards worktree-cards" aria-label="Available worktrees">{[...project.worktrees].sort((a, b) => Number(b.main) - Number(a.main)).map((tree) => {
         const groups = workspaces.filter((w) => w.worktree.root === tree.path); const agents = groups.flatMap((w) => w.agents);
         const run = props.runs.find((r) => r.repository === tree.path && ['running', 'waiting', 'paused'].includes(r.status));
         // Hard blocks make a click pointless; everything else is left to the server's preview, whose exact refusal is shown on click.
@@ -84,27 +84,29 @@ export function Workspaces(props: Props) {
         const squashReason = hardReason || ownerReason;
         const occupied = agents.length ? `${agents.map((a) => a.label).join(', ')} ${agents.length === 1 ? 'is' : 'are'} still in this worktree; the server refuses removal while a pane is inside it. Finish branch closes sessions AltCLI launched; close or move other panes yourself, then Recheck.` : '';
         const selected = (directoryRoot ?? selectedRoot) === tree.path;
-        return <li key={tree.id} className={selected ? 'selected' : ''}><button type="button" className="workspace-card" aria-pressed={selected} aria-label={`Open ${nameOf(tree.path)}`} onClick={() => {
-          setDirectoryRoot(tree.path);
-          if (groups.length === 1) onSelectWorkspace(groups[0]!); else if (!groups.length) onSelectWorktree(tree);
+        const expanded = expandedWorktrees[tree.id] ?? false;
+        return <li key={tree.id} className={selected ? 'selected' : ''}><details open={expanded} onToggle={event => {
+          const next = event.currentTarget.open;
+          setExpandedWorktrees(previous => previous[tree.id] === next ? previous : { ...previous, [tree.id]: next });
         }}>
-          <div className="workspace-title"><strong>{tree.main ? 'Main checkout' : nameOf(tree.path)}</strong><span className="badge">{agents.filter((a) => a.eligible).length} AGENTS</span></div>
+          <summary className="workspace-card" aria-label={`Worktree ${nameOf(tree.path)}`}>
+          <span className="workspace-title"><strong><span aria-hidden="true">{expanded ? '▾' : '▸'} </span>{tree.main ? 'Main checkout' : nameOf(tree.path)}</strong><span className="badge">{agents.filter((a) => a.eligible).length} AGENTS</span></span>
           <span className="mono cwd" title={tree.path}>{tree.path}</span>
           <span>Branch: <span className="mono">{tree.branch ?? 'detached HEAD'}</span></span>
           <span className="muted">{tree.error ?? (run ? `${run.implementation ? 'Implementation' : run.planning ? 'Plan' : 'Staging'} · ${run.status}` : agents.length ? agents.map((a) => a.label).join(', ') : 'No agents · start coding CLIs here, then Recheck')}</span>
           {groups.length > 1 && <span>{groups.length} agent directories · choose a task group</span>}
-        </button>{!tree.main && <WorktreeActions project={project} tree={tree} token={props.token}
+        </summary><div className="worktree-controls"><button type="button" className="quiet" aria-pressed={selected} aria-label={`Open ${nameOf(tree.path)}`} onClick={() => {
+          setDirectoryRoot(tree.path);
+          if (groups.length === 1) onSelectWorkspace(groups[0]!); else if (!groups.length) onSelectWorktree(tree);
+        }}>Open console</button>{!tree.main && <WorktreeActions project={project} tree={tree} token={props.token}
           disabled={!!squashReason} disabledReason={squashReason} deletionReason={hardReason} deletionHint={ownerReason || occupied}
           onChanged={props.onChanged} viewEpoch={props.viewEpoch} />}
-          <LaunchAgents requested={launchRequest?.treeId === tree.id ? launchRequest.nonce : 0} token={props.token} projectId={project.id} tree={tree} enabled={props.launchEnabled === true && props.inputEnabled} inputEnabled={props.inputEnabled} terminalEnabled={props.terminalEnabled === true} held={props.manualHeld === true} clientInstanceId={props.clientInstanceId ?? ''} onChanged={props.onChanged} viewEpoch={props.viewEpoch}
-            manualSessions={props.manualSessions} refreshState={props.refreshState} busy={props.disabled}
-            affected={props.runs.filter((r) => ['running', 'waiting', 'paused'].includes(r.status)).map((r) => `${r.id} · ${r.status}`)}/></li>;
+          <LaunchAgents requested={launchRequest?.treeId === tree.id ? launchRequest.nonce : 0} token={props.token} projectId={project.id} tree={tree} enabled={props.launchEnabled === true && props.inputEnabled} inputEnabled={props.inputEnabled} held={props.manualHeld === true} onChanged={props.onChanged} viewEpoch={props.viewEpoch} busy={props.disabled}/></div></details></li>;
       })}</ul>
       {directories.length > 1 && <div className="directory-groups"><h3>Choose the task group directory</h3><p className="fine">Collaborators must share a directory. These groups share one checkout; only one may own it at a time.</p>
         {directories.map((w) => <button type="button" key={workspaceKey(w)} className="quiet" onClick={() => onSelectWorkspace(w)}><span className="mono">{w.cwd}</span> · {w.agents.map((a) => a.label).join(', ')}</button>)}
       </div>}
       <LifecycleResults project={project} token={props.token} onChanged={props.onChanged} />
-      <CreateWorktree onLaunch={props.launchEnabled ? path => {const tree=project.worktrees.find(t=>t.path===path);if(tree){setDirectoryRoot(path);setLaunchRequest({treeId:tree.id,nonce:Date.now()});document.getElementById(`launch-${tree.id}`)?.scrollIntoView({block:'center'});}} : undefined} key={project.id} project={project} token={props.token} disabled={props.disabled || !props.inputEnabled || !!discoveryError || !!project.error} onChanged={props.onChanged} viewEpoch={props.viewEpoch} />
     </section>}
     {open && <WorkspaceDetail key={selectedKey} workspace={open} {...props} />}
   </>;

@@ -13,8 +13,8 @@ export function LaunchCleanup({token,item,enabled,viewEpoch,onChanged}:{token:st
     catch(e){if(!(e instanceof HttpError)||e.status>=500){setLost(true);setPreview(null);throw Error('The cleanup response was lost. Inspect its result before continuing.');}throw e;}
     setPreview(null);setAck(false);await onChanged();
   }
-  if(item.cleanup)return <p className="fine">Cleanup {item.cleanup.status}. Use Inspect to check the result; cleanup is never retried automatically.</p>;
-  return <div>
+  if(item.cleanup)return <p className="fine">Cleanup {item.cleanup.status}. Use Refresh launch status to check the result; cleanup is never retried automatically.</p>;
+  return <>
     {!preview&&!lost&&<button type="button" disabled={!enabled||busy} onClick={()=>void act(async()=>{setAck(false);setPreview(await api<LaunchCleanupPreview>(token,`launches/${item.id}/cleanup/preview`,{body:{}}));})}>Clean up…</button>}
     {preview&&<section aria-label={`Clean up ${item.sessionName}`}>
       <p><strong>{preview.sessionName}</strong>: {preview.state==='missing'?'the recorded session is already gone. Remove its launch card.':preview.state==='dead'?'the pane has exited. Remove its retained tmux session and launch card.':'cleanup is unavailable.'} Launch history is kept.</p>
@@ -25,5 +25,5 @@ export function LaunchCleanup({token,item,enabled,viewEpoch,onChanged}:{token:st
     </section>}
     {lost&&<button type="button" disabled={busy} onClick={()=>void act(async()=>{await api(token,`launches/${item.id}/inspect`,{body:{}});await onChanged();setLost(false);})}>Inspect cleanup result</button>}
     {error&&<p role="alert">{error}</p>}
-  </div>;
+  </>;
 }

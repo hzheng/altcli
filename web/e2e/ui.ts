@@ -4,6 +4,11 @@ export async function expand(scope: Page | Locator, summary: string | RegExp) {
   const toggle = scope.locator('summary').filter({ hasText: summary }).first();
   if (!await toggle.evaluate((element) => (element.parentElement as HTMLDetailsElement).open)) await toggle.click();
 }
+/** Opens a worktree's controls while preserving an already expanded card and its form state. */
+export async function expandWorktree(page: Page, name: string) {
+  const toggle = page.getByLabel(`Worktree ${name}`, { exact: true });
+  if (!await toggle.evaluate(element => (element.parentElement as HTMLDetailsElement).open)) await toggle.click();
+}
 /** Opens the next run's settings editor for the phase on screen unless it is already open. */
 export async function editSettings(page: Page) {
   const toggle = page.getByRole('region', { name: /^(Implementation|Plan) settings$/ }).getByRole('button', { name: 'Settings', exact: true });

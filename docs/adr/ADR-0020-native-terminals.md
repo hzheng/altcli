@@ -29,13 +29,16 @@ and background effects. Refuse it while any keyboard, delivery, setup or launch
 operation remains live or unresolved. Keep every affected run's keyboard hold,
 checkpoint and fault; its review or takeover stays separate. Recovery is available
 even with no remaining agents or with feature flags off.
+The browser records the inspection checkbox's acknowledgement as that note;
+typing additional text is not required.
 
 The terminal view, keyboard focus, control recipient and writer are independent.
 Copy mode and synchronized input block automated dispatch without removing a live,
 verified CLI from its workspace group or unmounting its terminal. Keep the reason
 visible so the owner can use the native keyboard to leave copy mode. Process,
 instance and directory checks still apply; observation is not readiness.
-One AltCLI control pane retains drafts per target.
+One AltCLI control pane retains drafts per target, with recipient tabs visually
+joined to the selected input section.
 
 An explicit Implementation action may hand off this browser's connected keyboard
 when there is exactly one manual session and no affected run checkpoints. Its

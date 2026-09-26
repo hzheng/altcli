@@ -77,7 +77,7 @@ A session reached by navigation keeps its own lifetime settings. If it uses
 destroy it, just as a desktop client leaving it would.
 
 The one **Keyboard** selector in the shared terminal area (radios on wide screens, a single
-select on phones; Projects launch terminals use the same selector) chooses the writer. Choosing
+select on phones) chooses the writer. Choosing
 a pane requires explicit confirmation naming the old and new targets and affected runs; it opens
 that pane's observer connection if needed, then requests the grant, creating a fresh writable
 attachment. A pending choice is shown as pending; cancel, Lock, a view change or a newer choice
@@ -137,6 +137,8 @@ neither blocks the grant nor fails settlement while it stays exited.
 
 After inspecting the host, **Record a human inspection decision…** provides a
 separate recovery path, including when no agents remain or feature flags are off.
+The browser requires the inspection acknowledgement checkbox and records that
+exact wording as the decision note; no typed note is required.
 `POST /api/v1/terminals/reconcile` accepts either `confirmReady: true` for the
 settled check, or `confirmInspected: true` with a nonblank single-line `note`
 (at most 1,000 characters). Both require the current `manualSessionId`,
@@ -248,6 +250,9 @@ never adopted; current absence cannot prove no execution. Human reconciliation
 records a note acknowledging possible prior/background effects. It never retries,
 removes sessions, deletes worktrees or rewrites history. A new launch needs a new
 preview. Mock launches are labelled simulated and appear in mock discovery.
+Launch cards in Projects expose status and recovery, without embedded terminals.
+Open the checkout in Console to view and control its discovered agents; startup
+that has not exposed a supported agent yet remains inspectable in host tmux.
 
 Live launched sessions are closed by **Finish branch** on a linked task worktree
 ([ADR-0013](adr/ADR-0013-confirmed-branch-setup.md#confirmed-closing-of-launched-sessions)):

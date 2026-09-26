@@ -1,6 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
-import type { WorkflowState, HookEvent } from '../src/contracts/workflow';
-import { editSettings, expand, openController, pane } from './ui';
+import type { WorkflowState, HookEvent, WorkspaceDiscovery } from '../src/contracts/workflow';
+import { expandWorktree, editSettings, expand, openCard, openController, pane } from './ui';
 const TOKEN = 'a'.repeat(64);
 const headers = { Authorization: `Bearer ${TOKEN}` };
 test.describe.configure({ mode: 'serial' });
@@ -27,7 +27,7 @@ async function unlock(page: Page, token = TOKEN, useFallback = true) {
 async function openTab(page: Page, name: 'Console' | 'Projects' | 'Settings' | 'About') { await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name, exact: true }).click(); }
 async function editWorkspace(page: Page, name: string) {
   await page.getByRole('button', { name: `Project ${name}`, exact: true }).click();
-  await page.getByRole('button', { name: `Open ${name}`, exact: true }).click();
+  await expandWorktree(page, name); await page.getByRole('button', { name: `Open ${name}`, exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Agent console', exact: true })).toBeVisible();
   await openTab(page, 'Projects');
 }
@@ -50,6 +50,67 @@ test.beforeEach(async ({ request }) => {
   expect((await request.patch('/api/v1/sessions/claude', { headers, data: { label: 'Claude Code', expectedLabel: 'Claude', expectedRegistrationId: session.registrationId } })).ok()).toBe(true);
 });
 test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'wait' }); });
+test('Console switches projects and worktrees without writes, keeps drafts and revokes readiness', async ({ page, request }, info) => {
+  const inventory = await (await request.get('/api/v1/workspaces', { headers })).json() as WorkspaceDiscovery;
+  const project = inventory.projects!.find(p => p.name === 'project')!, other = inventory.projects!.find(p => p.name === 'other')!;
+  const main = project.worktrees[0]!;
+  const linked = { ...main, id: 'empty-linked', path: '/demo/tasks/a-long-feature-branch-name', branch: 'feature/a-long-feature-branch-name', main: false, identity: null };
+  project.worktrees = [linked, main];
+  const otherAgentTree = { ...other.worktrees[0]!, main: false };
+  other.worktrees = [{ ...otherAgentTree, id: 'empty-main', path: '/demo/other-main', main: true, identity: null }, otherAgentTree];
+  inventory.projects!.push({ ...project, id: 'empty-project', name: 'empty', worktrees: [{ ...linked, id: 'empty-tree', path: '/demo/empty' }] });
+  const shell = inventory.workspaces.find(w => w.worktree.root === '/demo/other')!;
+  inventory.workspaces.push({ ...shell, cwd: '/demo/empty', worktree: { ...shell.worktree, root: '/demo/empty' }, agents: shell.agents.filter(a => a.kind === 'shell') });
+  await page.route('**/api/v1/workspaces', route => route.fulfill({ json: inventory }));
+  await unlock(page, TOKEN, false);
+  const context = page.locator('.context-bar'), projects = context.getByRole('combobox', { name: 'Switch project' }), trees = context.getByRole('combobox', { name: 'Switch worktree' });
+  await expect(projects).toHaveValue(project.id); await expect(trees).toHaveValue(main.id);
+  await expect(trees.locator('option').first()).toContainText('Main checkout');
+  await expect(projects.getByRole('option', { name: 'empty — no agents', exact: true })).toHaveAttribute('disabled');
+  const card = await openCard(page, 'Codex'); await card.getByLabel('Instruction for Codex').fill('Keep this project draft');
+  await card.getByLabel('Ready for implementation').check();
+  const writes: string[] = []; page.on('request', r => { if (r.method() !== 'GET') writes.push(r.url()); });
+  await trees.selectOption(linked.id);
+  await expect(context).toContainText(linked.path); await expect(page.getByRole('heading', { name: 'No eligible agents here yet' })).toBeVisible();
+  await expect(page.getByLabel('Instruction for Codex')).toHaveCount(0);
+  expect(await context.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+  await context.screenshot({ path: info.outputPath('console-worktree-switches.png') });
+  await projects.selectOption(other.id); await expect(trees).toHaveValue(otherAgentTree.id);
+  await expect(trees.locator('option')).toHaveCount(other.worktrees.length); await expect(context).toContainText('/demo/other');
+  await projects.selectOption(project.id); await expect(trees).toHaveValue(main.id);
+  await expect(card.getByLabel('Instruction for Codex')).toHaveValue('Keep this project draft');
+  await expect(card.getByLabel('Ready for implementation')).not.toBeChecked(); expect(writes).toEqual([]);
+  await page.reload(); await page.getByLabel('Host access token').fill(TOKEN); await page.getByRole('button', { name: 'Open console' }).click();
+  await expect(trees).toHaveValue(main.id);
+});
+test('Console project switching leaves an active run intact', async ({ page, request }) => {
+  const command = await post(request, 'commands', { requestId: crypto.randomUUID(), agentId: 'codex', kind: 'instruction', text: 'Keep running while browsing', confirmReady: true });
+  await unlock(page, TOKEN, false);
+  const before = await state(request), projects = page.getByRole('combobox', { name: 'Switch project' });
+  await expect(projects).not.toHaveValue('');
+  const original = await projects.inputValue();
+  const writes: string[] = []; page.on('request', r => { if (r.method() !== 'GET') writes.push(r.url()); });
+  await projects.selectOption({ label: 'other' }); await expect(page.locator('.context-bar')).toContainText('/demo/other');
+  await projects.selectOption(original); await expect(page.locator('.context-bar')).toContainText('/demo/project');
+  const after = await state(request); expect(after.commands).toEqual(before.commands);
+  expect(after.runs.find(r => r.currentCommandId === command.id)).toEqual(before.runs.find(r => r.currentCommandId === command.id));
+  expect(writes).toEqual([]);
+});
+test('Console asks for a task group when a worktree has several agent directories', async ({ page, request }) => {
+  const inventory = await (await request.get('/api/v1/workspaces', { headers })).json() as WorkspaceDiscovery;
+  const workspace = inventory.workspaces.find(w => w.worktree.root === '/demo/project')!;
+  inventory.workspaces.push({ ...workspace, cwd: '/demo/project/subdirectory' });
+  await page.route('**/api/v1/workspaces', route => route.fulfill({ json: inventory }));
+  await unlock(page, TOKEN, false);
+  const projects = page.getByRole('combobox', { name: 'Switch project' }); await expect(projects).not.toHaveValue('');
+  const original = await projects.inputValue();
+  await projects.selectOption({ label: 'other' }); await projects.selectOption(original);
+  await expect(page.getByText('This worktree has agents in several directories. Choose a task group in Projects.')).toBeVisible();
+  await expect(page.locator('.context-bar')).toContainText('No group in use');
+  await page.getByRole('button', { name: 'Projects →', exact: true }).click();
+  await expandWorktree(page, 'project'); await page.getByRole('button', { name: 'Open project', exact: true }).click();
+  await expect(page.getByRole('button', { name: /\/demo\/project\/subdirectory ·/ })).toBeVisible();
+});
 test('an interrupted worker displays Interrupted, including durable execution evidence after backend restart', async ({ page, request }) => {
   // State presentation fixture; exact native correlation and ownership are exercised in server/hook tests.
   const pair = await post(request, 'pairs', { name: 'Interrupt fixture', sessions: ['codex', 'claude'] });
@@ -98,6 +159,7 @@ test('Unknown offers an explicit status reset beside the warning, preserving the
   // Reset status sits beside the agent's own status line; choose its pane first so it is shown on narrow screens too.
   await page.getByRole('navigation', { name: 'Viewed terminal' }).getByRole('button', { name: 'Claude Code', exact: true }).click();
   const row = pane(page, 'Claude Code').locator('.pane-status');
+  await expect(row).toContainText('A backend restart can clear activity evidence.');
   const reset = row.getByRole('button', { name: 'Reset status', exact: true });
   await expect(reset).toBeEnabled(); await reset.click();
   // The confirmation opens beside the button that asked for it, inside the same pane.
@@ -580,6 +642,8 @@ test('two live agents can be changed to solo or an empty selection through real 
   await openTab(page, 'Console');
   await expect(page.getByRole('region', { name: 'Implementation settings' })).toContainText('Select at least one agent');
   await expect(page.getByRole('button', { name: /^Send / })).toHaveCount(0);
+  // No recipient tab or input section: the joined tab body must not leave an empty bordered strip.
+  await expect(page.locator('#altcli-control > .control-body')).toBeHidden();
   const current = await state(request); expect(current.groups.find((group) => group.cwd === '/demo/project')!.members).toEqual([]);
   expect(current.executions).toEqual([]);
   await page.reload(); await page.getByLabel('Host access token').fill(TOKEN); await page.getByRole('button', { name: 'Open console' }).click();
@@ -593,7 +657,8 @@ test('with no saved registrations a workspace opens directly into a usable read-
   await openTab(page, 'Projects');
   await expect(page.getByRole('list', { name: 'Available projects' }).getByRole('listitem')).toHaveCount(2);
   await page.getByRole('button', { name: 'Project project', exact: true }).click();
-  await page.getByRole('button', { name: 'Open project', exact: true }).getByText('Branch: main').click();
+  await expect(page.locator('summary').filter({ hasText: '/demo/project' })).toContainText('Branch: main');
+  await expandWorktree(page, 'project'); await page.getByRole('button', { name: 'Open project', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Agent console', exact: true })).toBeVisible();
   await expect(page.getByLabel('demo output').first()).toBeVisible();
   // The existing narrow-screen layout shows only the active pane, even with Parallel selected.

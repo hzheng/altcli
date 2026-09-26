@@ -113,9 +113,23 @@ after restart. Merely browsing is read-only and retains discoveries only for the
 current backend process. Prepare dependencies and agent sessions yourself;
 AltCLI does not clone repositories, move agents or configure environments.
 
-In **Projects**, select a project, then click a worktree card to open its console.
+In **Projects**, select a project. Worktrees fill one column with the main checkout
+first. Click a worktree heading to expand or collapse its controls; each starts
+collapsed and keeps your choice when you Recheck. Choose **Open console** inside
+the worktree to open its console.
+**Create task worktree** sits beside the Worktrees heading; its form opens below
+that row, above the worktree list.
 If agents occupy several subdirectories, choose the task group directory first.
 Selection is shown by its border/background, not a separate Selected button.
+
+Console's **Project** and **Worktree** dropdowns switch the current view directly.
+Switching projects opens the first worktree with a live coding agent (main checkout
+first when it has one). Projects without agents remain listed as disabled
+**no agents** options. Worktrees without agents can still be viewed using the
+Worktree dropdown. Switching preserves each task group's drafts, clears readiness,
+and leaves running work in progress. Use **Projects →** to choose a task group
+when several agent directories share a worktree.
+
 Every eligible agent has a checkbox; all are included initially. One selected
 agent is a solo group, two a pair, and three or more a larger group. Checkbox
 changes save immediately. Larger groups can be selected, but Plan/Implementation
@@ -342,25 +356,28 @@ To launch agents from AltCLI:
    on PATH or an absolute path; there is no shell parsing, and saving runs nothing.
 3. In **Projects**, choose **Launch agents…** on the checkout's card (empty/new
    worktrees included; **Create task worktree** can open it for the new one).
-   **Add launch row**, pick the profile and a count, and add a second row for
-   another CLI.
+   **Add agent** adds one profile selector for one session. Add another agent for
+   each additional CLI (up to six); **Remove agent** removes that entry.
 4. **Preview launch** lists each session name (`<profile>-<branch>`, numbered `-2`, `-3`…
    when taken), the
    literal executable and arguments and the commit. Resolve any listed blocker,
    then confirm with **Launch N sessions** before the two-minute preview expires.
-5. Each launch shows its status. Use **Open terminal** to watch startup; answering
-   a first-run prompt, such as folder trust, needs the keyboard: choose the launch in its
-   **Keyboard** selector and confirm. Startup is not
-   readiness. **Inspect** rereads a launch's state; an unresolved one also offers
+5. Each launch card shows status and recovery actions. **Refresh launch status**
+   checks the recorded process and shows its result and check time beside the
+   button, including unchanged results. This does not establish agent activity
+   or readiness. An unresolved launch also offers
    **Reconcile after host inspection…**. Nothing is retried.
-6. Open the checkout's card. The launched agents appear there with checkboxes, and
-   the ticked ones form the group (use **Recheck** if one is missing).
+6. Choose **Open console** in the expanded worktree. Discovered agents appear there with their
+   terminal views; the ticked agents form the group (use **Recheck** if one is
+   missing). Choose an agent in Console's **Keyboard** selector and confirm to
+   answer prompts. If startup has not exposed a supported agent yet, inspect its
+   tmux session on the host. Startup is not readiness.
 
 Use **Clean up…** on a launch card when its tmux pane is dead or its recorded
 session has already been killed. Preview the exact session, acknowledge possible
 background processes, then choose **Remove dead session** or **Remove launch card**.
 Cleanup keeps the history and leaves live sessions alone, including a newer session
-with the same name. If the result is uncertain, use **Inspect**; it checks the
+with the same name. If the result is uncertain, use **Refresh launch status**; it checks the
 original session without repeating removal. Shared windows or extra panes need
 Finish branch or host inspection. A keyboard on another pane may remain active;
 its reconciliation barrier is kept.

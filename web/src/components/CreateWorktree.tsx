@@ -57,7 +57,7 @@ export function CreateWorktree({ project, token, disabled, onChanged, onLaunch, 
   }
   const unresolved = project.creations.filter((op) => ['applying', 'uncertain'].includes(op.status));
   return <div className="create-worktree">
-    {!open && <button type="button" className="quiet" disabled={blocked || !sources.length} onClick={() => setOpen(true)}>Create task worktree</button>}
+    {!open && <button type="button" className="quiet" disabled={blocked || !sources.length} onClick={() => setOpen(true)}><span aria-hidden="true">🌱 </span>Create task worktree</button>}
     {open && <form className="worktree-form" aria-label="Create task worktree" onSubmit={(event) => { event.preventDefault(); void inspect(); }}>
       <h3>Create task worktree</h3>
       <label>Starting checkout<select aria-label="Starting checkout" value={sourceId} disabled={blocked} onChange={(event) => { setSourceId(event.target.value); invalidate(); }}>

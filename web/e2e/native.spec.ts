@@ -1,5 +1,6 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import type { WorkflowState } from '../src/contracts/workflow';
+import { expandWorktree } from './ui';
 const headers={Authorization:`Bearer ${'a'.repeat(64)}`};
 async function state(request:APIRequestContext):Promise<WorkflowState>{return (await request.get('/api/v1/state',{headers})).json();}
 async function post(request:APIRequestContext,path:string,data:unknown){const r=await request.post(`/api/v1/${path}`,{headers,data});expect(r.ok(),await r.text()).toBe(true);return r.json();}
@@ -288,9 +289,18 @@ test('repository entry, literal profile editor, preview and explicit duplicate-p
   await expect(profiles.getByLabel('Argument 1',{exact:true})).toHaveValue('--no-daemon');
   await sections.getByRole('button',{name:'Projects',exact:true}).click();await page.getByLabel('Main/default starting checkout').fill(`/demo/native-${info.project.name}`);await page.getByRole('button',{name:'Add project',exact:true}).click();
   await page.getByRole('button',{name:`Project native-${info.project.name}`,exact:true}).click();
-  const trees=page.getByRole('region',{name:`Project worktrees native-${info.project.name}`});await trees.getByRole('button',{name:'Launch agents…'}).click();
-  await trees.getByRole('button',{name:'Add launch row'}).click();const saved=await (await request.get('/api/v1/launch-profiles',{headers})).json();const profile=saved.find((p:{label:string})=>p.label===label);
-  await trees.getByLabel('Launch profile 1').selectOption(profile.id);await trees.getByLabel('Count',{exact:true}).fill('2');await trees.getByRole('button',{name:'Preview launch'}).click();
+  const trees=page.getByRole('region',{name:`Project worktrees native-${info.project.name}`});await expandWorktree(page,`native-${info.project.name}`);await trees.getByRole('button',{name:'Launch agents…'}).click();
+  const add=trees.getByRole('button',{name:'Add agent',exact:true});
+  await add.click();await expect(trees.getByRole('combobox')).toHaveCount(1);await expect(trees.getByRole('spinbutton')).toHaveCount(0);
+  const saved=await (await request.get('/api/v1/launch-profiles',{headers})).json();const profile=saved.find((p:{label:string})=>p.label===label);
+  await trees.getByLabel('Agent 1 profile').selectOption(profile.id);await trees.getByRole('button',{name:'Preview launch'}).click();
+  await expect(trees.getByRole('table').locator('tbody tr')).toHaveCount(1);
+  await add.click();await expect(trees.getByRole('combobox')).toHaveCount(2);await expect(trees.getByRole('table')).toHaveCount(0);
+  await trees.getByLabel('Agent 2 profile').selectOption(profile.id);
+  await trees.getByLabel('Agent 1 profile').selectOption('');await expect(trees.getByRole('button',{name:'Preview launch'})).toBeDisabled();
+  await trees.getByRole('button',{name:'Remove agent 1',exact:true}).click();await expect(trees.getByRole('combobox')).toHaveCount(1);
+  await expect(trees.getByLabel('Agent 1 profile')).toHaveValue(profile.id);
+  await add.click();await trees.getByLabel('Agent 2 profile').selectOption(profile.id);await trees.getByRole('button',{name:'Preview launch'}).click();
   await expect(trees.getByRole('table')).toContainText('literal ;');
   await expect(trees.getByRole('table')).toContainText('--no-daemon');
   // Short session names: profile and branch, numbered only when taken, never a random UUID fragment. Exact allocation is covered
@@ -299,12 +309,17 @@ test('repository entry, literal profile editor, preview and explicit duplicate-p
   expect(names).toHaveLength(2);expect(new Set(names).size).toBe(2);
   for(const name of names){expect(name.startsWith(`Fixture-${info.project.name}-`)).toBe(true);expect(name).not.toMatch(/-[0-9a-f]{8}$/);}
   await trees.getByRole('button',{name:'Launch 2 sessions',exact:true}).click();await expect(trees.getByText('Simulated launch; no program executed.',{exact:true})).toHaveCount(2);
+  await expect(trees.getByRole('button',{name:'Open terminal',exact:true})).toHaveCount(0);
+  await expect(trees.locator('.native-terminal')).toHaveCount(0);
   await page.screenshot({path:info.outputPath('explicit-launch.png'),fullPage:true});
+  await trees.getByRole('button',{name:`Open native-${info.project.name}`,exact:true}).click();
+  await expect(page.getByRole('heading',{name:'Agent console',exact:true})).toBeVisible();
+  for(const name of names)await expect(page.locator(`article[aria-label="${name} pane"]`)).toHaveCount(1);
   await sections.getByRole('button',{name:'Settings',exact:true}).click();await profiles.getByRole('button',{name:label,exact:true}).click();await profiles.getByRole('button',{name:'Delete profile'}).click();
   await expect(profiles.getByRole('button',{name:label,exact:true})).toHaveCount(0);
   const batches=await (await request.get('/api/v1/launches',{headers})).json();expect(batches.flatMap((b:{items:{profile:{id:string}}[]})=>b.items).filter((i:{profile:{id:string}})=>i.profile.id===profile.id)).toHaveLength(2);
 });
-test('manual recovery stays visible without agents and requires a note and explicit acknowledgement',async({page,request},info)=>{
+test('manual recovery stays visible without agents and needs only explicit acknowledgement',async({page,request},info)=>{
   await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
   const card=page.getByRole('region',{name:'Codex terminal',exact:true});
   await takeKeyboard(page);
@@ -320,10 +335,16 @@ test('manual recovery stays visible without agents and requires a note and expli
   await recovery.getByText('Record a human inspection decision…',{exact:true}).click();
   const confirm=recovery.getByRole('button',{name:'Record inspection and release server barrier'});
   await expect(confirm).toBeDisabled();
-  await recovery.getByLabel('Inspection note').fill('Inspected fixture host and possible prior/background effects.');
-  await expect(confirm).toBeDisabled();await recovery.getByRole('checkbox').check();await expect(confirm).toBeEnabled();
+  await expect(recovery.getByRole('textbox')).toHaveCount(0);
+  await recovery.getByRole('checkbox').check();await expect(confirm).toBeEnabled();
+  await recovery.getByRole('checkbox').uncheck();await expect(confirm).toBeDisabled();
+  await recovery.getByRole('checkbox').check();
   await page.screenshot({path:info.outputPath('manual-recovery.png'),fullPage:true});
-  await confirm.click();await expect.poll(async()=>(await state(request)).manualSessions?.length).toBe(0);
+  const decision=page.waitForResponse(r=>r.url().endsWith('/terminals/reconcile')&&r.request().method()==='POST');
+  await confirm.click();
+  const response=await decision;expect(response.ok()).toBe(true);
+  expect((await response.json()).humanDecision.note).toBe('I inspected the host and acknowledge possible prior and background effects.');
+  await expect.poll(async()=>(await state(request)).manualSessions?.length).toBe(0);
   await expect(recovery).toHaveCount(0);
 });
 
@@ -524,8 +545,8 @@ test('a Codex profile without --no-daemon is flagged in the row, the editor and 
     // The launch preview warns before any session starts; nothing is launched here.
     await sections.getByRole('button',{name:'Projects',exact:true}).click();await page.getByLabel('Main/default starting checkout').fill(`/demo/nodaemon-${info.project.name}`);await page.getByRole('button',{name:'Add project',exact:true}).click();
     await page.getByRole('button',{name:`Project nodaemon-${info.project.name}`,exact:true}).click();
-    const trees=page.getByRole('region',{name:`Project worktrees nodaemon-${info.project.name}`});await trees.getByRole('button',{name:'Launch agents…'}).click();
-    await trees.getByRole('button',{name:'Add launch row'}).click();await trees.getByLabel('Launch profile 1').selectOption(created.id);await trees.getByRole('button',{name:'Preview launch'}).click();
+    const trees=page.getByRole('region',{name:`Project worktrees nodaemon-${info.project.name}`});await expandWorktree(page,`nodaemon-${info.project.name}`);await trees.getByRole('button',{name:'Launch agents…'}).click();
+    await trees.getByRole('button',{name:'Add agent',exact:true}).click();await trees.getByLabel('Agent 1 profile').selectOption(created.id);await trees.getByRole('button',{name:'Preview launch'}).click();
     await expect(trees.getByRole('status').filter({hasText:`Profile ${label} runs Codex without --no-daemon`})).toBeVisible();
     await sections.getByRole('button',{name:'Settings',exact:true}).click();
     const profiles=page.getByRole('region',{name:'Launch profiles'});
@@ -549,8 +570,8 @@ test('a Codex-hinted shell profile keeps its arguments and offers manual verific
     const sections=page.getByRole('navigation',{name:'Sections'});
     await sections.getByRole('button',{name:'Projects',exact:true}).click();await page.getByLabel('Main/default starting checkout').fill(`/demo/codex-shell-${info.project.name}`);await page.getByRole('button',{name:'Add project',exact:true}).click();
     await page.getByRole('button',{name:`Project codex-shell-${info.project.name}`,exact:true}).click();
-    const trees=page.getByRole('region',{name:`Project worktrees codex-shell-${info.project.name}`});await trees.getByRole('button',{name:'Launch agents…'}).click();
-    await trees.getByRole('button',{name:'Add launch row'}).click();await trees.getByLabel('Launch profile 1').selectOption(created.id);await trees.getByRole('button',{name:'Preview launch'}).click();
+    const trees=page.getByRole('region',{name:`Project worktrees codex-shell-${info.project.name}`});await expandWorktree(page,`codex-shell-${info.project.name}`);await trees.getByRole('button',{name:'Launch agents…'}).click();
+    await trees.getByRole('button',{name:'Add agent',exact:true}).click();await trees.getByLabel('Agent 1 profile').selectOption(created.id);await trees.getByRole('button',{name:'Preview launch'}).click();
     await expect(trees.getByRole('status').filter({hasText:`Profile ${label} uses a shell or wrapper`})).toBeVisible();
     await expect(trees.getByText('runs Codex without --no-daemon',{exact:false})).toHaveCount(0);
     await sections.getByRole('button',{name:'Settings',exact:true}).click();
@@ -566,6 +587,50 @@ test('a Codex-hinted shell profile keeps its arguments and offers manual verific
     if(current)await request.delete(`/api/v1/launch-profiles/${created.id}`,{headers,data:{expectedRevision:current.revision}});
   }
 });
+test('launch status refresh shows checking, unchanged results, changes and failures beside the clicked agent',async({page,request},info)=>{
+  const name=`inspect-${info.project.name}`;
+  const project=await post(request,'projects',{path:`/demo/${name}`});
+  const discovery=await (await request.get('/api/v1/workspaces',{headers})).json();
+  const tree=discovery.projects.find((p:{id:string})=>p.id===project.id).worktrees[0];
+  const profile=await post(request,'launch-profiles',{label:'Inspect fixture',executable:'codex',args:['--no-daemon'],adapterHint:'codex',enabled:true});
+  const preview=await post(request,'launches/preview',{projectId:project.id,items:[{worktreeId:tree.id,profileId:profile.id,count:2}]});
+  const batch=await post(request,'launches',{requestId:preview.requestId,previewDigest:preview.digest,confirm:true});
+  const [item,other]=batch.items;let inspections=0,release!:()=>void;
+  const gate=new Promise<void>(r=>{release=r;});
+  await page.route('**/api/v1/launches',route=>route.fulfill({json:[batch]}));
+  // Simulated inspection responses; the launch and project setup use the real mock API.
+  await page.route(`**/api/v1/launches/${item.id}/inspect`,async route=>{
+    inspections++;
+    if(inspections===1)await gate;
+    if(inspections===3)return route.fulfill({status:503,json:{error:{message:'Host inspection unavailable.'}}});
+    if(inspections===2)Object.assign(item,{status:'exited',message:'The launched process has exited.'});
+    await route.fulfill({json:item});
+  });
+  try {
+    await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
+    await page.getByRole('navigation',{name:'Sections'}).getByRole('button',{name:'Projects',exact:true}).click();
+    await page.getByRole('button',{name:`Project ${name}`,exact:true}).click();
+    await expandWorktree(page,name);
+    const card=page.getByRole('group',{name:`Launch ${item.sessionName}`,exact:true});
+    const sibling=page.getByRole('group',{name:`Launch ${other.sessionName}`,exact:true});
+    const check=card.getByRole('button',{name:'Refresh launch status',exact:true});
+    await expect(check).toBeVisible();
+    const checkBox=(await check.boundingBox())!,cleanupBox=(await card.getByRole('button',{name:'Clean up…',exact:true}).boundingBox())!;
+    expect(Math.abs(checkBox.y+checkBox.height/2-cleanupBox.y-cleanupBox.height/2)).toBeLessThanOrEqual(1);
+    expect(cleanupBox.x).toBeGreaterThanOrEqual(checkBox.x+checkBox.width);
+    await check.click();await expect(card.getByRole('status')).toHaveText('Checking launch status…');
+    await expect(card.getByRole('button',{name:'Checking…',exact:true})).toBeDisabled();await expect(sibling.getByRole('status')).toHaveCount(0);
+    release();await expect(card.getByRole('status')).toContainText('running (unchanged)');
+    await expect(card.getByRole('status')).toContainText('Checked at');await expect(card.getByRole('status')).toContainText(item.message);
+    await expect(card.getByRole('status')).toBeInViewport();
+    await page.screenshot({path:info.outputPath('launch-status-result.png'),fullPage:true});
+    await check.click();await expect(card.getByRole('status')).toContainText('exited');await expect(card.getByRole('status')).toContainText('The launched process has exited.');
+    await expect(card.locator('strong').first()).toContainText('last observed: exited');
+    await check.click();await expect(card.getByRole('alert')).toContainText('Host inspection unavailable.');
+    await expect(card.getByRole('status')).toHaveCount(0);await expect(sibling.getByRole('alert')).toHaveCount(0);expect(inspections).toBe(3);
+    await check.click();await expect(card.getByRole('alert')).toHaveCount(0);await expect(card.getByRole('status')).toContainText('exited (unchanged)');
+  } finally {release();}
+});
 for(const scenario of ['dead','missing','live','lost'] as const)test(`launch cleanup: ${scenario} session requires explicit acknowledgement and preserves other sessions`,async({page,request},info)=>{
   const name=`cleanup-${scenario}-${info.project.name}`;
   const project=await post(request,'projects',{path:`/demo/${name}`});
@@ -575,7 +640,25 @@ for(const scenario of ['dead','missing','live','lost'] as const)test(`launch cle
   const launch=await post(request,'launches/preview',{projectId:project.id,items:[{worktreeId:tree.id,profileId:profile.id,count:2}]});
   const batch=await post(request,'launches',{requestId:launch.requestId,previewDigest:launch.digest,confirm:true});
   const item=batch.items[0],other=batch.items[1];let confirms=0,inspections=0;
-  // Only cleanup observations and effects are faked. Native tests exercise actual removal on private tmux servers.
+  const sessions=(await state(request)).sessions;
+  const rename=async(paneId:string,label:string)=>{
+    const session=sessions.find(s=>s.identity.paneId===paneId)!;
+    const response=await request.patch(`/api/v1/sessions/${session.id}`,{headers,data:{label,expectedLabel:session.label,expectedRegistrationId:session.registrationId}});
+    expect(response.ok(),await response.text()).toBe(true);return response.json();
+  };
+  const removed=await rename(item.identity.paneId,`Remove ${name}`),kept=await rename(other.identity.paneId,`Keep ${name}`);
+  // Cleanup effects and their read model are fixtures here. Server regressions exercise the real
+  // registration projection; native tests exercise actual removal on private tmux servers.
+  await page.route('**/api/v1/state',async route=>{
+    const response=await route.fetch(),body=await response.json() as WorkflowState;
+    if(item.closed){body.sessions=body.sessions.filter(s=>s.id!==removed.id);body.groups=body.groups.map(g=>({...g,members:g.members.filter(id=>id!==removed.id)}));}
+    await route.fulfill({response,json:body});
+  });
+  await page.route('**/api/v1/workspaces',async route=>{
+    const response=await route.fetch(),body=await response.json();
+    if(item.closed)for(const workspace of body.workspaces)workspace.agents=workspace.agents.filter((a:{identity:{paneId:string}})=>a.identity.paneId!==item.identity.paneId);
+    await route.fulfill({response,json:body});
+  });
   await page.route('**/api/v1/launches',route=>route.fulfill({json:[batch]}));
   await page.route(`**/api/v1/launches/${item.id}/cleanup/preview`,route=>route.fulfill({json:{requestId:crypto.randomUUID(),digest:'fixture',expiresAt:new Date(Date.now()+120000).toISOString(),launchId:item.id,sessionName:item.sessionName,state:scenario==='live'?'blocked':scenario==='missing'?'missing':'dead',blockers:scenario==='live'?['This session is still running. Cleanup cannot stop a live session.']:[]}}));
   await page.route(`**/api/v1/launches/${item.id}/cleanup`,async route=>{
@@ -587,6 +670,11 @@ for(const scenario of ['dead','missing','live','lost'] as const)test(`launch cle
   await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
   await page.getByRole('navigation',{name:'Sections'}).getByRole('button',{name:'Projects',exact:true}).click();
   await page.getByRole('button',{name:`Project ${name}`,exact:true}).click();
+  await expandWorktree(page, name); await page.getByRole('button',{name:`Open ${name}`,exact:true}).click();
+  const removedPane=page.locator(`article[aria-label="${removed.label} pane"]`),keptPane=page.locator(`article[aria-label="${kept.label} pane"]`);
+  await expect(removedPane).toHaveCount(1);await expect(keptPane).toHaveCount(1);
+  await page.getByRole('navigation',{name:'Command target'}).getByRole('button',{name:removed.label,exact:true}).click();
+  await page.getByRole('navigation',{name:'Sections'}).getByRole('button',{name:'Projects',exact:true}).click();
   const card=page.getByRole('group',{name:`Launch ${item.sessionName}`,exact:true});
   await card.getByRole('button',{name:'Clean up…',exact:true}).click();
   const panel=card.getByRole('region',{name:`Clean up ${item.sessionName}`});
@@ -601,4 +689,9 @@ for(const scenario of ['dead','missing','live','lost'] as const)test(`launch cle
     await expect(card).toHaveCount(0);expect(confirms).toBe(1);
   }
   await expect(page.getByRole('group',{name:`Launch ${other.sessionName}`,exact:true})).toBeVisible();
+  await page.getByRole('navigation',{name:'Sections'}).getByRole('button',{name:'Console',exact:true}).click();
+  await expect(keptPane).toHaveCount(1);
+  await expect(removedPane).toHaveCount(scenario==='live'?1:0);
+  await expect(page.getByRole('region',{name:'Agent identity changed'})).toHaveCount(0);
+  if(scenario!=='live')await expect(page.getByRole('navigation',{name:'Command target'}).getByRole('button',{name:kept.label,exact:true})).toHaveAttribute('aria-pressed','true');
 });

@@ -199,10 +199,10 @@ Illustrative initial screen:
 
 ```text
 PROJECT: AltCLI
+  [Create task worktree]
   Main checkout       main                    Claude
   Login fix           altcli-fix-login      Codex + Claude
   Settings redesign   altcli-feat-settings  No agents yet
-  [Create task worktree]
 ```
 
 Dirty or blocked workspaces remain visible and readable. Plan and existing-candidate review require clean entry; Commit snapshots current uncommitted work without completing pending requests. On a dirty checkout the author's card, with an empty instruction and the Commit & relay follow-up, offers Commit current changes & relay: snapshot first, then review only the validated new commit. Dirty input alone does not disable it or add a warning during Send. Readiness messages explain other start blockers; failures do not make the workspace disappear. Distinguish no tmux server, no Git workspace, unknown CLI, dirty files, directory mismatch, active/unknown writers, and detached HEAD. **Recheck** reruns discovery/validation; it does not repair the user's environment.

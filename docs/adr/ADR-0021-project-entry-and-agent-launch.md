@@ -32,6 +32,8 @@ Live launched sessions are closed through the separately confirmed Finish branch
 [ADR-0013](ADR-0013-confirmed-branch-setup.md#confirmed-closing-of-launched-sessions); its history
 is kept. Repository entry can also browse host directories read-only and adds the checkout Git
 reports, refusing when the browsed directory, repository or branch changed since it was shown.
+Launch cards provide status and recovery actions. Terminal views are in Console
+when the checkout is selected; Projects does not embed a second terminal view.
 
 September 26 extension, explicitly requested by the owner: each launch card offers
 **Clean up…** for a dead or missing app-launched session, independently of finishing
@@ -44,9 +46,11 @@ and a replacement or live session is never stopped by cleanup. Expanded/shared
 sessions require the broader Finish branch preview or manual host inspection.
 
 The cleanup decision and checkout reservation persist before any removal. Unknown
-results retain ownership across restart; **Inspect** checks absence without retrying.
-Verified absence retires the card and its terminal target but retains launch and
-acknowledgement history. Existing run/delivery/setup owners and keyboard records
+results retain ownership across restart; **Refresh launch status** checks absence without retrying.
+Verified absence retires the card, console entry and terminal target without a
+workspace reset. Saved registrations remain historical; surviving agents keep
+their names and group selection. Launch and acknowledgement history is retained.
+Existing run/delivery/setup owners and keyboard records
 targeting that pane block cleanup. A keyboard on another pane may remain active;
 its manual-input barrier, snapshots and workflow checkpoints are preserved. This
 does not certify that background work stopped or that the task completed. SQLite

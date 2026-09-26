@@ -2304,3 +2304,234 @@ No actual user session was removed and the running main-checkout backend was
 not restarted or modified. These changes remain in the feature worktree pending
 integration. Installed-agent, physical-device and deployed-host acceptance of
 the new cleanup flow was not performed.
+
+## 2026-09-26 — remove cleaned sessions from Console without a workspace reset
+
+Console state merged saved agent registrations back into its live session list
+after cleanup had retired the launch. Discovery and console state now exclude
+registrations belonging to a verified closed launch, matching the original tmux
+socket, server process/start and pane. A respawned pane's changed process ID does
+not keep it visible. History and surviving agents' names and selection remain
+stored; uncertain cleanup still requires inspection. Existing closed launches
+receive the same behavior on the next state refresh.
+
+- Two new server regressions reproduced the stale registration before the fix.
+  All 20 cleanup cases now pass, including five added cases for console state,
+  a reconstructed controller, unchanged saved configuration, uncertain cleanup,
+  respawned panes and discovery/registration on replacement servers or sockets.
+  These use disposable SQLite, simulated discovery and fixture tmux evidence.
+- The eight existing cleanup browser cases now also open Console before cleanup,
+  select the removed agent, return after cleanup and verify automatic removal,
+  the surviving name/recipient and absence of a reset prompt. Cleanup effects and
+  their state/discovery responses are route fixtures; the server tests exercise
+  the actual registration filtering. The focused desktop/iPhone run passed all
+  eight. The initial browser setup used the legacy numeric-pane registration API
+  for mock launch IDs and was corrected to use the supported inline-name API.
+- `./scripts/check.sh` passed on Node 24.12.0: 32 hook/setup, 43 smoke, 382
+  workflow and 76 unit tests, type checking and the production build.
+- `./scripts/check.sh --e2e` passed its checks and **276 browser cases**, with
+  eight intentional viewport-specific skips (9.6 minutes). The final strengthened
+  replacement-server assertions also passed in the focused cleanup suite.
+- The changed text was screened for secrets; none were found or withheld.
+  `git diff --check` passed.
+
+Changes are uncommitted in the feature checkout. The running main-checkout
+backend and real user sessions were not changed or restarted. No installed-CLI,
+private-tmux or physical-device acceptance was performed for this follow-up.
+
+## 2026-09-26 — console session controls and acknowledgement-only recovery
+
+The top manual-input recovery notice now accepts the inspection checkbox without
+requiring typed text. It sends the exact checked acknowledgement as the existing
+API's decision note; revision checks, explicit confirmation and workflow holds
+remain intact. Control recipient buttons now join the selected section with the
+same background while retaining separate drafts. Projects launch cards keep
+status and recovery actions; their duplicate terminal previews were removed.
+Discovered agents remain viewable in Console, and startup without a supported
+agent remains inspectable in host tmux. This handoff includes the captured cleanup
+refresh fix documented immediately above.
+
+- Six desktop/iPhone assertions reproduced the three UI issues before the fix.
+  The final focused run passed all six: checkbox-only recovery through the mock
+  API (including the recorded acknowledgement), joined tab backgrounds and
+  draft retention, and a real mock launch opening its agents in Console without
+  a Projects terminal preview.
+- The first post-fix run passed five cases; the phone tab case received a stale
+  development stylesheet. Its trace lacked the new selectors. Removing only the
+  generated e2e build caches and restarting the isolated test servers resolved
+  that case without changing the assertion.
+- Desktop and phone Control screenshots and the phone recovery screenshot were
+  inspected. This is Chromium viewport coverage, not physical iPhone acceptance.
+- `./scripts/check.sh` passed on Node 24.12.0: 32 hook/setup, 43 smoke, 382
+  workflow and 76 unit tests, type checking and the production build.
+- `./scripts/check.sh --e2e` passed the same checks, then **278 browser cases**
+  with eight intentional viewport-specific skips (9.6 minutes). Both isolated
+  test servers stopped after the run.
+- The final diff was screened for credentials; none were found or withheld.
+  `git diff --check` passed. API shapes and reconciliation validation are unchanged.
+
+No running user session or main-checkout backend was modified or restarted.
+Installed-provider, physical-device and deployed-host acceptance remain separate.
+
+## 2026-09-26 — review of console session controls; empty Control body
+
+Peer review accepted the console session-control candidate (5a3a30f) after
+`./scripts/check.sh --e2e` passed on it: 32 hook/setup, 43 smoke, 382 workflow
+and 76 unit tests, type checking, the production build and **278 browser cases**
+with eight intentional viewport-specific skips (9.6 minutes).
+
+Two follow-ups accompany the acceptance. With no recipient tab or input section
+(for example an empty agent selection), the joined Control body rendered an
+empty bordered strip; it is now hidden when empty. The terminal protocol no
+longer mentions Projects launch terminals, which the candidate removed.
+
+- The new empty-selection assertion failed on desktop and iPhone viewports
+  before the stylesheet change and passed after it, alongside the joined-tab and
+  per-target draft cases (six focused runs). The desktop tab screenshot was inspected.
+- `./scripts/check.sh --e2e` then passed the same checks and 278 browser cases
+  with eight skips (9.6 minutes); both isolated test servers stopped.
+- The diff was screened for credentials; none were found or withheld.
+  `git diff --check` passed.
+
+No running user session or main-checkout backend was modified or restarted.
+Physical-device and installed-provider acceptance remain separate.
+
+## 2026-09-26 — launch status feedback and one agent per entry
+
+Projects names its launch inspection **Refresh launch status**. The clicked card
+shows Checking, then the returned status/message and check time, including
+unchanged results. Failures appear in that card, and another check replaces them.
+The launch form uses **Add agent** and **Remove agent**, with one profile selector
+per session and no separate Count field. Editing the selection invalidates its
+preview. Console explains that a restart can clear activity evidence while
+preserving UNKNOWN and the existing inspected-readiness confirmation.
+
+- Six desktop/iPhone regression cases failed before the UI changes. Eight focused
+  cases then passed, covering explicit status recovery, one-agent addition and
+  removal, duplicate-profile launch, launch warnings, and inspection feedback.
+  Inspection responses are browser fixtures; project/launch setup uses the real
+  mock API. No live tmux inspection or launch is claimed by these browser tests.
+- Desktop and phone screenshots of the form and inline result were inspected.
+- The first full check caught a nullable feedback lookup; it was corrected and
+  `./scripts/check.sh` passed on Node 24.12.0: 32 hook/setup, 43 smoke, 382 workflow
+  and 76 unit tests, type checking and the production build.
+- The first full browser run exposed one remaining old-label selector in the
+  wrapper-profile test and was stopped. After updating only its selector, that
+  test passed on both viewports; its argument-preservation assertions are intact.
+- Before the additional worktree-layout request, `./scripts/check.sh --e2e`
+  passed all checks and 280 browser cases with eight intentional skips (9.7 minutes).
+
+The follow-up Worktrees layout stacks full-width cards, sorts the main checkout
+first without mutating discovery order, and gives each card a native disclosure
+heading. Cards start expanded; collapse state and mounted form state survive
+discovery refreshes. Opening Console is a separate action inside the expanded card.
+The new desktop/phone regression failed before the change, then fourteen focused
+browser cases and type checking passed. These include keyboard toggling, ordering,
+width, retained form state, read-only toggles, navigation, creation, squash, and the
+earlier launch controls. Both stacked-worktree screenshots were inspected.
+
+- `./scripts/check.sh` passed with the combined changes and the same non-browser
+  counts above. The first combined browser run found a navigation test still
+  clicking branch text inside the old card button and was stopped. Its selector
+  now uses Open console while preserving the branch assertion; both viewports passed.
+- The final `./scripts/check.sh --e2e` passed all checks and **282 browser cases**
+  with eight intentional viewport-specific skips (9.8 minutes). Both isolated
+  browser-test servers stopped after the run.
+- `git diff --check` passed. The final diff was screened for credentials; none
+  were found or withheld. Physical-device and installed-provider acceptance
+  remain separate from this Chromium viewport coverage.
+
+These are UI changes; API shapes, lifecycle evidence and launch/cleanup authority
+are unchanged. No running user session or main-checkout backend was modified.
+
+## 2026-09-26 — worktree creation first and one action row per worktree
+
+**Create task worktree** now sits directly under the Worktrees heading with a
+decorative 🌱 (hidden from assistive technology, so its accessible name is
+unchanged); its form, unresolved-creation notices and Launch agents here open
+there too. Each worktree's trigger buttons (Open console, Squash, Finish branch,
+Check removal, Discard, Launch agents) share one wrapping row. Reasons, opened
+previews and launch cards follow the row at full width. Each action keeps its own
+reason and `aria-describedby`, so an identical reason may repeat below the row.
+
+- Two new desktop/iPhone regression cases failed before the change and passed
+  after: the creation control and its form sit above the worktree list, and the
+  action buttons share one row on desktop (wrapping without overflow on the phone)
+  with reasons and the opened launch form below. All 48 Projects browser cases then
+  passed. Both one-row screenshots were inspected.
+- `./scripts/check.sh --e2e` passed on Node 24.12.0: 32 hook/setup, 43 smoke,
+  382 workflow and 76 unit tests, type checking, the production build and
+  **286 browser cases** with eight intentional viewport-specific skips (9.7 minutes).
+  An earlier run of the same command was stopped deliberately to remove CSS rules
+  the layout made unused; it is not counted.
+
+CSS and markup placement only; API shapes and operation authority are unchanged.
+
+## 2026-09-26 — Console project and worktree switches
+
+Console now offers Project and Worktree dropdowns beside the current path. A
+project switch opens its first worktree with a live coding agent, considering the
+main checkout first. Projects with no agents (including shell-only projects) stay
+listed as disabled **no agents** options. Empty worktrees remain viewable through
+the worktree switch. Multiple agent directories require task-group selection in
+Projects; navigation preserves drafts, revokes readiness and leaves runs intact.
+
+- The new navigation regression failed before implementation because the switches
+  did not exist. Six focused Chromium cases then passed across desktop and iPhone
+  viewports, covering populated-worktree selection, disabled projects, empty
+  worktrees, draft/readiness handling, active runs and multiple agent directories.
+  Both context-bar screenshots were inspected.
+- `./scripts/check.sh` and `./scripts/check.sh --e2e` passed on Node 24.12.0:
+  32 hook/setup, 43 smoke, 382 workflow and 76 unit tests, type checking and the
+  production build. The full browser run passed **292 cases** with eight intentional
+  viewport-specific skips (9.9 minutes). This uses isolated mock hosts and Chromium
+  viewports, not physical-device or installed-provider acceptance.
+- `git diff --check` and the staged diff check passed. The combined diff was
+  screened for credentials; none were found or withheld.
+
+Incoming work was reviewed and staged before these changes, as requested. Review
+identified a medium issue: `display: contents` on the launch wrapper removes the
+scroll target used by **Launch agents here**. The caller was traced and Chromium
+reproduced the missing scroll; the four incoming layout cases passed but did not
+cover a launch destination below the viewport. The follow-up below fixes it.
+
+## 2026-09-26 — launch visibility and collapsed worktrees
+
+**Launch agents here** now scrolls the rendered launch form into view after it
+opens, once per explicit request. It also expands a collapsed destination card.
+Worktree cards start collapsed and retain user toggles and form state across
+Recheck. **Refresh launch status** and **Clean up…** share one row on desktop and
+phone; cleanup previews and results use the width below the buttons.
+**Create task worktree** shares the Worktrees heading row. Its form and notices
+occupy their own full-width rows below, keeping the closed section compact.
+
+- The scrolling regression reproduced the offscreen form before the fix. It now
+  passes for initial opening, a collapsed destination, repeated requests and
+  Recheck without forced scrolling; shortcut clicks send no mutations.
+- Default-collapse and button-alignment assertions also failed before their
+  changes. All 16 focused desktop/phone cases then passed, including retained
+  forms, keyboard toggling, layout, refresh feedback and the four cleanup states.
+  Desktop and phone launch-card screenshots were inspected. Existing browser
+  flows now explicitly expand the worktree before using its controls.
+- `./scripts/check.sh` passed after the combined changes: 32 hook/setup, 43 smoke,
+  382 workflow and 76 unit tests, type checking and the production build.
+- The compact-header assertions failed against the former extra-row layout.
+  A subsequent form-placement check caught the existing maximum width allowing
+  the form to share the heading row on desktop; the form now occupies its own row.
+  All eight focused creation/scrolling cases passed on both viewports after that
+  correction, and both compact-header screenshots were inspected.
+- An earlier full browser run was stopped while adding the compact-header
+  request. It also exposed one navigation test still inspecting a control inside
+  a closed worktree; that test now expands the card before its original assertion.
+- One full-check attempt failed in the unchanged terminal-broker test's connection
+  helper after its fixed 10 ms wait for a reset frame. The exact test passed on a
+  direct rerun without edits. The final `./scripts/check.sh --e2e` then passed all
+  32 hook/setup, 43 smoke, 382 workflow and 76 unit tests, type checking and the
+  production build, plus **294 browser cases** with eight intentional skips
+  (10.2 minutes). Browser coverage uses isolated mock hosts and Chromium desktop
+  and phone viewports, not physical devices or installed coding CLIs.
+- Final staged and unstaged diff checks passed. The combined diff was screened
+  for credentials; none were found or withheld.
+
+Incoming work remains staged; the Console changes and these fixes remain
+unstaged. No live backend or user session was changed.

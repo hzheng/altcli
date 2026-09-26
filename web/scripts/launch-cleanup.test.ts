@@ -11,6 +11,10 @@ import { InputAuthority } from '../src/server/input-authority.ts';
 import { ProjectCatalog } from '../src/server/projects.ts';
 import { LaunchService } from '../src/server/launches.ts';
 import { loadConfig } from '../src/server/config.ts';
+import { Controller } from '../src/server/controller.ts';
+import { ControlPlane } from '../src/server/control-plane.ts';
+import { MockAdapter } from '../src/server/adapters/mock.ts';
+import type { ManagedSession } from '../src/contracts/workflow.ts';
 
 // Real SQLite, a fixture tmux host. Native launch tests separately exercise private tmux sockets.
 let directory: string, store: Store, authority: InputAuthority, service: LaunchService, item: LaunchInstance;
@@ -109,4 +113,61 @@ test('a second launch reservation is preserved and blocks cleanup', async () => 
   store.db.prepare('INSERT INTO launch_reservations(index_path,launch_id) VALUES(?,?)').run(item.worktree.indexPath,'other');
   assert.match((await service.previewCleanup(item.id)).blockers.join(' '),/Another launch/);
   assert.equal((store.db.prepare('SELECT launch_id FROM launch_reservations').get() as {launch_id:string}).launch_id,'other');
+});
+
+// The console combines discovery with saved registrations. Use its real read model with
+// simulated panes; the service above still verifies cleanup against the fixture tmux host.
+function consoleFixture() {
+  const plane = new ControlPlane(new Controller({ ...config(), mode: 'mock' }, store, new MockAdapter()));
+  const session: ManagedSession = { id: 'cleaned-agent', label: 'Saved CC name', agentType: 'claude', repository: item.worktree.root,
+    cwd: item.worktree.root, worktree: { root: item.worktree.root, gitDir: `${item.worktree.root}/.git`, indexPath: `${item.worktree.root}/.git/index` },
+    identity: item.identity!, expectedCommand: 'claude', relayPrompt: 'relay',
+    registrationId: randomUUID(), registeredAt: item.updatedAt, cliPid: null };
+  const survivor = { ...session, id: 'survivor', label: 'Keep this name', registrationId: randomUUID(), identity: { ...session.identity, paneId: '%10' } };
+  store.saveSession(session); store.saveSession(survivor);
+  const batch = service.batches()[0]!;
+  batch.items.push({ ...item, id: randomUUID(), identity: survivor.identity, sessionId: '$10', windowId: '@10', sessionName: 'CC-task-2' });
+  store.db.prepare('UPDATE launches SET value=? WHERE id=?').run(JSON.stringify(batch), batch.requestId);
+  store.saveGroup({ id: 'saved-group', name: 'Keep this group', repository: item.worktree.root, cwd: item.worktree.root,
+    members: [session.id, survivor.id], revision: 1, createdAt: item.updatedAt, legacyPairId: null });
+  return { plane, session, survivor };
+}
+test('verified cleanup removes a saved console agent without resetting surviving names, selection or history', async () => {
+  const { plane, session, survivor } = consoleFixture();
+  assert.ok((await plane.state()).sessions.some(s => s.id === session.id));
+  const saved = { sessions: store.sessions(), groups: store.groups() };
+  await service.confirmCleanup(item.id, await confirm());
+  for (const reader of [plane, new ControlPlane(new Controller({ ...config(), mode: 'mock' }, store, new MockAdapter()))]) {
+    const state = await reader.state();
+    assert.deepEqual(state.sessions.filter(s => s.repository === item.worktree.root), [survivor]);
+    assert.equal(state.groups.find(g => g.id === 'saved-group')?.name, 'Keep this group');
+    assert.deepEqual(state.groups.find(g => g.id === 'saved-group')?.members, [survivor.id]);
+  }
+  assert.deepEqual({ sessions: store.sessions(), groups: store.groups() }, saved);
+  assert.ok(read().closed); assert.deepEqual(killed, ['$9']);
+});
+test('uncertain cleanup keeps the saved console agent until inspection verifies absence, including a respawned pane', async () => {
+  const { plane, session } = consoleFixture();
+  store.saveSession({ ...session, identity: { ...session.identity, panePid: '999' } });
+  afterKill = () => { panes = null; absent = null; };
+  await service.confirmCleanup(item.id, await confirm());
+  assert.ok((await plane.state()).sessions.some(s => s.id === session.id));
+  absent = true; await service.inspect(item.id);
+  assert.equal((await plane.state()).sessions.some(s => s.id === session.id), false);
+});
+for (const field of ['serverPid', 'serverStarted', 'socketPath'] as const) test(`cleanup does not hide a reused pane with a different ${field}`, async () => {
+  const { plane, session } = consoleFixture();
+  await service.confirmCleanup(item.id, await confirm());
+  const replacement = { ...session, identity: { ...session.identity, [field]: `${session.identity[field]}-new` } };
+  const adapter = plane.adapter as MockAdapter;
+  const list = adapter.listPanes.bind(adapter);
+  adapter.listPanes = async () => [...await list(), { identity: replacement.identity, command: 'claude', cwd: item.worktree.root,
+    location: `${item.sessionName}:0.0`, dead: false, inMode: false, synchronized: false }];
+  const discovered = await plane.state();
+  assert.equal(discovered.sessions.some(s => s.id === session.id), false);
+  assert.ok(discovered.sessions.some(s => s.identity.paneId === session.identity.paneId && s.identity[field] === replacement.identity[field]));
+  store.saveSession(replacement);
+  const state = await plane.state();
+  assert.ok(state.sessions.some(s => s.id === replacement.id && s.identity[field] === replacement.identity[field]));
+  assert.ok(state.groups.some(g => g.id === 'saved-group' && g.members.includes(replacement.id)));
 });

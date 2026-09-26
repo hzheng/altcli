@@ -48,6 +48,9 @@ function statusOf(agent: SessionRegistration, run: RelayRun | undefined, state: 
       ? `The controller is ${run.status === 'paused' ? 'paused but still holds' : run.status === 'waiting' ? 'waiting for you and still holds' : 'driving'} this agent's turns.${run.status === 'paused' ? ' Pause does not interrupt the worker.' : ''}` : 'Not driven by the controller.';
     return { badge: activity.state, detail: `${activity.detail} ${ownership}`, when: activity.updatedAt };
   }
+  if (controller.badge === 'unknown' && activity?.state === 'unknown' && state.instances.find((i) => i.agentId === agent.id)?.status === 'current') {
+    return { ...controller, detail: `A backend restart can clear activity evidence. Inspect this terminal before using Reset status. ${controller.detail}` };
+  }
   return controller;
 }
 function controllerStatusOf(agent: SessionRegistration, run: RelayRun | undefined, state: WorkflowState): AgentStatus {
@@ -191,6 +194,11 @@ export function Console() {
   const card = discovery?.workspaces.find((w) => workspace ? workspaceKey(w) === workspace.key : w.worktree.root === project);
   const selectedProject = discovery?.projects?.find((p) => p.worktrees.some((w) => w.path === project));
   const selectedTree = selectedProject?.worktrees.find((w) => w.path === project);
+  const projectOptions = (discovery?.projects ?? []).map((p) => ({ project: p, firstAgentTree: [...p.worktrees]
+    .sort((a, b) => Number(b.main) - Number(a.main))
+    .find(tree => discovery?.workspaces.some(w => w.worktree.root === tree.path && w.agents.some(a => a.eligible || a.observable))) }));
+  const worktreeOptions = [...(selectedProject?.worktrees ?? [])].sort((a, b) => Number(b.main) - Number(a.main));
+  const needsDirectory = !card && (discovery?.workspaces.filter(w => w.worktree.root === project).length ?? 0) > 1;
   const setupHolds = discovery?.projects?.flatMap((p) => [...p.creations.filter((op) => ['applying', 'uncertain'].includes(op.status)).map((op) => op.input.path), ...(p.removals ?? []).filter((op) => ['applying', 'uncertain'].includes(op.status)).map((op) => op.input.worktree.root)]) ?? [];
   const setupHeld = !!project && setupHolds.includes(project);
   const groups = state?.groups ?? [];
@@ -317,6 +325,11 @@ export function Console() {
     const choice = { key: `worktree:${chosen.id}`, root: chosen.path };
     setWorkspace(choice); try { localStorage.setItem(WORKSPACE, JSON.stringify(choice)); } catch { /* preference only */ }
     setReady(false); scrolls.current.console = 0; showTab('console');
+  }
+  function switchWorktree(chosen: ProjectWorktree) {
+    const directories = discovery?.workspaces.filter(w => w.worktree.root === chosen.path) ?? [];
+    if (directories.length === 1) chooseWorkspace(directories[0]!);
+    else chooseWorktree(chosen);
   }
   /** Keeps or drops the token in this browser according to the preference. Lock always drops it. */
   function rememberToken(next: boolean, current = token) {
@@ -474,18 +487,35 @@ export function Console() {
       <Workspaces token={token} disabled={busy} discovery={discovery} discoveryError={discoveryError} onRecheck={() => recheck()}
         inputEnabled={state.inputEnabled} runs={state.runs} selectedRoot={project ?? null} onSelectWorktree={chooseWorktree}
         deliveryRepositories={state.reservations.map((reservation) => reservation.repository)}
-        launchEnabled={config?.launchEnabled === true} terminalEnabled={config?.terminalEnabled === true} clientInstanceId={clientInstanceId} manualHeld={manualHeld} manualSessions={state.manualSessions} refreshState={refresh} sessions={sessions} pairs={groups} lockedRepositories={[...setupHolds, ...state.runs.filter((run) => ['running','waiting','paused'].includes(run.status)).map((run) => run.repository)]}
+        launchEnabled={config?.launchEnabled === true} manualHeld={manualHeld} sessions={sessions} pairs={groups} lockedRepositories={[...setupHolds, ...state.runs.filter((run) => ['running','waiting','paused'].includes(run.status)).map((run) => run.repository)]}
         selectedKey={workspace?.key ?? null} onSelectWorkspace={chooseWorkspace} viewEpoch={viewEpoch}
         onChanged={async (notice) => { setMessage(notice); await Promise.all([refresh(), recheck()]); }} />
     </div>
     <div className="section-panel" hidden={tab !== 'console'}>
       <div className="context-bar">
-        <span className="context-project"><strong>{selectedProject?.name ?? (project ? nameOf(project) : 'No project')}</strong> {project && <span className="mono muted" title={project}>{project}</span>}</span>
+        <div className="context-project">
+          <div className="context-switches">
+            <label>Project<select aria-label="Switch project" value={selectedProject?.id ?? ''} disabled={!projectOptions.length} onChange={event => {
+              const tree = projectOptions.find(option => option.project.id === event.target.value)?.firstAgentTree; if (tree) switchWorktree(tree);
+            }}>
+              {!selectedProject && <option value="" disabled>{project ? nameOf(project) : 'Choose project'}</option>}
+              {projectOptions.map(({ project: p, firstAgentTree }) => <option key={p.id} value={p.id} disabled={!firstAgentTree}>{p.name}{firstAgentTree ? '' : ' — no agents'}</option>)}
+            </select></label>
+            <label>Worktree<select aria-label="Switch worktree" title={project} value={selectedTree?.id ?? ''} disabled={!worktreeOptions.length} onChange={event => {
+              const tree = worktreeOptions.find(t => t.id === event.target.value); if (tree) switchWorktree(tree);
+            }}>
+              {!selectedTree && <option value="" disabled>Choose worktree</option>}
+              {worktreeOptions.map(tree => <option key={tree.id} value={tree.id}>{tree.main ? 'Main checkout' : tree.branch ?? 'detached HEAD'} · {tree.path}</option>)}
+            </select></label>
+          </div>
+          {project && <span className="mono muted" title={project}>{project}</span>}
+        </div>
         {(card || selectedTree) && <span>Branch <span className="mono">{(card ?? selectedTree)?.branch ?? 'detached HEAD'}</span>{git && <span className="mono muted"> @ {git.head.slice(0, 7)} · {git.clean ? 'clean' : `${git.changeCount} uncommitted`}{git.integration ? ' · integration branch' : ''}</span>}</span>}
         <span>{pair ? <>Group <strong>{pair.name}</strong> <span className="muted">{pair.sessions.map((id) => sessions.find((s) => s.id === id)?.label ?? id).join(' ⇄ ')}</span></> : <span className="muted">No group in use</span>}</span>
         <span className="context-actions"><button type="button" className="quiet" disabled={busy || checking} onClick={recheckNow}>{checking ? 'Checking…' : 'Recheck'}</button>
           <button type="button" className="quiet" onClick={() => showTab('workspaces')}>Projects →</button></span>
       </div>
+      {needsDirectory && <p className="notice">This worktree has agents in several directories. Choose a task group in Projects.</p>}
       {(workspaceError || card?.gitError) && <p className="notice error" role="alert">{workspaceError || card?.gitError} Recheck before starting.</p>}
       {setupHeld && <p className="notice">This worktree operation is applying or uncertain. Inspect and reconcile its result in Projects before starting work.</p>}
       {unknownRequest && <div className="notice error" role="alert">Request {unknownRequest} has an uncertain HTTP result. Inspect its server run and the terminal; do not resend it.
@@ -595,7 +625,8 @@ export function Console() {
         </div>
         <section ref={controlPane} id="altcli-control" tabIndex={-1} className={`control-pane${controlDrawer ? ' drawer' : ''}`} aria-label="Control"
           onKeyDown={(e) => { if (controlDrawer && e.key === 'Escape') { e.stopPropagation(); toggleDrawer(false); } }}>
-          <div className="control-heading"><h2>Control</h2>{controlDrawer && <button type="button" className="quiet drawer-close" onClick={() => toggleDrawer(false)}>Close drawer</button>}</div><nav className="agent-tabs" aria-label="Command target">{visible.map(s => <button type="button" key={s.id} aria-pressed={s.id === current?.id} onClick={() => {setControlChoice(s.id);setConsent('');setReady(false);}}>{s.label}</button>)}</nav>
+          <div className="control-heading"><h2>Control</h2>{controlDrawer && <button type="button" className="quiet drawer-close" onClick={() => toggleDrawer(false)}>Close drawer</button>}</div><nav className="agent-tabs control-targets" aria-label="Command target">{visible.map(s => <button type="button" key={s.id} aria-pressed={s.id === current?.id} onClick={() => {setControlChoice(s.id);setConsent('');setReady(false);}}>{s.label}</button>)}</nav>
+          <div className="control-body">
           {current && inputRun && !showLegacy && <InteractionComposer key={current.id} token={token} state={state} run={inputRun} agent={current} draftKey={`draft:${scope}:${current.id}`} disabled={busy || stale || setupHeld || manualHeld || !state.inputEnabled || !!identityBlockedReason || !!cardReason(current)} viewEpoch={viewEpoch} refresh={refresh} />}
           {current && actionable && !inputRun && phase === 'implementation' && !showLegacy && <PaneActions key={current.id} {...common} group={pair} agent={current} settings={implementationSettings} blockedReason={implementationReason || cardReason(current)} keyboardHandoff={keyboardHandoff} viewEpoch={viewEpoch} draftKey={`draft:${scope}:${current.id}`} />}
         {phase === 'plan' && !inputRun && !showLegacy && <>{commandDivider}<PlanSetup {...common} group={pair && members.length ? pair : undefined} settings={planSettings} displayed={current?.id}
@@ -621,6 +652,7 @@ export function Console() {
             <span className="muted">1–200, default {DEFAULT_TURN_LIMIT}; frozen into the run when it starts.</span></label>}
           {!pair && <p className="fine">No group in use: Send &amp; relay is unavailable and Relay reviews without a partner. Choose a group in Projects to relay between two agents.</p>}
         </section>}
+          </div>
         </section>
         </div>
         <details className="panel status" open={agentsOpen} onToggle={(e) => setAgentsOpen(e.currentTarget.open)}>

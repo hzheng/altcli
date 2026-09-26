@@ -1,7 +1,7 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import type { Group, ImplementationStart, StandaloneStart } from '../src/contracts/implementation';
 import type { WorkflowState } from '../src/contracts/workflow';
-import { editSettings, expand, openCard, pane } from './ui';
+import { expandWorktree, editSettings, expand, openCard, pane } from './ui';
 const headers = { Authorization: `Bearer ${'a'.repeat(64)}` };
 async function post(request: APIRequestContext, path: string, data: unknown) {
   const response = await request.post(`/api/v1/${path}`, { headers, data }); expect(response.ok()).toBe(true); return response.json();
@@ -25,7 +25,7 @@ async function openGroup(page: Page, group: Group) {
   await unlock(page);
   await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Projects', exact: true }).click();
   await page.getByRole('button', { name: `Project ${group.repository.split('/').pop()}`, exact: true }).click();
-  await page.getByRole('button', { name: `Open ${group.cwd!.split('/').pop()}`, exact: true }).click();
+  await expandWorktree(page, group.repository.split('/').pop()!); await page.getByRole('button', { name: `Open ${group.cwd!.split('/').pop()}`, exact: true }).click();
   await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Console', exact: true }).click();
 }
 /** A task branch with `changes` uncommitted paths, so committed follow-ups need no further branch choice. */
@@ -46,6 +46,24 @@ function mutations(page: Page) {
   });
   return sent;
 }
+test('Control recipient tabs join the selected section and preserve each draft', async ({ page, request }, info) => {
+  const group = await post(request, 'groups', { name: 'Control tabs', members: ['codex','claude'] });
+  await taskBranch(page, 2); await openGroup(page, group);
+  const targets = page.getByRole('navigation', { name: 'Command target' });
+  const background = (element: Locator) => element.evaluate(el => getComputedStyle(el).backgroundColor);
+  for (const name of ['Codex', 'Claude']) {
+    const section = await openCard(page, name), selected = targets.getByRole('button', { name, exact: true });
+    await expect(selected).toHaveAttribute('aria-pressed', 'true');
+    expect(await background(selected)).toBe(await background(section));
+    expect(await background(targets.getByRole('button', { name: name === 'Codex' ? 'Claude' : 'Codex', exact: true }))).not.toBe(await background(section));
+    const tabBox = await selected.boundingBox(), panelBox = await section.boundingBox();
+    expect(Math.abs(tabBox!.y + tabBox!.height - panelBox!.y)).toBeLessThanOrEqual(2);
+    await section.getByLabel(`Instruction for ${name}`).fill(`${name} draft`);
+  }
+  const codex = await openCard(page, 'Codex');
+  await expect(codex.getByLabel('Instruction for Codex')).toHaveValue('Codex draft');
+  await page.getByRole('region', { name: 'Control', exact: true }).screenshot({ path: info.outputPath('control-tabs.png') });
+});
 test('one control pane keeps per-target drafts; After send maps to a plain Send, work with commit, or work with commit and relay', async ({ page, request }) => {
   const group = await post(request, 'groups', { name: 'Card actions', members: ['codex','claude'] });
   await taskBranch(page, 2);
@@ -164,10 +182,10 @@ test('drafts, choices and disclosures survive tab, layout, phase, section and wo
   await page.getByRole('button', { name: 'Focus', exact: true }).click(); await openCard(page, 'Codex'); await page.getByRole('button', { name: 'Parallel', exact: true }).click();
   // Visit another workspace and come back: each keeps its own drafts, never another's.
   await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Projects', exact: true }).click();
-  await page.getByRole('button', { name: 'Project other', exact: true }).click(); await page.getByRole('button', { name: 'Open other', exact: true }).click();
+  await page.getByRole('button', { name: 'Project other', exact: true }).click(); await expandWorktree(page, 'other'); await page.getByRole('button', { name: 'Open other', exact: true }).click();
   await expect(page.getByLabel('Instruction for Codex')).toHaveCount(0);
   await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Projects', exact: true }).click();
-  await page.getByRole('button', { name: 'Project project', exact: true }).click(); await page.getByRole('button', { name: 'Open project', exact: true }).click();
+  await page.getByRole('button', { name: 'Project project', exact: true }).click(); await expandWorktree(page, 'project'); await page.getByRole('button', { name: 'Open project', exact: true }).click();
   const back = await openCard(page, 'Codex');
   await expect(back.getByLabel('Instruction for Codex')).toHaveValue('Codex draft'); await expect(back.getByLabel('After send')).toHaveValue('commit');
   await expect(back.getByLabel('Review context for Codex (optional)')).toBeVisible(); await expect(back.getByLabel('Review context for Codex (optional)')).toHaveValue('Check the parser.');

@@ -246,7 +246,7 @@ export class ControlPlane {
   }
   async workspaces(): Promise<WorkspaceDiscovery> {
     this.syncMockLaunches();
-    const sessions = this.store.sessions() as ManagedSession[];
+    const sessions = this.withoutClosedLaunches(this.store.sessions() as ManagedSession[]);
     const discovery = await discoverWorkspaces(this.adapter, this.config.mode, sessions, this.config.integrationBranches);
     await Promise.all(discovery.workspaces.flatMap((workspace) => workspace.agents.map(async (agent) => {
       if (!agent.observable) return;
@@ -345,10 +345,21 @@ export class ControlPlane {
   }
   /** AltCLI's own history for backup; cloning the repository cannot recover it. */
   exportHistory(repository?: string) { return { ...this.workflow.exportHistory(repository), interactions: this.interactions.records(repository) }; }
+  /** Closed launches retain registrations for history, but cannot remain console or discovery targets.
+   * A respawn can change panePid; closing the original server's pane retires every CLI it hosted. */
+  private withoutClosedLaunches(sessions: ManagedSession[]): ManagedSession[] {
+    const closed = this.launches.batches().flatMap(batch => batch.items.flatMap(item => {
+      const identity = item.identity ?? item.placeholder;
+      return item.closed && identity ? [identity] : [];
+    }));
+    return sessions.filter(session => !closed.some(identity => identity.socketPath === session.identity.socketPath &&
+      identity.serverPid === session.identity.serverPid && identity.serverStarted === session.identity.serverStarted &&
+      identity.paneId === session.identity.paneId));
+  }
   private workspaceSessions(discovery: WorkspaceDiscovery): ManagedSession[] {
     const sessions = new Map((this.store.sessions() as ManagedSession[]).map((session) => [session.id, session]));
     for (const workspace of discovery.workspaces) for (const agent of workspace.agents) if (agent.session) sessions.set(agent.session.id, agent.session);
-    return [...sessions.values()];
+    return this.withoutClosedLaunches([...sessions.values()]);
   }
   private isRenewal(member: ManagedSession, current: ManagedSession): boolean {
     return this.renewalBases.get(member.id) === current.registrationId && this.discovered.get(member.id)?.registrationId === member.registrationId;
