@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import type { LaunchBatch, LaunchInstance, LaunchItem, LaunchPreview, LaunchProfile } from '../contracts/launches.ts';
+import type { LaunchBatch, LaunchCleanupPreview, LaunchInstance, LaunchItem, LaunchPreview, LaunchProfile } from '../contracts/launches.ts';
 import type { WorktreeIdentity } from '../contracts/workflow.ts';
 import { AppError, messageOf } from '../core/errors.ts';
 import { requestId } from '../core/validation.ts';
@@ -16,6 +16,7 @@ import type { InputAuthority } from './input-authority.ts';
 import { terminalEnvironment, terminalRunner, tmuxLiteral } from './terminal-environment.ts';
 import { inspectPane } from './adapters/tmux.ts';
 import { inspectAttach, type AttachTarget } from './tmux-attach.ts';
+import { launchCleanupHost, type LaunchCleanupHost } from './launch-cleanup-host.ts';
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const slug = (v: string) => v.replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 24) || 'agent';
 const SETTLED = new Set(['running','reconciled','failed']);
@@ -37,14 +38,18 @@ export function childEnvironmentArgs(global: string, session: string, env: Recor
 }
 export class LaunchService {
   private previews = new Map<string, LaunchPreview>();
+  private cleanupPreviews = new Map<string, { preview: LaunchCleanupPreview; evidence: string }>();
+  readonly cleanupHost: LaunchCleanupHost;
   readonly config: Config; readonly store: Store; readonly projects: ProjectCatalog; readonly authority: InputAuthority;
   readonly guard: (tree: WorktreeIdentity) => void;
   /** Session names live on the configured tmux server (none when no server runs). */
   readonly sessionNames: () => Promise<Set<string>>;
-  constructor(config: Config, store: Store, projects: ProjectCatalog, authority: InputAuthority, guard: (tree: WorktreeIdentity) => void, sessionNames: () => Promise<Set<string>>) {
+  constructor(config: Config, store: Store, projects: ProjectCatalog, authority: InputAuthority, guard: (tree: WorktreeIdentity) => void, sessionNames: () => Promise<Set<string>>, cleanupHost = launchCleanupHost(config)) {
     this.config=config;this.store=store;this.projects=projects;this.authority=authority;this.guard=guard;this.sessionNames=sessionNames;
+    this.cleanupHost=cleanupHost;
     for(const batch of this.batches()) {
       let changed=false;
+      for(const item of batch.items) if(item.cleanup?.status==='applying') {item.cleanup.status='uncertain';item.status='uncertain';item.message='Host restarted during cleanup. Inspect the result; nothing will be retried.';changed=true;}
       for(const item of batch.items) if(['applying','starting'].includes(item.status)) {item.status='uncertain';item.message='Host restarted during startup. Inspect the original instance; nothing was retried.';changed=true;}
       if(changed) this.save(batch);
     }
@@ -70,7 +75,7 @@ export class LaunchService {
   private lookup(id:string): {batch:LaunchBatch;item:LaunchInstance} {for(const batch of this.batches()){const item=batch.items.find(i=>i.id===id);if(item)return {batch,item};}throw new AppError('LAUNCH_CHANGED','Launch instance is unavailable.',409);}
   private update(batch:LaunchBatch,item:LaunchInstance,changes:Partial<LaunchInstance>) {
     Object.assign(item,changes,{updatedAt:new Date().toISOString()});this.save(batch);
-    if(batch.items.filter(i=>i.worktree.indexPath===item.worktree.indexPath).every(i=>SETTLED.has(i.status))) this.store.db.prepare('DELETE FROM launch_reservations WHERE index_path=? AND launch_id=?').run(item.worktree.indexPath,batch.requestId);
+    if(batch.items.filter(i=>i.worktree.indexPath===item.worktree.indexPath).every(i=>i.closed||SETTLED.has(i.status))) this.store.db.prepare('DELETE FROM launch_reservations WHERE index_path=? AND launch_id=?').run(item.worktree.indexPath,batch.requestId);
   }
   private async resolved(profile:LaunchProfile): Promise<string> {
     if(this.config.mode==='mock') return `/mock/bin/${slug(profile.executable)}`;
@@ -97,7 +102,7 @@ export class LaunchService {
         items.push({id,projectId,worktreeId:tree.id,worktree:tree.identity!,commonDir:project.commonDir,branch:tree.branch,head:tree.head!,profile,executable,sessionName,environmentDigest:digest(launchEnvironment())});}
     }
     if(items.length>6)throw new AppError('LAUNCH_ITEMS','At most six instances may be launched together.');
-    if(this.batches().flatMap(b=>b.items).filter(i=>!SETTLED.has(i.status)).length+items.length>8)blockers.push('At most eight launched sessions may await attention.');
+    if(this.batches().flatMap(b=>b.items).filter(i=>!i.closed&&!SETTLED.has(i.status)).length+items.length>8)blockers.push('At most eight launched sessions may await attention.');
     const id=randomUUID(), expiresAt=new Date(Date.now()+120000).toISOString();const result={requestId:id,digest:digest({id,items,expiresAt}),expiresAt,items,blockers:[...new Set(blockers)]};
     for(const [id,p] of this.previews)if(Date.parse(p.expiresAt)<Date.now())this.previews.delete(id);
     if(this.previews.size>=32)throw new AppError('LAUNCH_PREVIEW_LIMIT','Too many launch previews. Wait for older previews to expire.',409);
@@ -178,8 +183,79 @@ export class LaunchService {
   }
   /** Records that a confirmed Finish branch closed this launch's session. History is kept; the launch is never a target again. */
   retire(id:string,finishId:string):void {const {batch,item}=this.lookup(id);if(!item.closed)this.update(batch,item,{closed:{finishId,at:new Date().toISOString()}});}
+  private cleanupGate(item: LaunchInstance) {
+    if(!this.config.inputEnabled)throw new AppError('READ_ONLY','The host has disabled input.',403);
+    this.guard(item.worktree);this.projects.assertWorktreeReady(item.worktree.root,true);
+    if(item.status==='applying'||this.authority.busy)throw new AppError('LAUNCH_BUSY','Wait for the in-flight operation to settle.',409);
+    const identity=item.identity??item.placeholder;
+    const targetsPane=this.authority.pending().some(m=>{
+      if('launchId' in m.target)return m.target.launchId===item.id;
+      const agentId=m.target.agentId;
+      return this.store.sessions().some(s=>s.id===agentId&&s.identity.paneId===identity?.paneId&&s.identity.socketPath===identity.socketPath);
+    });
+    if(targetsPane)
+      throw new AppError('LAUNCH_BUSY','Release and reconcile the keyboard record involving this pane first.',409);
+    const reservation=this.store.db.prepare('SELECT launch_id FROM launch_reservations WHERE index_path=?').get(item.worktree.indexPath) as {launch_id:string}|undefined;
+    if(reservation&&reservation.launch_id!==this.lookup(item.id).batch.requestId)throw new AppError('LAUNCH_BUSY','Another launch owns this checkout. Inspect it first.',409);
+  }
+  private async cleanupEvidence(item: LaunchInstance): Promise<{state:LaunchCleanupPreview['state'];panes:unknown;blockers:string[]}> {
+    const identity=item.identity??item.placeholder, blockers:string[]=[];
+    try{this.cleanupGate(item);}catch(e){blockers.push(messageOf(e));}
+    if(item.closed||item.cleanup)blockers.push('This launch already has a cleanup or close record. Inspect its result.');
+    if(!identity||!item.sessionId||!item.windowId)return {state:'blocked',panes:null,blockers:[...blockers,'The original session identity is unavailable. Inspect the host manually.']};
+    if(this.config.mode==='mock')return {state:'blocked',panes:null,blockers:[...blockers,'This is a simulated running session; no host session can be cleaned up.']};
+    try{
+      const absent=await this.cleanupHost.absent({sessionId:item.sessionId,serverPid:identity.serverPid,serverStarted:identity.serverStarted});
+      if(absent===true)return {state:'missing',panes:null,blockers};
+      const panes=await this.cleanupHost.sessionPanes(item.sessionId);
+      if(!panes?.length||absent===null)blockers.push('The original session could not be verified as present or absent. Inspect again.');
+      else if(panes.some(p=>p.sessionId!==item.sessionId||p.marker!==item.id||p.serverPid!==identity.serverPid||p.serverStarted!==identity.serverStarted||p.socketPath!==identity.socketPath))blockers.push('The tmux server, session or launch marker changed. Nothing will be removed.');
+      else if(panes.length!==1||panes[0]!.paneId!==identity.paneId||panes[0]!.windowId!==item.windowId||panes[0]!.linked)blockers.push('This session has changed panes or shared windows. Inspect it with Finish branch or on the host.');
+      else if(!panes[0]!.dead)blockers.push('This session is still running. Cleanup cannot stop a live session.');
+      return {state:blockers.length?'blocked':'dead',panes,blockers};
+    }catch(e){return {state:'blocked',panes:null,blockers:[...blockers,messageOf(e)]};}
+  }
+  async previewCleanup(id:string):Promise<LaunchCleanupPreview> {
+    const {item}=this.lookup(id), evidence=await this.cleanupEvidence(item), request=randomUUID(), expiresAt=new Date(Date.now()+120000).toISOString();
+    const captured=digest({item,evidence});
+    const preview:LaunchCleanupPreview={requestId:request,digest:digest({request,captured,expiresAt}),expiresAt,launchId:id,sessionName:item.sessionName,state:evidence.state,blockers:evidence.blockers};
+    for(const [key,p] of this.cleanupPreviews)if(Date.parse(p.preview.expiresAt)<Date.now())this.cleanupPreviews.delete(key);
+    if(this.cleanupPreviews.size>=32)throw new AppError('LAUNCH_PREVIEW_LIMIT','Too many cleanup previews. Wait for older previews to expire.',409);
+    this.cleanupPreviews.set(request,{preview,evidence:captured});return preview;
+  }
+  async confirmCleanup(id:string,value:unknown):Promise<LaunchInstance> {
+    const b=terminalFields(value,['requestId','digest','confirmInspected']), request=requestId(b.requestId), hash=terminalText(b.digest);
+    if(b.confirmInspected!==true)throw new AppError('CONFIRM_REQUIRED','Confirm inspection of possible background processes before cleanup.');
+    let {batch,item}=this.lookup(id);
+    if(item.cleanup){if(item.cleanup.requestId!==request||item.cleanup.digest!==hash)throw new AppError('LAUNCH_CHANGED','Cleanup was already requested. Inspect its result.',409);return item;}
+    const held=this.cleanupPreviews.get(request);
+    if(!held||held.preview.launchId!==id||held.preview.digest!==hash||Date.parse(held.preview.expiresAt)<Date.now()||held.preview.blockers.length)throw new AppError('LAUNCH_CHANGED','Cleanup preview changed or is blocked. Preview again.',409);
+    const evidence=await this.cleanupEvidence(item);
+    if(digest({item,evidence})!==held.evidence||evidence.blockers.length)throw new AppError('LAUNCH_CHANGED','The launch or session changed. Preview cleanup again.',409);
+    // Claim before the only possible kill; concurrent confirmations return this record and never execute it again.
+    ({batch,item}=this.lookup(id));
+    if(item.cleanup)return this.confirmCleanup(id,value);
+    if(digest({item,evidence})!==held.evidence)throw new AppError('LAUNCH_CHANGED','The launch changed. Preview cleanup again.',409);
+    this.store.db.transaction(()=>{
+      this.cleanupGate(item);
+      this.update(batch,item,{status:'uncertain',cleanup:{requestId:request,digest:hash,status:'applying',acknowledgedAt:new Date().toISOString()},message:'Cleaning up the confirmed dead or missing session.'});
+      this.store.db.prepare('INSERT OR IGNORE INTO launch_reservations(index_path,launch_id) VALUES(?,?)').run(item.worktree.indexPath,batch.requestId);
+    }).immediate();
+    this.cleanupPreviews.delete(request);
+    try{if(evidence.state==='dead')await this.cleanupHost.kill(item);}catch{/* Only verified absence can finish cleanup. Never retry a kill. */}
+    return this.inspectCleanup(id);
+  }
+  private async inspectCleanup(id:string):Promise<LaunchInstance> {
+    const before=this.lookup(id).item, identity=before.identity??before.placeholder;
+    const gone=identity&&before.sessionId?await this.cleanupHost.absent({sessionId:before.sessionId,serverPid:identity.serverPid,serverStarted:identity.serverStarted}).catch(()=>null):null;
+    const {batch,item}=this.lookup(id);if(item.closed)return item;
+    this.update(batch,item,gone===true?{status:'reconciled',cleanup:{...item.cleanup!,status:'done'},closed:{cleanupId:item.cleanup!.requestId,at:new Date().toISOString()},message:'Session cleaned up after your acknowledgement. Launch history retained.'}
+      :{status:'uncertain',cleanup:{...item.cleanup!,status:'uncertain'},message:'Cleanup could not be verified. Inspect the original session on the host, then Inspect again. Nothing will be retried.'});
+    return item;
+  }
   async inspect(id:string):Promise<LaunchInstance> {
     const {batch,item}=this.lookup(id);
+    if(item.cleanup&&!item.closed)return this.inspectCleanup(id);
     if(item.status==='reconciled'||item.status==='failed'||item.closed||this.config.mode==='mock')return item;
     try{const pane=await this.verify(item);
       const eligible=classifyAgent({...pane,location:`${item.sessionName}:0.0`},[]).eligible;
@@ -189,19 +265,21 @@ export class LaunchService {
   async reconcile(id:string,value:unknown):Promise<LaunchInstance> {
     const b=terminalFields(value,['requestId','confirmInspected','note']);requestId(b.requestId);if(b.confirmInspected!==true)throw new AppError('CONFIRM_REQUIRED','Inspect the host, including possible prior and background effects.');
     const note=terminalText(b.note,1000);const {batch,item}=this.lookup(id);
+    if(item.cleanup&&!item.closed)throw new AppError('LAUNCH_BUSY','Inspect the pending cleanup; reconciliation cannot discard its ownership.',409);
     if(item.humanDecision){if(item.humanDecision.requestId!==b.requestId||item.humanDecision.note!==note)throw new AppError('LAUNCH_CHANGED','This instance was already reconciled.',409);return item;}
     if(item.status==='applying'||this.authority.busy)throw new AppError('LAUNCH_BUSY','Wait for the in-flight operation to settle.',409);
     this.update(batch,item,{status:'reconciled',message:'Human acknowledged possible prior effects. History retained; a new launch needs new consent.',humanDecision:{requestId:b.requestId as string,note,at:new Date().toISOString()}});return item;
   }
   async capture(id: string): Promise<{text: string}> {
     const {item} = this.lookup(id);
-    if (item.closed) return {text: 'This session was closed by Finish branch.'};
+    if (item.closed) return {text: 'finishId' in item.closed?'This session was closed by Finish branch.':'This session was closed by cleanup. Its launch history is retained.'};
     if (this.config.mode === 'mock') return {text: `Simulated launch ${item.sessionName}; no host process.`};
     const pane = await this.verify(item);
     return {text: await terminalRunner(this.config)(['capture-pane', '-p', '-J', '-S', '-250', '-t', pane.identity.paneId])};
   }
   async target(id:string):Promise<AttachTarget> {
-    const {item}=this.lookup(id);if(item.closed)throw new AppError('LAUNCH_CHANGED','This session was closed by Finish branch.',409);if(this.config.mode==='mock' && item.identity && item.sessionId)return {identity:item.identity,sessionId:item.sessionId,label:item.sessionName};
+    const {item}=this.lookup(id);if(item.closed)throw new AppError('LAUNCH_CHANGED','finishId' in item.closed?'This session was closed by Finish branch.':'This session was closed by cleanup.',409);
+    if(item.cleanup)throw new AppError('LAUNCH_CHANGED','This session has a pending cleanup.',409);if(this.config.mode==='mock' && item.identity && item.sessionId)return {identity:item.identity,sessionId:item.sessionId,label:item.sessionName};
     const pane=await this.verify(item);return inspectAttach(this.config,pane.identity);
   }
 }

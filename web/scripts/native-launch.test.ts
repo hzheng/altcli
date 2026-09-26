@@ -48,8 +48,22 @@ for(const existing of [false,true])test(`private tmux service launch: ${existing
     assert.ok(store.db.prepare('SELECT 1 FROM launch_reservations').get());assert.throws(()=>catalog.assertWorktreeReady(root),/launch/);
     const before=(await run(['list-sessions','-F','#{session_id}']));await launches.confirm(input);assert.equal(await run(['list-sessions','-F','#{session_id}']),before);
     await launches.reconcile(item.id,{requestId:randomUUID(),confirmInspected:true,note:'Fixture exited; inspected private server and child process result.'});assert.equal(store.db.prepare('SELECT 1 FROM launch_reservations').get(),undefined);
-    await run(['kill-session','-t',item.sessionId!]);await run(['new-session','-d','-s',item.sessionName,'/bin/sleep','300']);
-    await assert.rejects(launches.target(item.id),/identity|changed|verify/);
+    assert.equal((await launches.previewCleanup(item.id)).state,'dead');
+    // Revive it after a dead preview. The final tmux-side condition must refuse to kill the now-live pane.
+    await run(['respawn-pane','-k','-t',item.identity!.paneId,'/bin/sleep','300']);
+    await launches.cleanupHost.kill(item);
+    assert.equal((await run(['display-message','-p','-t',item.identity!.paneId,'#{pane_dead}'])).trim(),'0');
+    await run(['respawn-pane','-k','-t',item.identity!.paneId,'/usr/bin/true']);
+    for(let n=0;n<100;n++){if((await run(['display-message','-p','-t',item.identity!.paneId,'#{pane_dead}'])).trim()==='1')break;await wait(20);}
+    const cleanup=await launches.previewCleanup(item.id);
+    const cleaned=await launches.confirmCleanup(item.id,{requestId:cleanup.requestId,digest:cleanup.digest,confirmInspected:true});
+    assert.ok(cleaned.closed,cleaned.message);await assert.rejects(launches.target(item.id),/closed/);
+    const next=await launches.preview({projectId:project.id,items:[{worktreeId:tree.id,profileId:profile.id,count:1}]});
+    const missing=(await launches.confirm({requestId:next.requestId,previewDigest:next.digest,confirm:true})).items[0]!;
+    await run(['kill-session','-t',missing.sessionId!]);await run(['new-session','-d','-s',missing.sessionName,'/bin/sleep','300']);
+    const forget=await launches.previewCleanup(missing.id);assert.equal(forget.state,'missing');
+    assert.ok((await launches.confirmCleanup(missing.id,{requestId:forget.requestId,digest:forget.digest,confirmInspected:true})).closed);
+    assert.ok((await run(['list-sessions','-F','#{session_name}'])).includes(missing.sessionName),'the reused name belongs to another live session');
   }finally{for(const [key,value] of Object.entries(original)){if(value===undefined)delete process.env[key];else process.env[key]=value;}await run(['kill-server']).catch(()=>{});store.close();await rm(directory,{recursive:true,force:true});}
 });
 test('child environment policy retains explicit nonsecret hook references and rejects process injection names',()=>{

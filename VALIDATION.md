@@ -2263,3 +2263,44 @@ also asserts that input invalidates readiness. Product behavior is unchanged.
 
 Installed CLIs, physical devices and the deployed host were not exercised; the running backend
 and saved profiles were not changed.
+
+## 2026-09-26 — confirmed cleanup of dead and missing app sessions
+
+Read-only inspection found a retained dead app-launched pane and a reconciled
+launch whose original session was already gone. Reconciliation retained their
+cards, and the stored running label was only a previous observation. Each launch
+card now offers **Clean up…**, with a fresh preview and acknowledgement of possible
+background processes. Verified cleanup hides the card and keeps its history.
+Live/replaced sessions, shared windows and extra panes are refused. The final
+tmux condition also refuses a pane revived after the preview. Missing sessions
+are retired by recorded identity, without touching a reused name. Uncertain
+cleanup keeps its durable reservation and is inspected without another kill.
+
+- The initial 11 cleanup regression cases failed because cleanup was absent.
+  The final workflow suite includes 15 passing cleanup cases using real SQLite
+  and fixture tmux evidence: confirmation, missing/reconciled records, live and
+  changed identities, concurrent duplicates, restart, unknown absence, input and
+  owner gates, and preservation of another keyboard's reconciliation record.
+- The first full check caught a changed Finish branch error message. Its existing
+  message was restored, and the subsequent `./scripts/check.sh` passed on Node
+  24.12.0: 32 hook/setup, 43 smoke, 377 workflow and 76 unit tests, type checking
+  and the production build.
+- `./scripts/check.sh --e2e` passed the same checks, then **276 passed, eight
+  intentionally skipped** across desktop and iPhone Chromium (9.5 minutes).
+  The eight new browser cases cover dead, missing, live and lost-response flows,
+  cancellation, acknowledgement, retirement and preservation of another card.
+  Cleanup evidence/effects are route fixtures in those browser tests.
+- Real removal was tested on isolated private tmux sockets in
+  `native-launch.test.ts`. The combined cleanup/native run passed 19 cases;
+  the final two `private tmux service launch` cases were rerun and passed after
+  the Finish branch message correction. They verify removal, a revived pane
+  surviving the final guard, and a missing launch cleaned without killing a
+  live replacement with the same name.
+- Changed source, new files and this record were screened for secrets; none
+  were found. `git diff --check` passed. SQLite v16 protects pending cleanup
+  decisions from older backends that cannot interpret them.
+
+No actual user session was removed and the running main-checkout backend was
+not restarted or modified. These changes remain in the feature worktree pending
+integration. Installed-agent, physical-device and deployed-host acceptance of
+the new cleanup flow was not performed.

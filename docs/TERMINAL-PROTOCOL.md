@@ -249,13 +249,26 @@ records a note acknowledging possible prior/background effects. It never retries
 removes sessions, deletes worktrees or rewrites history. A new launch needs a new
 preview. Mock launches are labelled simulated and appear in mock discovery.
 
-Launched sessions are closed only by **Finish branch** on a linked task worktree
+Live launched sessions are closed by **Finish branch** on a linked task worktree
 ([ADR-0013](adr/ADR-0013-confirmed-branch-setup.md#confirmed-closing-of-launched-sessions)):
 `POST /api/v1/projects/worktrees/finish/preview`, `…/finish` (confirm), `…/finish/continue` (the
 removal or discard step) and `…/finish/reconcile` (inspect, record a decision, or stop before the
 Git step). Only sessions proven by server identity, session ID and full launch marker, wholly
 inside the worktree, are closed, by session ID; survivors and uncertain results keep the owner.
 A closed launch is retired from terminal and discovery targets and keeps its history.
+
+For a dead or missing launch, `POST /api/v1/launches/{id}/cleanup/preview` captures
+the original session's current evidence. `POST …/cleanup` requires that preview's
+request ID and digest plus `confirmInspected: true`, acknowledging possible
+background effects. Only the original unshared, single dead pane can be removed;
+the final tmux condition refuses a revived pane, new window/split or changed marker.
+Verified absence can retire an already-killed session without touching a reused
+name. The decision and launch reservation are durable before execution. Duplicates
+return the recorded operation, and `POST …/inspect` verifies uncertain cleanup
+without retrying removal. Live sessions and conflicting owners are refused; a
+keyboard targeting another pane keeps its existing barrier and checkpoints.
+Cleanup hides retired cards while keeping their records. See the
+[ADR-0021 cleanup extension](adr/ADR-0021-project-entry-and-agent-launch.md).
 
 ## Deployment acceptance
 

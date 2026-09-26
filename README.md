@@ -25,7 +25,10 @@ first, then Host configuration) edits executable/argument profiles; **Launch age
 previews exact checkout, commit and program before creating sessions named
 `<profile>-<branch>`. **Finish branch…** on a task worktree closes the sessions AltCLI
 launched there after a preview and confirmation, then can remove or discard the worktree
-through the usual confirmations; sessions you opened yourself are never closed. This is host-shell
+through the usual confirmations. Each launch card also offers **Clean up…** for a dead or
+missing app session, with a preview and background-work acknowledgement; the card is removed
+after verification and its history is retained. Live sessions are refused by cleanup.
+Sessions you opened yourself are never closed. This is host-shell
 power for the authenticated owner. See [the protocol](docs/TERMINAL-PROTOCOL.md)
 and [validation](VALIDATION.md); feature activation is not acceptance.
 

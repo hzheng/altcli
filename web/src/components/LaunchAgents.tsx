@@ -7,6 +7,7 @@ import type { ManualSession } from '../contracts/terminals';
 import { NativeTerminal, type NativeTerminalHandle } from './NativeTerminal';
 import { KeyboardSelector, keyboardOwnerOf } from './KeyboardSelector';
 import { isDirectCodexProfile, lacksCodexNoDaemon } from '../core/policy';
+import { LaunchCleanup } from './LaunchCleanup';
 export function LaunchAgents({token,projectId,tree,enabled,inputEnabled,terminalEnabled,held,clientInstanceId,onChanged,viewEpoch=0,requested=0,manualSessions,refreshState,busy:outerBusy=false,affected=[]}:{token:string;projectId:string;tree:ProjectWorktree;enabled:boolean;inputEnabled:boolean;terminalEnabled:boolean;held:boolean;clientInstanceId:string;onChanged:(notice:string)=>Promise<void>;viewEpoch?:number;requested?:number;manualSessions?:ManualSession[];refreshState?:()=>Promise<void>;busy?:boolean;affected?:string[]}) {
   const handle=useRef<NativeTerminalHandle|null>(null);
   const [open,setOpen]=useState(false),[profiles,setProfiles]=useState<LaunchProfile[]>([]),[rows,setRows]=useState<{profileId:string;count:number}[]>([]),[preview,setPreview]=useState<LaunchPreview|null>(null),[batches,setBatches]=useState<LaunchBatch[]>([]);
@@ -16,7 +17,7 @@ export function LaunchAgents({token,projectId,tree,enabled,inputEnabled,terminal
   useEffect(()=>{setPreview(null);},[viewEpoch,tree.head,tree.branch,enabled,held]);
   useEffect(()=>{void refresh().catch(e=>setError(e.message));},[token]);
   async function act(work:()=>Promise<void>){if(busy)return;setBusy(true);setError('');try{await work();}catch(e){setError(e instanceof Error?e.message:'Request failed.');}finally{setBusy(false);}}
-  const items=batches.flatMap(b=>b.items).filter(i=>i.worktreeId===tree.id);
+  const items=batches.flatMap(b=>b.items).filter(i=>i.worktreeId===tree.id&&!i.closed);
   return <div className="launch-agents" id={`launch-${tree.id}`}><button type="button" disabled={!enabled||busy||held||!!tree.error} onClick={()=>void act(async()=>{setOpen(x=>!x);setProfiles(await api<LaunchProfile[]>(token,'launch-profiles'));await refresh();})}>Launch agents…</button>
     {open&&<section aria-label={`Launch agents in ${tree.path}`}><h3>Launch agents in {tree.branch??'detached HEAD'}</h3><p className="mono">{tree.path}</p>
       {!profiles.some(p=>p.enabled)&&<p>Create an enabled Launch profile in Settings first.</p>}
@@ -30,12 +31,13 @@ export function LaunchAgents({token,projectId,tree,enabled,inputEnabled,terminal
         <button type="button" disabled={busy||!enabled||held||!!preview.blockers.length||!!unknown} onClick={()=>void act(async()=>{setUnknown(preview.requestId);try{await api<LaunchBatch>(token,'launches',{body:{requestId:preview.requestId,previewDigest:preview.digest,confirm:true}});}catch(e){if(e instanceof HttpError&&e.status<500)setUnknown(null);throw e;}setUnknown(null);setPreview(null);await refresh();await onChanged('Launch results recorded. Inspect startup before starting a task.');})}>Launch {preview.items.length} sessions</button></div>}
       {unknown&&<p role="alert">Launch {unknown} needs inspection. <button type="button" onClick={()=>void act(async()=>{await refresh();const all=await api<LaunchBatch[]>(token,'launches');if(all.some(b=>b.requestId===unknown))setUnknown(null);})}>Inspect recorded request</button></p>}
     </section>}
-    {items.map(item=><div className="notice" key={item.id}><strong>{item.sessionName} · {item.status}</strong><p>{item.message}</p><div className="row-tools">
+    {items.map(item=><div className="notice" key={item.id} role="group" aria-label={`Launch ${item.sessionName}`}><strong>{item.sessionName} · last observed: {item.status}</strong><p>{item.message}</p><div className="row-tools">
       <button type="button" disabled={busy} onClick={()=>void act(async()=>{await api<LaunchInstance>(token,`launches/${item.id}/inspect`,{body:{}});await refresh();await onChanged('Launch inspected without retry.');})}>Inspect</button>
-      {terminalEnabled&&item.identity&&<button type="button" onClick={()=>setTerminal(terminal===item.id?null:item.id)}>{terminal===item.id?'Close terminal':'Open terminal'}</button>}
-      {!['running','reconciled','failed','applying'].includes(item.status)&&<button type="button" onClick={()=>{setInspectId(item.id);setNote('');}}>Reconcile after host inspection…</button>}</div>
+      {terminalEnabled&&item.identity&&!item.cleanup&&<button type="button" onClick={()=>setTerminal(terminal===item.id?null:item.id)}>{terminal===item.id?'Close terminal':'Open terminal'}</button>}
+      {!item.cleanup&&!['running','reconciled','failed','applying'].includes(item.status)&&<button type="button" onClick={()=>{setInspectId(item.id);setNote('');}}>Reconcile after host inspection…</button>}</div>
+      <LaunchCleanup token={token} item={item} enabled={inputEnabled&&!busy&&!outerBusy} viewEpoch={viewEpoch} onChanged={async()=>{setTerminal(null);await refresh();await onChanged('Cleanup result recorded; launch history retained.');}} />
       {inspectId===item.id&&<div><p>Inspect the original operation, all possible sessions and background effects on the host. A missing session does not prove the program never ran. This releases the reservation and retains that uncertainty in history.</p><label>Inspection note<input value={note} maxLength={1000} onChange={e=>setNote(e.target.value)}/></label><button type="button" disabled={!note.trim()||busy} onClick={()=>void act(async()=>{await api(token,`launches/${item.id}/reconcile`,{body:{requestId:crypto.randomUUID(),confirmInspected:true,note}});setInspectId(null);await refresh();await onChanged('Launch reconciled by human inspection. Nothing was replayed.');})}>Record inspected reconciliation</button><button type="button" onClick={()=>setInspectId(null)}>Cancel</button></div>}
-      {terminal===item.id&&<><KeyboardSelector options={[{key:item.id,label:item.sessionName,inView:true}]} handle={key=>key===item.id?handle.current??undefined:undefined} affected={affected} disabled={outerBusy||!inputEnabled} viewEpoch={viewEpoch} refresh={refreshState??refresh}
+      {terminal===item.id&&!item.cleanup&&<><KeyboardSelector options={[{key:item.id,label:item.sessionName,inView:true}]} handle={key=>key===item.id?handle.current??undefined:undefined} affected={affected} disabled={outerBusy||!inputEnabled} viewEpoch={viewEpoch} refresh={refreshState??refresh}
         owner={keyboardOwnerOf(manualSessions,clientInstanceId,target=>'launchId' in target&&target.launchId===item.id?{key:item.id,label:item.sessionName}:undefined)} />
         <NativeTerminal ref={handle} token={token} target={{launchId:item.id}} clientInstanceId={clientInstanceId} viewEpoch={viewEpoch} label={item.sessionName} held={held} refresh={refresh} fallback={<LaunchCapture token={token} id={item.id} />}/></>}
     </div>)}{error&&<p role="alert">{error}</p>}

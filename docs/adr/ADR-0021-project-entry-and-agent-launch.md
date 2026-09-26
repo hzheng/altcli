@@ -28,10 +28,29 @@ September 25 update: a launched session is named from its profile and branch
 (`<profile>-<branch>`), numbered `-2`, `-3`… when that name is live on the server or held by an
 unsettled launch anywhere on the host; confirmation refuses a previewed name taken since, rather
 than renaming it. Launch identity remains the session ID and full-UUID marker, never the name.
-Launched sessions are closed only through the separately confirmed Finish branch of
+Live launched sessions are closed through the separately confirmed Finish branch of
 [ADR-0013](ADR-0013-confirmed-branch-setup.md#confirmed-closing-of-launched-sessions); its history
 is kept. Repository entry can also browse host directories read-only and adds the checkout Git
 reports, refusing when the browsed directory, repository or branch changed since it was shown.
+
+September 26 extension, explicitly requested by the owner: each launch card offers
+**Clean up…** for a dead or missing app-launched session, independently of finishing
+the branch. A read-only preview binds the recorded server/session/pane identity and
+full launch marker. Confirmation acknowledges possible surviving background work.
+For a retained dead session, only the original single pane/window, unshared and
+still dead, can be removed; tmux rechecks these conditions in its command queue.
+A missing original session only retires its card. Names are never removal targets,
+and a replacement or live session is never stopped by cleanup. Expanded/shared
+sessions require the broader Finish branch preview or manual host inspection.
+
+The cleanup decision and checkout reservation persist before any removal. Unknown
+results retain ownership across restart; **Inspect** checks absence without retrying.
+Verified absence retires the card and its terminal target but retains launch and
+acknowledgement history. Existing run/delivery/setup owners and keyboard records
+targeting that pane block cleanup. A keyboard on another pane may remain active;
+its manual-input barrier, snapshots and workflow checkpoints are preserved. This
+does not certify that background work stopped or that the task completed. SQLite
+v16 prevents older backends from reconciling away an unresolved cleanup.
 
 See [the protocol](../TERMINAL-PROTOCOL.md) for API, environment and recovery rules.
 Remote/provider/mobile acceptance remains separate from fake and private-fixture

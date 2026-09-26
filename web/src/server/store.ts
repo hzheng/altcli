@@ -17,7 +17,7 @@ export class Store {
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("busy_timeout = 5000");
     const version = this.db.pragma("user_version", { simple: true }) as number;
-    if (version > 15) throw new Error("Unsupported database version. Do not downgrade this store.");
+    if (version > 16) throw new Error("Unsupported database version. Do not downgrade this store.");
     this.db.transaction(() => {
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -47,7 +47,7 @@ export class Store {
       if (version === 1) this.migrateFromV1();
       if (version < 5) for (const pair of this.pairs()) this.saveGroup({ id: pair.id, name: pair.name, repository: pair.repository,
         cwd: null, members: pair.sessions, revision: 1, createdAt: pair.createdAt, legacyPairId: pair.id });
-      this.db.exec("PRAGMA user_version = 15"); // older servers must not ignore a Finish branch owner
+      this.db.exec("PRAGMA user_version = 16"); // older servers must not reconcile away a pending launch cleanup
     })();
   }
   /** v1 had one global reservation in `control` and sessions without agentType. */

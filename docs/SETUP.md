@@ -356,6 +356,15 @@ To launch agents from AltCLI:
 6. Open the checkout's card. The launched agents appear there with checkboxes, and
    the ticked ones form the group (use **Recheck** if one is missing).
 
+Use **Clean up…** on a launch card when its tmux pane is dead or its recorded
+session has already been killed. Preview the exact session, acknowledge possible
+background processes, then choose **Remove dead session** or **Remove launch card**.
+Cleanup keeps the history and leaves live sessions alone, including a newer session
+with the same name. If the result is uncertain, use **Inspect**; it checks the
+original session without repeating removal. Shared windows or extra panes need
+Finish branch or host inspection. A keyboard on another pane may remain active;
+its reconciliation barrier is kept.
+
 Before enabling on a deployed host, follow [TERMINAL-PROTOCOL](TERMINAL-PROTOCOL.md)
 and the private-fixture tests, then supervised installed-CLI acceptance. Never
 restart the active controller during delivery to adopt server changes.

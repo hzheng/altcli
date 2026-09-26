@@ -105,6 +105,8 @@ export class ControlPlane {
   async confirmFinish(value: unknown) { await this.workspaces(); return this.finish.confirm(value); }
   async continueFinish(value: unknown) { await this.workspaces(); return this.finish.continue(value); }
   async reconcileFinish(value: unknown) { await this.workspaces(); return this.finish.reconcile(value); }
+  previewLaunchCleanup(id: string) { return this.launches.previewCleanup(id); }
+  confirmLaunchCleanup(id: string, value: unknown) { return this.launches.confirmCleanup(id, value); }
   /** The effective host configuration for the Settings tab; read-only and without the token. */
   hostConfig(): HostConfig { return describeConfig(this.config); }
   /** Read-only host directory browsing for choosing a project's starting checkout. */

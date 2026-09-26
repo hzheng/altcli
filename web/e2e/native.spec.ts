@@ -566,3 +566,39 @@ test('a Codex-hinted shell profile keeps its arguments and offers manual verific
     if(current)await request.delete(`/api/v1/launch-profiles/${created.id}`,{headers,data:{expectedRevision:current.revision}});
   }
 });
+for(const scenario of ['dead','missing','live','lost'] as const)test(`launch cleanup: ${scenario} session requires explicit acknowledgement and preserves other sessions`,async({page,request},info)=>{
+  const name=`cleanup-${scenario}-${info.project.name}`;
+  const project=await post(request,'projects',{path:`/demo/${name}`});
+  const discovery=await (await request.get('/api/v1/workspaces',{headers})).json();
+  const tree=discovery.projects.find((p:{id:string})=>p.id===project.id).worktrees[0];
+  const profile=await post(request,'launch-profiles',{label:`Cleanup ${scenario}`,executable:'codex',args:['--no-daemon'],adapterHint:'codex',enabled:true});
+  const launch=await post(request,'launches/preview',{projectId:project.id,items:[{worktreeId:tree.id,profileId:profile.id,count:2}]});
+  const batch=await post(request,'launches',{requestId:launch.requestId,previewDigest:launch.digest,confirm:true});
+  const item=batch.items[0],other=batch.items[1];let confirms=0,inspections=0;
+  // Only cleanup observations and effects are faked. Native tests exercise actual removal on private tmux servers.
+  await page.route('**/api/v1/launches',route=>route.fulfill({json:[batch]}));
+  await page.route(`**/api/v1/launches/${item.id}/cleanup/preview`,route=>route.fulfill({json:{requestId:crypto.randomUUID(),digest:'fixture',expiresAt:new Date(Date.now()+120000).toISOString(),launchId:item.id,sessionName:item.sessionName,state:scenario==='live'?'blocked':scenario==='missing'?'missing':'dead',blockers:scenario==='live'?['This session is still running. Cleanup cannot stop a live session.']:[]}}));
+  await page.route(`**/api/v1/launches/${item.id}/cleanup`,async route=>{
+    confirms++;expect(route.request().postDataJSON()).toMatchObject({confirmInspected:true,digest:'fixture'});
+    item.closed={cleanupId:route.request().postDataJSON().requestId,at:new Date().toISOString()};
+    if(scenario==='lost')await route.abort('failed');else await route.fulfill({json:item});
+  });
+  await page.route(`**/api/v1/launches/${item.id}/inspect`,route=>{inspections++;return route.fulfill({json:item});});
+  await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
+  await page.getByRole('navigation',{name:'Sections'}).getByRole('button',{name:'Projects',exact:true}).click();
+  await page.getByRole('button',{name:`Project ${name}`,exact:true}).click();
+  const card=page.getByRole('group',{name:`Launch ${item.sessionName}`,exact:true});
+  await card.getByRole('button',{name:'Clean up…',exact:true}).click();
+  const panel=card.getByRole('region',{name:`Clean up ${item.sessionName}`});
+  const remove=panel.getByRole('button',{name:scenario==='missing'?'Remove launch card':'Remove dead session',exact:true});
+  await expect(remove).toBeDisabled();expect(confirms).toBe(0);
+  if(scenario==='live') {await expect(panel).toContainText('still running');await expect(panel.getByRole('checkbox')).toHaveCount(0);}
+  else {
+    await panel.getByRole('button',{name:'Cancel cleanup'}).click();await expect(panel).toHaveCount(0);expect(confirms).toBe(0);
+    await card.getByRole('button',{name:'Clean up…',exact:true}).click();
+    await panel.getByRole('checkbox').check();await remove.click();
+    if(scenario==='lost'){await expect(card).toContainText('response was lost');expect(confirms).toBe(1);await card.getByRole('button',{name:'Inspect cleanup result'}).click();expect(inspections).toBe(1);}
+    await expect(card).toHaveCount(0);expect(confirms).toBe(1);
+  }
+  await expect(page.getByRole('group',{name:`Launch ${other.sessionName}`,exact:true})).toBeVisible();
+});
