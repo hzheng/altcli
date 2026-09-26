@@ -93,7 +93,7 @@ export class ControlPlane {
       owner: (indexPath) => { const id = this.workflow.owner(indexPath); const run = id ? this.workflow.run(id) : undefined;
         return run ? { id: run.id, status: run.status, execution: this.workflow.execution(run.currentCommandId)?.status ?? null } : null; },
       delivery: (root) => !!this.store.activeFor(root),
-      agents: async () => Promise.all(this.workspaceSessions(await this.workspaces()).map(async (s) => ({ paneId: s.identity.paneId, socketPath: s.identity.socketPath, label: s.label,
+      agents: async () => Promise.all((await this.checkoutSessions()).map(async (s) => ({ paneId: s.identity.paneId, socketPath: s.identity.socketPath, label: s.label,
         state: (await this.instance(s)).status === 'current' ? this.activity.read(s).state : 'unknown' as const }))),
       closeTerminals: (paneIds, reason) => this.terminals.closePanes(paneIds, reason),
       remove: async (input, parent) => { await this.workspaces(); return this.projects.remove(input, (worktree) => this.removalGuard(worktree), (worktree) => this.archiveJournal(worktree.root), parent); },
@@ -174,7 +174,7 @@ export class ControlPlane {
     if ('confirmReady' in input) {
       const panes = await this.manualSnapshot();
       if (!isDeepStrictEqual(panes.map(p => p.identity), manual.panes.map(p => p.identity))) throw new AppError('INPUT_INVENTORY', 'Pane identities changed during manual input. Inspect the host and record a human decision if settled checks cannot establish safety.', 409);
-      const sessions = this.workspaceSessions(await this.workspaces());
+      const sessions = await this.checkoutSessions();
       for (const pane of panes) {
         const session = sessions.find(s => isDeepStrictEqual(s.identity, pane.identity));
         const before = manual.panes.find(p => isDeepStrictEqual(p.identity, pane.identity))!;
@@ -245,10 +245,15 @@ export class ControlPlane {
     if(this.adapter instanceof MockAdapter) this.adapter.launched = this.launches.batches().flatMap(b=>b.items).filter(i=>i.identity&&!i.closed).map(i=>({identity:i.identity!,cwd:i.worktree.root,location:`${i.sessionName}:0.0`,command:i.profile.adapterHint==='manual'?'sh':i.profile.adapterHint,dead:false,inMode:false,synchronized:false}));
   }
   async workspaces(): Promise<WorkspaceDiscovery> {
+    const { workspaces, skipped, error, discoveredAt, projects } = await this.workspaceInventory();
+    return { workspaces, skipped, error, discoveredAt, projects };
+  }
+  /** Subdirectory panes cannot join a group, but still share its checkout and must remain observable internally. */
+  private async workspaceInventory() {
     this.syncMockLaunches();
     const sessions = this.withoutClosedLaunches(this.store.sessions() as ManagedSession[]);
     const discovery = await discoverWorkspaces(this.adapter, this.config.mode, sessions, this.config.integrationBranches);
-    await Promise.all(discovery.workspaces.flatMap((workspace) => workspace.agents.map(async (agent) => {
+    await Promise.all(discovery.directories.flatMap((workspace) => workspace.agents.map(async (agent) => {
       if (!agent.observable) return;
       const existing = sessions.find((session) => session.id === agent.registeredAs);
       const moved = !!existing && ((existing.cwd ?? existing.repository) !== workspace.cwd ||
@@ -360,6 +365,10 @@ export class ControlPlane {
     const sessions = new Map((this.store.sessions() as ManagedSession[]).map((session) => [session.id, session]));
     for (const workspace of discovery.workspaces) for (const agent of workspace.agents) if (agent.session) sessions.set(agent.session.id, agent.session);
     return this.withoutClosedLaunches([...sessions.values()]);
+  }
+  private async checkoutSessions(): Promise<ManagedSession[]> {
+    const inventory = await this.workspaceInventory();
+    return this.workspaceSessions({ ...inventory, workspaces: inventory.directories });
   }
   private isRenewal(member: ManagedSession, current: ManagedSession): boolean {
     return this.renewalBases.get(member.id) === current.registrationId && this.discovered.get(member.id)?.registrationId === member.registrationId;
@@ -1013,9 +1022,9 @@ export class ControlPlane {
     return result ? JSON.stringify({ result, next: run.implementation?.next ?? run.planning?.next, plan: run.planning?.current, brief: run.planning?.briefRevision, policy: run.implementation?.revision ?? run.planning?.policyRevision }) : null;
   }
   private async checkpointMembers(run: RelayRun): Promise<ManagedSession[]> {
-    const discovery = await this.workspaces();
+    const discovery = await this.workspaceInventory();
     if (discovery.error) throw new AppError('UNKNOWN_ACTIVITY', 'Pane inventory is unavailable.', 409);
-    const workspaces = discovery.workspaces.filter((w) => w.worktree.indexPath === run.lockKey);
+    const workspaces = discovery.directories.filter((w) => w.worktree.indexPath === run.lockKey);
     if (workspaces.some((w) => w.agents.some((a) => !a.eligible || !a.session))) throw new AppError('UNKNOWN_ACTIVITY', 'Every checkout pane must have a verified agent identity.', 409);
     const sessions = workspaces.flatMap((w) => w.agents.map((a) => a.session!));
     if (!run.participants.every((p) => sessions.some((s) => s.id === p.id && s.registrationId === p.registrationId))) throw new AppError('TARGET_CHANGED', 'A participant is missing or changed.', 409);

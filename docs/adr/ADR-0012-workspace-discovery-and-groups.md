@@ -19,7 +19,7 @@ Users should choose a project and task worktree rather than register panes and c
 
 Navigation is **project → worktree → task/agent group**. A local project is keyed by its canonical shared Git metadata directory (`git rev-parse --git-common-dir`), within the configured host. Linked worktrees share that identity. Separate clones never merge merely because their origin URLs match; repositories without remotes work normally. Remotes are not needed for discovery and are not read or displayed by this increment.
 
-Git's worktree inventory supplies main and linked checkouts, including those with no agents. Each worktree has a branch-independent identity derived from its canonical Git directory/index, with its directory, current branch or detached HEAD, and availability displayed separately. Missing/inaccessible worktrees remain diagnostic entries; bare Git directories are not runnable checkouts. tmux supplies the live agent inventory, not the whole project catalog.
+Git's worktree inventory supplies main and linked checkouts, including those with no agents. Each worktree has a branch-independent identity derived from its canonical Git directory/index, with its directory, current branch or detached HEAD, and availability displayed separately. Missing/inaccessible worktrees remain diagnostic entries; bare Git directories are not runnable checkouts. tmux supplies the live agent inventory, not the whole project catalog. Only a worktree's root directory is a workspace: a pane whose canonical cwd is a subdirectory of a worktree is listed among skipped panes with that reason and is never offered for a group.
 
 Discovery caches observed project identities without writing configuration. Explicit name/membership edits, Start, and task-worktree creation remember the project in SQLite; these known projects survive restart with no panes. Existing stored session roots also seed discovery. Merely observed, unused projects remain known for the process lifetime but are not silently persisted by a GET. Opening projects/worktrees does not write Git or start a task.
 
@@ -27,7 +27,7 @@ Use **group** for distinct agent instances. A workspace has at most one current 
 
 Registration is internal, not an onboarding action. Read-only discovery proposes stable instance identities and captures their output without writing configuration. Start revalidates the exact generation, process, cwd and worktree before binding it. Explicit name/membership edits may also persist a validated identity. The Name column defaults to the agent label and supports inline editing (Enter/blur saves, Escape cancels). Rename changes only the display label, with generation and previous-label checks; IDs, tmux identities and past snapshots stay unchanged. Name/membership edits require an unowned checkout; concurrent edits check current revisions and exact generations.
 
-Project cards select the project view. Worktree cards are clickable and keyboard accessible: a single agent directory opens Console directly; multiple directories require choosing the task group directory first. An empty worktree opens setup guidance without Start. Border/background indicates selection; there is no Selected badge/button. No view action starts work or persists default membership.
+Project cards select the project view. Worktree cards are keyboard-accessible disclosures; **Open console** opens that worktree's Console. Every worktree card with live panes carries its own Agents & group editor (names, member checkboxes, reset), whichever worktree Console currently shows; worktrees run concurrently, so no single worktree's editor is singled out. An empty worktree opens setup guidance without Start. Border/background indicates selection; there is no Selected badge/button. No view action starts work or persists default membership.
 
 The current UI shares this workspace group across Plan and Implementation; larger future planning rosters may need a separate implementation subset. Earlier overlapping stored associations and pair IDs are preserved for historical/frozen runs and staging compatibility, but only one current group is exposed per workspace. Discovery never rewrites those records. The [workflow guide](../WORKFLOWS.md) owns detailed vocabulary and phase controls.
 
@@ -53,8 +53,8 @@ List panes
     -> classify eligible CLI instances and show unknowns separately
     -> group repositories by canonical shared Git metadata directory
     -> enumerate every project's Git worktrees, even without panes
-    -> group agents by canonical cwd beneath each worktree
-    -> display projects, worktrees, and task groups
+    -> keep agents whose canonical cwd is a worktree root; report subdirectory panes as skipped
+    -> display projects, worktrees, and each worktree's group
 ```
 
 Possible inspection primitives include `tmux list-panes -a -F ...`, `realpath`, and read-only Git worktree/status queries. Their parsing and installed-version behavior must be tested; this document does not provide a verified implementation. Use argument arrays and exact targets, not shell-concatenated prompts. Empty/inaccessible paths or failed Git checks are diagnostic states, not guessed repositories.
@@ -67,12 +67,12 @@ Inspect observed pane directories, stored session roots and remembered projects 
 
 For the first local version, selected members must satisfy **both** rules:
 
-1. The same canonical current working directory on the same host. Resolve equivalent path spellings; `/repo` and `/repo/web` are distinct task groups under one worktree. The user aligns collaborating agents manually when necessary.
+1. The worktree's root directory as canonical current working directory on the same host. Resolve equivalent path spellings; an agent in `/repo/web` is not part of `/repo`'s workspace and is reported as skipped until it is started in `/repo`. The user aligns collaborating agents manually when necessary.
 2. The same actual Git worktree and index. A similar repository name or common directory ancestor is not sufficient, and linked worktrees sharing a repository are not the same index.
 
-Project identity is not an execution lock. The canonical cwd groups agents; the canonical worktree/index excludes competing runs. Therefore `/repo` and `/repo/web` share one checkout card and execution boundary even with different task groups. Separate linked worktrees can host independent tasks, subject to shared environment resources and the user's setup constraints. Do not rename historical `repository` fields (which hold worktree roots) into project identities or invalidate active run snapshots.
+Project identity is not an execution lock. The worktree root groups agents; the canonical worktree/index excludes competing runs, including any older stored registration or group from a subdirectory of the same checkout. Separate linked worktrees can host independent tasks, subject to shared environment resources and the user's setup constraints. Do not rename historical `repository` fields (which hold worktree roots) into project identities or invalidate active run snapshots.
 
-The selected phase group, not every agent in the entire app, must satisfy the local placement contract. However, unselected panes sharing the underlying worktree are still potentially affected writers. Show them. Before Plan, implementation, or branch setup, verify no conflicting controller assignment exists and require explicit reconciliation of relevant active/unknown external work. Exclusion from scheduling is not isolation. tmux cwd/process snapshots cannot establish semantic readiness or prevent subsequent desktop writes; state these limits rather than claim a process sandbox.
+The selected phase group, not every agent in the entire app, must satisfy the local placement contract. However, unselected panes sharing the underlying worktree are still potentially affected writers. Show them. The root-only workspace filter does not narrow internal checkout inventory: subdirectory panes retain canonical worktree and instance evidence for external-activity holds, checkpoint recovery, manual reconciliation and session-closing checks. Before Plan, implementation, or branch setup, verify no conflicting controller assignment exists and require explicit reconciliation of relevant active/unknown external work. Exclusion from scheduling is not isolation. tmux cwd/process snapshots cannot establish semantic readiness or prevent subsequent desktop writes; state these limits rather than claim a process sandbox.
 
 Revalidate group identity, cwd, worktree/index, and branch at dispatch/handoff/phase boundaries. An unexpected move or restart marks the member unavailable or pauses the run; it does not silently rebind to a different pane or follow a new directory. Changes in discovery never mutate a bound group.
 

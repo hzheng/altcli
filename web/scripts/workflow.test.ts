@@ -586,7 +586,7 @@ test('mock discovery groups the simulated panes by directory and suggests exactl
   // Discovery is read-only: nothing registered, started or reserved.
   assert.equal(store.sessions().length, 2); assert.deepEqual(plane.workflow.runs(), []); assert.deepEqual(store.reservations(), []);
 });
-test('real discovery canonicalizes spellings, separates subdirectories and linked worktrees, reads the branch, and reports non-Git directories', async () => {
+test('real discovery canonicalizes spellings, separates linked worktrees, reads the branch, and reports subdirectories and non-Git directories', async () => {
   const repo = join(directory, 'repo'); mkdirSync(repo); execFileSync('git', ['-c', 'init.defaultBranch=main', 'init', '-q', repo]);
   assert.equal(await currentBranch(repo), 'main'); // unborn branch still has a name
   writeFileSync(join(repo, 'example'), 'test'); execFileSync('git', ['-C', repo, 'add', 'example']);
@@ -605,11 +605,12 @@ test('real discovery canonicalizes spellings, separates subdirectories and linke
   const root = (await resolveWorktree(repo))!.root;
   assert.equal(discovery.error, null);
   assert.deepEqual(discovery.workspaces.map((w) => [w.cwd, w.branch, w.agents.map((a) => a.identity.paneId), w.group, w.sharesIndexWith]), [
-    [join(root, 'web'), 'feature/x', ['%3'], ['%3'], [root]],
-    [root, 'feature/x', ['%0', '%1', '%2'], ['%0', '%1'], [join(root, 'web')]],
+    [root, 'feature/x', ['%0', '%1', '%2'], ['%0', '%1'], []],
     [(await resolveWorktree(linked))!.root, null, ['%4'], ['%4'], []]].sort((a, b) => (a[0] as string).localeCompare(b[0] as string)));
-  assert.deepEqual(discovery.skipped.map((s) => [s.cwd, s.panes, s.reason]), [[plain, 1, 'Not inside a Git worktree.'], [join(directory, 'missing'), 1, discovery.skipped[1]!.reason]]);
-  assert.match(discovery.skipped[1]!.reason, /ENOENT/);
+  // Only a worktree's root is a workspace: an agent started in a subdirectory is reported, not offered for a group.
+  assert.deepEqual(discovery.skipped.map((s) => [s.cwd, s.panes, s.reason]), [[join(repo, 'web'), 1, `In a subdirectory of worktree ${root}; only a worktree's root directory is a workspace.`],
+    [plain, 1, 'Not inside a Git worktree.'], [join(directory, 'missing'), 1, discovery.skipped[2]!.reason]]);
+  assert.match(discovery.skipped[2]!.reason, /ENOENT/);
   listing.listPanes = async () => { throw new Error('no server running'); };
   const failed = await discoverWorkspaces(listing, 'tmux', []);
   assert.deepEqual([failed.workspaces, failed.skipped, failed.error], [[], [], 'no server running']);

@@ -82,7 +82,7 @@ Transport reservations and execution ownership are separate. Terminal text deliv
 12. **A finished chain is not task acceptance.** Final requirements and cumulative project tests remain separate.
 
 13. **Inventory is not authorization.** Auto-selection is a convenience before Start, never a live membership rule.
-14. **Workspace grouping is not the lock boundary.** Cards for different subdirectories of the same checkout share its canonical worktree/index execution exclusion.
+14. **Workspace grouping is not the lock boundary.** Only a worktree's root is a workspace, and the canonical worktree/index is the execution exclusion; an older stored registration or group from a subdirectory of the same checkout still shares it.
 15. **The app does not manage environments.** The user prepares dependencies and agent cwd. Existing-worktree branch setup and new task-worktree creation are separate scoped confirmations under ADR-0013; neither relocates agents or bootstraps an environment.
 16. **Branch writes need scoped consent.** Creation at a settled boundary requires the recorded workspace/current-commit consent and fresh checks; ambiguity is not an invitation to force or retry blindly.
 17. **Solo is explicit.** One identity is stored once; self-review does not count as independent peer approval, and no virtual second vote or self-relay is created.

@@ -1,6 +1,6 @@
 import { realpath } from 'node:fs/promises';
 import type { AdapterMode, SessionRegistration } from '../contracts/api.ts';
-import type { WorkspaceDiscovery } from '../contracts/workflow.ts';
+import type { Workspace, WorkspaceDiscovery } from '../contracts/workflow.ts';
 import { messageOf } from '../core/errors.ts';
 import { groupWorkspaces, type DirectoryInspection } from '../core/workspaces.ts';
 import type { ListedPane, TerminalAdapter } from './adapters/terminal.ts';
@@ -19,10 +19,10 @@ async function inspect(cwd: string, mode: AdapterMode): Promise<DirectoryInspect
 }
 /** Workspace cards from every live pane on the configured tmux server, detached sessions included. Reads tmux, the
  * filesystem and Git; writes nothing and registers nothing. A stale card is never a live session. */
-export async function discoverWorkspaces(adapter: TerminalAdapter, mode: AdapterMode, sessions: SessionRegistration[], integrationBranches: string[] = []): Promise<WorkspaceDiscovery> {
+export async function discoverWorkspaces(adapter: TerminalAdapter, mode: AdapterMode, sessions: SessionRegistration[], integrationBranches: string[] = []): Promise<WorkspaceDiscovery & { directories: Workspace[] }> {
   const discoveredAt = new Date().toISOString();
   let panes: ListedPane[];
-  try { panes = await adapter.listPanes(); } catch (error) { return { workspaces: [], skipped: [], error: messageOf(error), discoveredAt }; }
+  try { panes = await adapter.listPanes(); } catch (error) { return { workspaces: [], skipped: [], directories: [], error: messageOf(error), discoveredAt }; }
   const inspections = new Map<string, DirectoryInspection>();
   await Promise.all([...new Set(panes.map((p) => p.cwd))].map(async (cwd) => { inspections.set(cwd, await inspect(cwd, mode)); }));
   const result = groupWorkspaces(panes, inspections, sessions);

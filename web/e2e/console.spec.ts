@@ -1,6 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import type { WorkflowState, HookEvent, WorkspaceDiscovery } from '../src/contracts/workflow';
-import { expandWorktree, editSettings, expand, openCard, openController, pane } from './ui';
+import { expandAgents, expandWorktree, editSettings, expand, openCard, openController, pane } from './ui';
 const TOKEN = 'a'.repeat(64);
 const headers = { Authorization: `Bearer ${TOKEN}` };
 test.describe.configure({ mode: 'serial' });
@@ -29,7 +29,7 @@ async function editWorkspace(page: Page, name: string) {
   await page.getByRole('button', { name: `Project ${name}`, exact: true }).click();
   await expandWorktree(page, name); await page.getByRole('button', { name: `Open ${name}`, exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Agent console', exact: true })).toBeVisible();
-  await openTab(page, 'Projects');
+  await openTab(page, 'Projects'); await expandAgents(page, name);
 }
 const workspace = (page: Page, name: string) => page.getByRole('region', { name: `Workspace ${name}`, exact: true });
 async function complete(request: APIRequestContext, commandId: string, outcome = 'accept_and_improve', reason?: string) {
@@ -95,21 +95,6 @@ test('Console project switching leaves an active run intact', async ({ page, req
   const after = await state(request); expect(after.commands).toEqual(before.commands);
   expect(after.runs.find(r => r.currentCommandId === command.id)).toEqual(before.runs.find(r => r.currentCommandId === command.id));
   expect(writes).toEqual([]);
-});
-test('Console asks for a task group when a worktree has several agent directories', async ({ page, request }) => {
-  const inventory = await (await request.get('/api/v1/workspaces', { headers })).json() as WorkspaceDiscovery;
-  const workspace = inventory.workspaces.find(w => w.worktree.root === '/demo/project')!;
-  inventory.workspaces.push({ ...workspace, cwd: '/demo/project/subdirectory' });
-  await page.route('**/api/v1/workspaces', route => route.fulfill({ json: inventory }));
-  await unlock(page, TOKEN, false);
-  const projects = page.getByRole('combobox', { name: 'Switch project' }); await expect(projects).not.toHaveValue('');
-  const original = await projects.inputValue();
-  await projects.selectOption({ label: 'other' }); await projects.selectOption(original);
-  await expect(page.getByText('This worktree has agents in several directories. Choose a task group in Projects.')).toBeVisible();
-  await expect(page.locator('.context-bar')).toContainText('No group in use');
-  await page.getByRole('button', { name: 'Projects →', exact: true }).click();
-  await expandWorktree(page, 'project'); await page.getByRole('button', { name: 'Open project', exact: true }).click();
-  await expect(page.getByRole('button', { name: /\/demo\/project\/subdirectory ·/ })).toBeVisible();
 });
 test('an interrupted worker displays Interrupted, including durable execution evidence after backend restart', async ({ page, request }) => {
   // State presentation fixture; exact native correlation and ownership are exercised in server/hook tests.
@@ -222,7 +207,7 @@ test('workspace cards automatically group two eligible agents; selection is read
   await expect(workspace(page, 'other')).toContainText('Solo · 1 agent');
   await editWorkspace(page, 'project');
   await expect(workspace(page, 'other')).toHaveCount(0);
-  await expect(workspace(page, 'project').getByLabel('Name for Codex %0')).toHaveValue('Codex'); await expect(workspace(page, 'project')).toContainText('Branch main');
+  await expect(workspace(page, 'project').getByLabel('Name for Codex %0')).toHaveValue('Codex'); await expect(project.getByRole('region', { name: 'Workspace project', exact: true })).toBeVisible();
   await expect(page.getByLabel('Workspace group members')).toHaveText('Codex ⇄ Claude Code');
   await expect(page.getByLabel('Group name')).toHaveCount(0);
   await expect(workspace(page, 'project').getByRole('checkbox')).toHaveCount(2);
@@ -647,7 +632,7 @@ test('two live agents can be changed to solo or an empty selection through real 
   const current = await state(request); expect(current.groups.find((group) => group.cwd === '/demo/project')!.members).toEqual([]);
   expect(current.executions).toEqual([]);
   await page.reload(); await page.getByLabel('Host access token').fill(TOKEN); await page.getByRole('button', { name: 'Open console' }).click();
-  await openTab(page, 'Projects');
+  await openTab(page, 'Projects'); await expandAgents(page, 'project');
   await expect(detail.getByLabel('Include Codex', { exact: true })).not.toBeChecked();
   await expect(detail.getByLabel('Include Claude Code', { exact: true })).not.toBeChecked();
 });

@@ -21,27 +21,31 @@ export function classifyAgent(pane: PaneState & { location: string }, sessions: 
     label: registered?.label ?? (tmuxName || `${name} ${pane.identity.paneId}`), registeredAs: registered?.id ?? null };
 }
 const indexKey = (w: WorktreeIdentity) => `${w.root}\0${w.gitDir}\0${w.indexPath}`;
-/** Group live panes into workspace cards by canonical cwd on one tmux server. Directories outside Git, or that could not be
- * inspected, are reported rather than guessed. All eligible agents are included by default. */
-export function groupWorkspaces(panes: (PaneState & { location: string })[], inspections: Map<string, DirectoryInspection>, sessions: SessionRegistration[]): Pick<WorkspaceDiscovery, "workspaces" | "skipped"> {
+/** Group live panes into workspace cards by canonical cwd on one tmux server. Only a worktree's root directory is a workspace:
+ * panes in a subdirectory, outside Git, or that could not be inspected are reported rather than guessed. All eligible agents are
+ * included by default. Internal directory inventory retains every inspected checkout pane for activity and ownership checks. */
+export function groupWorkspaces(panes: (PaneState & { location: string })[], inspections: Map<string, DirectoryInspection>, sessions: SessionRegistration[]): Pick<WorkspaceDiscovery, "workspaces" | "skipped"> & { directories: Workspace[] } {
   const cards = new Map<string, Workspace>(); const skipped = new Map<string, SkippedDirectory>();
   for (const pane of panes) {
     const inspection = inspections.get(pane.cwd);
-    if (!inspection || "error" in inspection || !inspection.worktree) {
-      const reason = !inspection ? "The directory was not inspected." : "error" in inspection ? inspection.error : "Not inside a Git worktree.";
+    if (!inspection || "error" in inspection || !inspection.worktree || inspection.cwd !== inspection.worktree.root) {
+      const reason = !inspection ? "The directory was not inspected." : "error" in inspection ? inspection.error : !inspection.worktree ? "Not inside a Git worktree."
+        : `In a subdirectory of worktree ${inspection.worktree.root}; only a worktree's root directory is a workspace.`;
       const entry = skipped.get(pane.cwd) ?? { cwd: pane.cwd, panes: 0, reason };
-      skipped.set(pane.cwd, { ...entry, panes: entry.panes + 1 }); continue;
+      skipped.set(pane.cwd, { ...entry, panes: entry.panes + 1 });
+      if (!inspection || "error" in inspection || !inspection.worktree) continue;
     }
     const key = `${pane.identity.socketPath}\0${inspection.cwd}`;
     const card = cards.get(key) ?? { cwd: inspection.cwd, socketPath: pane.identity.socketPath, worktree: inspection.worktree, branch: inspection.branch, agents: [], group: null, sharesIndexWith: [] };
     card.agents.push(classifyAgent(pane, sessions));
     cards.set(key, card);
   }
-  const workspaces = [...cards.values()].sort((a, b) => a.cwd.localeCompare(b.cwd) || a.socketPath.localeCompare(b.socketPath));
+  const directories = [...cards.values()].sort((a, b) => a.cwd.localeCompare(b.cwd) || a.socketPath.localeCompare(b.socketPath));
+  const workspaces = directories.filter(card => card.cwd === card.worktree.root);
   for (const card of workspaces) {
     const eligible = card.agents.filter((a) => a.eligible);
     if (eligible.length) card.group = eligible.map((a) => a.identity.paneId);
     card.sharesIndexWith = workspaces.filter((other) => other !== card && indexKey(other.worktree) === indexKey(card.worktree)).map((other) => other.cwd);
   }
-  return { workspaces, skipped: [...skipped.values()] };
+  return { workspaces, skipped: [...skipped.values()], directories };
 }

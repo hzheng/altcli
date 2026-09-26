@@ -1520,6 +1520,65 @@ test('native work in an unselected discovered checkout agent faults an unfinishe
   assert.equal(plane.workflow.owner(`${root}/.git/index`), first.requestId); assert.equal(sent.length, 2);
 });
 
+/** Real cwd/index inspection with simulated panes; the extra pane is never registered or selected. */
+async function subdirectoryPanes(command = 'codex') {
+  const subdirectory = join(root, 'web'); mkdirSync(subdirectory);
+  const inspect = adapter.inspect.bind(adapter), list = adapter.listPanes.bind(adapter);
+  adapter.inspect = async id => ({ ...await inspect(id), ...(id === '%3' ? { cwd: subdirectory, command } : {}) });
+  adapter.listPanes = async () => (await list()).filter(p => ['%0', '%1', '%3'].includes(p.identity.paneId));
+  adapter.foreground = async s => String(100 + Number(s.identity.paneId.slice(1)));
+  plane = new ControlPlane(new Controller({ ...config(), mode: 'tmux' }, store, adapter));
+  for (const session of store.sessions() as ManagedSession[]) await plane.recordEvent({
+    event: 'session_started', source: session.agentType as 'codex' | 'claude', sessionId: `session-${session.id}`,
+    identity: session.identity, paneId: session.identity.paneId, socketPath: session.identity.socketPath,
+    cliPid: session.cliPid!, startedAt: new Date().toISOString(),
+  });
+  return adapter.inspect('%3');
+}
+test('a subdirectory agent stays out of selectable groups but its external prompt pauses the shared checkout', async () => {
+  const extra = await subdirectoryPanes(); const input = request(); await plane.submitImplementation(input);
+  const discovery = await plane.workspaces(), state = await plane.state();
+  assert.deepEqual(discovery.workspaces.map(w => w.cwd), [root]); assert.equal(discovery.skipped[0]!.panes, 1);
+  assert.equal('directories' in discovery, false);
+  assert.equal(state.sessions.some(s => s.identity.paneId === '%3'), false);
+  assert.deepEqual(state.groups.flatMap(g => g.members), ['codex', 'claude']);
+  await plane.recordEvent({ event: 'turn_started', source: 'codex', identity: extra.identity, paneId: '%3', socketPath: extra.identity.socketPath,
+    cliPid: '103', startedAt: new Date().toISOString(), sessionId: 'subdirectory-session', sourceTurnId: 'external', prompt: 'Edit this checkout' });
+  assert.equal(run(input.requestId).status, 'paused');
+  assert.match(run(input.requestId).reason!, /outside its current assignment/);
+  publish(input.requestId, true); await complete(input.requestId);
+  assert.equal(run(input.requestId).status, 'paused'); assert.equal(sent.length, 1);
+  assert.equal(plane.workflow.owner(`${root}/.git/index`), input.requestId);
+});
+for (const command of ['codex', 'zsh']) test(`a subdirectory ${command} with unknown activity prevents a recoverable checkpoint`, async () => {
+  await subdirectoryPanes(command); const input = request({ autoContinue: false }); await plane.submitImplementation(input);
+  publish(input.requestId, true); await complete(input.requestId);
+  const review = run(input.requestId).currentCommandId; publish(review, true); await complete(review);
+  assert.equal(run(input.requestId).status, 'waiting');
+  assert.equal(plane.interactions.checkpoint(input.requestId), undefined);
+  assert.equal(plane.workflow.owner(`${root}/.git/index`), input.requestId);
+});
+test('a settled subdirectory agent remains part of checkpoint identity and background checks', async () => {
+  const extra = await subdirectoryPanes();
+  await plane.recordEvent({ event: 'session_started', source: 'codex', identity: extra.identity, paneId: '%3', socketPath: extra.identity.socketPath,
+    cliPid: '103', startedAt: new Date().toISOString(), sessionId: 'subdirectory-session' });
+  const input = request({ autoContinue: false }); await plane.submitImplementation(input);
+  publish(input.requestId, true); await complete(input.requestId);
+  const review = run(input.requestId).currentCommandId; publish(review, true); await complete(review);
+  const cp = plane.interactions.checkpoint(input.requestId)!; assert.ok(cp);
+  assert.deepEqual(cp.sessions.map(s => s.identity.paneId).sort(), ['%0', '%1', '%3']);
+  const external = externalEvent(input.requestId, { identity: extra.identity, paneId: '%3', cliPid: '103', sessionId: 'subdirectory-session' });
+  await plane.recordEvent(external); assert.equal(run(input.requestId).status, 'paused');
+  await plane.recordEvent({ ...external, event: 'turn_complete' });
+  const decision = checkpointDecision(input.requestId, 'restore');
+  const extraSession = cp.sessions.find(s => s.identity.paneId === '%3')!;
+  adapter.trees.set(extraSession.id, [{ pid: '999', command: 'background-job' }]);
+  await assert.rejects(plane.reconcileCheckpoint(decision), /background processes remain/i);
+  adapter.trees.delete(extraSession.id);
+  await plane.reconcileCheckpoint(decision); assert.equal(run(input.requestId).status, 'waiting'); assert.equal(sent.length, 2);
+  assert.equal(store.sessions().some(s => s.id === extraSession.id), false);
+});
+
 test('concurrent external completions retain settlement evidence for both checkout agents', async () => {
   checkpointPanes(); const input = request({ autoContinue: false }); await plane.submitImplementation(input); publish(input.requestId, true); await complete(input.requestId);
   const review = run(input.requestId).currentCommandId; publish(review, true); await complete(review);

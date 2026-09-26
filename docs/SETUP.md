@@ -119,7 +119,10 @@ collapsed and keeps your choice when you Recheck. Choose **Open console** inside
 the worktree to open its console.
 **Create task worktree** sits beside the Worktrees heading; its form opens below
 that row, above the worktree list.
-If agents occupy several subdirectories, choose the task group directory first.
+Each worktree card has its own **Agents & group** disclosure for names and
+members, whichever worktree Console shows. Start agents in the worktree's root
+directory: a pane in a subdirectory is listed under panes not in a discovered
+workspace instead.
 Selection is shown by its border/background, not a separate Selected button.
 
 Console's **Project** and **Worktree** dropdowns switch the current view directly.
@@ -127,8 +130,7 @@ Switching projects opens the first worktree with a live coding agent (main check
 first when it has one). Projects without agents remain listed as disabled
 **no agents** options. Worktrees without agents can still be viewed using the
 Worktree dropdown. Switching preserves each task group's drafts, clears readiness,
-and leaves running work in progress. Use **Projects →** to choose a task group
-when several agent directories share a worktree.
+and leaves running work in progress.
 
 Every eligible agent has a checkbox; all are included initially. One selected
 agent is a solo group, two a pair, and three or more a larger group. Checkbox
@@ -139,9 +141,8 @@ to the agent label; edit it inline and press Enter or leave the field to save,
 or Escape to cancel. Names do not change tmux sessions or historical runs.
 Discovery and opening a card are read-only; exact instance bindings are checked
 internally and persisted only on an explicit edit or Start.
-All selected members must share the same canonical
-current directory and Git worktree/index. Separate subdirectories appear as
-task groups under one worktree and share its execution lock. Separate linked
+All selected members must run in the worktree's root
+directory and share its Git worktree/index. Separate linked
 worktrees can run independent tasks concurrently; shared databases, ports and
 other environment resources remain your responsibility.
 

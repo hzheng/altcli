@@ -34,7 +34,7 @@ App discovers projects from tmux and remembered local repository identities
     -> Git supplies each project's worktree inventory, including empty checkouts
     -> User chooses an existing worktree or explicitly creates a task worktree
     -> User prepares its environment and starts coding CLIs there
-    -> User opens a task group directory and confirms its members
+    -> User opens the worktree (agents in its root directory) and confirms its members
        all eligible preselected; checkboxes choose solo / pair / larger group
        current execution requires 1 or 2; larger selections remain visible
     -> Choose Plan or Implementation and branch intent
@@ -73,7 +73,7 @@ The entry model is now project → worktree → task/group, with solo support an
 | --- | --- |
 | **Project** | A local repository identified by its canonical Git common directory on the host. Matching origins do not combine separate clones. |
 | **Worktree** | An independent checkout/index within a project. Identity does not depend on branch; show its path and current branch or detached HEAD. Empty worktrees remain visible. |
-| **Workspace / task group directory** | A canonical current-working-directory group beneath a worktree. Collaborators share this cwd; different directories within one checkout share its execution lock. Historical API `repository` fields still contain worktree roots, not project IDs. |
+| **Workspace** | A worktree's root directory with the live agents started there. Collaborators share this cwd; agents in a subdirectory are reported, not offered for a group. Historical API `repository` fields still contain worktree roots, not project IDs. |
 | **Available agents** | Eligible discovered instances in a workspace. This changing inventory is not a running group's membership. |
 | **Group** | One or more distinct registered agent instances selected to collaborate in a workspace. Replaces the earlier product term pair. A run binds an exact group membership revision. A separate naming/setup wizard is not required. |
 | **Planning group / roster** | The ordered required members assigned to Plan. N-shaped selections; current execution supports one or two, with 3+ including Gemini execution enabled later. |
@@ -126,13 +126,13 @@ evidence cannot be recovered by guessing from a result file or terminal text.
 ### Workspace, inventory, and bound group are separate
 
 ```text
-Project -> Worktree -> Task group directory
+Project -> Worktree (root directory)
     -> current available-agent inventory
     -> preselected or user-edited group
     -> Start confirms a frozen run membership snapshot
 ```
 
-For a fresh task group directory, all eligible agents are included. Every session has a checkbox, so the user can select one, two or more members, or temporarily clear the selection. Unknown or unverified processes cannot be selected. A worktree with one agent directory opens Console directly; with multiple directories, choose the task group first. Empty worktrees show setup guidance. Border/background alone indicates selection. Opening never starts work or persists default grouping.
+For a fresh workspace, all eligible agents are included. Every session has a checkbox, so the user can select one, two or more members, or temporarily clear the selection. Unknown or unverified processes cannot be selected. Each worktree card carries its own Agents & group editor; Open console opens that worktree. Empty worktrees show setup guidance. Border/background alone indicates selection. Opening never starts work or persists default grouping.
 
 The current UI uses one workspace group for both phases; each checkbox change persists membership immediately. Inline Name edits save on Enter/blur and cancel on Escape. Discovery proposes exact instances without saving them; Start revalidates and binds them internally. A separate implementation subset belongs to later larger-roster planning, not a second current workspace group.
 
@@ -184,7 +184,7 @@ The normal path becomes:
 ```text
 Discover local projects
     -> Choose an existing worktree or explicitly create one
-    -> Open its task group directory
+    -> Open the worktree
     -> Check/uncheck members and optionally edit inline names
     -> Choose phase, roles, and automation/checkpoint settings
     -> Resolve branch consent when necessary

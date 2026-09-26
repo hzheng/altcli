@@ -1,7 +1,7 @@
 import { expect, test, type Page, type APIRequestContext } from '@playwright/test';
 import type { WorkspaceDiscovery, WorkflowState } from '../src/contracts/workflow';
 import type { DirectoryListing, FinishPreview, ProjectWorktree, TaskFinish, WorktreeCreateInput, WorktreeCreation, WorktreeDiscard, WorktreePreview } from '../src/contracts/projects';
-import { expandWorktree } from './ui';
+import { expandAgents, expandWorktree } from './ui';
 
 const token = 'a'.repeat(64); // test fixture only
 const headers = { Authorization: `Bearer ${token}` };
@@ -39,7 +39,8 @@ test('worktrees fill one column, put the main checkout first and toggle independ
   const writes: string[] = []; page.on('request', r => { if (r.method() !== 'GET') writes.push(r.url()); });
   await page.getByRole('button', { name: 'Recheck', exact: true }).click();
   const list = page.getByRole('list', { name: 'Available worktrees' }), cards = list.locator(':scope > li');
-  await expect(cards).toHaveCount(3); await expect(cards.first().locator('summary')).toContainText('Main checkout');
+  const summary = (card: typeof cards) => card.locator(':scope > details > summary'); // not the nested Agents & group disclosure
+  await expect(cards).toHaveCount(3); await expect(summary(cards.first())).toContainText('Main checkout');
   await expect(cards.locator('details[open]')).toHaveCount(0);
   const bounds = await list.boundingBox();
   for (let i = 0; i < 3; i++) {
@@ -50,11 +51,11 @@ test('worktrees fill one column, put the main checkout first and toggle independ
   await expandWorktree(page, main.path.split('/').pop()!); await expandWorktree(page, 'login');
   await first.getByRole('button', { name: 'Launch agents…' }).click();
   const form = first.getByRole('region', { name: `Launch agents in ${main.path}` }); await expect(form).toBeVisible();
-  await first.locator('summary').click(); await expect(first.locator('details').first()).not.toHaveAttribute('open');
+  await summary(first).click(); await expect(first.locator('details').first()).not.toHaveAttribute('open');
   await expect(form).not.toBeVisible(); await expect(second.getByRole('button', { name: 'Launch agents…' })).toBeVisible();
   await page.getByRole('button', { name: 'Recheck', exact: true }).click(); await expect(form).not.toBeVisible();
-  await first.locator('summary').focus(); await page.keyboard.press('Enter'); await expect(form).toBeVisible();
-  await second.locator('summary').click(); await expect(second.getByRole('button', { name: 'Open login', exact: true })).not.toBeVisible();
+  await summary(first).focus(); await page.keyboard.press('Enter'); await expect(form).toBeVisible();
+  await summary(second).click(); await expect(second.getByRole('button', { name: 'Open login', exact: true })).not.toBeVisible();
   await expect(first.getByRole('button', { name: `Open ${main.path.split('/').pop()}`, exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Projects and agents' })).toBeVisible(); expect(writes).toEqual([]);
   await page.screenshot({ path: info.outputPath('stacked-worktrees.png'), fullPage: true });
@@ -203,18 +204,23 @@ test('uncertain creation stays owned and offers inspection instead of resending'
   await page.getByRole('button', { name: 'Inspect creation result', exact: true }).click();
   await expect(notice(page, 'Exact clean result verified')).toBeVisible(); expect(count).toBe(1);
 });
-test('different agent directories remain task groups under one shared checkout', async ({ page, request }) => {
-  const inventory = await fixture(page, request); const initial = inventory.workspaces[0]!;
-  inventory.workspaces = [{ ...initial, agents: [initial.agents[0]!] }, { ...initial, cwd: '/demo/project/web', agents: [initial.agents[1]!] }];
+test('every worktree card carries its own agents and group editor, whichever worktree Console shows', async ({ page, request }) => {
+  const inventory = await fixture(page, request); const project = inventory.projects![0]!;
+  const target = tree('/home/fixture/tasks/login', 'feature/login'); project.worktrees.push(target);
+  const demo = inventory.workspaces[0]!;
+  inventory.workspaces.push({ ...demo, cwd: target.path, worktree: target.identity!, branch: target.branch, sharesIndexWith: [] });
   await page.getByRole('button', { name: 'Recheck', exact: true }).click();
-  await expect(page.locator('summary').filter({ hasText: '/demo/project' })).toContainText('2 agent directories');
-  await expandWorktree(page, 'project'); await page.getByRole('button', { name: 'Open project', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Projects and agents', exact: true })).toBeVisible();
-  await expect(page.getByText('These groups share one checkout', { exact: false })).toBeVisible();
-  await page.locator('.directory-groups').getByRole('button').filter({ hasText: '/demo/project/web' }).click();
+  const cards = page.getByRole('list', { name: 'Available worktrees' }).getByRole('listitem');
+  for (const name of ['project', 'login']) {
+    await expandAgents(page, name);
+    await expect(cards.filter({ has: page.getByLabel(`Worktree ${name}`, { exact: true }) }).getByRole('region', { name: `Workspace ${name}`, exact: true })).toBeVisible();
+  }
+  await page.getByRole('button', { name: 'Open login', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Agent console', exact: true })).toBeVisible();
   await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Projects', exact: true }).click();
-  await expect(page.getByRole('region', { name: 'Workspace web', exact: true })).toBeVisible();
+  // Opening one worktree in Console neither hides the other editor nor adds a separate panel for the opened one.
+  await expect(cards.getByRole('region', { name: /^Workspace / })).toHaveCount(2);
+  await expect(page.getByRole('region', { name: /^Workspace / })).toHaveCount(2);
 });
 test('a read-only host allows project navigation but disables worktree creation', async ({ page, request }) => {
   await fixture(page, request, false); await expect(page.getByRole('button', { name: 'Create task worktree', exact: true })).toBeDisabled();

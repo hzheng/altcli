@@ -198,7 +198,6 @@ export function Console() {
     .sort((a, b) => Number(b.main) - Number(a.main))
     .find(tree => discovery?.workspaces.some(w => w.worktree.root === tree.path && w.agents.some(a => a.eligible || a.observable))) }));
   const worktreeOptions = [...(selectedProject?.worktrees ?? [])].sort((a, b) => Number(b.main) - Number(a.main));
-  const needsDirectory = !card && (discovery?.workspaces.filter(w => w.worktree.root === project).length ?? 0) > 1;
   const setupHolds = discovery?.projects?.flatMap((p) => [...p.creations.filter((op) => ['applying', 'uncertain'].includes(op.status)).map((op) => op.input.path), ...(p.removals ?? []).filter((op) => ['applying', 'uncertain'].includes(op.status)).map((op) => op.input.worktree.root)]) ?? [];
   const setupHeld = !!project && setupHolds.includes(project);
   const groups = state?.groups ?? [];
@@ -488,7 +487,7 @@ export function Console() {
         inputEnabled={state.inputEnabled} runs={state.runs} selectedRoot={project ?? null} onSelectWorktree={chooseWorktree}
         deliveryRepositories={state.reservations.map((reservation) => reservation.repository)}
         launchEnabled={config?.launchEnabled === true} manualHeld={manualHeld} sessions={sessions} pairs={groups} lockedRepositories={[...setupHolds, ...state.runs.filter((run) => ['running','waiting','paused'].includes(run.status)).map((run) => run.repository)]}
-        selectedKey={workspace?.key ?? null} onSelectWorkspace={chooseWorkspace} viewEpoch={viewEpoch}
+        onSelectWorkspace={chooseWorkspace} viewEpoch={viewEpoch}
         onChanged={async (notice) => { setMessage(notice); await Promise.all([refresh(), recheck()]); }} />
     </div>
     <div className="section-panel" hidden={tab !== 'console'}>
@@ -515,7 +514,6 @@ export function Console() {
         <span className="context-actions"><button type="button" className="quiet" disabled={busy || checking} onClick={recheckNow}>{checking ? 'Checking…' : 'Recheck'}</button>
           <button type="button" className="quiet" onClick={() => showTab('workspaces')}>Projects →</button></span>
       </div>
-      {needsDirectory && <p className="notice">This worktree has agents in several directories. Choose a task group in Projects.</p>}
       {(workspaceError || card?.gitError) && <p className="notice error" role="alert">{workspaceError || card?.gitError} Recheck before starting.</p>}
       {setupHeld && <p className="notice">This worktree operation is applying or uncertain. Inspect and reconcile its result in Projects before starting work.</p>}
       {unknownRequest && <div className="notice error" role="alert">Request {unknownRequest} has an uncertain HTTP result. Inspect its server run and the terminal; do not resend it.

@@ -2535,3 +2535,69 @@ occupy their own full-width rows below, keeping the closed section compact.
 
 Incoming work remains staged; the Console changes and these fixes remain
 unstaged. No live backend or user session was changed.
+
+## 2026-09-26 — worktree-root workspaces and a per-worktree agents editor
+
+Discovery now treats only a worktree's root directory as a workspace. A pane
+whose canonical cwd is a subdirectory of a worktree is listed with the skipped
+panes ("In a subdirectory of worktree …; only a worktree's root directory is a
+workspace.") and is never offered for a group, Start or the Console. Projects
+gives every worktree card its own collapsible **Agents & group** editor (names,
+member checkboxes, Reset…). The single editor panel that followed the Console's
+selected worktree, the task-group-directory chooser and the Console's
+several-directories notice are removed. D43, ADR-0012, ADR-0017, WORKFLOWS and
+SETUP describe the rule. The deprecated explicit `POST /sessions` registration
+and staging relay are unchanged and can still use registrations stored earlier
+from a subdirectory.
+
+- The discovery unit test and the real-Git discovery test now expect a
+  subdirectory pane to be skipped with its reason; both pass. They were not run
+  against the previous code.
+- A new desktop/iPhone browser case expands two worktree cards, checks each has
+  its own editor, opens Console for one, and checks both editors remain with no
+  other workspace panel. It was not run against the previous code. Console cases
+  that used the bottom panel now expand the card's editor first. One layout case
+  scopes its summary locator to the card's own summary. The removed header's
+  "Branch main" check became a check that the editor sits inside the project
+  card; that card's branch is asserted separately.
+- The first `./scripts/check.sh --e2e` passed (32 hook/setup, 43 smoke, 382
+  workflow and 76 unit tests, type checking, the production build and 292 browser
+  cases with eight skips). Its screenshots showed the new editor unstyled: the
+  browser-test servers reused the persisted Turbopack dev cache in
+  `web/.next-e2e-altcli-*` and served the previous `globals.css`, while the
+  production build contained the new rules. That browser run is not counted.
+- After the final skipped-reason wording, `./scripts/check.sh` passed with the
+  same non-browser counts on Node 24.12.0. The complete browser suite then ran
+  with the same servers on fresh dist directories (removed afterwards): **292
+  passed**, eight intentional skips (10.2 minutes). Desktop and phone screenshots
+  of the in-card editor were inspected. Coverage uses the isolated mock host and
+  Chromium viewports, not physical devices or installed coding CLIs.
+- `git diff --check` passed. The diff was screened for credentials; none were
+  found or withheld.
+
+Nothing was committed. No live backend or user session was changed; the stale
+`web/.next-e2e-altcli-*` caches were left in place.
+
+## 2026-09-26 — retain subdirectory panes in checkout activity checks
+
+The root-only workspace filter also removed unregistered subdirectory agents
+from internal activity tracking. Their external prompts no longer paused a run
+sharing the checkout, and checkpoint capture omitted their activity and processes.
+Discovery now keeps a separate internal directory inventory for those guards,
+manual reconciliation and session-closing checks. Public workspaces, selectable
+groups and Console sessions still exclude unregistered subdirectory agents.
+
+- Four real-Git/SQLite regressions with simulated terminal and lifecycle evidence
+  failed before the fix and passed afterwards. They cover an external prompt
+  pausing the root run and preventing peer dispatch; unknown agent and shell
+  panes preventing checkpoint capture; and a settled subdirectory agent remaining
+  in checkpoint identity, native-settlement and background-process validation.
+- `./scripts/check.sh` passed with Node 24.12.0 selected on PATH:
+  32 hook/setup, 43 smoke, 386 workflow and 76 unit cases, type checking
+  and the production build. The focused four-case run also passed.
+- Browser tests were not rerun for this server-only fix; the reviewed commit's
+  prior browser results do not constitute validation of these new changes.
+  Installed-provider and physical-device acceptance were not performed.
+
+The running main-checkout backend and user sessions were not changed or
+restarted; test controllers used fresh isolated instances.

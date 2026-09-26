@@ -9,6 +9,12 @@ export async function expandWorktree(page: Page, name: string) {
   const toggle = page.getByLabel(`Worktree ${name}`, { exact: true });
   if (!await toggle.evaluate(element => (element.parentElement as HTMLDetailsElement).open)) await toggle.click();
 }
+/** Opens a worktree card and its own Agents & group editor, preserving either disclosure when it is already open. */
+export async function expandAgents(page: Page, name: string) {
+  await expandWorktree(page, name);
+  const card = page.getByRole('list', { name: 'Available worktrees' }).getByRole('listitem').filter({ has: page.getByLabel(`Worktree ${name}`, { exact: true }) });
+  await expand(card, 'Agents & group');
+}
 /** Opens the next run's settings editor for the phase on screen unless it is already open. */
 export async function editSettings(page: Page) {
   const toggle = page.getByRole('region', { name: /^(Implementation|Plan) settings$/ }).getByRole('button', { name: 'Settings', exact: true });

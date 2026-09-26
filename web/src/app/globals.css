@@ -150,6 +150,12 @@ details.advanced[open] summary { margin-bottom:12px; }
 .worktree-controls .worktree-actions, .worktree-controls .worktree-actions > div, .worktree-controls > .launch-agents { display:contents; }
 .worktree-controls .worktree-actions > div > :not(button), .worktree-controls > .launch-agents > :not(button) { order:1; flex-basis:100%; min-width:0; }
 .worktree-controls .worktree-actions > div > .fine { margin:4px 0 0; }
+/* Each worktree card's own Agents & group editor, between its summary and its action row. */
+.worktree-cards .workspace-detail { margin:0 16px 12px; padding-top:10px; border-top:1px solid var(--line); }
+.worktree-cards .workspace-detail > summary { font-size:12px; color:var(--muted); overflow-wrap:anywhere; }
+.worktree-cards .workspace-detail > summary::before { content:"▸ "; color:var(--accent); }
+.worktree-cards .workspace-detail[open] > summary::before { content:"▾ "; }
+.worktree-cards .workspace-detail > section { margin-top:12px; }
 .create-worktree { margin-top:20px; }
 .worktrees-heading { flex-wrap:wrap; }
 .worktrees-heading > div:first-child { margin-right:auto; }
@@ -165,10 +171,8 @@ button.danger { border-color:#64453e; color:#f1bbb0; }
 .worktree-form label { display:grid; gap:6px; }
 .worktree-form .readiness { display:flex; }
 .worktree-preview .mono { overflow-wrap:anywhere; }
-.directory-groups { margin-top:18px; display:grid; gap:8px; }
 .agent-choice { display:flex; align-items:center; gap:8px; margin:0; white-space:nowrap; }
 .workspace-detail input.agent-name { min-width:120px; width:180px; padding:6px 8px; background:transparent; }
-.workspace-detail h2 .mono { font-size:11px; font-weight:400; margin-left:8px; }
 .workspace-detail h3 { margin:22px 0 10px; font-size:13px; font-weight:650; letter-spacing:.6px; text-transform:uppercase; color:var(--muted); }
 .workspace-detail h4 { margin:0; font-size:14px; font-weight:600; }
 .workspace-detail h4 .mono { font-size:11px; font-weight:400; margin-left:8px; }
@@ -184,7 +188,7 @@ button.danger { border-color:#64453e; color:#f1bbb0; }
 .group-actions { display:flex; gap:6px; }
 .group-actions button { font-size:11px; padding:6px 10px; }
 .group-form { border-top:1px dashed var(--line); padding-top:14px; }
-.workspace-detail > .muted { font-size:12px; margin-bottom:12px; overflow-wrap:anywhere; }
+.workspace-detail section > .muted { font-size:12px; margin-bottom:12px; overflow-wrap:anywhere; }
 details.skipped { margin-top:14px; font-size:12px; color:var(--muted); }
 details.skipped summary { cursor:pointer; list-style:none; }
 details.skipped summary::before { content:"▸ "; color:var(--accent); }

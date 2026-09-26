@@ -50,13 +50,14 @@ test("all eligible agents form the default group, including three or more", () =
   // A shell or dev server in the directory is visible but never counted.
   expect(workspaces.find((w) => w.cwd === "/two")!.agents.map((a) => a.eligible)).toEqual([true, true, false, false]);
 });
-test("equivalent spellings collapse into one card; subdirectories stay separate cards that share the index", () => {
-  const panes = [pane("codex", "/repo"), pane("2.1.272", "/link/repo"), pane("codex", "/repo/web")];
-  const { workspaces } = groupWorkspaces(panes, inspected({
+test("equivalent spellings collapse into one card; a subdirectory of the worktree is reported, never a workspace", () => {
+  const panes = [pane("codex", "/repo"), pane("2.1.272", "/link/repo"), pane("codex", "/repo/web"), pane("zsh", "/repo/web")];
+  const { workspaces, skipped } = groupWorkspaces(panes, inspected({
     "/repo": { cwd: "/repo", worktree: worktree("/repo"), branch: "main" }, "/link/repo": { cwd: "/repo", worktree: worktree("/repo"), branch: "main" },
     "/repo/web": { cwd: "/repo/web", worktree: worktree("/repo"), branch: "main" } }), []);
   expect(workspaces.map((w) => [w.cwd, w.agents.map((a) => a.identity.paneId), w.group, w.sharesIndexWith])).toEqual([
-    ["/repo", ["%0", "%1"], ["%0", "%1"], ["/repo/web"]], ["/repo/web", ["%2"], ["%2"], ["/repo"]]]);
+    ["/repo", ["%0", "%1"], ["%0", "%1"], []]]);
+  expect(skipped).toEqual([{ cwd: "/repo/web", panes: 2, reason: "In a subdirectory of worktree /repo; only a worktree's root directory is a workspace." }]);
 });
 test("linked worktrees are distinct cards that do not share an index", () => {
   const panes = [pane("codex", "/repo"), pane("codex", "/linked")];
