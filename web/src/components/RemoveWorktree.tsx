@@ -228,6 +228,11 @@ export function LifecycleResults({ project, token, onChanged }: { project: Proje
   }
   const pending = <T extends { status: string }>(ops: T[] | undefined) => (ops ?? []).filter((op) => ['applying', 'uncertain'].includes(op.status));
   return <>
+    {/* A Git step can remove the worktree before its finish is settled. Keep recovery reachable without its card. */}
+    {(project.finishes ?? []).filter((op) => FINISH_HOLDING.includes(op.status) && !project.worktrees.some((tree) => tree.id === op.preview.worktreeId)).map((op) =>
+      <FinishBranch key={op.requestId} project={project} token={token} disabled onChanged={onChanged}
+        tree={{ id: op.preview.worktreeId, path: op.preview.worktree.root, identity: op.preview.worktree, branch: op.preview.branch,
+          head: op.preview.git.head, main: false, error: null }} />)}
     {pending(project.removals).map((op) => <div className="notice" key={op.input.requestId}>
       <strong>Worktree removal {op.status}</strong><p>{op.message}</p><p className="mono">{op.input.worktree.root}</p>
       <button type="button" disabled={busy || op.status === 'applying'} onClick={() => void send('projects/worktrees/removal/reconcile', { requestId: op.input.requestId })}>Inspect removal result</button>

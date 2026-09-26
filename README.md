@@ -73,7 +73,10 @@ Both CLIs report native session startup as Ready before the first observed
 prompt. Ready does not certify task completion or absence of background work.
 Codex pairs native `UserPromptSubmit` with `notify` using the exact session and
 turn IDs; install both hooks, restart Codex and trust the native hook through
-`/hooks` after upgrading. Notification
+`/hooks` after upgrading. With Codex 0.157+, use `codex --no-daemon` in tmux
+(included in the Codex launch preset) so hooks retain the pane identity; add this
+argument to existing profiles before relaunching. The shared daemon cannot supply
+pane-correlated activity to AltCLI. Notification
 prompt history is never used to infer the current command.
 The Codex `notify` payload carries no such fields, so for a Codex participant the
 server keeps its own evidence: it records the processes under or attached to the

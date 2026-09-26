@@ -69,7 +69,7 @@ export function FinishBranch({ project, tree, token, disabled, disabledReason, o
   const closable = preview?.sessions.filter((s) => s.closable) ?? [];
   const removeReason = preview && !(preview.git.integration === 'integrated' && preview.git.dirty === false) ? 'Needs proven integration and a clean worktree.' : '';
   const reason = !preview ? '' : preview.blockers[0] || (outcome === 'remove' ? removeReason : '')
-    || (preview.active && !stopActive ? 'Some sessions are working or run task processes: confirm stopping them anyway.' : '')
+    || (preview.active && !stopActive ? 'Some sessions may have unfinished work or background processes: confirm stopping them anyway.' : '')
     || (outcome === 'close' && !closable.length ? 'There are no app-launched sessions to close.' : '');
   const blocked = disabled ? disabledReason || 'Finish branch is unavailable. Recheck the worktree.' : '';
   return <div className="create-worktree finish-branch">

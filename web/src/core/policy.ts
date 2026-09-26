@@ -29,3 +29,10 @@ export function assertIdentity(session: SessionRegistration, pane: PaneState): v
 export function sameRequest(previous: { agentId: string; kind: string; text: string; handoff?: boolean }, next: { agentId: string; kind: string; text: string; handoff?: boolean }): boolean {
   return previous.agentId === next.agentId && previous.kind === next.kind && previous.text === next.text && Boolean(previous.handoff) === Boolean(next.handoff);
 }
+/** Codex 0.157+ runs turns in a shared background server unless started with --no-daemon. That server's hooks lack the pane's tmux
+ * identity, so AltCLI cannot correlate the pane's turns. Only direct Codex argv can be checked and amended here. */
+export function lacksCodexNoDaemon(profile: { adapterHint: string; executable: string; args: string[] }): boolean {
+  return isDirectCodexProfile(profile) && !profile.args.includes("--no-daemon");
+}
+/** A display hint cannot establish how a shell or wrapper passes arguments to Codex. */
+export const isDirectCodexProfile = (profile: { executable: string }): boolean => /(^|\/)codex$/.test(profile.executable);

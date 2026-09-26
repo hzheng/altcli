@@ -209,7 +209,7 @@ export interface FinishPreview extends FinishInput {
   run: { id: string; status: string } | null;
   /** Hard refusals: nothing can be confirmed until they are resolved. */
   blockers: string[];
-  /** Working or unknown activity, or task processes beyond the CLI: stopping needs an explicit acknowledgement. */
+  /** Working/unknown activity, an exited pane with unknown background effects, or task processes beyond the CLI: stopping needs acknowledgement. */
   active: boolean;
 }
 export interface FinishConfirm { requestId: string; digest: string; outcome: FinishOutcome; stopActive: boolean; confirm: true }

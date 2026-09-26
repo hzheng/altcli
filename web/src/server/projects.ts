@@ -386,6 +386,11 @@ export class ProjectCatalog {
     }
     return { targetRef, targetHead, integratedBy, integratedCommit };
   }
+  /** The current Finish branch scope, without binding session-stop consent to task commits or uncommitted content. */
+  async finishScope(projectId: string, worktreeId: string): Promise<{ worktree: WorktreeIdentity; branch: string }> {
+    const { tree } = await this.taskWorktree(projectId, worktreeId, 'finished');
+    return { worktree: tree.identity, branch: tree.branch };
+  }
   /** Read-only Git facts for Finish branch. Unlike the removal preview, live panes and uncommitted files do not stop it: they are shown.
    * Integration is classified from the removal evidence; inspection errors never establish integration or its absence. */
   async finishEvidence(projectId: string, worktreeId: string): Promise<{ worktree: WorktreeIdentity; git: FinishGit }> {

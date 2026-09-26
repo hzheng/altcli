@@ -302,7 +302,11 @@ additionally needs proven integration and a clean worktree.
 **Execution.** The operation and its owner are persisted before any tmux command, in the same
 transaction that rechecks the gates (SQLite v15 prevents older servers from ignoring it). The
 evidence is recomputed and must match the digest; before each kill the exact session is
-re-verified, and a changed session stops further mutation. Native observer connections to those
+re-verified with fresh activity and worktree/branch identity, and a change or unavailable
+inspection stops further mutation. Task commits and dirty content do not change session-stop
+consent. A live pane without complete process identity evidence is not closable; an already
+exited pane requires acknowledgement and keeps background effects unknown after closing, until
+a recorded human inspection decision. Native observer connections to those
 panes are closed first. Each session is persisted as possibly executed, then closed with
 `kill-session -t <session ID>` (argument array, never `kill-server` or a name), and its absence
 is verified on the original server; an unreachable or restarted server is not proof unless the
@@ -317,8 +321,11 @@ uncertain, attention (survivors), awaiting-Git and Git states, so Start, continu
 launch and other end-of-task operations are refused meanwhile; keyboard acquisition waits only
 while a step may be acting. The Git step shows a fresh removal or discard preview and runs that
 existing operation as the finish's only admitted child, bound by request ID; an uncertain child
-keeps the parent owner and is inspected by its own ID, never reissued. Compare-and-set
-revisions keep overlapping confirm, continue and inspect calls from acting twice. Ownership is
+keeps the parent owner and is inspected by its own ID, never reissued. A recorded child's identity
+also survives a thrown response. A restart before any child was recorded can return to the Git
+preview: children reserve durably before mutation. Inspection stays available at the project
+level after the worktree card disappears. Compare-and-set revisions keep overlapping confirm,
+continue and inspect calls from acting twice. Ownership is
 released only by verified success, a verified no-effect failure, an explicit stop before the Git
 step, or a recorded human inspection decision after the session step's effects are
 reconciled. Restart turns in-flight steps uncertain; inspection is read-only and never repeats a

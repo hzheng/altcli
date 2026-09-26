@@ -17,33 +17,38 @@ function warningsOf(c: CheckoutObservation): string[] {
 export function AddProject({ token, onAdded }: { token: string; onAdded: () => Promise<void> }) {
   const [directory, setDirectory] = useState(''), [chosen, setChosen] = useState<Chosen | null>(null), [browsing, setBrowsing] = useState(false);
   const [checking, setChecking] = useState(false), [error, setError] = useState('');
-  async function inspect(path: string): Promise<Chosen | null> {
+  const choice = useRef(0);
+  useEffect(() => () => { choice.current++; }, [token]);
+  async function inspect(path: string, version: number): Promise<Chosen | null> {
     const listing = await api<DirectoryListing>(token, 'directories', { body: { path } });
+    if (version !== choice.current) return null;
     if (!listing.checkout) { setError(listing.checkoutError ?? `${listing.path} is not inside a Git checkout. Choose the repository's main checkout.`); return null; }
     const next = { path: listing.path, checkout: listing.checkout }; setChosen(next); setDirectory(listing.checkout.root); return next;
   }
   async function add() {
     if (checking) return; setChecking(true); setError('');
+    const version = choice.current;
     try {
       // A typed path gets the same read-only inspection as a browsed one; anything worth a second look is shown before adding.
-      const target = chosen ?? await inspect(directory.trim());
+      const target = chosen ?? await inspect(directory.trim(), version);
       if (!target || (!chosen && warningsOf(target.checkout).length)) return;
       const { root, commonDir, branch } = target.checkout;
       await api(token, 'projects', { body: { path: root, expected: { root, commonDir, branch } } });
-      setDirectory(''); setChosen(null); await onAdded();
-    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Could not add the project.'); }
+      if (version === choice.current) { setDirectory(''); setChosen(null); }
+      await onAdded();
+    } catch (caught) { if (version === choice.current) setError(caught instanceof Error ? caught.message : 'Could not add the project.'); }
     finally { setChecking(false); }
   }
-  async function useMain(path: string) { setChecking(true); setError(''); try { await inspect(path); } catch (caught) { setError(caught instanceof Error ? caught.message : 'Could not inspect the main checkout.'); } finally { setChecking(false); } }
+  async function useMain(path: string) { const version = ++choice.current; setChecking(true); setError(''); try { await inspect(path, version); } catch (caught) { if (version === choice.current) setError(caught instanceof Error ? caught.message : 'Could not inspect the main checkout.'); } finally { setChecking(false); } }
   const c = chosen?.checkout; const warnings = c ? warningsOf(c) : [];
   return <form onSubmit={(e) => { e.preventDefault(); void add(); }}>
     <label htmlFor="project-path">Main/default starting checkout</label>
-    <div className="row-tools"><input id="project-path" value={directory} onChange={(e) => { setDirectory(e.target.value); setChosen(null); setError(''); }} placeholder="/absolute/path/to/main/checkout" autoComplete="off" />
+    <div className="row-tools"><input id="project-path" value={directory} onChange={(e) => { choice.current++; setDirectory(e.target.value); setChosen(null); setError(''); }} placeholder="/absolute/path/to/main/checkout" autoComplete="off" />
       <button type="button" className="quiet" aria-expanded={browsing} onClick={() => setBrowsing(!browsing)}>Browse…</button>
       <button type="submit" disabled={checking || !directory.trim()}>Add project</button></div>
     <p className="fine">Choose the checkout you use as the project’s starting point, usually on its default branch. Its actual branch is shown before adding. Task worktrees are found automatically; create task branches from Projects. Adding creates no files or tmux sessions.</p>
     {browsing && <DirectoryPicker token={token} start={directory.trim() || null} onCancel={() => setBrowsing(false)}
-      onSelect={(listing) => { setChosen({ path: listing.path, checkout: listing.checkout! }); setDirectory(listing.checkout!.root); setBrowsing(false); setError(''); }} />}
+      onSelect={(listing) => { choice.current++; setChosen({ path: listing.path, checkout: listing.checkout! }); setDirectory(listing.checkout!.root); setBrowsing(false); setError(''); }} />}
     {c && <div className="notice" role="region" aria-label="Chosen checkout">
       <p><strong>{c.kind === 'main' ? 'Main checkout' : 'Linked worktree'}</strong> <span className="mono">{c.root}</span></p>
       <p>Branch <span className="mono">{c.branch ?? 'detached HEAD'}</span> · default branch {c.defaultBranch ? <span className="mono">{c.defaultBranch}</span> : 'not recorded'}</p>

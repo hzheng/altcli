@@ -121,6 +121,10 @@ test('Send & commit refuses pending native input without releasing or dispatchin
   await page.route('**/api/v1/terminals/*/input',async route=>{const response=await route.fetch();received();await gate;try{await route.fulfill({response});}finally{finished();}},{times:1});
   try {
     await terminal.locator('.xterm-helper-textarea').focus();await page.keyboard.insertText('x');await captured;
+    // The admitted byte revises the manual-input record. Once the page observes it, the earlier Ready is revoked; confirming before
+    // that observation would race the next state poll, which revokes a fresh confirmation too.
+    await expect.poll(async()=>((await state(request)).manualSessions??[])[0]?.bytes).toBe(1);
+    await expect(control.getByLabel('Ready for implementation')).not.toBeChecked();
     await page.getByRole('button',{name:'Recheck',exact:true}).first().click();
     await control.getByLabel('Ready for implementation').check();await send.click();
     await expect(control.getByRole('alert')).toContainText('Terminal input is still pending');
@@ -274,18 +278,21 @@ test('repository entry, literal profile editor, preview and explicit duplicate-p
   await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
   const sections=page.getByRole('navigation',{name:'Sections'});await sections.getByRole('button',{name:'Settings',exact:true}).click();
   const profiles=page.getByRole('region',{name:'Launch profiles'});await profiles.getByRole('button',{name:'New',exact:true}).click();await profiles.getByRole('menuitem',{name:'Codex preset'}).click();
-  const label=`Fixture ${info.project.name}`;await profiles.getByLabel('Profile label',{exact:true}).fill(label);await profiles.getByRole('button',{name:'Add argument',exact:true}).click();await profiles.getByLabel('Argument 1',{exact:true}).fill('literal ;');await profiles.getByRole('button',{name:'Save profile'}).click();
+  await expect(profiles.getByLabel('Argument 1',{exact:true})).toHaveValue('--no-daemon');
+  const label=`Fixture ${info.project.name}`;await profiles.getByLabel('Profile label',{exact:true}).fill(label);await profiles.getByRole('button',{name:'Add argument',exact:true}).click();await profiles.getByLabel('Argument 2',{exact:true}).fill('literal ;');await profiles.getByRole('button',{name:'Save profile'}).click();
   const revisionOf=async()=>((await (await request.get('/api/v1/launch-profiles',{headers})).json()) as {label:string;revision:number}[]).find(p=>p.label===label)?.revision;
   // Saved profiles sit in one row by label; the revision stays internal but still guards every save.
   await expect(profiles.getByRole('group',{name:'Saved profiles'}).getByRole('button',{name:label,exact:true})).toBeVisible();await expect(profiles).not.toContainText('revision');expect(await revisionOf()).toBe(1);
   await profiles.getByRole('button',{name:label,exact:true}).click();await profiles.getByRole('button',{name:'Save profile'}).click();
   await expect.poll(revisionOf).toBe(2);
+  await expect(profiles.getByLabel('Argument 1',{exact:true})).toHaveValue('--no-daemon');
   await sections.getByRole('button',{name:'Projects',exact:true}).click();await page.getByLabel('Main/default starting checkout').fill(`/demo/native-${info.project.name}`);await page.getByRole('button',{name:'Add project',exact:true}).click();
   await page.getByRole('button',{name:`Project native-${info.project.name}`,exact:true}).click();
   const trees=page.getByRole('region',{name:`Project worktrees native-${info.project.name}`});await trees.getByRole('button',{name:'Launch agents…'}).click();
   await trees.getByRole('button',{name:'Add launch row'}).click();const saved=await (await request.get('/api/v1/launch-profiles',{headers})).json();const profile=saved.find((p:{label:string})=>p.label===label);
   await trees.getByLabel('Launch profile 1').selectOption(profile.id);await trees.getByLabel('Count',{exact:true}).fill('2');await trees.getByRole('button',{name:'Preview launch'}).click();
   await expect(trees.getByRole('table')).toContainText('literal ;');
+  await expect(trees.getByRole('table')).toContainText('--no-daemon');
   // Short session names: profile and branch, numbered only when taken, never a random UUID fragment. Exact allocation is covered
   // by the server and private-tmux tests; other tests on this server may have moved the mock branch.
   const names=await trees.getByRole('table').locator('tbody tr td:first-child').allTextContents();
@@ -507,4 +514,55 @@ test('cancelling a keyboard request while its terminal is still connecting reque
     await expect(page.getByText(/Nothing was requested/).first()).toBeVisible();
     expect(decisions).toEqual([]);expect((await state(request)).manualSessions).toEqual([]);
   } finally {release();}
+});
+test('a Codex profile without --no-daemon is flagged in the row, the editor and the launch preview, and one click restores the flag',async({page,request},info)=>{
+  const label=`No daemon ${info.project.name}`;
+  const created=await post(request,'launch-profiles',{label,executable:'codex',args:['--model','fixture'],adapterHint:'codex',enabled:true});
+  try {
+    await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
+    const sections=page.getByRole('navigation',{name:'Sections'});
+    // The launch preview warns before any session starts; nothing is launched here.
+    await sections.getByRole('button',{name:'Projects',exact:true}).click();await page.getByLabel('Main/default starting checkout').fill(`/demo/nodaemon-${info.project.name}`);await page.getByRole('button',{name:'Add project',exact:true}).click();
+    await page.getByRole('button',{name:`Project nodaemon-${info.project.name}`,exact:true}).click();
+    const trees=page.getByRole('region',{name:`Project worktrees nodaemon-${info.project.name}`});await trees.getByRole('button',{name:'Launch agents…'}).click();
+    await trees.getByRole('button',{name:'Add launch row'}).click();await trees.getByLabel('Launch profile 1').selectOption(created.id);await trees.getByRole('button',{name:'Preview launch'}).click();
+    await expect(trees.getByRole('status').filter({hasText:`Profile ${label} runs Codex without --no-daemon`})).toBeVisible();
+    await sections.getByRole('button',{name:'Settings',exact:true}).click();
+    const profiles=page.getByRole('region',{name:'Launch profiles'});
+    await profiles.getByRole('button',{name:`${label} · needs --no-daemon`,exact:true}).click();
+    const warning=profiles.getByRole('status').filter({hasText:'lacks --no-daemon'});
+    await expect(warning).toBeVisible();await warning.getByRole('button',{name:'Add --no-daemon',exact:true}).click();
+    await expect(profiles.getByLabel('Argument 1',{exact:true})).toHaveValue('--no-daemon');await expect(profiles.getByLabel('Argument 2',{exact:true})).toHaveValue('--model');
+    await expect(warning).toHaveCount(0);
+    await profiles.getByRole('button',{name:'Save profile'}).click();
+    await expect(profiles.getByRole('button',{name:label,exact:true})).toBeVisible();
+  } finally {
+    const current=((await (await request.get('/api/v1/launch-profiles',{headers})).json()) as {id:string;revision:number}[]).find(p=>p.id===created.id);
+    if(current)await request.delete(`/api/v1/launch-profiles/${created.id}`,{headers,data:{expectedRevision:current.revision}});
+  }
+});
+test('a Codex-hinted shell profile keeps its arguments and offers manual verification',async({page,request},info)=>{
+  const label=`Codex shell ${info.project.name}`,args=['-lc','exec codex --no-daemon'] as const;
+  const created=await post(request,'launch-profiles',{label,executable:'/bin/zsh',args,adapterHint:'codex',enabled:true});
+  try {
+    await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
+    const sections=page.getByRole('navigation',{name:'Sections'});
+    await sections.getByRole('button',{name:'Projects',exact:true}).click();await page.getByLabel('Main/default starting checkout').fill(`/demo/codex-shell-${info.project.name}`);await page.getByRole('button',{name:'Add project',exact:true}).click();
+    await page.getByRole('button',{name:`Project codex-shell-${info.project.name}`,exact:true}).click();
+    const trees=page.getByRole('region',{name:`Project worktrees codex-shell-${info.project.name}`});await trees.getByRole('button',{name:'Launch agents…'}).click();
+    await trees.getByRole('button',{name:'Add launch row'}).click();await trees.getByLabel('Launch profile 1').selectOption(created.id);await trees.getByRole('button',{name:'Preview launch'}).click();
+    await expect(trees.getByRole('status').filter({hasText:`Profile ${label} uses a shell or wrapper`})).toBeVisible();
+    await expect(trees.getByText('runs Codex without --no-daemon',{exact:false})).toHaveCount(0);
+    await sections.getByRole('button',{name:'Settings',exact:true}).click();
+    const profiles=page.getByRole('region',{name:'Launch profiles'});
+    await profiles.getByRole('button',{name:label,exact:true}).click();
+    await expect(profiles.getByText('For a shell or wrapper, check that its Codex command includes',{exact:false})).toBeVisible();
+    await expect(profiles.getByRole('button',{name:'Add --no-daemon',exact:true})).toHaveCount(0);
+    await expect(profiles.getByLabel('Argument 1',{exact:true})).toHaveValue(args[0]);await expect(profiles.getByLabel('Argument 2',{exact:true})).toHaveValue(args[1]);
+    const saved=page.waitForResponse(r=>r.url().endsWith(`/launch-profiles/${created.id}`)&&r.request().method()==='PATCH');
+    await profiles.getByRole('button',{name:'Save profile'}).click();const response=await saved;expect(response.ok()).toBe(true);expect((await response.json()).args).toEqual(args);
+  } finally {
+    const current=((await (await request.get('/api/v1/launch-profiles',{headers})).json()) as {id:string;revision:number}[]).find(p=>p.id===created.id);
+    if(current)await request.delete(`/api/v1/launch-profiles/${created.id}`,{headers,data:{expectedRevision:current.revision}});
+  }
 });

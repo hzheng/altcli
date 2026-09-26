@@ -215,14 +215,18 @@ test('an uncertain child keeps the parent owner and is inspected by its stored I
   const { target, path } = await fixture();
   let reconciled = 0; const calls: string[] = [];
   finish = coordinator({
-    discard: async (input) => { calls.push(input.requestId); return { input, status: 'uncertain', message: 'Discard or its verification is uncertain.', updatedAt: new Date().toISOString() } as WorktreeDiscard; },
-    reconcileChild: async (kind, id) => { reconciled++; assert.equal(kind, 'discard'); assert.equal(id, calls[0]); return reconciled < 2 ? { status: 'uncertain', message: 'Still present.' } : { status: 'discarded', message: 'Discard verified.' }; },
+    discard: async (input) => { calls.push(input.requestId); const child = { input, status: 'uncertain', message: 'Discard or its verification is uncertain.', updatedAt: new Date().toISOString() } as WorktreeDiscard;
+      store.saveWorktreeDiscard(child); return child; },
+    reconcileChild: async (kind, id) => { reconciled++; assert.equal(kind, 'discard'); assert.equal(id, calls[0]);
+      const child: WorktreeDiscard = { ...store.worktreeDiscards()[0]!, ...(reconciled < 2 ? { status: 'uncertain', message: 'Still present.' } : { status: 'discarded', message: 'Discard verified.' }) };
+      store.saveWorktreeDiscard(child); return child; },
   });
   const preview = await finish.preview(target);
   const closed = await finish.confirm(confirmOf(preview, 'discard'));
   const discard = { ...await catalog.previewDiscard(target), confirmBranch: 'feature/finished', confirm: true as const };
   const uncertain = await finish.continue({ requestId: closed.requestId, revision: closed.revision, discard });
-  assert.equal(uncertain.status, 'git_uncertain'); assert.throws(() => catalog.assertWorktreeReady(path), /Finish branch owns/);
+  assert.equal(uncertain.status, 'git_uncertain'); assert.equal(finish.holding()[0]!.requestId, closed.requestId);
+  assert.throws(() => catalog.assertWorktreeReady(path), /worktree discard is applying or uncertain/);
   const still = await finish.reconcile({ requestId: uncertain.requestId, revision: uncertain.revision, action: 'inspect' });
   assert.equal(still.status, 'git_uncertain');
   const done = await finish.reconcile({ requestId: still.requestId, revision: still.revision, action: 'inspect' });
@@ -269,4 +273,98 @@ test('an unexpected error before any kill settles as a no-effect failure instead
   const op = await finish.confirm(confirmOf(await finish.preview(target), 'close'));
   assert.equal(op.status, 'failed'); assert.match(op.message, /Terminal broker unavailable\. Nothing was closed/);
   assert.deepEqual(host.killed, []); assert.equal(catalog.projectHeld(target.projectId), false);
+});
+
+test('missing process evidence never makes a live session safe to close', async () => {
+  const { target } = await fixture([]);
+  for (const read of [
+    async () => { throw new Error('ps unavailable'); },
+    async () => ({ root: null, processes: [] }),
+    async () => ({ root: proc('100', 'codex', { started: null }), processes: [] }),
+    async () => ({ root: proc('100', 'codex'), processes: [proc('101', 'helper', { started: null, infrastructure: true })] }),
+  ]) {
+    host.processes = read;
+    const preview = await finish.preview(target);
+    assert.equal(preview.sessions[0]!.closable, false);
+    assert.match(preview.sessions[0]!.reason!, /process evidence/i);
+    await finish.confirm(confirmOf(preview, 'close'));
+    assert.deepEqual(host.killed, []);
+  }
+});
+test('closing an exited pane cannot certify that its former background processes stopped', async () => {
+  const { target } = await fixture();
+  host.sessions.get('$3')![0]!.dead = true;
+  host.trees.delete('100'); // The exited root no longer connects ps evidence to the still-live child.
+  const preview = await finish.preview(target);
+  const closed = await finish.confirm(confirmOf(preview, 'discard'));
+  assert.equal(closed.status, 'attention'); assert.equal(closed.sessions[0]!.evidence, 'unknown');
+  assert.equal(preview.active, true);
+  assert.ok(host.live.has('101')); assert.equal(store.worktreeDiscards().length, 0);
+  const inspected = await finish.reconcile({ requestId: closed.requestId, revision: closed.revision, action: 'inspect' });
+  assert.equal(inspected.status, 'attention'); assert.equal(inspected.sessions[0]!.evidence, 'unknown');
+  assert.equal(catalog.projectHeld(target.projectId), true);
+});
+test('a branch change after preview refuses the session stop, but task commits and dirty files do not', async () => {
+  const { target, path } = await fixture([]);
+  const preview = await finish.preview(target);
+  git(path, 'switch', '-c', 'feature/other');
+  const refused = await finish.confirm(confirmOf(preview, 'close', false));
+  assert.equal(refused.status, 'failed'); assert.deepEqual(host.killed, []);
+  git(path, 'switch', 'feature/finished');
+  const again = await finish.preview(target);
+  writeFileSync(join(path, 'app.txt'), 'new commit\n'); git(path, 'commit', '-am', 'task progress');
+  writeFileSync(join(path, 'app.txt'), 'unfinished task progress\n');
+  assert.equal((await finish.confirm(confirmOf(again, 'close', false))).status, 'done');
+  assert.deepEqual(host.killed, ['$3']);
+});
+test('a branch change between session kills leaves the remaining sessions open', async () => {
+  const { target, path } = await fixture([]);
+  const second = host.add('$4', randomUUID(), path, proc('800', 'codex')); recordLaunch((await resolveWorktree(path))!, second);
+  host.afterKill = () => { git(path, 'switch', '-c', 'feature/other'); };
+  const partial = await finish.confirm(confirmOf(await finish.preview(target), 'close', false));
+  assert.equal(partial.status, 'attention'); assert.deepEqual(host.killed, ['$3']);
+  assert.equal(partial.sessions[1]!.status, 'skipped');
+});
+test('activity is inspected again before each kill and an inspection error stops further kills', async () => {
+  const { target, path } = await fixture([]);
+  const second = host.add('$4', randomUUID(), path, proc('800', 'codex')); recordLaunch((await resolveWorktree(path))!, second);
+  let state: 'idle' | 'working' = 'idle';
+  finish = coordinator({ agents: async () => [{ paneId: second.paneId, socketPath: SERVER.socketPath, label: 'Second', state }] });
+  host.afterKill = () => { state = 'working'; };
+  const partial = await finish.confirm(confirmOf(await finish.preview(target), 'close', false));
+  assert.equal(partial.status, 'attention'); assert.deepEqual(host.killed, ['$3']);
+  assert.equal(partial.sessions[1]!.status, 'skipped');
+  await finish.reconcile({ requestId: partial.requestId, revision: partial.revision, action: 'decide', note: 'Left the second session running.' });
+  // Lose activity inspection after the digest check, immediately before the kill.
+  let unavailable = false;
+  finish = coordinator({ agents: async () => { if (unavailable) throw new Error('activity unavailable'); return []; }, closeTerminals: async () => { unavailable = true; } });
+  const refused = await finish.confirm(confirmOf(await finish.preview(target), 'close', false));
+  assert.equal(refused.status, 'failed'); assert.deepEqual(host.killed, ['$3']);
+});
+test('a thrown child response keeps its durable identity and is inspected without repeating deletion', async () => {
+  const { target, path } = await fixture([]);
+  finish = coordinator({ discard: async (input, parent) => {
+    await catalog.discard(input, async () => {}, async () => 0, parent);
+    throw new Error('Child response unavailable');
+  } });
+  const closed = await finish.confirm(confirmOf(await finish.preview(target), 'discard'));
+  const discard = { ...await catalog.previewDiscard(target), confirmBranch: 'feature/finished', confirm: true as const };
+  const uncertain = await finish.continue({ requestId: closed.requestId, revision: closed.revision, discard });
+  assert.ok(!existsSync(path)); assert.equal(uncertain.status, 'git_uncertain');
+  assert.deepEqual(uncertain.child, { kind: 'discard', requestId: discard.requestId });
+  assert.doesNotMatch(uncertain.message, /Nothing was removed/);
+  const done = await finish.reconcile({ requestId: uncertain.requestId, revision: uncertain.revision, action: 'inspect' });
+  assert.equal(done.status, 'done'); assert.equal(store.worktreeDiscards().length, 1);
+});
+test('restart before a child was recorded releases only the Git step for a fresh confirmation', async () => {
+  const { target, path } = await fixture([]);
+  const closed = await finish.confirm(confirmOf(await finish.preview(target), 'discard'));
+  store.saveTaskFinish({ ...closed, status: 'git_applying', step: 'git', child: { kind: 'discard', requestId: randomUUID() }, revision: closed.revision + 1 }, closed.revision);
+  finish = coordinator();
+  const restarted = store.taskFinishes()[0]!;
+  assert.equal(restarted.status, 'git_uncertain');
+  const inspected = await finish.reconcile({ requestId: restarted.requestId, revision: restarted.revision, action: 'inspect' });
+  assert.equal(inspected.status, 'awaiting_git'); assert.equal(inspected.child, null);
+  assert.ok(existsSync(path)); assert.equal(store.worktreeDiscards().length, 0);
+  assert.equal(catalog.projectHeld(target.projectId), true);
 });

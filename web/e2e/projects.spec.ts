@@ -393,6 +393,31 @@ test('batch advice sends exact revisions as a read-only instruction without conf
   await expect(page.getByRole('button', { name: 'Confirm squash', exact: true })).toBeVisible();
 });
 
+test('editing a project path cancels an earlier inspection before it can add the old checkout', async ({ page, request }) => {
+  await fixture(page, request);
+  const adds: unknown[] = [];
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let inspecting = false;
+  await page.route('**/api/v1/directories', async (route) => {
+    const path = route.request().postDataJSON().path;
+    if (path === '/demo/old') { inspecting = true; await held; }
+    return route.fulfill({ json: { path, parent: '/demo', home: '/demo', entries: [], truncated: false, checkoutError: null,
+      checkout: { root: path, commonDir: `${path}/.git`, kind: 'main', branch: 'main', head: 'a'.repeat(40), defaultBranch: 'main', mainCheckout: null, mainCheckoutNote: null } } });
+  });
+  await page.route('**/api/v1/projects', (route) => { adds.push(route.request().postDataJSON()); return route.fulfill({ json: {} }); });
+  const path = page.getByLabel('Main/default starting checkout');
+  try {
+    await path.fill('/demo/old'); await page.getByRole('button', { name: 'Add project', exact: true }).click();
+    await expect.poll(() => inspecting).toBe(true);
+    await path.fill('/demo/new'); release();
+    await expect(page.getByRole('button', { name: 'Add project', exact: true })).toBeEnabled();
+    expect(adds).toEqual([]); await expect(path).toHaveValue('/demo/new');
+    await page.getByRole('button', { name: 'Add project', exact: true }).click();
+    await expect.poll(() => adds).toEqual([{ path: '/demo/new', expected: { root: '/demo/new', commonDir: '/demo/new/.git', branch: 'main' } }]);
+  } finally { release(); }
+});
+
 test('adding a project browses host folders, shows the checkout it will add, and sends exactly that identity', async ({ page, request }) => {
   await fixture(page, request);
   const adds: unknown[] = []; page.on('request', (r) => { if (r.method() === 'POST' && new URL(r.url()).pathname === '/api/v1/projects') adds.push(r.postDataJSON()); });
@@ -426,6 +451,30 @@ test('a typed linked worktree or non-default branch is shown before adding, and 
   await page.getByRole('button', { name: 'Add project', exact: true }).click();
   await expect.poll(() => adds).toEqual([{ path: '/home/fixture/repo', expected: { root: '/home/fixture/repo', commonDir: '/home/fixture/repo/.git', branch: 'feature/other' } }]);
 });
+test('Finish branch inspection stays reachable after its Git step removed the worktree card', async ({ page, request }, info) => {
+  const inventory = await fixture(page, request); const project = inventory.projects![0]!;
+  const target = tree('/home/fixture/tasks/finished', 'feature/finished');
+  const requestId = crypto.randomUUID(), childId = crypto.randomUUID();
+  const op: TaskFinish = { requestId, input: { requestId, digest: 'd'.repeat(64), outcome: 'remove', stopActive: true, confirm: true },
+    preview: { projectId: project.id, worktreeId: target.id, requestId, digest: 'd'.repeat(64), worktree: target.identity!, branch: target.branch!, sessions: [], others: [], run: null, blockers: [], active: false,
+      git: { branch: target.branch!, head: target.head!, targetRef: 'refs/heads/main', targetHead: target.head!, ahead: 0, behind: 0, dirty: false, changeCount: 0,
+        integration: 'integrated', integratedBy: 'ancestry', integratedCommit: target.head, note: null } },
+    status: 'git_uncertain', step: 'git', revision: 4, message: 'Inspect the recorded removal.', sessions: [], child: { kind: 'removal', requestId: childId }, updatedAt: new Date().toISOString() };
+  project.finishes = [op]; // The worktree is already absent from discovery, but the parent still owns the project.
+  const inspections: unknown[] = [];
+  await page.route('**/api/v1/projects/worktrees/finish/reconcile', (route) => {
+    inspections.push(route.request().postDataJSON()); op.status = 'done'; op.revision++; op.message = 'Removal verified; Finish branch complete.';
+    return route.fulfill({ json: op });
+  });
+  await page.getByRole('button', { name: 'Recheck', exact: true }).click();
+  const recovery = page.getByRole('region', { name: 'Finishing feature/finished', exact: true });
+  await expect(recovery).toContainText('Inspect the recorded removal.');
+  await page.screenshot({ path: info.outputPath('finish-recovery.png'), fullPage: true });
+  await recovery.getByRole('button', { name: 'Inspect again', exact: true }).click();
+  await expect.poll(() => inspections).toEqual([{ requestId, revision: 4, action: 'inspect' }]);
+  await expect(recovery).toHaveCount(0); await expect(notice(page, 'Finish branch complete')).toBeVisible();
+});
+
 test('Finish branch previews app sessions, needs the stop acknowledgement, closes them, then removes through a fresh confirmation', async ({ page, request }, info) => {
   const inventory = await fixture(page, request); const project = inventory.projects![0]!;
   const target = tree('/home/fixture/tasks/finished', 'feature/finished'); project.worktrees.push(target);

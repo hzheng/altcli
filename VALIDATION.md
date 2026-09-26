@@ -2114,3 +2114,152 @@ because xterm otherwise ignored the next inserted text after returning.
 
 Not exercised: installed Codex/Claude CLIs, physical iPhone Safari, a deployed proxy and a real
 host Finish branch; the running main-checkout backend was not modified or restarted.
+
+## 2026-09-25 — review of 0bcc162: Finish branch evidence and recovery
+
+The review fixes stale branch/activity consent before session termination, missing process
+evidence treated as empty, exited-pane background effects treated as clear, loss of the Git
+child's identity after a thrown response, restart before child reservation, recovery controls
+disappearing with a removed worktree, and a directory inspection adding an outdated selection.
+
+- Seven new fixture-host regression tests failed before their fixes. The Finish branch suite
+  now has 17 passing cases, using disposable real Git/SQLite and simulated tmux/process evidence.
+  Coverage includes commits and dirty content remaining valid session-stop consent, branch and
+  activity changes between kills, process inspection failures, exited roots, a completed child
+  whose response throws, and restart before a child record exists.
+- The new desktop directory-selection race test failed before the fix: a delayed inspection
+  added the old checkout and cleared the user's new path. Both viewport cases passed afterwards.
+- `./scripts/check.sh` passed during review (361 workflow cases at that point).
+  `./scripts/check.sh --e2e` then passed: 32 hook/setup, 43 smoke, 362 workflow and 72 unit
+  tests, TypeScript and production build; 262 browser cases passed with eight intentional
+  viewport-specific skips (9.4 minutes).
+- The final missing-worktree recovery case was added after full-suite test discovery.
+  `npm --prefix web run e2e -- projects.spec.ts -g 'Finish branch inspection stays reachable'`
+  passed both desktop/iPhone Chromium cases separately. Final source type checking also passed.
+- `npm --prefix web run test:native` passed all 16 private-tmux cases. Desktop and phone
+  Finish branch preview and recovery screenshots were inspected.
+- Ruby/Psych parsed all 137 OpenAPI schemas and resolved internal references; this is
+  syntax/reference checking, not a full OpenAPI validator. No JSON contract shape changed.
+- Reviewed changes were screened for credentials; only dummy test credentials and nonsecret
+  identifiers were present. `git diff --check` passed.
+
+Separate concurrent edits to the Codex launch preset, its browser test, README and setup guide
+appeared during validation and were left intact; these results do not claim acceptance of those
+edits. Review fixes remain uncommitted. The running main-checkout backend was not restarted;
+installed-provider, physical-device and deployed-host acceptance were not exercised.
+
+## 2026-09-25 — Codex terminal activity with the shared-daemon default
+
+Read-only inspection reproduced a live agent showing human-confirmed Ready while
+Codex was working. Codex 0.157 used its shared background server; the terminal had
+`TMUX`/`TMUX_PANE`, but the daemon did not, and no current pane-bound lifecycle
+event reached AltCLI. This affects direct xterm prompts as well as Control input.
+
+The Codex profile preset now includes `--no-daemon` and preserves preset arguments
+when opening a new draft. Profile help and setup documentation explain updating
+existing profiles and relaunching after current work settles. Saved profiles are
+not automatically rewritten, and manual Ready is not evidence that hooks work.
+
+- `./scripts/check.sh` passed, including hook/setup, smoke, workflow and unit tests,
+  TypeScript and the production build.
+- `./scripts/check.sh --e2e` passed the same checks and desktop/iPhone Chromium:
+  264 passed, eight intentional viewport-specific skips (9.2 minutes). The profile
+  test verifies `--no-daemon` in the new draft, after saving/reloading, and in the
+  exact launch preview; both viewports passed against the real mock API.
+- An isolated probe ran installed Codex 0.157.0 with `--no-daemon`, a private tmux
+  server, disposable HOME/CODEX_HOME, reviewed AltCLI hooks and a local fixture
+  model endpoint. Native SessionStart produced Ready, and submitting a prompt
+  directly in the terminal produced an exact native turn and Working through the
+  real activity tracker. No model request was forwarded to an external service;
+  this verifies startup and prompt detection, not successful model completion.
+  Earlier probe attempts stopped at fresh-hook trust or waited for startup without
+  submitting a prompt; they were not counted as passes. Probe artifacts were removed.
+- Changed source/docs were screened for credentials; only the existing dummy test
+  token remained. `git diff --check` passed.
+
+The live backend, saved launch profiles, global CLI configuration and active agent
+were not changed or restarted. The live profile still needs `--no-daemon` followed
+by a settled relaunch; deployed completion and physical iPhone acceptance remain open.
+
+## 2026-09-25 — review of 293a5c8: surface Codex profiles without --no-daemon
+
+Reviewed the incoming Finish branch hardening, directory-selection race fix and Codex preset
+change. The Finish and directory changes were accepted as they stand: 17 Finish cases and the
+unit suite passed, and the full typecheck with route typegen passed before any edit. Codex 0.157.0
+on this host lists `--no-daemon` in `codex --help`.
+
+The preset fix only helps new profiles; saved profiles are not rewritten, and the incoming notes
+record a live Codex profile still missing the flag. A shared `lacksCodexNoDaemon` check (Codex by
+adapter hint or a `codex` executable) now marks such a profile **needs --no-daemon** in the
+saved-profile row, shows a warning with **Add --no-daemon** in its editor, and warns in the launch
+preview before any session starts. Nothing is saved or relaunched automatically.
+
+- `src/core/policy.test.ts`: hint- and executable-based detection, present flag, other CLIs.
+- New browser case (desktop and iPhone) against the mock API: a Codex profile saved without the
+  flag is marked in the row, warned in the launch preview, and one click restores the flag ahead
+  of the existing arguments; saving clears the marker. The existing profile case still passes.
+
+- `./scripts/check.sh --e2e` passed on Node 24.12.0: 32 hook/setup, 43 smoke, 362 workflow and
+  73 unit tests, TypeScript and production build, then desktop/iPhone Chromium: 266 passed, eight
+  intentional viewport-specific skips (9.3 minutes).
+- Changed text was screened for credentials; only the existing dummy test token appears.
+
+Not exercised: installed Codex sessions with and without the flag in this review, physical
+devices and the deployed host; the running backend and saved profiles were not changed.
+
+## 2026-09-26 — preserve Codex shell and wrapper launch arguments
+
+The follow-up to the objection on `4c022b9` restricts the missing-flag warning and
+**Add --no-daemon** action to a direct `codex` executable, including absolute paths.
+A Codex adapter hint on a shell or wrapper now shows manual verification guidance
+in the editor and launch preview. It does not imply that the outer executable
+accepts Codex arguments. Saved wrapper arguments are preserved.
+
+- Three new shell/wrapper policy cases failed before the fix; all four policy
+  tests passed after it. The existing direct-Codex browser case and new shell
+  case passed on desktop and iPhone Chromium (four focused tests, mock API).
+- The first `./scripts/check.sh` run passed 32 hook/setup, 43 smoke and 362
+  workflow tests, then caught strict array-index typing in the new browser test.
+  The fixture is now a tuple; the subsequent typecheck passed.
+- `./scripts/check.sh --e2e` passed 32 hook/setup, 43 smoke, 362 workflow and 76
+  unit tests, typecheck and production build. The browser phase finished with
+  **267 passed, eight skipped, one failed** (9.3 minutes), including both profile
+  cases passing on both viewports. The failure was the existing iPhone test
+  `Send & commit refuses pending native input without releasing or dispatching`
+  in `web/e2e/native.spec.ts:116`: its readiness checkbox did not stay checked.
+- An isolated iPhone rerun of that test with `--repeat-each 3` produced one pass
+  and two timeouts waiting for its disabled Send button. That separate readiness
+  test and its implementation were not changed; the full browser gate remains
+  unresolved, and this is not an all-checks-passed claim.
+- The final diff was screened for secrets; no secrets were found.
+
+Installed-agent launches, physical devices and deployed-host behavior were not
+tested. No running backend, saved launch profile or global CLI configuration was
+changed. These source changes have not been committed or integrated into main.
+
+## 2026-09-26 — review of 6e46bc8: wrapper-safe Codex warning; deterministic pending-input test
+
+Reviewed `4c022b9..6e46bc8`. Accepted: prepending `--no-daemon` to a Codex-hinted shell or
+wrapper would change that program's own arguments (for example `zsh --no-daemon -lc …`), so the
+warning and **Add --no-daemon** now apply only to a direct `codex` executable, and wrappers get
+manual guidance with their arguments preserved. No stale references remain to the removed helper.
+
+The candidate left one browser failure unresolved: `Send & commit refuses pending native input
+without releasing or dispatching` (iPhone). Its readiness key includes the manual-input record's
+revision, which the admitted byte changes. The test ticked Ready after a Recheck without first
+waiting for the page to observe that revision, so a state poll arriving just after the tick revoked
+it and left Send disabled. The test now waits until the server records the byte and the page
+revokes the earlier Ready, then rechecks and confirms. This strengthens rather than weakens it: it
+also asserts that input invalidates readiness. Product behavior is unchanged.
+
+- The test passed 12 of 12 repetitions (six per viewport) after the change; before it, the same
+  isolated repetitions passed but the full-suite runs recorded in the previous entry failed.
+
+- `./scripts/check.sh --e2e` passed on Node 24.12.0: 32 hook/setup, 43 smoke, 362 workflow and
+  76 unit tests, TypeScript and production build, then desktop/iPhone Chromium: 268 passed, eight
+  intentional viewport-specific skips, no failures (9.4 minutes). This resolves the gate the
+  previous entry left open.
+- Changed text was screened for credentials; none were found.
+
+Installed CLIs, physical devices and the deployed host were not exercised; the running backend
+and saved profiles were not changed.

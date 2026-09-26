@@ -126,7 +126,9 @@ export class FinishCoordinator {
     const reason = listed.some((p) => p.sessionId !== item.sessionId || p.marker !== item.id || p.serverPid !== identity.serverPid || p.serverStarted !== identity.serverStarted || p.socketPath !== identity.socketPath)
       ? 'Its tmux server, session or launch marker changed. AltCLI will not close it.'
       : listed.some((p) => p.linked) ? 'A window is shared with another session. Close it yourself.'
-      : panes.find((p) => !inside(worktree.root, p.cwd)) ? `A pane is in another directory (${panes.find((p) => !inside(worktree.root, p.cwd))!.cwd}). Close it yourself.` : null;
+      : panes.find((p) => !inside(worktree.root, p.cwd)) ? `A pane is in another directory (${panes.find((p) => !inside(worktree.root, p.cwd))!.cwd}). Close it yourself.`
+      : !panes.length || panes.some((p) => !p.dead && (!p.root?.started || p.processes.some((q) => !q.started)))
+        ? 'Current process evidence is unavailable. Inspect again before closing this session.' : null;
     return { ...base, sessionName: listed[0]?.sessionName ?? item.sessionName, closable: !reason, reason, panes, clients: await this.deps.host.clients(item.sessionId!).catch(() => 0) };
   }
   private async evidence(worktree: WorktreeIdentity): Promise<{ sessions: FinishSession[]; others: FinishPreview['others']; run: FinishPreview['run'] }> {
@@ -144,7 +146,7 @@ export class FinishCoordinator {
     const input = parseFinishInput(value);
     const { worktree, git } = await this.deps.projects.finishEvidence(input.projectId, input.worktreeId);
     const { sessions, others, run } = await this.evidence(worktree);
-    const active = sessions.some((s) => s.closable && s.panes.some((p) => (p.activity !== null && ACTIVE.has(p.activity)) || taskProcesses(p).length > 0));
+    const active = sessions.some((s) => s.closable && s.panes.some((p) => p.dead || (p.activity !== null && ACTIVE.has(p.activity)) || taskProcesses(p).length > 0));
     const preview: FinishPreview = { ...input, requestId: randomUUID(), digest: digestOf(consentOf(worktree, git.branch, sessions, others, run)), worktree, branch: git.branch,
       sessions, others, git, run, blockers: this.blockers(input.projectId, worktree), active };
     for (const [id, held] of this.previews) if (held.expires < Date.now()) this.previews.delete(id);
@@ -162,7 +164,7 @@ export class FinishCoordinator {
     if (!held || held.expires < Date.now() || held.preview.digest !== input.digest) throw new AppError('FINISH_CHANGED', 'This preview expired or changed. Preview again.', 409);
     const { preview } = held;
     if (preview.blockers.length) throw new AppError('FINISH_BLOCKED', preview.blockers[0]!, 409);
-    if (preview.active && !input.stopActive) throw new AppError('CONFIRM_REQUIRED', 'Some sessions are working or run task processes. Confirm stopping them anyway.');
+    if (preview.active && !input.stopActive) throw new AppError('CONFIRM_REQUIRED', 'Some sessions may have unfinished work or background processes. Confirm stopping them anyway.');
     if (input.outcome === 'remove' && (preview.git.integration !== 'integrated' || preview.git.dirty !== false)) throw new AppError('FINISH_BLOCKED', 'Removal needs proven integration and a clean worktree. Close the sessions only, or discard.', 409);
     return this.deps.authority.automated(async () => {
       const operation: TaskFinish = { requestId: input.requestId, input, preview, status: 'applying', step: 'sessions', revision: 0, message: 'Checking the previewed sessions before closing them.',
@@ -191,18 +193,24 @@ export class FinishCoordinator {
     let op = claimed; const { preview } = op;
     const fail = (message: string) => this.save({ ...op, status: 'failed', message }, op.revision);
     try {
+      await this.assertScope(preview);
       const fresh = await this.evidence(preview.worktree);
       if (digestOf(consentOf(preview.worktree, preview.branch, fresh.sessions, fresh.others, fresh.run)) !== preview.digest) return fail('Something changed since the preview (sessions, panes, processes, activity, occupancy or the run). Nothing was closed. Preview again.');
     } catch (error) { return fail(`The sessions could not be inspected again: ${messageOf(error)} Nothing was closed.`); }
     const targets = preview.sessions.filter((s) => s.closable);
     await this.deps.closeTerminals(new Set(targets.flatMap((s) => s.panes.map((p) => p.paneId))), 'Finish branch closed this session.');
     if (this.deps.authority.pending().length) return fail('Manual terminal input began. Nothing was closed.');
-    const agents = await this.deps.agents().catch(() => []);
     let killed = 0;
     for (const target of targets) {
       const item = this.deps.launches.batches().flatMap((b) => b.items).find((i) => i.id === target.launchId);
       // Immediately before each kill: the same server, marker, windows, panes, directories, activity and processes as consented.
-      const current = item ? await this.session(item, preview.worktree, agents).catch(() => null) : null;
+      let current: FinishSession | null = null;
+      try {
+        const agents = await this.deps.agents();
+        const session = item ? await this.session(item, preview.worktree, agents) : null;
+        await this.assertScope(preview);
+        current = session;
+      } catch { /* Unavailable scope or activity cannot authorize a kill. */ }
       if (!current || !isDeepStrictEqual(sessionConsent(current), sessionConsent(target))) {
         if (!killed) return fail(`${target.sessionName} changed before it was closed. Nothing was closed. Preview again.`);
         op = this.save({ ...op, sessions: op.sessions.map((s) => s.status === 'pending' ? { ...s, status: 'skipped' } : s) }, op.revision);
@@ -218,13 +226,19 @@ export class FinishCoordinator {
       for (let attempt = 0; gone === null && attempt < 10; attempt++) { await this.pause(200); gone = await this.deps.host.absent(identity); }
       if (gone !== true) { op = this.save({ ...op, sessions: op.sessions.map((s) => s.sessionId === target.sessionId ? { ...s, status: 'uncertain' } : s) }, op.revision); continue; }
       this.deps.launches.retire(target.launchId, op.requestId);
-      const after = await this.survivors(retained);
+      const after = await this.survivors(retained, current.panes.some((p) => p.dead));
       op = this.save({ ...op, sessions: op.sessions.map((s) => s.sessionId === target.sessionId ? { ...s, status: 'closed', ...after } : s) }, op.revision);
     }
     return this.settleSessions(op);
   }
-  /** Processes seen before the kill that are still alive with the same start time. Missing start evidence stays unknown. */
-  private async survivors(retained: FinishProcess[]): Promise<Pick<FinishSessionResult, 'survivors' | 'evidence'>> {
+  private async assertScope(preview: FinishPreview): Promise<void> {
+    const scope = await this.deps.projects.finishScope(preview.projectId, preview.worktreeId);
+    if (!sameWorktree(scope.worktree, preview.worktree) || scope.branch !== preview.branch)
+      throw new AppError('FINISH_CHANGED', 'The worktree identity or branch changed. Preview again.', 409);
+  }
+  /** Processes seen before the kill that are still alive with the same start time. An already exited root cannot prove absence of
+   * its former descendants: that missing evidence stays unknown through inspection, even with no retained PIDs. */
+  private async survivors(retained: FinishProcess[], exited = false): Promise<Pick<FinishSessionResult, 'survivors' | 'evidence'>> {
     let alive: FinishProcess[] = retained;
     for (let attempt = 0; attempt < 10 && alive.length; attempt++) {
       if (attempt) await this.pause(200);
@@ -232,7 +246,7 @@ export class FinishCoordinator {
       if (!starts) return { survivors: [], evidence: 'unknown' };
       alive = retained.filter((p) => starts.has(p.pid) && (p.started === null || starts.get(p.pid) === p.started));
     }
-    return { survivors: alive, evidence: !alive.length ? 'clear' : alive.some((p) => p.started === null) ? 'unknown' : 'survivors' };
+    return { survivors: alive, evidence: exited ? 'unknown' : !alive.length ? 'clear' : alive.some((p) => p.started === null) ? 'unknown' : 'survivors' };
   }
   private settleSessions(op: TaskFinish, decided = false): TaskFinish {
     const uncertain = op.sessions.filter((s) => s.status === 'attempted' || s.status === 'uncertain');
@@ -262,9 +276,17 @@ export class FinishCoordinator {
       const claimed = this.save({ ...op, status: 'git_applying', step: 'git', child: { kind, requestId: child.requestId }, message: `Running the confirmed ${kind}.` }, op.revision);
       let result: WorktreeRemoval | WorktreeDiscard;
       try { result = kind === 'removal' ? await this.deps.remove(child as WorktreeRemoveInput, op.requestId) : await this.deps.discard(child as WorktreeDiscardConfirm, op.requestId); }
-      catch (error) { return this.save({ ...claimed, status: 'awaiting_git', step: 'sessions', child: null, message: `${messageOf(error)} Nothing was removed.` }, claimed.revision); }
+      catch (error) {
+        // Both child operations persist before mutating Git. A thrown response after that point proves no outcome: keep its ID.
+        if (this.recordedChild(claimed)) return this.save({ ...claimed, status: 'git_uncertain', message: `${messageOf(error)} Inspect the recorded ${kind}; nothing is retried.` }, claimed.revision);
+        return this.afterChild(claimed, 'failed', `${messageOf(error)} No Git operation was recorded.`);
+      }
       return this.afterChild(claimed, result.status, result.message);
     });
+  }
+  private recordedChild(op: TaskFinish): WorktreeRemoval | WorktreeDiscard | undefined {
+    const children = op.child?.kind === 'removal' ? this.store.worktreeRemovals() : this.store.worktreeDiscards();
+    return children.find((child) => child.input.requestId === op.child?.requestId);
   }
   private afterChild(op: TaskFinish, status: string, message: string): TaskFinish {
     const next: FinishStatus = ['removed', 'discarded'].includes(status) ? 'done' : status === 'failed' ? 'awaiting_git' : 'git_uncertain';
@@ -283,6 +305,8 @@ export class FinishCoordinator {
       return this.save({ ...op, status: 'done', message: `${op.message.split('. ')[0]}. Stopped before the Git step: the worktree and branch are kept.` }, op.revision);
     }
     if (op.status === 'git_uncertain' && op.child) {
+      // Restart can happen after the parent claims its step but before the child reserves it. No child record means no Git attempt.
+      if (!this.recordedChild(op)) return this.afterChild(op, 'failed', 'No Git operation was recorded before this step stopped.');
       const child = await this.deps.reconcileChild(op.child.kind, op.child.requestId);
       return this.afterChild(op, child.status, child.message);
     }
@@ -292,9 +316,9 @@ export class FinishCoordinator {
       const target = op.preview.sessions.find((t) => t.sessionId === s.sessionId)!;
       if (s.status === 'attempted' || s.status === 'uncertain') {
         const gone = await this.deps.host.absent({ sessionId: s.sessionId, serverPid: target.server.pid, serverStarted: target.server.started });
-        if (gone === true) { this.deps.launches.retire(s.launchId, op.requestId); sessions.push({ ...s, status: 'closed', ...await this.survivors(s.retained) }); }
+        if (gone === true) { this.deps.launches.retire(s.launchId, op.requestId); sessions.push({ ...s, status: 'closed', ...await this.survivors(s.retained, target.panes.some((p) => p.dead)) }); }
         else sessions.push({ ...s, status: 'uncertain' });
-      } else if (s.status === 'closed' && s.evidence !== 'clear') sessions.push({ ...s, ...await this.survivors(s.retained) });
+      } else if (s.status === 'closed' && s.evidence !== 'clear') sessions.push({ ...s, ...await this.survivors(s.retained, target.panes.some((p) => p.dead)) });
       else sessions.push(s);
     }
     const decision = input.action === 'decide' ? { note: input.note!, at: now() } : op.decision;

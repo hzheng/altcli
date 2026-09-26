@@ -51,6 +51,22 @@ cd web && npm run dev
 
 Codex needs both the native `UserPromptSubmit` entry in `~/.codex/hooks.json`
 (or `$CODEX_HOME/hooks.json`) and the `notify` command in `config.toml`.
+For Codex 0.157+, launch it with `codex --no-daemon` inside tmux. The shared
+background server is enabled by default in that version; its hooks do not inherit
+the terminal's `TMUX`/`TMUX_PANE`, so AltCLI cannot attribute turns to that pane.
+This affects prompts submitted directly in xterm as well as Control commands.
+The Codex launch preset includes `--no-daemon`; add it to existing profiles under
+Settings → Launch profiles, then let current work finish before relaunching. A profile
+whose executable is `codex` (including an absolute path) without the flag is marked **needs
+--no-daemon** in the saved-profile row, warned about in its editor, where **Add
+--no-daemon** inserts it, and in the launch preview before any session starts.
+A Codex adapter hint on a shell or wrapper instead shows manual verification
+guidance. Check the command that actually starts Codex; AltCLI does not parse
+the wrapper or offer to prepend a Codex option to its arguments.
+Changing a profile does not change an already running session. A manual Reset
+status does not repair missing hooks: its Ready observation remains until new
+native evidence arrives. See the [Codex changelog](https://learn.chatgpt.com/docs/changelog)
+for the background-server default and `--no-daemon` option (available since 0.156).
 Both CLIs also install SessionStart for startup/resume, so fresh sessions can
 report Ready before their first prompt. Trust the additional Codex SessionStart
 hook through `/hooks`. Ready is a session observation, not task completion.
