@@ -76,23 +76,26 @@ A session reached by navigation keeps its own lifetime settings. If it uses
 `destroy-unattached`, detaching the browser there (release, close or Lock) can
 destroy it, just as a desktop client leaving it would.
 
-The one **Keyboard** selector in the shared terminal area (radios on wide screens, a single
-select on phones) chooses the writer. Choosing
+The ⌨️ status in the page heading reports the one server-wide keyboard owner. It is
+informational, including when another browser or checkout owns the keyboard; it never selects
+or transfers ownership. Each native terminal has a ⌨️ **Claim keyboard** tool, right after its
+status badge and hidden while that pane types; its confirmation opens below the tool row. Claiming
 a pane requires explicit confirmation naming the old and new targets and affected runs; it opens
 that pane's observer connection if needed, then requests the grant, creating a fresh writable
 attachment. A pending choice is shown as pending; cancel, Lock, a view change or a newer choice
 before the request is sent sends nothing, and a lost response is reconciled from the server's
 report, never replayed. Moving the keyboard between this browser's panes freezes the old pane's
 input first and uses the broker's serialized transfer, never a client-side release-then-acquire.
-The checked selection is always the server-confirmed writer; another browser's ownership or an
-unresolved record is shown as status, never as **Nobody**. The grant It participates in normal tmux sizing. There is one writer across the
+The status reports the server-confirmed live writer, including another browser, or nobody.
+An unresolved record is a separate hold shown in Control access, even when nobody owns the
+keyboard. The grant participates in normal tmux sizing. There is one writer across the
 configured server, and a durable manual barrier holds AltCLI dispatch, setup and
 launch before claim. It does not stop an already computing worker or external
 terminal clients. All current modern runs get whole-run input holds. Legacy runs
 must settle or be deliberately taken over first.
 
-**Nobody (observe only)** is the plain release: it stops admission and drains admitted input.
-**Release and record settled…**, beside the selector, is the separately confirmed strict release; it
+**Release keyboard** in Control access is the plain release: it stops admission and drains admitted input.
+**Release and record settled…**, in the same panel, is the separately confirmed strict release; it
 also performs fresh inventory, activity, background-work and checkpoint checks.
 A failed check still releases the keyboard, retaining the barrier and reason.
 Disconnect, Lock, expiry and restart always retain the barrier. Transfer/recovery
@@ -135,10 +138,10 @@ checkpoints retain the barrier. A pane that had already exited when the keyboard
 was granted (such as a remain-on-exit launch pane) has no process tree to read; it
 neither blocks the grant nor fails settlement while it stays exited.
 
-After inspecting the host, **Record a human inspection decision…** provides a
-separate recovery path, including when no agents remain or feature flags are off.
-The browser requires the inspection acknowledgement checkbox and records that
-exact wording as the decision note; no typed note is required.
+In the browser, **Take control…** in Control access records this human decision for every
+unresolved record after one confirmation, including when no agents remain or feature flags are
+off. Its notes say that earlier input may have run commands or left background work; the fixed
+acknowledgement wording is recorded as the decision note, with no checkbox or typed note.
 `POST /api/v1/terminals/reconcile` accepts either `confirmReady: true` for the
 settled check, or `confirmInspected: true` with a nonblank single-line `note`
 (at most 1,000 characters). Both require the current `manualSessionId`,
@@ -151,8 +154,8 @@ by hand.
 The browser separates terminal view, DOM focus, AltCLI command recipient and
 keyboard grant. Control-pane drafts, including the Plan brief, stay editable while
 a keyboard or manual barrier holds dispatch; only their actions are blocked, with
-the reason shown. Ctrl+Shift+Escape leaves terminal focus for the visible Control region (or the
-phone drawer toggle, or the nearest Keyboard selector); the terminal shows this hint while it has
+the reason shown. Ctrl+Shift+Escape leaves terminal focus for the visible Terminal/Control switch
+(or the Control access entry); the terminal shows this hint while it has
 focus, and it never sends input or changes keyboard ownership. Focus moves on the
 shortcut's first key release, so xterm also sees that release and does not ignore the
 next inserted text (IME, emoji, phone keyboards) when the user returns. Touch keys and
@@ -174,20 +177,35 @@ moved elsewhere while a keyboard grant was pending, the terminal does not take
 focus back; it reports **Keyboard ready for <name>** instead. With native terminals
 enabled, Settings also shows the server-wide keyboard scope and the terminal limits.
 
-The one Control pane has alternate placements, never a second composer:
-- **Control below / Control beside:** on windows at least 1280 px wide, the pane
+The one Control pane is never a second composer:
+- **Terminal / Control:** outside Plan the terminals and Control share one frame, and the switch
+  shows one of them (Terminal first, remembered per workspace until Lock). The run's actual phase
+  decides, so an owned Plan run keeps the Plan layout. The hidden surface stays mounted: terminals
+  keep their connections and keyboard generation, a hidden terminal admits no new input event (an
+  event already partly sent still drains), and Control keeps its drafts. Switching sends nothing and
+  revokes readiness; the selected agent's status stays in the frame header.
+- **Control below / Control beside** (Plan only): on windows at least 1280 px wide, the pane
   can sit beside the terminal stage. The choice is remembered in this browser;
   narrower windows stack it below.
-- **Open control drawer:** at phone widths, the same pane opens as a bottom
+- **Open control drawer** (Plan only): at phone widths, the same pane opens as a bottom
   drawer. Escape or **Close drawer** returns focus to the toggle.
 - **Agent selector:** the tabs above the terminals choose the terminal shown and the
   control recipient together (Plan setup addresses the whole group). In Parallel,
   clicking a card's heading does the same. Selection starts on a working agent, is
   then held, revokes readiness and sends nothing; it never selects the keyboard writer.
+- **Control access:** one nonmodal panel under the page heading, opened only from its entry in the
+  page heading's status row (entry, then the ⌨️ keyboard status, then connection status) on every tab
+  and reachable with no agents. Notices, status lines and composers name it but carry no opener. It holds keyboard release, manual-input
+  reconciliation, the controller's run card with pause and one-click checkpoint or handoff
+  continuation, a list of what to notice, one **Take control…** confirmation (ending this
+  checkout's controller run, clearing an uncertain-request warning, releasing an older delivery
+  hold and recording the decision on earlier manual input, in that order), one-click **Mark
+  <agent> Ready**, workspace reset, and each composer's readiness check. A check is offered only while the
+  Console shows its action; opening or closing the panel changes nothing.
 
 Terminal tools are icon buttons that keep their full accessible names, with help on hover and
-focus, and a **?** legend that also works by tap: **Open terminal** ▶️ / **Reconnect** 🔄 (observe
-only), **Captured text** 📄 / **Show terminal** 🖥️, **Expand terminal** ⤢ / **Collapse terminal** ⤡,
+focus, and a **?** legend that also works by tap: **Claim keyboard** ⌨️ (asks first; second, after
+the status badge), **Open terminal** ▶️ / **Reconnect** 🔄 (observe only), **Captured text** 📄 / **Show terminal** 🖥️, **Expand terminal** ⤢ / **Collapse terminal** ⤡,
 **Screen reader mode** ♿ and, while writing, **Paste text** 📋. **Expand terminal** enlarges the
 existing surface in the page without opening a new connection or changing keyboard ownership.
 The former visible focus-escape button is gone (September 25 decision); the shortcut and its

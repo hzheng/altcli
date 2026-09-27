@@ -2627,3 +2627,272 @@ TERMINAL-PROTOCOL and the ROADMAP M1 row were updated.
   32 hook/setup, 43 smoke, 382 workflow and 76 unit tests, type checking and the
   production build passed. The complete browser suite was not run for this change.
   Browser coverage uses isolated mock hosts, not physical devices or installed CLIs.
+
+## 2026-09-26 — Terminal/Control frame, worktree labels and one Control access spot
+
+Implemented the frozen plan (revision 2, SHA-256 `f78e0176…0a71`) for the owner's layout brief:
+
+- **One frame outside Plan.** A **Terminal / Control** switch beside the Agent selector shows the
+  terminals or the one Control pane. The owned run's actual phase decides, so an owned Plan run keeps
+  the Plan layout; Control below/beside and the phone drawer remain Plan-only. The switch starts on
+  Terminal, is page memory per workspace (Lock clears it), is never changed by an effect, and joins
+  the view key, so switching revokes readiness. The hidden surface stays mounted. A hidden native
+  terminal admits no new input event (an event already partly sent still drains), and
+  Ctrl+Shift+Esc now moves to the visible switch or the Control access entry. With Control shown,
+  the selected agent's status stays in the frame header, and a read-only keyboard-owner line with
+  **Show writer <agent>** replaces the stage Keyboard selector.
+- **Worktree selector.** Options read `Main checkout · <path>` or `<path>`; the branch stays in
+  the field to their right.
+- **Control access.** One top-bar entry on every tab (`Control access · <holder>`, with ⚠ when a
+  decision is needed) opens one nonmodal panel under the page heading. It is reachable with no
+  agents. It holds the Keyboard selector, manual-input reconciliation (reset on view and connection
+  changes, same acknowledgement note), the former Controller panel (run card, Next turn,
+  checkpoint and handoff continuation, pause, and a takeover with three required checks), the
+  uncertain-request and legacy-delivery acknowledgements, status and workspace resets, blockers
+  with no confirmation, and each composer's readiness check. Composers render their check through
+  a portal, so the consent key and checked state stay with the composer. A check is shown only
+  while the Console shows its action (**Show Control** / **Go to Console** otherwise). Opening,
+  closing and **Return to action** keep a current check. The duplicates were removed from the
+  settings row, the stage, the notices, pane status lines and the Agents table, which keep their
+  text and an **Open Control access** link.
+- **Takeover freshness.** A takeover may name `expectedCommandId`; a run whose current command
+  differs refuses it with `HANDOFF_CHANGED` (409) before anything is invalidated or released.
+  Omitting it keeps the old behavior. `RunAction` and `shared/openapi.yaml` document it.
+
+ADR-0020 (September 26 update), README, WORKFLOWS, TERMINAL-PROTOCOL, SETUP, TESTING, the ROADMAP M1
+row and the About text were updated.
+
+Observed checks:
+
+- `./scripts/check.sh` passed on the final code: the skills check, 32 review-regression/setup,
+  43 smoke, 383 workflow/server (including the new stale-takeover test) and 83 unit tests
+  (including `control-items.test.ts`), type checking and the production build.
+- The full browser suite (all six specs, desktop and iPhone projects, isolated mock hosts) passed:
+  299 passed, 9 skipped by project. It ran through a scratch Playwright config that reuses the
+  project config with fresh Next dist dirs. The existing `web/.next-e2e-altcli-{desktop,iphone}`
+  dev caches served a stale `globals.css`: the served stylesheet still held the removed
+  `.controller-toggle` rules and none of the new ones. Earlier targeted runs against those caches
+  therefore passed without the new CSS. Clear those caches before running
+  `./scripts/check.sh --e2e`, which was not run itself.
+- New or rewritten cases cover:
+  - the one frame (default Terminal, hidden surface mounted, switch revokes readiness, no requests);
+  - an owned Plan run keeping the Plan layout, and an Implementation run keeping the switch;
+  - exact worktree option labels;
+  - the Control access journey (entry, **Show Control**, **Return to action**, other tab,
+    **Go to Console**) and the three-check takeover;
+  - status, workspace and manual recovery from the panel, including with no agents;
+  - keyboard selection, transfer and release from the panel, and the keyboard-release Send
+    from Control;
+  - a hidden terminal refusing new input (a case added after the full run; it passed separately
+    on both projects, and with the guard temporarily removed it failed on desktop, admitting 2
+    bytes where 1 was expected), and the new focus-escape target;
+  - Plan-only placement and drawer.
+- Screenshots from a throwaway mock server with a fresh build, at 1440×900 and iPhone 13, were
+  inspected for the Terminal, Control and Control access views: no horizontal overflow. They led
+  to one fix (radio inputs in the panel no longer take the full-width input style).
+- Not run: physical devices, installed CLIs or a real tmux host.
+
+## 2026-09-26 — review relay: heading access and local keyboard claims
+
+Reviewed commit `840dceaf4b5212a8946836d4f9e177287c609a0c` and applied the owner's
+follow-up: **Control access** sits immediately left of connection status in the
+page heading. The ⌨️ status reports the server-wide live owner (including another
+browser), with no owner selector. Each terminal offers **Claim keyboard**, with a
+confirmation naming the current owner and target. The existing serialized transfer,
+pending cancellation, uncertain-result handling, release and reconciliation remain.
+An unresolved manual-input record is still a dispatch hold even when no live writer
+owns the keyboard.
+
+Review also found that a phone's fixed Plan drawer could cover readiness controls
+after opening Control access. Opening that panel now closes the drawer without
+discarding the draft or readiness. The regression checks the drawer position,
+clicks readiness and returns to the enabled planning action.
+
+Observed checks (Node 24.12.0; isolated mock hosts on ports 19787/19788):
+
+- `./scripts/check.sh` passed. The nonbrowser portion of
+  `./scripts/check.sh --e2e` also passed on the final functional code: skills check,
+  32 hook/setup, 43 smoke, 383 workflow/server and 83 unit tests, type checking and
+  the production build.
+- New header and keyboard-status tests first failed against the incoming UI, then
+  passed with the changes. Header checks cover widths 1440, 800, 390 and 320 without
+  horizontal overflow; screenshots of the heading and local claims were inspected.
+  Transfer, another-browser warnings, cancellation, release and the Plan drawer
+  regression passed on their applicable desktop/phone viewports.
+- The first full browser run reported 305 passed, 10 skipped and one failed paste
+  case. Its trace showed the second input request stalled after a one-use network
+  interceptor was removed. That test now keeps its route installed and explicitly
+  passes subsequent requests through, retaining all byte-count and dropped-input
+  assertions. Five repetitions on each viewport then passed (10 total).
+- The complete browser rerun (`ALTCLI_E2E_PORT=19787 npm run e2e` in `web/`)
+  passed: 306 passed, 10 skipped by project, no failures. This reran the browser
+  portion of the earlier `./scripts/check.sh --e2e`; its nonbrowser checks had
+  already passed. The final diff passed `git diff --check` and secret screening.
+- No installed CLI, real tmux host or physical device acceptance is claimed. No
+  live backend was changed. Relay improvements remain unstaged; the reviewed
+  incoming commit was already HEAD and required no staging.
+
+## 2026-09-26 — keyboard claim icon and one Control access entry
+
+At the owner's request, a follow-up to the local keyboard claims above:
+
+- **Claim keyboard** is now a ⌨️ icon tool in each terminal's tool row. It is the second item,
+  right after the status badge, and is hidden while that pane types. Its confirmation still
+  opens below the row.
+- The page heading's status row now reads: the **Control access · …** entry, then the ⌨️
+  keyboard status, then connection status.
+- That entry is the only Control access opener. The **Open Control access** buttons were removed
+  from notices, pane status lines, the Agents table, the composers and the Terminal/Control
+  switch. Those places now only name Control access.
+
+Observed checks:
+
+- `npm run typecheck` and the 83 unit tests passed.
+- The full browser suite (all six specs, desktop and iPhone projects, isolated mock hosts, fresh
+  Next dist dirs because the shared e2e caches serve stale CSS) passed: 306 passed, 10 skipped by
+  project.
+- Updated cases assert the icon's position and ⌨️ text, the heading order and single row at
+  1440/800/390/320 px, and that no **Open Control access** button remains.
+- Screenshots at 1440×900 and iPhone 13 were inspected: no horizontal overflow.
+- `./scripts/check.sh` was not rerun for this follow-up. Physical devices, installed CLIs and a
+  real tmux host were not exercised.
+
+## 2026-09-26 — explain disabled Send after entering an instruction
+
+Traced the Send gate to `PaneActions.reasonFor`: keyboard ownership is not a
+prerequisite. With no other blocker, Send waits for **Ready for implementation**
+in Control access. The detailed readiness reason was omitted from the button's
+visible description in favor of its authorization summary.
+
+After a nonblank instruction is entered, a disabled Send now shows its actual
+reason in a notice immediately below the button. The readiness reason names the
+exact checkbox and Control access's top-right location. The notice is a live
+status associated with the button, disappears when enabled or the draft is
+cleared, and leaves the authorization summary visible. Branch and manual-input
+blockers use the same path; sending and ownership gates are unchanged.
+
+Observed checks (Node 24.12.0, isolated mock hosts on 22787/22788):
+
+- The new desktop/phone regression failed before the change because the notice
+  was absent, then passed. It confirms Send becomes enabled while the keyboard
+  remains unowned, without sending any mutation.
+- Ten focused browser cases passed, covering the notice, its accessible
+  description, blank drafts, readiness, branch gates, cross-browser keyboard
+  holds and the existing action authorization text. The phone screenshot was
+  inspected.
+- `./scripts/check.sh` passed: skills check, 32 hook/setup, 43 smoke, 383 workflow,
+  83 unit tests, type checking and production build.
+- `./scripts/check.sh --e2e` passed its nonbrowser checks; the browser run had
+  304 passed, 10 skipped and four failures from one old `/Confirm Ready/` tooltip
+  assertion (two policies on both viewports). The assertion was updated to require
+  the new location and checkbox wording. All four complete cases then passed in
+  a focused rerun. The full suite was not repeated after that test-only update.
+- Final diff and secret screening passed. No physical-device, installed-CLI or
+  real-tmux acceptance is claimed. These changes remain unstaged.
+
+## 2026-09-27 — take control with one confirmation
+
+The owner asked for fewer checks when grasping control: the user cannot be stopped from acting
+outside the app, so Control access now lists what to notice and asks once.
+
+- **What to notice.** A plain list covers: an agent that may still be working, a request or
+  delivery that may have reached a terminal, earlier manual input that may have run commands or
+  left background work, another browser's keyboard, and blockers such as copy mode.
+- **Take control… with one confirmation.** The confirmation lists its steps, then runs them in
+  order: clear the uncertain-request warning, end this checkout's controller runs (each with its
+  observed command), release an older delivery hold, and record the human decision on unresolved
+  manual input with the fixed acknowledgement note. Each step is its own request with its server
+  checks. The first refusal or unknown result stops the rest and reports what was already done;
+  nothing is retried.
+- **Checkboxes removed.** The three takeover checks, the separate acknowledgement buttons, the
+  manual-input form (checkbox and inspection details), the two-step Reset status, and the
+  checkpoint and blocked-handoff checkboxes are gone. Checkpoint and handoff continuation and
+  **Mark <agent> Ready** are single clicks whose text says what they attest. Mark Ready appears
+  only once nothing holds the checkout.
+- **Kept.** Pause stays available while the controller drives. Each action keeps its one
+  readiness check, and keyboard claim and release keep their own confirmations. ADR-0020 has a
+  September 27 update, and README, WORKFLOWS, TERMINAL-PROTOCOL and SETUP were updated.
+
+Observed checks:
+
+- `./scripts/check.sh` passed: skills check, 32 hook/setup, 43 smoke, 383 workflow and 83 unit
+  tests, type checking and the production build.
+- The full browser suite on fresh Next dist dirs (isolated mock hosts, desktop and iPhone): 310
+  passed, 10 skipped by project.
+- The run before the final change had four failures: an assertion expecting a single
+  controller button now also matched **Take control…**. It was fixed and passed separately; the
+  full rerun above includes it.
+- A new native case clears a controller run and earlier manual input with one confirmation and
+  asserts the takeover and reconcile requests in that order. Other cases cover the notes, zero
+  checkboxes, a one-click Mark Ready, and single-click checkpoint and handoff continuation.
+- A screenshot of the panel with a driving run was inspected: notes, one confirmation listing
+  its step, no checkboxes.
+- Not exercised: physical devices, installed CLIs or a real tmux host.
+
+## 2026-09-27 — relay review of the single-confirmation takeover
+
+Reviewed against the index and staged all 18 incoming paths before making improvements:
+
+- `README.md`, `VALIDATION.md`, `docs/SETUP.md`, `docs/TERMINAL-PROTOCOL.md`,
+  `docs/WORKFLOWS.md`, `docs/adr/ADR-0020-native-terminals.md`.
+- `web/e2e/console.spec.ts`, `web/e2e/implementation.spec.ts`, `web/e2e/native.spec.ts`,
+  `web/e2e/ui.ts`.
+- `web/src/app/globals.css`, `web/src/components/BlockedHandoff.tsx`,
+  `web/src/components/Console.tsx`, `web/src/components/ControlAccess.tsx`,
+  `web/src/components/InteractionControls.tsx`, deletion of
+  `web/src/components/ManualInputRecovery.tsx`.
+- `web/src/core/control-items.ts`, `web/src/core/control-items.test.ts`.
+
+Outgoing improvements remain unstaged in Console, the native browser tests and this log:
+
+- An unknown first-step result no longer says "Nothing else changed." The server can have
+  completed takeover even when its response is lost. The message distinguishes confirmed
+  progress from the uncertain step and says that later steps were not sent.
+- The panel no longer says nothing holds control while a live keyboard holds dispatch. It
+  limits the empty-state message to takeover records and points to the reported keyboard owner.
+- Browser coverage now refuses or loses the response at each of takeover and manual
+  reconciliation, checks actual mock-host state and confirmed progress, and verifies that
+  rechecking does not retry the decision or send later steps.
+
+Observed checks using Node 24.12.0 and isolated mock hosts on 22787/22788:
+
+- The two new message assertions failed before the fixes. After the fixes, the targeted run
+  passed ten cases; two failed because the new test incorrectly expected a refused run to be
+  paused. Keyboard ownership leaves that unfinished run running. Correcting that assertion
+  made both desktop and iPhone refusal cases pass separately.
+- `./scripts/check.sh` passed: skills check, 32 hook/setup, 43 smoke, 383 workflow and 83 unit
+  tests, type checking and the production build.
+- The first `./scripts/check.sh --e2e` attempt stopped before browser tests on an unrelated
+  existing assertion at `web/scripts/implementation.test.ts:1314`: `/caf/` matched part of a
+  randomly generated parent commit hash. That test was left unchanged and passed in the rerun.
+- The full `./scripts/check.sh --e2e` rerun passed all nonbrowser checks and the desktop/iPhone
+  browser suite: 318 passed, 10 skipped. This includes all four new failure scenarios in both
+  viewports. No physical-device, installed-CLI or real-tmux acceptance is claimed.
+- Incoming and outgoing secret screening found no secrets. Diff checks passed, and only the
+  three outgoing files above differ from the accepted index.
+
+## 2026-09-27 — squash feature/layout into main
+
+Integrated layout through `fcdf878` onto main at `eb61835`, using the verified
+shared baseline `be597c1` (`main~2` and `feature/layout~3` before integration).
+The Agent-selector change was already present on main. Conflict resolution keeps
+layout's Terminal/Control frame and unified Control access together with main's
+worktree-root discovery, internal subdirectory activity guards and per-worktree
+Agents & group editor. Both branches' validation records are retained without
+duplicating the shared Agent-selector entry.
+
+- Node 24.12.0: `./scripts/check.sh` passed 32 hook/setup, 43 smoke, 387 workflow
+  and 83 unit cases, type checking and the production build. The build used
+  `ALTCLI_DIST_DIR=.next-e2e-altcli-ws-probe` to preserve the live build.
+- The complete Playwright suite passed: 316 cases, 10 expected skips, zero
+  failures or flaky cases. A temporary configuration preserved both configured
+  projects and all tests while assigning fresh dist directories to the isolated
+  mock servers. Desktop and phone Control captures and the phone heading were
+  visually checked. These are viewport tests, not physical-device or installed
+  CLI acceptance.
+- Main-only and layout-only files match their respective source revisions
+  exactly; overlapping files were checked for preservation of both changes.
+  Staged diff and commit-message screening found no credentials; diff checks passed.
+
+Temporary generated configuration was restored after testing. The running
+backend and live agent sessions were not restarted or modified.

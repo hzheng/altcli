@@ -358,17 +358,30 @@ In Projects, **Ask an agent to suggest batches** sends a standalone read-only ad
 One **Agent** selector chooses both the terminal shown and the Control recipient;
 in Parallel, clicking a card's heading does the same. It starts on a working agent
 and is then held until you choose another, so a newly working agent never retargets
-Control. Selecting sends nothing and revokes readiness. Plan setup is the exception:
-it addresses the whole group, so the selector only changes the terminal shown. On wide
-windows the pane can sit beside the terminals (**Control beside**); on phones
-**Open control drawer** shows the same pane as a bottom drawer. **Open terminal** is
-observation; choosing a pane in the one **Keyboard** selector requires confirmation and holds
-dispatch/setup/launch across the configured tmux server. It does not interrupt workers already
-computing. **Nobody** releases the keyboard; use **Release and record settled** after inspecting
+Control. Selecting sends nothing and revokes readiness. Outside Plan, the **Terminal / Control**
+switch shows the terminals or Control in the same frame; switching also sends nothing and revokes
+readiness. Plan is the exception: Plan setup addresses the whole group, so the selector only
+changes the terminal shown, and it stays below the terminals, beside them on wide windows
+(**Control beside**) or in a bottom drawer on phones (**Open control drawer**). **Control access**
+lists what to notice before you take control and then asks once: **Take control…** ends this
+checkout's controller run, clears an uncertain-request warning, releases an older delivery hold
+and records your decision on earlier manual input, stopping at the first refusal. Its one entry
+sits in the page heading's status row; it also holds keyboard release, pause, one-click checkpoint
+or handoff continuation, **Mark <agent> Ready**, and each action's readiness check. **Open terminal** is
+observation; the ⌨️ **Claim keyboard** tool at a native terminal requires confirmation naming the
+current owner and holds dispatch/setup/launch across the configured tmux server. The ⌨️ status to
+the right of the Control access entry reports that server-wide owner without selecting one. Claiming does not interrupt workers already
+computing. **Release keyboard** in Control access releases the keyboard; use **Release and record settled** after inspecting
 all panes. Failed checks,
 disconnect, Lock and restart retain a durable manual barrier. Then review each
 valid saved workflow checkpoint explicitly. Faulted/originally paused runs need
 existing deliberate takeover; they do not become resumable through keyboard input.
+
+Send does not require claiming the native keyboard. After an instruction is entered,
+a disabled Send shows its current blocker beside the button. When readiness is the
+remaining gate, the hint points to **Control access** at the top right and the
+**Ready for implementation** checkbox. Other gates, such as branch settings or
+another browser's keyboard hold, show their own reason instead.
 
 Add an absolute Git directory in Projects, select a main or task worktree, and
 preview literal profile launches. Launching after worktree creation is a separate

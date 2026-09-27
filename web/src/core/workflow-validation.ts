@@ -50,7 +50,7 @@ export function parseRunAction(value: unknown): RunAction {
   if (!['pause','takeover','continue','recheck'].includes(String(body.action))) throw new AppError('INVALID_ACTION', 'Unknown run action.');
   if (body.action !== 'pause' && body.confirmReady !== true) throw new AppError('READINESS_REQUIRED', 'Inspect every participant and stop all writers before changing ownership.');
   return { runId: requestId(body.runId), action: body.action as RunAction['action'], ...(body.confirmReady === true ? { confirmReady: true } : {}),
-    ...(['continue', 'recheck'].includes(String(body.action)) ? { expectedCommandId: requestId(body.expectedCommandId) } : {}),
+    ...(['continue', 'recheck'].includes(String(body.action)) || (body.action === 'takeover' && body.expectedCommandId !== undefined) ? { expectedCommandId: requestId(body.expectedCommandId) } : {}),
     ...(body.action === 'recheck' ? { expectedRevision: requestId(body.expectedRevision) } : {}) };
 }
 export function parseWorkspaceReset(value: unknown): WorkspaceReset {

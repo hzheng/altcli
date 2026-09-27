@@ -453,6 +453,19 @@ test('pausing is durable and human takeover is explicit', async () => {
   assert.throws(() => parseRunAction({ runId: command.requestId, action: 'takeover' }), /Inspect every participant/);
   stopped(command.requestId); assert.equal(plane.workflow.owner('/demo/project/.git/index'), null);
 });
+test('a takeover confirmed for an earlier command is refused without changing ownership', async () => {
+  const command = start({ pairId: pair().id, autoContinue: true }); await plane.submit(command);
+  await complete(command.requestId);
+  const review = plane.workflow.run(command.requestId)!.currentCommandId; assert.notEqual(review, command.requestId);
+  plane.action({ runId: command.requestId, action: 'pause' });
+  const stale = parseRunAction({ runId: command.requestId, action: 'takeover', confirmReady: true, expectedCommandId: command.requestId });
+  assert.equal(stale.expectedCommandId, command.requestId);
+  assert.throws(() => plane.action(stale), /moved to another command/);
+  assert.equal(plane.workflow.run(command.requestId)!.status, 'paused'); assert.equal(plane.workflow.run(command.requestId)!.currentCommandId, review);
+  assert.ok(plane.workflow.owner('/demo/project/.git/index'));
+  plane.action(parseRunAction({ runId: command.requestId, action: 'takeover', confirmReady: true, expectedCommandId: review }));
+  assert.equal(plane.workflow.run(command.requestId)!.status, 'stopped'); assert.equal(plane.workflow.owner('/demo/project/.git/index'), null);
+});
 test('restart pauses durable runs and never replays a delivery', async () => {
   const command = start({ pairId: pair().id, autoContinue: true }); await plane.submit(command);
   store.close(); store = new Store(directory);

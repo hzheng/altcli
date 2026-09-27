@@ -84,7 +84,7 @@ the AltCLI UserPromptSubmit, SessionStart and Interrupt hooks before the next co
 changed native hooks until trusted; see [hook trust](https://learn.chatgpt.com/docs/hooks#review-and-trust-hooks).
 A turn that
 started without this native binding cannot be completed by searching notification
-history; reconcile any old owned run through Pause and Take over.
+history; reconcile any old owned run through Pause and Take control in Control access.
 
 Open http://127.0.0.1:8787 and enter the token from `web/.env.local`. Verify pane
 captures before setting `ALTCLI_ENABLE_INPUT=true` and restarting the backend.
@@ -300,7 +300,7 @@ An Implementation run paused only at its completion/background gate offers
 **Recheck and relay** after inspection. It requires current correlated clear
 evidence and revalidates the publication and checkout; refreshing the page never
 resumes it. See [the handoff recovery rules](WORKFLOWS.md#a-published-handoff-waiting-for-completion).
-Inspect the agents and use **Pause the controller**, then **Take over from the controller…**, before manual intervention.
+Inspect the agents, then use **Take control…** in **Control access** (one confirmation) before manual intervention; **Pause the controller** there only stops scheduling.
 Pause prevents further scheduling but does not interrupt workers or retract input;
 explicit takeover releases ownership after inspection. Never send a replacement
 command just because an HTTP response failed.
@@ -370,7 +370,7 @@ To launch agents from AltCLI:
    **Reconcile after host inspection…**. Nothing is retried.
 6. Choose **Open console** in the expanded worktree. Discovered agents appear there with their
    terminal views; the ticked agents form the group (use **Recheck** if one is
-   missing). Choose an agent in Console's **Keyboard** selector and confirm to
+   missing). Use the ⌨️ **Claim keyboard** tool at the agent's terminal and confirm the displayed owner/transfer warning to
    answer prompts. If startup has not exposed a supported agent yet, inspect its
    tmux session on the host. Startup is not readiness.
 

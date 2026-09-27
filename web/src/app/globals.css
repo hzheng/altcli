@@ -241,13 +241,35 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
 .phase-caption { display:inline-flex; align-items:center; gap:4px; }
 .run-summary .badge.warning { flex:0 1 auto; min-width:0; max-width:100%; overflow:hidden; text-overflow:ellipsis; }
 .row-toggles { margin-left:auto; display:flex; gap:6px; flex-shrink:0; }
-.controller-toggle { font-size:12px; color:var(--muted); font-weight:400; white-space:nowrap; }
-.controller-toggle span { color:var(--accent); }
-.controller-toggle.attention { color:#e7c793; border-color:#61543e; }
-.controller-panel { margin-top:10px; }
-.controller-panel > .panel { margin-top:0; }
-.controller-panel > .panel + .panel { margin-top:10px; }
-.controller-panel .latest-run { margin-top:0; }
+/* Server-wide status and Control access share the right side of each page heading. */
+.page-heading { flex-wrap:wrap; gap:10px; }
+.heading-status { position:relative; display:flex; align-items:center; justify-content:flex-end; gap:8px; margin-left:auto; min-width:0; max-width:100%; }
+.heading-status .connection { margin:0; min-width:0; flex-shrink:0; }
+.heading-status > .hint { position:static; flex-shrink:0; }
+.access-entry { font-size:12px; color:var(--muted); font-weight:400; min-width:0; max-width:340px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.access-entry[aria-expanded=true] { color:var(--accent); border-color:#3a5140; }
+.access-entry.attention { color:#e7c793; border-color:#61543e; }
+.control-access { margin:0 0 18px; }
+.control-access[hidden], .readiness-slot[hidden] { display:none; }
+.control-access h3 { margin:0 0 8px; font-size:14px; }
+.access-scope { margin-top:0; overflow-wrap:anywhere; }
+.access-items { list-style:none; margin:12px 0 0; padding:0; display:grid; gap:6px; font-size:12px; }
+.access-items li { overflow-wrap:anywhere; }
+.access-items li.attention { color:#e7c793; }
+.access-items .badge { margin-right:4px; }
+.access-section { margin-top:14px; padding-top:12px; border-top:1px solid var(--line); min-width:0; }
+.access-section > .panel { margin-top:0; }
+.access-section > .panel + .panel { margin-top:10px; }
+.access-section .latest-run { margin-top:0; }
+.access-item { display:grid; gap:8px; justify-items:start; margin:8px 0; font-size:12px; overflow-wrap:anywhere; }
+/* One Take control: its confirmation lists every step before anything is sent. */
+.take-control { margin-top:14px; }
+.take-control .notice ul { margin:6px 0 10px; padding-left:18px; }
+.take-control .notice .pane-buttons button { margin-left:0; }
+.access-agent { margin-top:8px; align-items:center; font-size:12px; }
+.access-check { margin:6px 0; }
+.access-check .readiness { margin-top:0; }
+.access-check .fine { margin-top:6px; }
 .settings-toggle { font-size:12px; color:var(--muted); font-weight:400; white-space:nowrap; }
 .settings-toggle span { color:var(--accent); }
 .settings-editor { margin-top:10px; padding-top:10px; border-top:1px dashed var(--line); }
@@ -289,8 +311,6 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
 .about p + p { margin-top:10px; }
 .about p { font-size:13px; }
 .run-command { font-size:12px; color:var(--muted); margin:6px 0; }
-.notice.takeover { display:grid; gap:10px; margin-top:12px; }
-.notice.takeover button { margin-left:0; }
 .run-meaning { margin:6px 0 10px; }
 .run-command .command-text { display:inline; white-space:pre-line; }
 .latest-run { margin-top:16px; padding:12px 16px; font-size:12px; }
@@ -302,8 +322,6 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
 .latest-run p + p { margin-top:6px; }
 .latest-run details { margin-top:8px; }
 .reset-reason { flex-basis:100%; font-size:11px; color:#e7c793; }
-.reset-status { margin:0 18px 10px; display:grid; gap:8px; justify-items:start; }
-.reset-status button { margin-left:0; }
 .status:not([open]) { padding-bottom:14px; }
 .status summary .muted { font-size:12px; }
 /* Watch zone: a recessed stage holds the terminal captures, set apart from the raised controller and settings cards above. */
@@ -356,7 +374,7 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
 .terminal-tools, .terminal-keys { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; padding: .5rem; }
 .native-terminal { min-width: 0; }
 .native-terminal.expanded .xterm-mount { height: 80svh; }
-.native-terminal:focus-within, .control-pane:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.native-terminal:focus-within, .control-pane:focus-visible, .control-access:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .control-pane { margin-block: 1rem; padding: 1rem; border: 1px solid var(--line, #425354); border-radius: .5rem; }
 @media (max-width: 600px) { .xterm-mount { height: 22rem; } .terminal-keys button { min-height: 44px; } }
 /* Optional placements of the one control pane: beside the stage on wide screens, a bottom drawer on phones. */
@@ -368,6 +386,13 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
 .control-body > .pane-actions { border-top:0; }
 .control-body > .composer { margin-top:0; border:0; border-radius:0; }
 .control-body > .command-divider { margin-top:0; padding-top:12px; }
+/* Outside Plan the stage and Control are one frame: the switch shows one surface and hides the other, which stays mounted. The scoped
+   rule must win over .panes { display:grid } so hidden content also leaves the tab order and accessibility tree. */
+.workbench .panes[hidden], .workbench .control-pane[hidden] { display:none; }
+.workbench.merged.control > .terminal-stage { border-bottom-left-radius:0; border-bottom-right-radius:0; }
+.workbench.merged > .control-pane { margin:0; border-top:0; border-radius:0 0 14px 14px; background:var(--stage-bg); border-color:#33454b; }
+.stage-status { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; font-size:11px; color:var(--muted); min-width:0; }
+.stage-status .state { display:inline-flex; align-items:center; text-transform:uppercase; font-size:10px; letter-spacing:.4px; color:var(--text); white-space:nowrap; }
 /* Parallel cards: the heading of an unselected card is a pointer shortcut for the Agent selector. */
 .panes.parallel .pane:not(.active) .pane-heading { cursor: pointer; }
 .control-placement, .drawer-toggle { display: none; }
@@ -420,18 +445,11 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
 .new-profile-menu button { border:0; background:transparent; text-align:left; padding:8px 10px; font-weight:500; }
 .legend-line { display:block; }
 .legend-line + .legend-line { margin-top:4px; }
-/* The one keyboard, chosen in the shared stage area: radios on wide screens, one select on phones. */
-.keyboard-block { margin:0 0 10px; min-width:0; }
-.keyboard-selector { display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; font-size:12px; min-width:0; }
-.kb-radios { display:flex; flex-wrap:wrap; gap:4px 14px; min-width:0; }
-.kb-radios label { display:inline-flex; align-items:center; gap:6px; margin:0; font-size:12px; color:var(--text); }
-.kb-radios input { accent-color:var(--accent); }
-.kb-select { display:none; width:auto; flex:1 1 160px; padding:6px 10px; font-size:12px; }
-.kb-owner { display:inline-flex; align-items:center; gap:4px; color:#e7c793; }
-.keyboard-selector button { padding:5px 10px; font-size:11px; }
-.keyboard-block > .notice { margin:8px 0 0; }
-.keyboard-block > .fine { margin-top:6px; }
-@media (max-width:760px) { .kb-radios { display:none; } .kb-select { display:block; } }
+/* Local claims share one decision coordinator; release and recovery stay in Control access. */
+.keyboard-claim { padding:0 .5rem; min-width:0; font-size:12px; }
+.keyboard-claim:empty { display:none; }
+.keyboard-claim > button { margin:0 6px 6px 0; }
+.keyboard-claim > .notice, .keyboard-release > .notice { margin:8px 0; }
 /* Host directory browser for choosing a project's starting checkout. */
 .directory-picker { border:1px solid var(--line); border-radius:10px; padding:12px; margin:10px 0; background:#121c20; min-width:0; }
 .picker-path { display:flex; align-items:center; gap:8px; min-width:0; }

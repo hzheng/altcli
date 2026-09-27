@@ -1,11 +1,15 @@
 'use client';
 import { useEffect, useId, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { CommandRecord } from '../contracts/api';
 import type { Group, WorkspaceGit } from '../contracts/implementation';
 import type { WorkflowState } from '../contracts/workflow';
 import { api, HttpError } from '../client/api';
 import { useRemembered } from '../client/memory';
 import { isSha, type RunSettings } from './RunSettings';
+
+/** The last gate before Start Plan; its check is in Control access. */
+const NOT_READY = 'Confirm Ready for planning in Control access. Changing the brief, a setting or the checkout clears an earlier confirmation.';
 
 /** Group-level Plan start: one shared brief for every planner. Starting a Plan is never a per-pane coding send. */
 export function PlanSetup(p: {
@@ -15,6 +19,8 @@ export function PlanSetup(p: {
   blockedReason: string; busy: boolean; submit: (work: () => Promise<void>) => Promise<void>;
   consent: string; setConsent: (update: (current: string) => string) => void; runMark: string; recheck: number; draftKey: string;
   refresh: () => Promise<void>; onRecheck: () => Promise<void>; onMessage: (message: string) => void; onUncertain: (id: string) => void;
+  /** Control access's readiness slot: the one place the Plan check is shown. Its state and key stay here. */
+  readinessSlot: HTMLElement | null;
 }) {
   const { settings: s, group, git } = p;
   const members = group?.members ?? [];
@@ -41,7 +47,7 @@ export function PlanSetup(p: {
     : s.needsBaseline && !isSha(s.taskBase.trim()) ? 'Enter the full task baseline commit.'
     : !s.limitValid ? 'Set the maximum automatic turns to a whole number from 1 to 200.'
     : !text.trim() ? 'Enter the shared task brief.'
-    : !ready ? 'Confirm Ready for planning. Changing the brief, a setting or the checkout clears an earlier confirmation.' : '');
+    : !ready ? NOT_READY : '');
   const reasonId = useId(); const briefId = useId();
   async function start() {
     if (disabled || !ready || !text.trim() || !group || !git || !target) return;
@@ -78,8 +84,11 @@ export function PlanSetup(p: {
     {!group ? <p>Select at least one agent in Projects to start.</p> : members.length > 2 ? <p className="notice" role="status">Your group has {members.length} agents. Plan and Implementation currently execute with one or two agents; larger-group execution is not enabled yet. Your selection is saved. Choose one or two members to start a run.</p> : <>
       <p className="fine">Plan documents are kept in AltCLI’s data directory, not in this checkout. No branch is created during Plan. Output permissions are cooperative and validated, not native CLI sandbox isolation.</p>
       <label htmlFor={briefId}>Shared task brief</label><textarea id={briefId} rows={3} value={text} disabled={p.busy} maxLength={1900} onChange={(e) => setText(e.target.value)} />
-      <label className="readiness"><input type="checkbox" aria-label="Ready for planning" checked={ready} disabled={disabled} onChange={(e) => p.setConsent(() => e.target.checked ? key : '')} />
-        I checked every selected and unselected agent sharing this checkout: all are settled, prompts are empty, and no background writers remain. I authorize document-only planning and the displayed post-plan settings; any branch choice applies only after Plan finishes.</label>
+      {p.readinessSlot && createPortal(<div className="access-check" role="group" aria-label="Readiness for Plan">
+        <label className="readiness"><input type="checkbox" aria-label="Ready for planning" checked={ready} disabled={disabled} onChange={(e) => p.setConsent(() => e.target.checked ? key : '')} />
+          I checked every selected and unselected agent sharing this checkout: all are settled, prompts are empty, and no background writers remain. I authorize document-only planning and the displayed post-plan settings; any branch choice applies only after Plan finishes.</label>
+        <p className="fine"><strong>Start Plan</strong> for {members.length} {members.length === 1 ? 'planner' : 'planners'}: document-only planning of the shared brief.</p>
+      </div>, p.readinessSlot)}
       <div className="register-actions"><button type="button" className="primary" title={`${reason ? `${reason} ` : ''}Start document-only planning.`} aria-describedby={reason ? reasonId : undefined} disabled={disabled || !ready || !text.trim()} onClick={() => void start()}>Start Plan</button></div>
       {startError && <p className="notice error" role="alert">{startError}</p>}
       {reason && <p className="fine" role="status" id={reasonId}>{reason}</p>}

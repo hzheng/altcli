@@ -123,6 +123,7 @@ export interface WorkflowState extends ConsoleState {
   checkpoints?: Checkpoint[];
 }
 export interface HookReceipt { accepted: boolean; reason: string; event: TurnEvent | null; completion?: 'pending' | 'finished' }
+/** `expectedCommandId` is required with continue and recheck. With takeover it is optional; when given, a run whose current command differs is refused. */
 export interface RunAction { runId: string; action: 'pause' | 'takeover' | 'continue' | 'recheck'; confirmReady?: true; expectedCommandId?: string; expectedRevision?: string }
 
 /** How discovery classified a pane's foreground process. Only codex and claude can be group members. */

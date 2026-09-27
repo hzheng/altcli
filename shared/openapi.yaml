@@ -2602,7 +2602,7 @@ components:
         runId: {"type":"string","format":"uuid"}
         action: {"enum":["pause","takeover","continue","recheck"]}
         confirmReady: {"const":true}
-        expectedCommandId: {"type":"string","format":"uuid"}
+        expectedCommandId: {"type":"string","format":"uuid","description":"Required with continue and recheck. Optional with takeover: when given, a run whose current command differs is refused with 409 and nothing changes."}
         expectedRevision: {"type":"string","format":"uuid","description":"Required with recheck, together with expectedCommandId and confirmReady. Matches the current blocked handoff observation."}
       required: ["runId","action"]
       additionalProperties: false

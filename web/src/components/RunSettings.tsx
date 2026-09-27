@@ -1,5 +1,4 @@
 'use client';
-import type { ReactNode } from 'react';
 import type { BranchConsent, CollaborationPolicy, WorkspaceGit } from '../contracts/implementation';
 import type { ManagedSession } from '../contracts/workflow';
 import { useRemembered, type PageMemory } from '../client/memory';
@@ -59,10 +58,9 @@ export type RunSettings = ReturnType<typeof useRunSettings>;
 
 const policyName = (policy: CollaborationPolicy) => policy === 'solo' ? 'Solo work' : policy === 'peer' ? 'Peer relay' : 'Worker + reviewer';
 
-/** The compact summary of the next run's settings, with the phase switch and a collapsed editor. */
-/** The controller's state for this checkout, shown as a toggle in the settings row with its card behind it. */
-export interface ControllerToggle { state: string; attention: boolean; open: boolean; onToggle: () => void; content: ReactNode }
-export function RunSettingsBar({ settings, git, members, sessions, displayed, disabled, notice, legacy = false, controller, onPhase }: {
+/** The compact summary of the next run's settings, with the phase switch and a collapsed editor. Who controls the checkout is shown by
+ * the Control access entry instead. */
+export function RunSettingsBar({ settings, git, members, sessions, displayed, disabled, notice, legacy = false, onPhase }: {
   settings: RunSettings; git?: WorkspaceGit; members: string[]; sessions: ManagedSession[];
   /** The displayed pane's agent, the default first implementer. */
   displayed?: string;
@@ -71,7 +69,6 @@ export function RunSettingsBar({ settings, git, members, sessions, displayed, di
   notice?: string;
   /** The deprecated staging fallback is on: the next-run settings do not apply to it. */
   legacy?: boolean;
-  controller: ControllerToggle;
   onPhase: (phase: Phase) => void;
 }) {
   const s = settings; const planning = s.planning;
@@ -96,10 +93,8 @@ export function RunSettingsBar({ settings, git, members, sessions, displayed, di
         <button type="button" className={!planning ? 'selected' : 'quiet'} aria-pressed={!planning} onClick={() => onPhase('implementation')}>Implementation</button></div>
       {legacy ? <span className="summary-text">Deprecated staging fallback is on; these settings apply to committed actions only.</span> : notice ? <span className="summary-text">{notice}</span> : <span className="summary-text" title={summary.join(' · ')}>{summary.join(' · ')}</span>}
       {!notice && !legacy && warning && <span className="badge warning" title={warning}>{warning}</span>}
-      <span className="row-toggles"><button type="button" className={`quiet controller-toggle${controller.attention ? ' attention' : ''}`} aria-expanded={controller.open} aria-controls="controller-panel" onClick={controller.onToggle}><span aria-hidden="true">{controller.open ? '▾' : '▸'}</span> Controller · {controller.state}</button>
-      {!notice && !legacy && <button type="button" className="quiet settings-toggle" aria-expanded={s.open} aria-controls={`${s.phase}-settings-editor`} onClick={() => s.setOpen(!s.open)}><span aria-hidden="true">{s.open ? '▾' : '▸'}</span> Settings</button>}</span>
+      {!notice && !legacy && <span className="row-toggles"><button type="button" className="quiet settings-toggle" aria-expanded={s.open} aria-controls={`${s.phase}-settings-editor`} onClick={() => s.setOpen(!s.open)}><span aria-hidden="true">{s.open ? '▾' : '▸'}</span> Settings</button></span>}
     </div>
-    <div className="controller-panel" id="controller-panel" hidden={!controller.open}>{controller.content}</div>
     {!notice && !legacy && <div className="settings-editor" id={`${s.phase}-settings-editor`} hidden={!s.open}>
         {git?.integration && <p className="fine">{git.branch} is an integration branch: a starting point, not an implementation branch.</p>}
         <div className="register-grid">

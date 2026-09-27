@@ -1162,6 +1162,9 @@ export class ControlPlane {
     }
     else {
       if (input.confirmReady !== true) throw new AppError('READINESS_REQUIRED', 'Confirm every writer has stopped.');
+      // A takeover confirmed for one command must not end a newer one: reject before anything is invalidated or released.
+      const observed = this.workflow.run(input.runId);
+      if (input.expectedCommandId && observed && observed.currentCommandId !== input.expectedCommandId) throw new AppError('HANDOFF_CHANGED', 'The controller moved to another command after you inspected it. Review its current state before taking over.', 409);
       if (this.interactions.records().some((r) => r.input.runId === input.runId && ['recorded','sending'].includes(r.status))) throw new AppError('DELIVERY_PENDING', 'Wait for terminal input to finish before taking over.', 409);
       this.interactions.invalidate(input.runId, 'Human takeover ended this checkpoint.'); this.workflow.takeover(input.runId);
     }

@@ -1,13 +1,16 @@
 'use client';
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { Checkpoint, InteractionInput, InteractionRecord } from '../contracts/interactions';
 import type { ManagedSession, RelayRun, WorkflowState } from '../contracts/workflow';
 import { api, HttpError } from '../client/api';
 import { useRemembered } from '../client/memory';
 
-export function InteractionComposer({ token, state, run, agent, draftKey, disabled, viewEpoch, refresh }: {
+export function InteractionComposer({ token, state, run, agent, draftKey, disabled, viewEpoch, refresh, readinessSlot }: {
   token: string; state: WorkflowState; run: RelayRun; agent: ManagedSession; draftKey: string;
   disabled: boolean; viewEpoch: number; refresh: () => Promise<void>;
+  /** Control access's readiness slot: the one place the inspection check is shown. Its state stays here. */
+  readinessSlot: HTMLElement | null;
 }) {
   const [text, setText] = useRemembered(`${draftKey}:text`, '');
   const [answer, setAnswer] = useRemembered(`${draftKey}:answer`, '');
@@ -41,9 +44,12 @@ export function InteractionComposer({ token, state, run, agent, draftKey, disabl
     <p className="zone-label"><span aria-hidden="true">⌨️</span> Input to {agent.label} · run in progress</p>
     <label>Add detail to this task<textarea aria-label={`Add detail for ${agent.label}`} rows={2} value={text} maxLength={1900} onChange={(e) => setText(e.target.value)} /></label>
     <p className="fine">After the current task: {run.implementation ? turn?.input.handoff ? 'publish the assigned result, then review with the peer' : 'publish the assigned result, then stop' : run.planning ? 'continue the configured planning workflow' : 'stop after the instruction'}. This update does not change that choice.</p>
-    <label><input type="checkbox" checked={present} disabled={!!reason || busy} onChange={(e) => setPresent(e.target.checked)} /> I inspected {agent.label}’s terminal and intend this input.</label>
+    {readinessSlot && createPortal(<div className="access-check" role="group" aria-label={`Input check for ${agent.label}`}>
+      <label className="readiness"><input type="checkbox" checked={present} disabled={!!reason || busy} onChange={(e) => setPresent(e.target.checked)} /> I inspected {agent.label}’s terminal and intend this input.</label>
+      <p className="fine">Applies to <strong>Send update</strong>, answers and keys for {agent.label} in this run.</p>
+    </div>, readinessSlot)}
     <button type="button" disabled={off || !text.trim()} onClick={() => void send('detail')}>Send update to {agent.label}</button>
-    {reason && <p className="fine" role="status">{reason}</p>}
+    {reason ? <p className="fine" role="status">{reason}</p> : !present && <p className="fine">Confirm your terminal inspection in Control access.</p>}
     <details className="pane-disclosure"><summary>Terminal controls</summary>
       <p className="fine">Inspect the capture and its time above. Answers are literal; their meaning depends on the current dialog. Input holds progression until a post-turn check. A queued new turn may require takeover; inspect the terminal after sending.</p>
       <label>Literal answer<textarea aria-label={`Literal answer for ${agent.label}`} rows={1} maxLength={1900} value={answer} onChange={(e) => setAnswer(e.target.value)} /></label>
@@ -54,14 +60,13 @@ export function InteractionComposer({ token, state, run, agent, draftKey, disabl
   </section>;
 }
 
-export function CheckpointControls({ token, checkpoint, disabled, viewEpoch, refresh }: { token: string; checkpoint: Checkpoint; disabled: boolean; viewEpoch: number; refresh: () => Promise<void> }) {
-  const [ready, setReady] = useState(false); const [busy, setBusy] = useState(false); const [message, setMessage] = useState('');
-  useEffect(() => { setReady(false); }, [checkpoint.revision, viewEpoch, disabled]);
+export function CheckpointControls({ token, checkpoint, disabled, refresh }: { token: string; checkpoint: Checkpoint; disabled: boolean; refresh: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false); const [message, setMessage] = useState('');
   const blocked = checkpoint.fault || Object.values(checkpoint.external).some((e) => e.state !== 'clear');
   if (checkpoint.kind === 'waiting' && !Object.keys(checkpoint.external).length) return null;
   async function confirm() {
-    if (!ready || blocked || busy || disabled) return;
-    setBusy(true); setReady(false);
+    if (blocked || busy || disabled) return;
+    setBusy(true);
     try {
       await api(token, 'checkpoints', { body: { requestId: crypto.randomUUID(), runId: checkpoint.runId, commandId: checkpoint.commandId, expectedRevision: checkpoint.revision, action: checkpoint.kind === 'waiting' ? 'restore' : 'review_input', confirmReady: true } });
       setMessage('Checkpoint reconciled. Inspect the current controller state.');
@@ -70,8 +75,8 @@ export function CheckpointControls({ token, checkpoint, disabled, viewEpoch, ref
   }
   return <section className="notice" aria-label="Input checkpoint">
     <p>{blocked ? checkpoint.reason || 'Missing activity evidence; inspect the workers and take over if needed.' : 'The original result is validated. Check every checkout terminal, queued input and background writer before continuing.'}</p>
-    <label><input type="checkbox" disabled={disabled || busy || blocked} checked={ready} onChange={(e) => setReady(e.target.checked)} /> All checkout writers are settled, with empty prompts and no queued input.</label>
-    <button disabled={disabled || busy || blocked || !ready} onClick={() => void confirm()}>{checkpoint.kind === 'waiting' ? 'Restore checkpoint' : 'Review input and continue'}</button>
+    {!blocked && <p className="fine">Continuing tells the controller every checkout writer is settled: empty prompts, no queued input.</p>}
+    <button disabled={disabled || busy || blocked} onClick={() => void confirm()}>{checkpoint.kind === 'waiting' ? 'Restore checkpoint' : 'Review input and continue'}</button>
     {message && <p role="status">{message}</p>}
   </section>;
 }

@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useId, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { CommandRecord } from '../contracts/api';
 import type { Group, ReviewPreview, WorkspaceGit } from '../contracts/implementation';
 import type { ManagedSession, WorkflowState } from '../contracts/workflow';
@@ -10,8 +11,8 @@ import { paneRequest, sendAction, type AfterSend, type PaneAction } from '../cor
 import { isSha, type RunSettings } from './RunSettings';
 
 type Preview = { key: string; data?: ReviewPreview; error?: string };
-/** The last gate: everything else is in place, so the card shows what a confirmation would authorize instead of this reason. */
-const NOT_READY = 'Confirm Ready for implementation after checking every agent and the displayed range.';
+/** The last gate, with the exact location and label of the check that enables sending. */
+const NOT_READY = 'In Control access at the top right, check “Ready for implementation” after inspecting every agent and the displayed range.';
 /** Read-only previews of one review range for one recipient. Every range is read by the server; nothing here is estimated or sent. */
 function useReviewRange({ token, group, git, logPath, recipient, reviewTaskBase, commitPending, enabled, recheck, memoryKey, onPreview }: {
   token: string; group: Group; git?: WorkspaceGit; logPath?: string; recipient?: string; reviewTaskBase: string; commitPending: boolean; enabled: boolean;
@@ -104,6 +105,8 @@ export interface PaneActionsProps {
   runMark: string;
   recheck: number; draftKey: string;
   refresh: () => Promise<void>; onRecheck: () => Promise<void>; onMessage: (message: string) => void; onUncertain: (id: string) => void;
+  /** Control access's readiness slot: the one place this card's check is shown. Its state and key stay here. */
+  readinessSlot: HTMLElement | null;
 }
 /** The actions under one agent pane. Every control's first delivery goes to this card's agent; nothing is sent from an effect. */
 export function PaneActions(p: PaneActionsProps) {
@@ -199,6 +202,7 @@ export function PaneActions(p: PaneActionsProps) {
   }
   const ids = useId();
   const sendChoice: PaneAction = handoffOnly ? after === 'commit_relay' ? 'commit_relay' : 'commit' : sendAction(after); const sendReason = reasonFor(sendChoice);
+  const showSendBlocker = !!text.trim() && !!sendReason;
   const sendLabel = handoffOnly ? after === 'commit_relay' ? `Commit current changes & relay ${peerName}` : `Commit current changes ${name}`
     : after === 'commit' ? `Send & commit ${name}` : after === 'commit_relay' ? `Send & commit ${name} → relay ${peerName}` : `Send ${name}`;
   const noChange = `If ${name} changes nothing, it reports without ${s.logPath ? 'a project change (the tracked journal line is still committed)' : 'a commit'} and nothing is relayed.`;
@@ -216,7 +220,14 @@ export function PaneActions(p: PaneActionsProps) {
   const title = (reason: string, help: string) => `${reason ? `${reason} ` : ''}${help}`;
   const openSettings = () => { s.setOpen(true); document.getElementById('run-settings')?.scrollIntoView({ block: 'nearest' }); };
   const inputOff = !!common;
+  // Rendered once, in Control access; the consent key and checked state remain this card's own.
+  const readiness = <div className="access-check" role="group" aria-label={`Readiness for ${name}`}>
+    <label className="readiness"><input type="checkbox" aria-label="Ready for implementation" checked={ready} disabled={inputOff} onChange={(e) => p.setConsent(() => e.target.checked ? key : '')} />
+      <span>{p.keyboardHandoff ? `All panes on this host are settled: empty prompts, no background writers. This action releases the ${p.keyboardHandoff.label} keyboard, verifies settlement, then sends to ${name}.` : 'All agents in this checkout are settled: empty prompts, no background writers.'} {canSend && <span className="muted">({relevant.join(' · ')})</span>}</span></label>
+    <p className="fine">{canSend ? <><strong>{sendLabel}</strong>: {authorization}</> : relayHelp}</p>
+  </div>;
   return <section className="pane-actions" aria-label={`Actions for ${name}`}>
+    {p.readinessSlot && createPortal(readiness, p.readinessSlot)}
     <p className="zone-label"><span aria-hidden="true">⌨️</span> Command · {canSend ? `Send to ${name}` : `${name} reviews`}</p>
     {canSend && <>
       <label className="sr-only" htmlFor={`${ids}-text`}>Instruction for {name}</label>
@@ -234,11 +245,11 @@ export function PaneActions(p: PaneActionsProps) {
     </>}
     {!canSend && <p className="fine">Reviewer: reviews without editing project files. Change roles in settings.</p>}
     <div className="ready-row">
-      <label className="readiness"><input type="checkbox" aria-label="Ready for implementation" checked={ready} disabled={inputOff} onChange={(e) => p.setConsent(() => e.target.checked ? key : '')} />
-        <span>{p.keyboardHandoff ? `All panes on this host are settled: empty prompts, no background writers. This action releases the ${p.keyboardHandoff.label} keyboard, verifies settlement, then sends to ${name}.` : 'All agents in this checkout are settled: empty prompts, no background writers.'} {canSend && <span className="muted">({relevant.join(' · ')})</span>}</span></label>
-      {canSend && <button type="button" className="primary" title={title(sendReason, sendHelp)} aria-describedby={`${ids}-line`} disabled={!!sendReason} onClick={() => void start(sendChoice)}>{sendLabel}</button>}
+      {!common && !ready && (!canSend || !showSendBlocker) && <span className="ready-state fine">Confirm readiness in Control access.</span>}
+      {canSend && <button type="button" className="primary" title={title(sendReason, sendHelp)} aria-describedby={`${showSendBlocker ? `${ids}-blocked ` : ''}${ids}-line`} disabled={!!sendReason} onClick={() => void start(sendChoice)}>{sendLabel}</button>}
     </div>
-    {canSend && <p className="fine pane-line" id={`${ids}-line`}>{sendReason && sendReason !== NOT_READY ? sendReason : authorization}
+    {canSend && showSendBlocker && <p className="notice" id={`${ids}-blocked`} role="status"><strong>{sendLabel} is disabled.</strong> {sendReason}</p>}
+    {canSend && <p className="fine pane-line" id={`${ids}-line`}>{!showSendBlocker && sendReason && sendReason !== NOT_READY ? sendReason : authorization}
       {/* A settings gap is fixed in the shared settings, so the reason opens them. */}
       {sendReason && sendReason === s.branchReason && <button type="button" className="quiet inline-link" onClick={openSettings}>Settings</button>}</p>}
     {startError && <p className="notice error" role="alert">{startError}</p>}

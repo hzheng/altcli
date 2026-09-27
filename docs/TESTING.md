@@ -102,7 +102,7 @@ an unexecuted row open; a mock result cannot fill an installed-host row.
 
 `web/e2e/native.spec.ts` exercises the real mock API and xterm renderer, including
 late input responses after recovery, paste consent, separate control drafts,
-expansion without lease changes, the shared Keyboard selector (confirmation, transfer
+expansion without lease changes, local keyboard claims and the server-wide ownership status (confirmation, transfer
 between panes as one broker decision, cancel during a slow connect) and the keyboard
 focus escape. `web/scripts/terminal-broker.test.ts` covers server resize admission,
 generation checks and short launch-name allocation across worktrees.

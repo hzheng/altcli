@@ -29,8 +29,8 @@ and background effects. Refuse it while any keyboard, delivery, setup or launch
 operation remains live or unresolved. Keep every affected run's keyboard hold,
 checkpoint and fault; its review or takeover stays separate. Recovery is available
 even with no remaining agents or with feature flags off.
-The browser records the inspection checkbox's acknowledgement as that note;
-typing additional text is not required.
+The browser records its fixed acknowledgement wording as that note when the user takes control;
+neither a checkbox nor a typed note is required (September 27 update below).
 
 The selected agent (the terminal shown and the control recipient, chosen together),
 keyboard focus and writer are independent.
@@ -63,6 +63,46 @@ never releases one pane before acquiring another, and a cancelled or outdated ch
 nothing. **Nobody** is the plain release; the strict settled release stays a separate confirmed
 action. Keyboard acquisition also waits while a Finish branch step may be acting on sessions or
 Git ([ADR-0013](ADR-0013-confirmed-branch-setup.md#confirmed-closing-of-launched-sessions)).
+
+September 26 update: outside Plan the terminals and the one control pane share a frame behind a
+**Terminal / Control** switch. The hidden surface stays mounted, so connections, keyboard
+generations and drafts survive; a hidden terminal admits no new input, and switching sends nothing
+and revokes readiness. The run's actual phase decides the layout, so an owned Plan run keeps the
+Plan layout, whose side placement and phone drawer remain Plan-only. The Keyboard selector moves
+from the shared terminal area into **Control access**, the one panel that gathers every
+confirmation which takes control or enables an action: keyboard, manual-input reconciliation,
+pause and takeover, checkpoint and handoff continuation, status and workspace resets,
+uncertain-result acknowledgements and each action's readiness check. Each stays its own request
+with its own confirmation; nothing is batched, retried or chained. Takeover names the command it
+was confirmed for, so a run that moved on refuses it without side effects.
+
+September 26 follow-up: at the owner's request, **Control access** sits immediately left of
+connection status in each page heading. A separate ⌨️ status reports the server-wide keyboard
+owner and has no ownership controls. **Claim keyboard** lives at the terminal where input is
+needed; its confirmation names the current owner, intended target and affected runs. This
+supersedes the selector placement above, while preserving one serialized acquire/transfer,
+changed-view cancellation, no automatic grants and no replay of uncertain results. Plain and
+settled release remain in Control access alongside reconciliation. An explicit claim does not
+send terminal input or continue a held run.
+
+Later on September 26: the claim is a ⌨️ icon tool in each terminal's tool row, right after the
+status badge, with its confirmation below the row. The page heading's status row reads Control
+access entry, then the ⌨️ keyboard status, then connection status; that entry is the only Control
+access opener, and notices, status lines and composers only name it.
+
+September 27 update, at the owner's request: the user cannot be prevented from acting outside the
+app, so taking control is one explicit confirmation after a plain list of what to notice (an
+agent that may still be working, a request or delivery that may have reached a terminal, earlier
+manual input that may have run commands or left background work). **Take control…** lists its
+steps and then runs them in a fixed order: clear the uncertain-request warning, end this
+checkout's controller runs (each with its observed command), release an older delivery hold, and
+record the human inspection decision on unresolved manual input. This supersedes the earlier
+"nothing is batched or chained" rule for these steps only: each remains its own request with its
+server checks and expected identity, the first refusal or unknown result stops the rest and is
+reported with what already happened, and nothing is retried. Takeover still never interrupts a
+worker or claims success. Checkpoint and blocked-handoff continuation and **Mark <agent> Ready**
+are single clicks whose text states what they attest; each action keeps its one readiness check.
+Runs in other worktrees keep their own holds.
 
 See
 [the protocol](../TERMINAL-PROTOCOL.md) for limits, recovery and deployment checks.

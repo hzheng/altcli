@@ -1,7 +1,7 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import type { Group, ImplementationStart, StandaloneStart } from '../src/contracts/implementation';
 import type { WorkflowState } from '../src/contracts/workflow';
-import { expandWorktree, editSettings, expand, openCard, pane } from './ui';
+import { expandWorktree, editSettings, expand, openAccess, openCard, pane, readiness, showSurface } from './ui';
 const headers = { Authorization: `Bearer ${'a'.repeat(64)}` };
 async function post(request: APIRequestContext, path: string, data: unknown) {
   const response = await request.post(`/api/v1/${path}`, { headers, data }); expect(response.ok()).toBe(true); return response.json();
@@ -46,15 +46,58 @@ function mutations(page: Page) {
   });
   return sent;
 }
+test('a typed instruction explains the disabled Send and readiness enables it without claiming keyboard', async ({ page, request }, info) => {
+  const group = await post(request, 'groups', { name: 'Send readiness hint', members: ['codex','claude'] });
+  await openGroup(page, group);
+  const sent = mutations(page), actions = await openCard(page, 'Codex');
+  const draft = actions.getByLabel('Instruction for Codex'), send = actions.getByRole('button', { name: 'Send Codex', exact: true });
+  const hint = actions.getByRole('status');
+  await expect(hint).toHaveCount(0);
+  await draft.fill('Explain the change.'); await expect(send).toBeDisabled();
+  await expect(hint).toContainText('Send Codex is disabled.');
+  await expect(hint).toContainText('Control access at the top right');
+  await expect(hint).toContainText('Ready for implementation');
+  await expect(send).toHaveAccessibleDescription(/Control access at the top right/);
+  await expect(page.locator('.page-heading').getByRole('img', { name: 'Keyboard: nobody', exact: true })).toBeVisible();
+  await page.screenshot({ path: info.outputPath('disabled-send-hint.png'), fullPage: true });
+  await draft.fill('   '); await expect(hint).toHaveCount(0);
+  await draft.fill('Explain the change.');
+  await (await readiness(page)).check(); await expect(send).toBeEnabled(); await expect(hint).toHaveCount(0);
+  await expect(page.locator('.page-heading').getByRole('img', { name: 'Keyboard: nobody', exact: true })).toBeVisible();
+  expect(sent).toEqual([]);
+});
+test('the page heading row holds the one Control access entry, then the keyboard status, then connection status', async ({ page }, info) => {
+  await unlock(page);
+  const heading = page.locator('.page-heading'), entry = heading.getByRole('button', { name: /^Control access · / });
+  const keyboard = heading.getByRole('img', { name: /^Keyboard: / });
+  await expect(entry).toBeVisible(); await expect(keyboard).toBeVisible();
+  // It is the only Control access opener: no top-bar copy and no scattered shortcuts.
+  await expect(page.locator('.topbar .access-entry')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Open Control access' })).toHaveCount(0);
+  const middle = (box: { y: number; height: number }) => box.y + box.height / 2;
+  for (const width of [1440, 800, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    const access = (await entry.boundingBox())!, owner = (await keyboard.boundingBox())!, connection = (await heading.locator('.connection').boundingBox())!;
+    for (const box of [owner, connection]) expect(Math.abs(middle(access) - middle(box)), `one row at ${width}`).toBeLessThan(3);
+    expect(owner.x, `keyboard status right of Control access at ${width}`).toBeGreaterThanOrEqual(access.x + access.width);
+    expect(connection.x, `connection status right of the keyboard status at ${width}`).toBeGreaterThanOrEqual(owner.x + owner.width);
+    expect(connection.x - access.x - access.width).toBeLessThan(60);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(0);
+  }
+  await heading.screenshot({ path: info.outputPath('heading-control-access.png') });
+});
 test('the Agent selector switches the shown terminal and Control together and keeps each draft', async ({ page, request }, info) => {
   const group = await post(request, 'groups', { name: 'Agent selector', members: ['codex','claude'] });
   await taskBranch(page, 2); await openGroup(page, group); await page.getByRole('button', { name: 'Focus', exact: true }).click();
   const sent = mutations(page);
   const agents = page.getByRole('navigation', { name: 'Agent' }), control = page.getByRole('region', { name: 'Control', exact: true });
   for (const [name, other] of [['Codex', 'Claude'], ['Claude', 'Codex']] as const) {
-    const section = await openCard(page, name);
+    await agents.getByRole('button', { name, exact: true }).click(); await showSurface(page, 'Terminal');
     await expect(agents.getByRole('button', { name, exact: true })).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByLabel(`${name} output`)).toBeVisible(); await expect(page.getByLabel(`${other} output`)).toBeHidden();
+    // The same selection is the Control recipient; the switch shows Control in place of the terminals.
+    const section = await openCard(page, name);
+    await expect(page.getByLabel(`${name} output`)).toBeHidden();
     await expect(control.locator('.control-heading h2')).toHaveText(`Control · ${name}`);
     await section.getByLabel(`Instruction for ${name}`).fill(`${name} draft`);
   }
@@ -66,6 +109,61 @@ test('the Agent selector switches the shown terminal and Control together and ke
   expect(sent).toEqual([]);
   await control.screenshot({ path: info.outputPath('control-agent.png') });
 });
+test('outside Plan one frame shows the terminals or Control; the hidden surface stays mounted and switching sends nothing', async ({ page, request }) => {
+  const group = await post(request, 'groups', { name: 'One frame', members: ['codex','claude'] });
+  await taskBranch(page);
+  await openGroup(page, group);
+  const sent = mutations(page);
+  const surface = page.getByRole('group', { name: 'Terminal or Control' });
+  await expect(surface.getByRole('button', { name: 'Terminal', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('group', { name: 'Pane layout' })).toBeVisible(); await expect(page.getByRole('region', { name: 'Control', exact: true })).toHaveCount(0);
+  const codex = await openCard(page, 'Codex');
+  // Control replaces the terminals: they stay mounted but leave the page and the accessibility tree; Parallel/Focus apply to terminals only.
+  await expect(page.getByRole('group', { name: 'Pane layout' })).toHaveCount(0);
+  await expect(page.locator('section.panes')).toHaveAttribute('hidden', ''); await expect(page.getByRole('region', { name: 'Agent output' })).toHaveCount(0);
+  await expect(page.locator('article.pane')).toHaveCount(2);
+  await expect(page.getByRole('group', { name: 'Codex status' })).toBeVisible(); // the selected agent's activity stays on screen
+  await codex.getByLabel('Instruction for Codex').fill('Keep this draft');
+  const ready = await readiness(page); await ready.check();
+  await showSurface(page, 'Terminal'); await expect(ready).not.toBeChecked();
+  await expect(page.locator('section#altcli-control')).toHaveAttribute('hidden', ''); await expect(page.getByRole('region', { name: 'Control', exact: true })).toHaveCount(0);
+  await expect((await openCard(page, 'Codex')).getByLabel('Instruction for Codex')).toHaveValue('Keep this draft');
+  // Plan keeps its own layout: no switch, and Control follows the stage.
+  await page.getByRole('group', { name: 'Phase' }).getByRole('button', { name: 'Plan', exact: true }).click();
+  await expect(surface).toHaveCount(0); await expect(page.getByRole('region', { name: 'Agent output' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Plan setup' })).toBeVisible();
+  expect(sent).toEqual([]);
+});
+test('Control access is one panel on every tab; opening it sends nothing, and readiness is confirmed there only for the action on screen', async ({ page, request }) => {
+  const group = await post(request, 'groups', { name: 'Access', members: ['codex','claude'] });
+  await taskBranch(page);
+  await openGroup(page, group);
+  const sent = mutations(page);
+  const entry = page.getByRole('button', { name: /^Control access · / });
+  await expect(entry).toHaveAccessibleName('Control access · you'); await expect(entry).toHaveAttribute('aria-expanded', 'false');
+  const access = await openAccess(page); await expect(access).toBeFocused();
+  // With the terminals shown the check is not offered; Show Control is itself a view change.
+  const ready = access.getByLabel('Ready for implementation', { exact: true });
+  await expect(ready).toBeHidden(); await access.getByRole('button', { name: 'Show Control', exact: true }).click();
+  const codex = page.getByRole('region', { name: 'Actions for Codex', exact: true });
+  await codex.getByLabel('Instruction for Codex').fill('Explain the change.');
+  // The composer explains the blocker; its one check, with what it authorizes, is in Control access.
+  await expect(codex.getByRole('checkbox')).toHaveCount(0); await expect(codex.getByRole('status')).toContainText('Control access at the top right');
+  await expect(codex.getByRole('button', { name: 'Open Control access' })).toHaveCount(0);
+  await ready.check(); await expect(access.getByRole('group', { name: 'Readiness for Codex' })).toContainText('Send Codex');
+  // Closing, reopening and returning to the already visible action keep a current confirmation.
+  await entry.click(); await expect(access).toBeHidden(); await expect(entry).toBeFocused();
+  await entry.click(); await expect(ready).toBeChecked();
+  await access.getByRole('button', { name: 'Return to action', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Control', exact: true })).toBeFocused(); await expect(ready).toBeChecked();
+  await expect(codex.getByRole('button', { name: 'Send Codex', exact: true })).toBeEnabled();
+  // The same panel is reachable from another tab; there the check waits for the Console, and switching tabs revokes it.
+  await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Projects', exact: true }).click();
+  await expect(access).toBeVisible(); await expect(ready).toBeHidden();
+  await access.getByRole('button', { name: 'Go to Console', exact: true }).click();
+  await expect(codex).toBeVisible(); await expect(ready).not.toBeChecked();
+  expect(sent).toEqual([]);
+});
 test('one control pane keeps per-target drafts; After send maps to a plain Send, work with commit, or work with commit and relay', async ({ page, request }) => {
   const group = await post(request, 'groups', { name: 'Card actions', members: ['codex','claude'] });
   await taskBranch(page, 2);
@@ -73,14 +171,16 @@ test('one control pane keeps per-target drafts; After send maps to a plain Send,
   await page.route('**/api/v1/implementation', async (route) => { starts.push(route.request().postDataJSON()); await route.fulfill({ json: { status: 'delivered', error: null } }); });
   await page.route('**/api/v1/instructions', async (route) => { sent.push(route.request().postDataJSON()); await route.fulfill({ json: { status: 'delivered', error: null } }); });
   await openGroup(page, group);
-  await expect(page.getByRole('region', { name: 'Control', exact: true })).toHaveCount(1);
+  // One mounted Control section, shown in the frame only when Control is selected.
+  await expect(page.locator('section#altcli-control')).toHaveCount(1); await expect(page.getByRole('region', { name: 'Control', exact: true })).toHaveCount(0);
   await expect(page.locator('article.pane .pane-actions')).toHaveCount(0);
   const claude = await openCard(page, 'Claude');
+  await expect(page.getByRole('region', { name: 'Control', exact: true })).toHaveCount(1);
   await claude.getByLabel('Instruction for Claude').fill('Fix the parser.');
   await claude.getByLabel('After send').selectOption('commit');
   const sendCommit = claude.getByRole('button', { name: 'Send & commit Claude', exact: true });
   await expect(claude.locator('.pane-line')).toContainText('including the 2 uncommitted paths already present');
-  await claude.getByLabel('Ready for implementation').check(); await sendCommit.click();
+  await (await readiness(page)).check(); await sendCommit.click();
   await expect.poll(() => starts.length).toBe(1);
   expect(starts[0]).toMatchObject({ agentId: 'claude', kind: 'work', text: 'Fix the parser.', handoff: false, autoContinue: false, policy: 'peer', branch: { branch: 'task/current', head: 'a'.repeat(40) } });
   expect(starts[0]).not.toHaveProperty('reviewBase');
@@ -92,14 +192,14 @@ test('one control pane keeps per-target drafts; After send maps to a plain Send,
   // New work is reviewed from the pre-send HEAD; no existing-commit baseline is attached to it.
   await expect(codex.getByLabel('Review baseline')).toBeHidden();
   await expect(codex.locator('.pane-line')).toContainText('Claude reviews only what Codex commits');
-  await codex.getByLabel('Ready for implementation').check();
+  await (await readiness(page)).check();
   await codex.getByRole('button', { name: 'Send & commit Codex → relay Claude', exact: true }).click();
   await expect.poll(() => starts.length).toBe(2);
   expect(starts[1]).toMatchObject({ agentId: 'codex', kind: 'work', text: 'Add the retry.', handoff: true, autoContinue: true, policy: 'peer', reviewNote: 'Check the retry path first.' });
   expect(starts[1]).not.toHaveProperty('reviewBase');
   await expect(codex.getByLabel('Relay note for Claude')).toHaveValue(''); // consumed with the start
   await codex.getByLabel('Instruction for Codex').fill('Only explain.'); await codex.getByLabel('After send').selectOption('nothing');
-  await codex.getByLabel('Ready for implementation').check(); await codex.getByRole('button', { name: 'Send Codex', exact: true }).click();
+  await (await readiness(page)).check(); await codex.getByRole('button', { name: 'Send Codex', exact: true }).click();
   await expect.poll(() => sent.length).toBe(1);
   expect(sent[0]).toMatchObject({ agentId: 'codex', text: 'Only explain.', policy: 'peer' }); expect(sent[0]).not.toHaveProperty('branch');
   // Fixed roles: only the worker's card sends; the reviewer's card only reviews.
@@ -111,7 +211,7 @@ test('one control pane keeps per-target drafts; After send maps to a plain Send,
   await expect(reviewer).toContainText('Reviewer: reviews without editing project files');
   const worker = await openCard(page, 'Claude');
   await worker.getByLabel('Instruction for Claude').fill('Implement the fix.'); await worker.getByLabel('After send').selectOption('commit_relay');
-  await worker.getByLabel('Ready for implementation').check(); await worker.getByRole('button', { name: 'Send & commit Claude → relay Codex', exact: true }).click();
+  await (await readiness(page)).check(); await worker.getByRole('button', { name: 'Send & commit Claude → relay Codex', exact: true }).click();
   await expect.poll(() => starts.length).toBe(3);
   expect(starts[2]).toMatchObject({ agentId: 'claude', workerId: 'claude', policy: 'worker_reviewer', kind: 'work', handoff: true, autoContinue: false });
 });
@@ -121,12 +221,12 @@ test('on an integration branch Send & commit waits for a task branch while plain
   await page.route('**/api/v1/implementation', async (route) => { starts.push(route.request().postDataJSON()); await route.fulfill({ json: { status: 'delivered', error: null } }); });
   await page.route('**/api/v1/instructions', async (route) => { sent++; await route.fulfill({ json: { status: 'delivered', error: null } }); });
   await openGroup(page, group);
-  const codex = await openCard(page, 'Codex'); const ready = codex.getByLabel('Ready for implementation');
+  const codex = await openCard(page, 'Codex'); const ready = (await readiness(page));
   await codex.getByLabel('Instruction for Codex').fill('Start the task.');
   await codex.getByLabel('After send').selectOption('commit');
   await ready.check();
   const commit = codex.getByRole('button', { name: 'Send & commit Codex', exact: true });
-  await expect(commit).toBeDisabled(); await expect(codex.locator('.pane-line')).toContainText('Choose the implementation branch in settings.');
+  await expect(commit).toBeDisabled(); await expect(codex.getByRole('status')).toContainText('Send & commit Codex is disabled. Choose the implementation branch in settings.');
   await expect(page.getByRole('region', { name: 'Implementation settings' })).toContainText('Choose the implementation branch in settings.');
   // The Settings toggle stays where it is when the editor opens below the summary row.
   const toggle = page.getByRole('region', { name: 'Implementation settings' }).getByRole('button', { name: 'Settings', exact: true });
@@ -147,16 +247,17 @@ test('readiness is one slot, revoked by After send, view switches and runs, and 
   const group = await post(request, 'groups', { name: 'One slot', members: ['codex','claude'] });
   await taskBranch(page);
   await openGroup(page, group); await page.getByRole('button', { name: 'Parallel', exact: true }).click();
-  await (await openCard(page, 'Codex')).getByLabel('Ready for implementation').check();
-  // Asserted by attribute: on a phone the unchosen card is hidden, but its checkbox state still matters.
-  const codexReady = page.getByRole('region', {name:'Actions for Codex'}).getByLabel('Ready for implementation');
-  // Two cards are visible side by side on a desktop; on a phone only the chosen one is, and choosing revokes readiness anyway.
-  const claude = await openCard(page, 'Claude'); const ready = claude.getByLabel('Ready for implementation');
-  await ready.check(); await expect(codexReady).toHaveCount(0);
+  await openCard(page, 'Codex'); const ready = await readiness(page);
+  await expect(ready).toHaveCount(1); await ready.check();
+  // Only the selected agent's composer is mounted, so its check in Control access is the one slot; choosing another agent revokes it.
+  const claude = await openCard(page, 'Claude');
+  await expect(ready).toHaveCount(1); await expect(ready).not.toBeChecked();
+  await ready.check();
   await claude.getByLabel('After send').selectOption('commit'); await expect(ready).not.toBeChecked();
   await claude.getByLabel('After send').selectOption('nothing'); await expect(ready).not.toBeChecked();
-  await ready.check(); await page.getByRole('button', { name: 'Focus', exact: true }).click(); await expect(ready).not.toBeChecked();
-  await page.getByRole('button', { name: 'Parallel', exact: true }).click();
+  // The Terminal/Control switch is a view change, and the check is offered only while Control shows its action.
+  await ready.check(); await showSurface(page, 'Terminal'); await expect(ready).not.toBeChecked(); await expect(ready).toBeHidden();
+  await (await openAccess(page)).getByRole('button', { name: 'Show Control', exact: true }).click();
   await ready.check();
   await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Projects', exact: true }).click();
   await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Console', exact: true }).click();
@@ -181,7 +282,8 @@ test('drafts, choices and disclosures survive tab, layout, phase, section and wo
   await editSettings(page); await page.getByLabel('Implementation branch').selectOption('new'); await page.getByLabel('New branch name').fill('task/draft');
   await page.getByRole('group', { name: 'Phase' }).getByRole('button', { name: 'Plan', exact: true }).click(); await page.getByLabel('Shared task brief').fill('Plan draft');
   await page.getByRole('group', { name: 'Phase' }).getByRole('button', { name: 'Implementation', exact: true }).click();
-  await page.getByRole('button', { name: 'Focus', exact: true }).click(); await openCard(page, 'Codex'); await page.getByRole('button', { name: 'Parallel', exact: true }).click();
+  await showSurface(page, 'Terminal'); await page.getByRole('button', { name: 'Focus', exact: true }).click(); await openCard(page, 'Codex');
+  await showSurface(page, 'Terminal'); await page.getByRole('button', { name: 'Parallel', exact: true }).click();
   // Visit another workspace and come back: each keeps its own drafts, never another's.
   await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Projects', exact: true }).click();
   await page.getByRole('button', { name: 'Project other', exact: true }).click(); await expandWorktree(page, 'other'); await page.getByRole('button', { name: 'Open other', exact: true }).click();
@@ -215,7 +317,9 @@ test('Lock forgets drafts and settings within the same document and revokes term
   await page.getByRole('button', { name: 'Lock', exact: true }).click();
   // Unlock in the same document, without navigating or reloading: hooks that stay mounted must not keep the old values.
   await page.getByLabel('Host access token').fill('a'.repeat(64)); await page.getByRole('button', { name: 'Open console' }).click();
-  const back = page.getByRole('region', { name: 'Actions for Codex' });
+  // Lock also forgets the Terminal/Control choice: the frame starts on Terminal again.
+  await expect(page.getByRole('group', { name: 'Terminal or Control' }).getByRole('button', { name: 'Terminal', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  const back = await openCard(page, 'Codex');
   await expect(back.getByLabel('Instruction for Codex')).toHaveValue(''); await expect(back.getByLabel('After send')).toHaveValue('nothing');
   await editSettings(page);
   await expect(page.getByLabel('Implementation branch')).toHaveValue(''); await expect(page.getByLabel('New branch name')).toHaveCount(0);
@@ -250,7 +354,7 @@ test('Settings shows the effective host configuration and the console preference
   await sections.getByRole('button', { name: 'About', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'About AltCLI', exact: true })).toBeVisible();
   await expect(page.getByRole('region', { name: 'How this works' })).toContainText('No effect in this page sends commands');
-  await sections.getByRole('button', { name: 'Console', exact: true }).click();
+  await sections.getByRole('button', { name: 'Console', exact: true }).click(); await showSurface(page, 'Control');
   await expect(page.getByRole('region', { name: 'Actions for Codex' })).toBeVisible();
 });
 test('Stay unlocked is an explicit preference: reopening skips the token, Lock forgets it, a refused token is dropped', async ({ page, request }) => {
@@ -286,7 +390,7 @@ test('a double click starts once, and a refused start stays in its own card with
   });
   await openGroup(page, group);
   const codex = await openCard(page, 'Codex');
-  await codex.getByLabel('Instruction for Codex').fill('Do it once.'); await codex.getByLabel('Ready for implementation').check();
+  await codex.getByLabel('Instruction for Codex').fill('Do it once.'); await (await readiness(page)).check();
   await codex.getByRole('button', { name: 'Send Codex', exact: true }).dblclick();
   await expect(codex.getByRole('alert')).toHaveText('REJECTED: Another turn is starting.'); expect(calls).toBe(1);
   await expect(codex.getByLabel('Instruction for Codex')).toHaveValue('Do it once.');
@@ -334,12 +438,13 @@ test('terminal captures are taller, grow with the window, and stand apart from s
   // Guards only: the watch, command and settings surfaces differ; exact colours are a design choice.
   expect(await background(stage)).not.toBe(await background(page.getByRole('region', { name: 'Implementation settings' })));
   for (const name of ['Codex', 'Claude']) {
-    const actions = await openCard(page, name);
+    await stage.getByRole('navigation', { name: 'Agent' }).getByRole('button', { name, exact: true }).click(); await showSurface(page, 'Terminal');
     expect(await height(name), `${name} capture at 1440×900`).toBeGreaterThanOrEqual(252);
+    const actions = await openCard(page, name);
     expect(await background(page.getByLabel(`${name} output`))).not.toBe(await background(actions));
     await expect(actions.locator('.zone-label')).toHaveText(`⌨️ Command · Send to ${name}`);
   }
-  const parallel = await height('Codex');
+  await showSurface(page, 'Terminal'); const parallel = await height('Codex');
   await page.getByRole('button', { name: 'Focus', exact: true }).click();
   await expect.poll(() => page.locator('article.pane:not([hidden]) pre').evaluate((el) => el.clientHeight)).toBeGreaterThan(parallel);
   await page.getByRole('button', { name: 'Parallel', exact: true }).click();
@@ -387,8 +492,10 @@ test('the settings row wraps inside its panel at intermediate widths, with the S
   for (const width of [1100, 900, 800, 761]) {
     await page.setViewportSize({ width, height: 900 });
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), { message: `overflow at ${width}` }).toBeLessThanOrEqual(0);
-    for (const name of ['Settings', /^Controller · /]) {
-      const toggle = settings.getByRole('button', { name, exact: name === 'Settings' });
+    // Who controls the checkout moved to the Control access entry in the top bar; the row keeps the Settings toggle.
+    await expect(page.getByRole('button', { name: /^Control access · / })).toBeInViewport({ ratio: 1 });
+    for (const name of ['Settings']) {
+      const toggle = settings.getByRole('button', { name, exact: true });
       await expect(toggle).toBeInViewport({ ratio: 1 });
       const box = (await toggle.boundingBox())!; const panel = (await settings.boundingBox())!;
       expect(box.x + box.width, `${String(name)} inside the panel at ${width}`).toBeLessThanOrEqual(panel.x + panel.width);
@@ -425,11 +532,14 @@ test('a newly working agent never takes the chosen agent away', async ({ page, r
     await route.fulfill({ json: data });
   });
   await openGroup(page, group); await page.getByRole('button', { name: 'Focus', exact: true }).click();
-  await openCard(page, 'Claude'); await expect(page.getByLabel('Claude output')).toBeVisible();
+  await openCard(page, 'Claude'); await expect(page.getByRole('region', { name: 'Actions for Claude' })).toBeVisible();
   working = true; await page.getByRole('button', { name: 'Recheck', exact: true }).click();
   await expect(pane(page, 'Codex').locator('.pane-status .state')).toHaveText('working');
-  await expect(page.getByLabel('Claude output')).toBeVisible(); await expect(page.getByLabel('Codex output')).toBeHidden();
+  // Neither the selection nor the Terminal/Control switch follows the newly working agent.
+  await expect(page.getByRole('group', { name: 'Terminal or Control' }).getByRole('button', { name: 'Control', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('region', { name: 'Actions for Claude' })).toBeVisible();
+  await showSurface(page, 'Terminal');
+  await expect(page.getByLabel('Claude output')).toBeVisible(); await expect(page.getByLabel('Codex output')).toBeHidden();
   await expect(page.getByRole('navigation', { name: 'Agent' }).getByRole('button', { name: 'Claude', exact: true })).toHaveAttribute('aria-pressed', 'true');
 });
 test('the console has no horizontal overflow at phone widths', async ({ page, request }, info) => {
@@ -443,6 +553,7 @@ test('the console has no horizontal overflow at phone widths', async ({ page, re
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
   }
   // The single visible capture is taller than the former fixed 320 px phone height.
+  await showSurface(page, 'Terminal');
   expect(await page.getByLabel('Codex output').evaluate((el) => el.clientHeight)).toBeGreaterThan(320);
   await page.screenshot({ path: info.outputPath('console-320.png'), fullPage: true });
 });
@@ -452,44 +563,66 @@ test('in Parallel, clicking a card heading selects that agent for the terminal a
   await unlock(page);
   const commands = async () => ((await (await request.get('/api/v1/state', { headers })).json()) as WorkflowState).commands.length;
   const before = await commands();
-  await page.getByRole('button', { name: 'Parallel', exact: true }).click(); await openCard(page, 'Codex');
+  await page.getByRole('button', { name: 'Parallel', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Agent' }).getByRole('button', { name: 'Codex', exact: true }).click();
   await pane(page, 'Claude').locator('.pane-heading h2').click();
   await expect(pane(page, 'Claude')).toHaveClass(/\bactive\b/); await expect(pane(page, 'Codex')).not.toHaveClass(/\bactive\b/);
   await expect(page.getByRole('navigation', { name: 'Agent' }).getByRole('button', { name: 'Claude', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await showSurface(page, 'Control');
   await expect(page.locator('.control-heading h2')).toHaveText('Control · Claude');
   await expect(page.getByRole('region', { name: 'Control', exact: true })).toHaveCount(1);
   expect(await commands()).toBe(before);
 });
-test('on wide screens the one control pane can sit beside the stage; the choice is remembered and narrower windows stack it', async ({ page }, info) => {
+test('in Plan on wide screens the one control pane can sit beside the stage; the choice is remembered and narrower windows stack it', async ({ page }, info) => {
   test.skip(info.project.name !== 'desktop', 'The side placement applies from 1280 CSS pixels.');
   await page.setViewportSize({ width: 1440, height: 900 }); await unlock(page);
   const stage = page.locator('.terminal-stage'), control = page.getByRole('region', { name: 'Control', exact: true });
   const placement = page.getByRole('group', { name: 'Control pane placement' });
+  const plan = () => page.getByRole('group', { name: 'Phase' }).getByRole('button', { name: 'Plan', exact: true }).click();
+  // Outside Plan the switch replaces the placements.
+  await expect(placement).toHaveCount(0); await plan();
   await placement.getByRole('button', { name: 'Control beside', exact: true }).click();
   const beside = async () => { const s = (await stage.boundingBox())!, c = (await control.boundingBox())!; return c.x >= s.x + s.width && c.y < s.y + s.height; };
   await expect.poll(beside).toBe(true);
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   await expect(control).toHaveCount(1);
-  await unlock(page);
+  await unlock(page); await plan();
   await expect(placement.getByRole('button', { name: 'Control beside', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect.poll(beside).toBe(true);
   await page.setViewportSize({ width: 1000, height: 900 });
   await expect(placement).toBeHidden();
   await expect.poll(async () => (await control.boundingBox())!.y >= (await stage.boundingBox())!.y + (await stage.boundingBox())!.height).toBe(true);
 });
-test('on phones the one control pane opens as a bottom drawer and returns focus to its toggle', async ({ page }, info) => {
+test('in Plan on phones the one control pane opens as a bottom drawer and returns focus to its toggle', async ({ page }, info) => {
   test.skip(info.project.name !== 'iphone', 'The drawer placement applies at phone widths.');
   await unlock(page);
+  // Outside Plan the switch replaces the drawer.
+  await expect(page.getByRole('button', { name: 'Open control drawer', exact: true })).toHaveCount(0);
+  await page.getByRole('group', { name: 'Phase' }).getByRole('button', { name: 'Plan', exact: true }).click();
   const control = page.getByRole('region', { name: 'Control', exact: true });
   await page.getByRole('button', { name: 'Open control drawer', exact: true }).click();
   await expect(control).toBeFocused();
   expect(await control.evaluate((el) => getComputedStyle(el).position)).toBe('fixed');
   await expect(control.getByRole('heading', { name: /^Control · / })).toBeInViewport();
-  await expect(control).toHaveCount(1); await expect(page.getByRole('textbox', { name: /^Instruction for / })).toHaveCount(1);
+  await expect(control).toHaveCount(1); await expect(page.getByRole('textbox', { name: 'Shared task brief' })).toHaveCount(1);
   await page.keyboard.press('Escape');
   await expect(page.getByRole('button', { name: 'Open control drawer', exact: true })).toBeFocused();
   expect(await control.evaluate((el) => getComputedStyle(el).position)).not.toBe('fixed');
   await page.getByRole('button', { name: 'Open control drawer', exact: true }).click();
   await control.getByRole('button', { name: 'Close drawer', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Open control drawer', exact: true })).toBeFocused();
+});
+test('Plan drawer can open Control access without covering its readiness check', async ({ page }, info) => {
+  test.skip(info.project.name !== 'iphone', 'The drawer applies at phone widths.');
+  await unlock(page);
+  await page.getByRole('group', { name: 'Phase' }).getByRole('button', { name: 'Plan', exact: true }).click();
+  await page.getByRole('button', { name: 'Open control drawer', exact: true }).click();
+  const control = page.getByRole('region', { name: 'Control', exact: true });
+  await control.getByLabel('Shared task brief').fill('Plan the drawer flow.');
+  await page.locator('.page-heading').getByRole('button', { name: /^Control access · / }).click();
+  expect(await control.evaluate((el) => getComputedStyle(el).position)).not.toBe('fixed');
+  const access = page.getByRole('region', { name: 'Control access', exact: true });
+  await access.getByLabel('Ready for planning', { exact: true }).check({ timeout: 3000 });
+  await access.getByRole('button', { name: 'Return to action', exact: true }).click();
+  await expect(control).toBeFocused();await expect(control.getByRole('button', { name: 'Start Plan', exact: true })).toBeEnabled();
 });

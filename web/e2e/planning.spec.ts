@@ -4,7 +4,7 @@ import type { Group, ImplementationRun } from '../src/contracts/implementation';
 import type { PlanDecision, PlanStart } from '../src/contracts/planning';
 import type { RelayRun, WorkflowState } from '../src/contracts/workflow';
 import { newPlanning } from '../src/server/planning-state';
-import { expandWorktree, editSettings, expand, openController } from './ui';
+import { expandWorktree, editSettings, expand, openController, readiness } from './ui';
 const headers = { Authorization: `Bearer ${'a'.repeat(64)}` };
 async function post(request: APIRequestContext, path: string, data: unknown) {
   const response = await request.post(`/api/v1/${path}`, { headers, data }); expect(response.ok()).toBe(true); return response.json();
@@ -41,7 +41,7 @@ test('Plan and Implementation are explicit readonly choices; Plan collects indep
   await page.getByLabel('Automatic collaboration across both phases').uncheck();
   await expect(page.getByLabel('Require my approval before implementation')).toBeChecked();
   await expect(page.getByLabel('Pause on a reviewer objection')).not.toBeChecked();
-  await page.getByLabel('Ready for planning').check();
+  await (await readiness(page, 'Ready for planning')).check();
   await page.screenshot({ path: info.outputPath('planning-setup.png'), fullPage: true });
   await page.getByRole('button', { name: 'Start Plan', exact: true }).click();
   await expect.poll(() => starts.length).toBe(1);
@@ -52,14 +52,14 @@ test('Start Plan explains why it is disabled, including a confirmation cleared b
   const group = await post(request, 'groups', { name: 'Planners', members: ['codex','claude'] }); let starts = 0;
   await page.route('**/api/v1/planning', async (route) => { starts++; await route.fulfill({ json: { status: 'delivered', error: null } }); });
   await openGroup(page, group); await page.getByRole('group', { name: 'Phase' }).getByRole('button', { name: 'Plan', exact: true }).click();
-  const start = page.getByRole('button', { name: 'Start Plan', exact: true }); const ready = page.getByLabel('Ready for planning');
+  const start = page.getByRole('button', { name: 'Start Plan', exact: true }); const ready = (await readiness(page, 'Ready for planning'));
   const reason = page.getByRole('region', { name: 'Plan setup' }).getByRole('status');
   await expect(start).toBeDisabled(); await expect(reason).toHaveText('Enter the shared task brief.');
   await expect(start).toHaveAccessibleDescription('Enter the shared task brief.');
   // Ticking Ready first and typing afterwards is the sequence that used to fail silently.
   await ready.check(); await page.getByLabel('Shared task brief').fill('Plan a scoped feature.');
   await expect(ready).not.toBeChecked(); await expect(start).toBeDisabled();
-  await expect(reason).toHaveText(/Confirm Ready for planning\. Changing the brief, a setting or the checkout clears an earlier confirmation\./);
+  await expect(reason).toHaveText(/Confirm Ready for planning in Control access\. Changing the brief, a setting or the checkout clears an earlier confirmation\./);
   await expect(start).toHaveAccessibleDescription(/Confirm Ready for planning/); await expect(start).toHaveAttribute('title', /Confirm Ready for planning.*Start document-only planning\./);
   await ready.check(); await expect(reason).toHaveCount(0); await expect(start).toBeEnabled(); await expect(start).toHaveAttribute('title', 'Start document-only planning.');
   await editSettings(page); await expand(page, 'Collaboration settings'); await page.getByLabel('Maximum automatic turns across both phases').fill('0');
@@ -72,7 +72,7 @@ test('a refused Start Plan shows the server reason beside its button and Recheck
   await page.route('**/api/v1/planning', async (route) => { starts++; await route.fulfill({ status: 409, json: { error: { message: 'Planning must preserve its clean branch and code baseline.' } } }); });
   await openGroup(page, group); await page.getByRole('group', { name: 'Phase' }).getByRole('button', { name: 'Plan', exact: true }).click();
   const setup = page.getByRole('region', { name: 'Plan setup' });
-  await page.getByLabel('Shared task brief').fill('Plan a scoped feature.'); await page.getByLabel('Ready for planning').check();
+  await page.getByLabel('Shared task brief').fill('Plan a scoped feature.'); await (await readiness(page, 'Ready for planning')).check();
   await page.getByRole('button', { name: 'Start Plan', exact: true }).click(); await expect.poll(() => starts).toBe(1);
   // The refusal appears beside Start Plan, not only in the console message below the history.
   await expect(setup.getByRole('alert')).toHaveText('Planning must preserve its clean branch and code baseline.');
@@ -88,7 +88,7 @@ test('solo Plan can preauthorize automatic Implementation without creating a sec
   await editSettings(page); await expand(page, 'Collaboration settings'); await page.getByLabel('Require my approval before implementation').uncheck();
   await page.getByLabel('Pause on a reviewer objection').check();
   await page.getByLabel('Implementation branch', { exact: true }).selectOption('new'); await page.getByLabel('New branch name').fill('task/after-plan');
-  await page.getByLabel('Ready for planning').check(); await page.getByRole('button', { name: 'Start Plan', exact: true }).click();
+  await (await readiness(page, 'Ready for planning')).check(); await page.getByRole('button', { name: 'Start Plan', exact: true }).click();
   await expect.poll(() => start).toMatchObject({ autoContinue: true, requireApproval: false, pauseOnObjection: true, implementation: { policy: 'solo', branch: { newBranch: 'task/after-plan' } } });
 });
 async function checkpoint(page: Page, request: APIRequestContext, consent: 'upfront' | 'deferred' = 'upfront') {
@@ -108,7 +108,7 @@ async function checkpoint(page: Page, request: APIRequestContext, consent: 'upfr
   await page.route('**/api/v1/state', async (route) => { const response = await route.fetch(); const data = await response.json(); await route.fulfill({ json: { ...data, runs: [run], executions: [] } }); });
   await openGroup(page, group);
   // The checkpoint sits on the controller's card; its toggle announces that the controller is waiting for the human.
-  await expect(page.getByRole('button', { name: 'Controller · waiting for you' })).toBeVisible(); await openController(page); return run;
+  await expect(page.getByRole('button', { name: /^Control access · waiting for you/ })).toBeVisible(); await openController(page); return run;
 }
 test('deferred checkpoint consent on an integration branch offers only a new task branch', async ({ page, request }) => {
   await checkpoint(page, request, 'deferred'); const decisions: PlanDecision[] = [];
@@ -173,12 +173,17 @@ test('the phase selector follows the run into Implementation once, keeps a later
   const phase = page.getByRole('group', { name: 'Phase' });
   const planButton = phase.getByRole('button', { name: 'Plan', exact: true }), implementationButton = phase.getByRole('button', { name: 'Implementation', exact: true });
   await expect(planButton).toHaveAttribute('aria-pressed', 'true');
+  // An owned Plan run keeps the Plan layout, even when the next-run phase shows Implementation.
+  const surface = page.getByRole('group', { name: 'Terminal or Control' });
+  await expect(surface).toHaveCount(0); await implementationButton.click(); await expect(surface).toHaveCount(0);
   current = implementing;
-  await expect(implementationButton).toHaveAttribute('aria-pressed', 'true');
+  await expect(implementationButton).toHaveAttribute('aria-pressed', 'true'); await expect(surface).toBeVisible();
   // Following the phase is view state only: it sends nothing, and a later deliberate choice is not overridden by polling.
   const posts: string[] = []; page.on('request', (r) => { if (r.method() !== 'GET') posts.push(r.url()); });
   await planButton.click(); await page.waitForTimeout(4500);
   await expect(planButton).toHaveAttribute('aria-pressed', 'true'); expect(posts).toEqual([]);
+  // The run's actual phase decides the layout, so the Implementation run keeps its Terminal/Control frame.
+  await expect(surface).toBeVisible();
   // Lock forgets the remembered phase; reopening the implementing worktree shows Implementation again.
   await page.getByRole('button', { name: 'Lock', exact: true }).click();
   await page.getByLabel('Host access token').fill('a'.repeat(64)); await page.getByRole('button', { name: 'Open console' }).click();

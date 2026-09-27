@@ -13,16 +13,22 @@ Native iOS and a third AI supervisor remain deferred.
 `node scripts/setup.mjs` writes `ALTCLI_ENABLE_TERMINAL=true` and
 `ALTCLI_ENABLE_AGENT_LAUNCH=true` into a new `web/.env.local`; a missing line means
 off, so add them to an older file. With the host flags enabled,
-Console's **Open terminal** observes a card; the one **Keyboard** selector above the terminals grants the
-one server-wide writer (after confirmation) and holds AltCLI dispatch/setup/launch. Automatically sized tmux windows
+Console's **Open terminal** observes a card; the ⌨️ **Claim keyboard** tool at that terminal grants the
+one server-wide writer after confirmation naming the current owner and holds AltCLI dispatch/setup/launch. Automatically sized tmux windows
 use captured observation to avoid resizing workers. Release and reconciliation
 are explicit; held workflow checkpoints need their own review.
 
 One **Agent** selector above the terminals chooses both the terminal shown and the
 single Control pane's recipient, which keeps a draft per agent. It starts on a working
-agent and then changes only when you choose another; Plan setup addresses the whole
-group. Manual-input recovery needs a checked acknowledgement;
-its wording is recorded without a typed note. Projects adds a project by its main/default starting checkout,
+agent and then changes only when you choose another. Outside Plan, a **Terminal / Control**
+switch shows the terminals or that Control pane in one frame (Terminal first); switching sends
+nothing and clears confirmations. Plan setup addresses the whole group and keeps its own section
+below the terminals. **Control access**, the one entry in the page heading's status row, gathers
+keyboard release, manual-input recovery, pause and takeover, other recovery and
+each action's readiness check; other places only name it. The ⌨️ status to its right reports the
+server-wide keyboard owner, beside connection status; claim it with the ⌨️ tool at the terminal
+where you want to type. Taking control is one confirmation after a list of what to notice; for
+earlier manual input its fixed acknowledgement is recorded as the decision note. Projects adds a project by its main/default starting checkout,
 typed or found with **Browse…**, even with no tmux panes. Settings (Console preferences
 first, then Host configuration) edits executable/argument profiles; **Launch agents…**
 previews exact checkout, commit and program before creating sessions named
@@ -314,15 +320,18 @@ borrow each other's completion. Relay commands use the `relay:` prefix. The glob
 instruction rule must recognize that prefix as documented in [SKILLS](docs/SKILLS.md).
 The marker is bookkeeping, not a new task. The skill defines its Git staging contract.
 
-The **Controller · …** toggle beside Settings shows whether the controller is
-driving the agents in this checkout, waiting for you, paused, or idle; open it for
-the command it holds and its actions. Use **Pause the controller** before desktop
-intervention. Pause keeps the controller
-in charge of the checkout and does not send Ctrl-C or stop background jobs; a
-command the controller paused itself (uncertain delivery, background work, an
-uncorrelated prompt) offers only **Take over from the controller…**. After
-inspecting and stopping writers, the confirmed takeover gives you control of the
-agents without claiming success. No command is
+The **Control access · …** entry in the page heading's status row names who holds control: you,
+the controller (driving, waiting for you, paused) or a keyboard or manual-input hold. Open it to
+see what to notice first: an agent that may still be working, a request or delivery that may have
+reached a terminal, or earlier manual input that may have run commands. Then **Take control…**
+asks once, listing its steps: end this checkout's controller run, clear an uncertain-request
+warning, release an older delivery hold and record your decision on earlier manual input. Each
+step is its own server request, run in order; the first refusal or unknown result stops the rest
+and says what was already done. Taking control never interrupts an agent or its background work,
+replays input or claims success, and it is refused, changing nothing, if the controller moved to
+another command meanwhile. **Pause the controller** stays available while it drives (it keeps the
+run and does not send Ctrl-C or stop background jobs), and a paused run's valid checkpoint or
+handoff can continue instead with one click. No command is
 silently retried. Final task-level tests and review remain your responsibility.
 
 Once ownership is released, a restarted CLI in the same pane is
@@ -350,7 +359,7 @@ its owned relay without accepting a handoff. Delayed events cannot interrupt a
 newer native turn, and late completion cannot resume an interrupted assignment.
 Pause in the web app remains a scheduling control; it does not send an interrupt
 to the CLI. After upgrading hooks, review and trust Interrupt in Codex `/hooks`.
-For a quiet CLI that remains Unknown, **Reset status** on its row in Status restores
+For a quiet CLI that remains Unknown, **Mark <agent> Ready** in Control access (one click) restores
 Ready after you inspect its empty prompt and confirm no background writers.
 It checks the exact current CLI and refuses owned runs, pending deliveries or
 changed activity. It preserves workspace configuration and never certifies a

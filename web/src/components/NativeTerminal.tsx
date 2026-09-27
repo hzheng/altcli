@@ -21,12 +21,12 @@ export interface NativeTerminalHandle {
 const BADGES = {
   'Keyboard here': ['⌨️', 'This browser holds the one keyboard for this tmux server, and typing here goes to this pane. Dispatch, setup and launch stay held until you release it and reconcile manual input.'],
   Disconnected: ['🔌', 'Not connected to this pane. Open the terminal to watch it; that does not take the keyboard.'],
-  'Controlled in another browser': ['🔒', 'Another browser holds the keyboard for this tmux server. Transfer it with the Keyboard selector only after checking with that browser’s user.'],
-  'Keyboard in another terminal': ['↔️', 'This browser’s keyboard is in another pane. Choose this pane in the Keyboard selector to move it here.'],
+  'Controlled in another browser': ['🔒', 'Another browser holds the keyboard for this tmux server. Claim it at this terminal only after checking with that browser’s user.'],
+  'Keyboard in another terminal': ['↔️', 'This browser’s keyboard is in another pane. Use Claim keyboard here to move it to this terminal.'],
   'Manual CLI/shell': ['⚠️', 'The registered CLI process in this pane was replaced, for example it exited to a shell. Inspect the pane before sending.'],
-  'Observing · manual input unresolved': ['⚠️', 'Watching read-only. Earlier manual input is not reconciled; review it in the manual input notice before automated work continues.'],
+  'Observing · manual input unresolved': ['⚠️', 'Watching read-only. Earlier manual input is not reconciled; review it in Control access before automated work continues.'],
   'Observing · manual input held': ['⚠️', 'Watching read-only. A keyboard or manual-input hold is active on this server, so automated work waits for it.'],
-  Observing: ['👁️', 'Watching this pane live, read-only. Choose it in the Keyboard selector to type here.'],
+  Observing: ['👁️', 'Watching this pane live, read-only. Use Claim keyboard here to type.'],
 } as const;
 const TOOL_HELP = [
   ['▶️', 'Open terminal / 🔄 Reconnect', 'watch this pane live; this does not take the keyboard'],
@@ -34,11 +34,11 @@ const TOOL_HELP = [
   ['⤢', 'Expand / ⤡ Collapse terminal', 'enlarge within the page without reconnecting or changing keyboard ownership'],
   ['♿', 'Screen reader mode', 'expose output to assistive technology; turn it off if a software keyboard cannot type'],
   ['📋', 'Paste text', 'paste clipboard text while this pane has the keyboard'],
-  ['⌨️', 'Keyboard', 'choose which pane types in the Keyboard selector; Ctrl+Shift+Esc leaves terminal focus'],
+  ['⌨️', 'Claim keyboard', 'type in this pane after a confirmation; release it in Control access. Ctrl+Shift+Esc leaves terminal focus'],
 ] as const;
 /** Native bytes stay in this component. No replay, persistence, automatic grant or URL credentials. Keyboard decisions come only
- * from the shared Keyboard selector through the handle; this card shows the state and the terminal tools. */
-export function NativeTerminal({ ref, token, target, clientInstanceId, label, fallback, capturedAt, held, holder, cliChanged = false, refresh, viewEpoch = 0 }: {
+ * from the shared decision coordinator through the handle; this card hosts its local claim and terminal tools. */
+export function NativeTerminal({ ref, token, target, clientInstanceId, label, fallback, capturedAt, held, holder, cliChanged = false, refresh, viewEpoch = 0, keyboardButton, keyboardControl }: {
   ref?: Ref<NativeTerminalHandle>;
   token: string; target: TerminalTarget; clientInstanceId: string; label: string; fallback: ReactNode;
   capturedAt?: string; held: boolean; refresh: () => Promise<void>; viewEpoch?: number;
@@ -46,8 +46,10 @@ export function NativeTerminal({ ref, token, target, clientInstanceId, label, fa
   holder?: 'other-browser' | 'this-browser' | 'unresolved' | null;
   /** The registered CLI process in this pane was replaced, e.g. it exited to a shell. */
   cliChanged?: boolean;
+  /** The ⌨️ claim tool, placed right after the status badge, and its confirmation shown below the tool row. */
+  keyboardButton?: ReactNode; keyboardControl?: ReactNode;
 }) {
-  const mount = useRef<HTMLDivElement>(null), terminal = useRef<Terminal | null>(null);
+  const mount = useRef<HTMLDivElement>(null), terminal = useRef<Terminal | null>(null), root = useRef<HTMLElement>(null);
   // One input event may span several 4 KiB chunks; `start` marks each event's first chunk.
   const live = useRef<{ id: string; generation: string; writer: boolean; seq: number; queue: { bytes: Uint8Array; start: boolean }[]; bytes: number; sending: boolean; ws: WebSocket } | null>(null);
   const [connected, setConnected] = useState(false), [native, setNative] = useState(false), [writer, setWriter] = useState(false);
@@ -80,17 +82,14 @@ export function NativeTerminal({ ref, token, target, clientInstanceId, label, fa
   useEffect(() => { if(!expanded)clearTransient();else clearModifiers(); refit.current?.(); }, [expanded]);
   const targetKey = JSON.stringify(target);
   const refreshRef = useRef(refresh); refreshRef.current = refresh;
-  /** Ctrl+Shift+Escape leaves terminal focus without sending anything: to the visible Control region, else the phone drawer toggle, else
-   * the nearest Keyboard selector. It never releases keyboard authority. */
+  /** Ctrl+Shift+Escape leaves terminal focus without sending anything: to the visible Terminal/Control switch, else the Control access
+   * entry. It never releases keyboard authority or dispatches. */
   function focusControl() {
     clearModifiers();
     const visible = (el: HTMLElement | null | undefined) => el && el.getClientRects().length ? el : null;
-    const control = visible(document.querySelector<HTMLElement>('.control-pane'));
-    const scope = mount.current?.closest('.launch-agents, .section-panel');
-    const destination = control ?? visible(document.querySelector<HTMLElement>('.drawer-toggle'))
-      ?? visible(scope?.querySelector<HTMLElement>('.keyboard-selector input:checked, .keyboard-selector select, .keyboard-selector input'))
+    const destination = visible(document.querySelector<HTMLElement>('.surface-switch button[aria-pressed=true]'))
+      ?? visible(document.querySelector<HTMLElement>('.access-entry'))
       ?? mount.current?.closest('section')?.querySelector<HTMLButtonElement>('button');
-    if (destination === control && control) control.tabIndex = -1;
     destination?.focus();
   }
   function loseInput(reason: string, c = live.current, generation = c?.generation) {
@@ -114,6 +113,8 @@ export function NativeTerminal({ ref, token, target, clientInstanceId, label, fa
   }
   function enqueue(bytes: Uint8Array) {
     const c = live.current; if (!c?.writer) return;
+    // A hidden terminal (Control shown, Focus, another tab) admits no new input event; one already queued still finishes draining.
+    if (!root.current?.getClientRects().length) return;
     if (bytes.length + c.bytes > 256 * 1024) { loseInput('Paste exceeds the 256 KiB input limit. Inspect before reconnecting.'); return; }
     for (let i=0;i<bytes.length;i+=4096) c.queue.push({ bytes: bytes.slice(i,i+4096), start: i===0 });
     c.bytes += bytes.length; void drain();
@@ -206,7 +207,7 @@ export function NativeTerminal({ ref, token, target, clientInstanceId, label, fa
           const f = JSON.parse(event.data) as TerminalFrame;
           if (f.type === 'reset') {
             generation = f.generation; connection.generation = generation; connection.writer = false; connection.seq = 0; connection.queue = []; connection.bytes = 0; connection.sending = false;
-            sequence = processedBytes = 0; clearModifiers(); term!.reset(); term!.options.disableStdin = true; setWriter(false); setConnected(true); setNative(f.native); setNotice(f.reason || 'Observing. Choose this pane in the Keyboard selector to type.');
+            sequence = processedBytes = 0; clearModifiers(); term!.reset(); term!.options.disableStdin = true; setWriter(false); setConnected(true); setNative(f.native); setNotice(f.reason || 'Observing. Claim keyboard here to type.');
             frames.current++; connectedRef.current = true; connectingRef.current = false; settleWaiters(null);
             if (generationSeen.current?.generation === f.generation) generationSeen.current.resolve();
             scheduleSize();
@@ -305,19 +306,20 @@ export function NativeTerminal({ ref, token, target, clientInstanceId, label, fa
   const badge: keyof typeof BADGES = writer ? 'Keyboard here' : !connected ? 'Disconnected' : holder === 'other-browser' ? 'Controlled in another browser'
     : holder === 'this-browser' ? 'Keyboard in another terminal' : cliChanged ? 'Manual CLI/shell'
     : held ? (holder === 'unresolved' ? 'Observing · manual input unresolved' : 'Observing · manual input held') : 'Observing';
-  return <section className={`native-terminal${expanded?' expanded':''}`} data-expanded={expanded} aria-label={`${label} terminal`} onBlurCapture={e=>{if(!e.currentTarget.contains(e.relatedTarget))clearTransient();}}
+  return <section ref={root} className={`native-terminal${expanded?' expanded':''}`} data-expanded={expanded} aria-label={`${label} terminal`} onBlurCapture={e=>{if(!e.currentTarget.contains(e.relatedTarget))clearTransient();}}
     onPasteCapture={event=>{
       if(!mount.current?.contains(event.target as Node))return;
       const text=event.clipboardData.getData('text/plain');
       if(!allowPaste(text)){event.preventDefault();event.stopPropagation();}else clearModifiers();
     }}>
-    <div className="terminal-tools"><StatusIcon icon={BADGES[badge][0]} label={badge} help={BADGES[badge][1]} />
+    <div className="terminal-tools"><StatusIcon icon={BADGES[badge][0]} label={badge} help={BADGES[badge][1]} />{keyboardButton}
       {writer && <IconButton icon="📋" label="Paste text" help="Paste clipboard text into this pane, subject to the paste checks." disabled={capture||!native} aria-disabled={pasting} aria-busy={pasting} onClick={()=>void pasteText()} />}
       {!connected && <IconButton icon={epoch ? '🔄' : '▶️'} label={epoch ? 'Reconnect' : 'Open terminal'} help="Watch this pane live. This does not take the keyboard." onClick={() => {setNotice('Reconnecting as observer…');connectingRef.current = true;setEpoch(x=>x+1);}} />}
       <IconButton icon={capture ? '🖥️' : '📄'} label={capture ? 'Show terminal' : 'Captured text'} help="A readable, selectable snapshot with its timestamp, not the live terminal." aria-pressed={capture} onClick={()=>setCapture(x=>!x)} />
       <IconButton icon={expanded ? '⤡' : '⤢'} label={expanded ? 'Collapse terminal' : 'Expand terminal'} help="Enlarge within the page. It does not reconnect or change keyboard ownership." aria-expanded={expanded} onClick={()=>setExpanded(!expanded)} />
       <IconButton icon="♿" label="Screen reader mode" help="Expose terminal output to assistive technology. Turn it off if a software keyboard cannot type; Captured text is the alternative." aria-pressed={screenReader} onClick={()=>{setScreenReader(!screenReader);if(terminal.current)terminal.current.options.screenReaderMode=!screenReader;}} />
       <HelpTip label="Terminal tools help" help={<>{TOOL_HELP.map(([icon, name, text]) => <span key={name} className="legend-line">{icon} <strong>{name}</strong>: {text}</span>)}</>} /></div>
+    {keyboardControl}
     {screenReader && <p className="fine">If your keyboard cannot enter text in this mode, turn it off. Captured text is also available for reading.</p>}
     <p className="fine" role="status">{notice}{active && ` · ${active}`}{focused && ' · Ctrl+Shift+Esc: leave terminal focus'}</p>
     <div ref={mount} className="xterm-mount" hidden={capture || !native} aria-label={`${label} native output`} onFocus={() => setFocused(true)} onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) { setFocused(false); leaving.current = false; } }} />

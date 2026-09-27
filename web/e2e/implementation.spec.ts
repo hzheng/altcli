@@ -1,7 +1,7 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import type { GitChange, Group, ImplementationStart, StandaloneStart } from '../src/contracts/implementation';
 import type { WorkflowState } from '../src/contracts/workflow';
-import { expandWorktree, editSettings, expand, handOff, openCard, openController, pane } from './ui';
+import { expandWorktree, editSettings, expand, handOff, openCard, openController, pane, readiness, openAccess, takeControl } from './ui';
 const headers = { Authorization: `Bearer ${'a'.repeat(64)}` };
 async function post(request: APIRequestContext, path: string, data: unknown) {
   const response = await request.post(`/api/v1/${path}`, { headers, data }); expect(response.ok()).toBe(true); return response.json();
@@ -36,14 +36,15 @@ test('blocked handoff details require fresh inspection and an explicit recheck c
   const panel = page.getByLabel('Blocked handoff', { exact: true });
   await expect(panel).toContainText('cccccccccccc'); await expect(panel).toContainText('Tasks: 1'); await expect(panel).toContainText('local_bash');
   const button = panel.getByRole('button', { name: 'Recheck and relay', exact: true });
-  await expect(button).toBeDisabled(); expect(actions).toEqual([]);
-  await panel.getByRole('checkbox').check(); await expect(button).toBeEnabled();
+  // One click: the text beside it says what continuing attests, with no checkbox; nothing is sent before the click.
+  await expect(panel.getByRole('checkbox')).toHaveCount(0); await expect(panel).toContainText('every checkout writer is settled');
+  await expect(button).toBeEnabled(); expect(actions).toEqual([]);
   revision = crypto.randomUUID(); await page.getByRole('button', { name: 'Recheck', exact: true }).click();
-  await expect(panel.getByRole('checkbox')).not.toBeChecked(); await expect(button).toBeDisabled(); expect(actions).toEqual([]);
-  await panel.getByRole('checkbox').check(); await button.click();
+  await expect(page.getByRole('button', { name: 'Recheck', exact: true })).toBeEnabled(); expect(actions).toEqual([]);
+  await button.click();
   await expect.poll(() => actions.length).toBe(1);
+  // The click carries the revision now on screen.
   expect(actions[0]).toEqual({ runId: id, action: 'recheck', confirmReady: true, expectedCommandId: id, expectedRevision: revision });
-  await expect(button).toBeDisabled();
 });
 test('the baseline selector lists every candidate, defaults to the earliest, and marks the latest', async ({ page, request }, info) => {
   const group = await post(request, 'groups', { name: 'Baseline choices', members: ['codex','claude'] });
@@ -71,7 +72,7 @@ test('the baseline selector lists every candidate, defaults to the earliest, and
   await expect(baseline).toHaveValue('b'.repeat(40));
   const line = claude.getByText(/^Relay Claude: /);
   await expect(line).toContainText('3 commits after bbbbbb through aaaaaa'); await expect(line.locator('strong')).toHaveText(`earliest: all since Claude's last commit`);
-  const relay = claude.getByRole('button', { name: 'Relay Claude', exact: true }); const ready = claude.getByLabel('Ready for implementation');
+  const relay = claude.getByRole('button', { name: 'Relay Claude', exact: true }); const ready = (await readiness(page));
   await ready.check(); await expect(relay).toBeEnabled();
   await baseline.selectOption('d'.repeat(40));
   await expect(ready).not.toBeChecked(); await expect(relay).toBeDisabled(); expect(starts).toEqual([]);
@@ -140,7 +141,7 @@ for (const dirty of [false, true]) test(`another baseline requires preview and c
   await expect(page.getByRole('region', {name:'Control',exact:true}).locator('.pane-actions')).toHaveCount(1);
   if (dirty) await handOff(scope, 'commit_relay'); else await expand(scope, 'Committed review');
   const send = scope.getByRole('button', { name: dirty ? 'Commit current changes & relay Codex' : 'Relay Codex', exact: true }); const baseline = scope.getByLabel('Review baseline', { exact: true });
-  const ready = scope.getByLabel('Ready for implementation');
+  const ready = (await readiness(page));
   await expect(baseline.getByRole('option')).toHaveText([`bbbbbb · Baseline change — earliest: all since the task baseline · latest: ${dirty ? 'current changes only' : 'last commit only'}`, 'Another commit…']);
   await baseline.selectOption('other'); const other = scope.getByRole('region', { name: 'Another baseline', exact: true });
   await ready.check(); await expect(send).toBeDisabled(); await expect(send).toHaveAttribute('title', /Enter a baseline commit and preview it first/);
@@ -170,7 +171,7 @@ test('a log-only derived range has a disabled reason but recent commits can stil
   await openGroup(page, group);
   await editSettings(page); await page.getByLabel('Implementation branch').selectOption('new'); await page.getByLabel('New branch name').fill('task/review');
   const claude = await openCard(page, 'Claude'); await expand(claude, 'Committed review');
-  await claude.getByLabel('Ready for implementation').check();
+  await (await readiness(page)).check();
   const relay = claude.getByRole('button', { name: 'Relay Claude', exact: true });
   await expect(relay).toBeDisabled(); await expect(claude.getByRole('alert')).toContainText('no project proposal');
   await expect(claude.getByLabel('Review baseline', { exact: true })).toHaveValue('other');
@@ -196,7 +197,7 @@ for (const dirty of [false, true]) test(`a refused derived range still relays a 
   // A dirty checkout snapshots in Codex's card and relays to Claude; a clean one is reviewed in Claude's own card.
   const scope = await openCard(page, dirty ? 'Codex' : 'Claude');
   if (dirty) await handOff(scope, 'commit_relay'); else await expand(scope, 'Committed review');
-  const send = scope.getByRole('button', { name: dirty ? 'Commit current changes & relay Claude' : 'Relay Claude', exact: true }); const ready = scope.getByLabel('Ready for implementation');
+  const send = scope.getByRole('button', { name: dirty ? 'Commit current changes & relay Claude' : 'Relay Claude', exact: true }); const ready = (await readiness(page));
   await expect(scope.getByLabel('Review baseline', { exact: true })).toHaveValue('other'); await expect(scope.getByRole('alert')).toContainText('no project proposal');
   await ready.check(); await expect(send).toBeDisabled(); await expect(send).toHaveAttribute('title', /Enter a baseline commit and preview it first/);
   const other = scope.getByRole('region', { name: 'Another baseline', exact: true });
@@ -243,7 +244,7 @@ test('committed implementation is default and explicit branch consent carries fi
   await page.getByLabel('Implementation branch').selectOption('new');
   await page.getByLabel('New branch name').fill('task/browser-fixture');
   const claude = await openCard(page, 'Claude'); await handOff(claude, 'commit');
-  await claude.getByLabel('Ready for implementation').check();
+  await (await readiness(page)).check();
   await page.screenshot({ path: testInfo.outputPath('implementation.png'), fullPage: true });
   await claude.getByRole('button', { name: 'Commit current changes Claude', exact: true }).click();
   await expect.poll(() => starts.length).toBe(1);
@@ -251,7 +252,7 @@ test('committed implementation is default and explicit branch consent carries fi
     branch: { branch: 'main', head: 'a'.repeat(40), newBranch: 'task/browser-fixture' }, confirmReady: true });
   expect(starts[0]).not.toHaveProperty('text'); // a hand-off as it stands carries no instruction
   expect(starts[0]).not.toHaveProperty('logPath'); // the journal stays in AltCLI unless the project opts into a tracked mirror
-  await expect(claude.getByLabel('Ready for implementation')).not.toBeChecked();
+  await expect((await readiness(page))).not.toBeChecked();
   await page.getByRole('button', { name: 'Lock', exact: true }).click(); expect(starts).toHaveLength(1);
 });
 test('a tracked relay log is an explicit opt-in whose path is sent only when enabled', async ({ page, request }) => {
@@ -275,7 +276,7 @@ test('a tracked relay log is an explicit opt-in whose path is sent only when ena
   const path = page.getByLabel('Tracked relay log'); await expect(path).toHaveValue('RELAY-LOG.jsonl');
   await path.fill('docs/relay-log.jsonl');
   await expect.poll(() => previews.at(-1)?.logPath).toBe('docs/relay-log.jsonl');
-  await handOff(codex, 'commit'); await codex.getByLabel('Ready for implementation').check();
+  await handOff(codex, 'commit'); await (await readiness(page)).check();
   await codex.getByRole('button', { name: 'Commit current changes Codex', exact: true }).click();
   await expect.poll(() => starts.length).toBe(1);
   expect(starts[0]).toMatchObject({ kind: 'commit', logPath: 'docs/relay-log.jsonl' });
@@ -288,14 +289,14 @@ test('solo implementation has one participant and no automatic review controls',
   await openGroup(page, group);
   await editSettings(page);
   await expect(page.getByLabel('Collaboration', { exact: true })).toHaveValue('solo');
-  const solo = page.getByRole('region', { name: 'Actions for Solo worker' });
+  const solo = await openCard(page, 'Solo worker');
   // A clean checkout has nothing to snapshot, and a solo card never offers a relay or a peer.
   await expect(solo.getByRole('button', { name: 'Commit current changes Solo worker', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: /^Relay / })).toHaveCount(0);
   await expect(solo.getByLabel('After send').locator('option')).toHaveText(['Nothing', 'Commit']);
   await expect(page.getByLabel('Automatic collaboration after the initial review')).toHaveCount(0);
   await page.getByLabel('Implementation branch').selectOption('stay'); await solo.getByLabel('Instruction for Solo worker').fill('Work once.');
-  await solo.getByLabel('Ready for implementation').check(); await solo.getByRole('button', { name: 'Send Solo worker', exact: true }).click();
+  await (await readiness(page)).check(); await solo.getByRole('button', { name: 'Send Solo worker', exact: true }).click();
   await expect.poll(() => payload).toMatchObject({ policy: 'solo', agentId: 'solo-worker', text: 'Work once.' });
 });
 for (const policy of ['peer', 'worker_reviewer'] as const) test(`${policy} relay of new commits targets the named peer with the derived baseline`, async ({ page, request }) => {
@@ -321,8 +322,8 @@ for (const policy of ['peer', 'worker_reviewer'] as const) test(`${policy} relay
   expect(previews.filter((preview) => preview.recipient === 'claude').at(-1)!.base).toBeUndefined();
   if (policy === 'worker_reviewer') expect(previews.slice(afterPolicy).some((preview) => preview.recipient === 'codex')).toBe(false); // the fixed worker never reviews
   const review = claude.getByRole('button', { name: 'Relay Claude', exact: true });
-  await expect(review).toBeDisabled(); await expect(review).toHaveAttribute('title', /Confirm Ready/);
-  await claude.getByLabel('Ready for implementation').check(); await review.click();
+  await expect(review).toBeDisabled(); await expect(review).toHaveAttribute('title', /Control access at the top right, check “Ready for implementation”/);
+  await (await readiness(page)).check(); await review.click();
   await expect.poll(() => starts.length).toBe(1);
   expect(starts[0]).toMatchObject({ kind: 'review', agentId: 'claude', policy, reviewBase: 'b'.repeat(40), branch: { head: 'a'.repeat(40) } });
 });
@@ -338,7 +339,7 @@ test('an integration branch is a starting point only: no continue option, and th
   const codex = await openCard(page, 'Codex'); await handOff(codex, 'commit');
   await expect(codex.getByRole('button', { name: 'Commit current changes Codex', exact: true })).toBeDisabled();
   await picker.selectOption('new'); await page.getByLabel('New branch name').fill('task/from-main');
-  await codex.getByLabel('Ready for implementation').check(); await codex.getByRole('button', { name: 'Commit current changes Codex', exact: true }).click();
+  await (await readiness(page)).check(); await codex.getByRole('button', { name: 'Commit current changes Codex', exact: true }).click();
   await expect.poll(() => payload).toMatchObject({ branch: { branch: 'main', head: 'a'.repeat(40), newBranch: 'task/from-main' } });
   expect((payload as unknown as ImplementationStart).branch.taskBase).toBeUndefined();
 });
@@ -363,17 +364,18 @@ test('reconciliation discovers the restarted peer for the next Commit without a 
   const warning = page.getByRole('region', { name: 'Agent identity changed' });
   await expect(warning).toContainText('CLI identity changed for Claude');
   await expect(warning).toContainText('rediscovered automatically, keeping names and group settings');
-  await expect(warning.getByRole('button', { name: 'Reset workspace…', exact: true })).toBeDisabled();
-  await openController(page); await page.getByRole('button', { name: 'Pause the controller', exact: true }).click();
-  await page.getByRole('button', { name: 'I checked every participant; give me control', exact: true }).click();
-  await expect(page.getByRole('button', { name: /^(Pause the controller|Take over from the controller…)$/ })).toHaveCount(0);
+  // The reset is offered once, in Control access, and stays blocked while the controller owns the checkout.
+  await expect((await openAccess(page)).getByRole('group', { name: 'Workspace reset' }).getByRole('button', { name: 'Reset workspace…', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Pause the controller', exact: true }).click();
+  await takeControl(page);
+  await expect(page.getByRole('button', { name: /^(Pause the controller|Take control…)$/ })).toHaveCount(0);
   await expect(warning).toHaveCount(0);
   await expect(pane(page, 'Claude').locator('.pane-status .state')).not.toHaveText('attention');
   expect(starts).toEqual([]); expect(resets).toEqual([]);
   await editSettings(page); await page.getByLabel('Implementation branch').selectOption('new');
   await page.getByLabel('New branch name').fill('task/after-recovery');
   const codex = await openCard(page, 'Codex'); await handOff(codex, 'commit');
-  const send = codex.getByRole('button', { name: 'Commit current changes Codex', exact: true }); const ready = codex.getByLabel('Ready for implementation');
+  const send = codex.getByRole('button', { name: 'Commit current changes Codex', exact: true }); const ready = (await readiness(page));
   await expect(send).toBeDisabled(); await expect(ready).not.toBeChecked();
   await ready.check();
   await page.screenshot({ path: info.outputPath('reconciled-peer-ready.png'), fullPage: true });
@@ -396,7 +398,7 @@ test('an unknown peer blocks sending and Recheck requires fresh readiness after 
   await openGroup(page, group);
   await editSettings(page); await page.getByLabel('Implementation branch').selectOption('new'); await page.getByLabel('New branch name').fill('task/identity');
   const codex = await openCard(page, 'Codex'); await handOff(codex, 'commit');
-  const ready = codex.getByLabel('Ready for implementation'); const send = codex.getByRole('button', { name: 'Commit current changes Codex', exact: true });
+  const ready = (await readiness(page)); const send = codex.getByRole('button', { name: 'Commit current changes Codex', exact: true });
   await ready.check(); await expect(send).toBeEnabled(); unknown = true;
   await expect(ready).toBeDisabled({ timeout: 10000 }); await expect(ready).not.toBeChecked();
   await expect(send).toHaveAttribute('title', /^The host cannot confirm the CLI process for Claude/);
@@ -417,7 +419,7 @@ test('an existing task branch keeps its baseline: inferred values are confirmed,
   await expect(page.getByLabel('Implementation branch', { exact: true })).toHaveValue('stay');
   await expect(page.getByLabel('Task baseline commit')).toHaveValue('c'.repeat(40));
   const codex = await openCard(page, 'Codex'); await handOff(codex, 'commit');
-  const commit = codex.getByRole('button', { name: 'Commit current changes Codex', exact: true }); const ready = codex.getByLabel('Ready for implementation');
+  const commit = codex.getByRole('button', { name: 'Commit current changes Codex', exact: true }); const ready = (await readiness(page));
   await ready.check(); await commit.click();
   await expect.poll(() => payload).toMatchObject({ branch: { branch: 'task/existing', head: 'a'.repeat(40), taskBase: 'c'.repeat(40) } });
   // When no baseline can be inferred, relay waits for a full commit ID even after readiness is confirmed.
@@ -435,7 +437,7 @@ test('a changed branch tip invalidates the displayed readiness confirmation', as
     await route.fulfill({ json: data }); });
   await openGroup(page, group); await editSettings(page); await page.getByLabel('Implementation branch').selectOption('new'); await page.getByLabel('New branch name').fill('task/tip-check');
   const codex = await openCard(page, 'Codex'); await codex.getByLabel('Instruction for Codex').fill('Check the tip.');
-  const ready = codex.getByLabel('Ready for implementation'); const send = codex.getByRole('button', { name: 'Send Codex', exact: true });
+  const ready = (await readiness(page)); const send = codex.getByRole('button', { name: 'Send Codex', exact: true });
   await ready.check(); await expect(send).toBeEnabled(); head = 'b'.repeat(40);
   await expect(ready).not.toBeChecked({ timeout: 10000 });
   await expect(send).toBeDisabled();
@@ -465,7 +467,7 @@ for (const phase of ['Plan', 'Implementation'] as const) test(`${phase} applies 
   await page.getByLabel('Implementation branch', { exact: true }).selectOption('new');
   await page.getByLabel('New branch name').fill('task/clean-start');
   if (phase === 'Plan') await page.getByLabel('Shared task brief').fill('A scoped task.'); else await handOff(codex, 'commit');
-  const ready = phase === 'Plan' ? page.getByLabel('Ready for planning') : codex.getByLabel('Ready for implementation');
+  const ready = phase === 'Plan' ? (await readiness(page, 'Ready for planning')) : (await readiness(page));
   await ready.check(); dirty = true;
   // Let polling invalidate an existing confirmation, without a click clearing it for us.
   if (phase === 'Plan') await expect(ready).toBeDisabled({ timeout: 10000 });
@@ -515,7 +517,7 @@ for (const phase of ['Plan', 'Implementation'] as const) test(`${phase} applies 
   const sections = page.getByRole('navigation', { name: 'Sections' });
   await sections.getByRole('button', { name: 'Settings', exact: true }).click(); await page.getByLabel('Staging fallback', { exact: true }).check();
   await sections.getByRole('button', { name: 'Console', exact: true }).click();
-  await expect(page.getByLabel('Ready to send', { exact: true })).toBeEnabled(); expect(starts).toBe(1);
+  await expect((await readiness(page, 'Ready to send'))).toBeEnabled(); expect(starts).toBe(1);
   // The legacy composer is a command section below the terminal stage, like Plan setup.
   await expect(page.locator('.control-pane .command-divider + .composer.command-zone')).toHaveCount(1);
 });
@@ -527,7 +529,7 @@ test('failed Git recheck blocks cached clean consent until a successful read and
   });
   await openGroup(page, group); await editSettings(page); await page.getByLabel('Implementation branch').selectOption('new'); await page.getByLabel('New branch name').fill('task/read-failure');
   const codex = await openCard(page, 'Codex'); await codex.getByLabel('Instruction for Codex').fill('Wait for reliable Git state.');
-  const ready = codex.getByLabel('Ready for implementation'); await ready.check(); failure = true;
+  const ready = (await readiness(page)); await ready.check(); failure = true;
   await page.getByRole('button', { name: 'Recheck', exact: true }).click();
   await expect(ready).toBeDisabled(); await expect(ready).not.toBeChecked(); await expect(page.getByRole('alert').filter({ hasText: 'Workspace inspection unavailable' })).toContainText('Recheck before starting');
   failure = false; await page.getByRole('button', { name: 'Recheck', exact: true }).click();
@@ -571,7 +573,7 @@ test('plain Send ignores branch setup and automation; every action explains its 
   await page.getByLabel('New branch name').fill('task/not-created-by-send');
   const worker = await openCard(page, 'Claude'); await worker.getByLabel('After send').selectOption('nothing');
   await worker.getByLabel('Instruction for Claude').fill('Explain this code.');
-  await worker.getByLabel('Ready for implementation').check(); await worker.getByRole('button', { name: 'Send Claude', exact: true }).click();
+  await (await readiness(page)).check(); await worker.getByRole('button', { name: 'Send Claude', exact: true }).click();
   await expect.poll(() => sent.length).toBe(1);
   expect(sent[0]).toMatchObject({ agentId: 'claude', workerId: 'claude', policy: 'worker_reviewer', text: 'Explain this code.' });
   expect(sent[0]).not.toHaveProperty('branch'); expect(sent[0]).not.toHaveProperty('autoContinue'); expect(commits).toBe(0);
@@ -591,9 +593,9 @@ test('an active plain Send may dirty the checkout without displaying a clean-che
   await openGroup(page, group);
   const codex = await openCard(page, 'Codex');
   await codex.getByLabel('Instruction for Codex').fill('Make the requested edits without committing.');
-  await codex.getByLabel('Ready for implementation').check();
+  await (await readiness(page)).check();
   await codex.getByRole('button', { name: 'Send Codex', exact: true }).click();
-  await openController(page); await expect(page.getByRole('button', { name: /^(Pause the controller|Take over from the controller…)$/ })).toBeVisible();
+  await openController(page); await expect(page.getByRole('button', { name: 'Take control…', exact: true })).toBeVisible();
   dirty = true; await page.getByRole('button', { name: 'Recheck', exact: true }).click();
   await expect(page.locator('.context-bar')).toContainText('· 1 uncommitted');
   await expect(page.getByRole('region', { name: 'Uncommitted changes', exact: true })).toHaveCount(0);
@@ -639,12 +641,12 @@ for (const policy of ['peer', 'worker_reviewer'] as const) test(`Relay adapts to
   await reviewer.getByLabel('Review baseline', { exact: true }).selectOption('c'.repeat(40));
   await expect(reviewer.getByText(new RegExp(`Relay ${peer}: 1 commit after cccccc`))).toBeVisible();
   expect(previews.at(-1)).toMatchObject({base:'c'.repeat(40),commitPending:false});
-  await reviewer.getByLabel('Ready for implementation').check(); await expect(reviewer.getByRole('button', { name: `Relay ${peer}`, exact: true })).toBeEnabled();
+  await (await readiness(page)).check(); await expect(reviewer.getByRole('button', { name: `Relay ${peer}`, exact: true })).toBeEnabled();
   dirty = true; await page.getByRole('button', { name: 'Recheck', exact: true }).click();
-  await expect(reviewer.getByLabel('Ready for implementation')).not.toBeChecked();
+  await expect((await readiness(page))).not.toBeChecked();
   // On a dirty checkout the worker's card snapshots the current changes, then relays them to the same peer.
   const author = await openCard(page, worker === 'codex' ? 'Codex' : 'Claude'); await handOff(author, 'commit_relay');
-  const ready = author.getByLabel('Ready for implementation'); const baseline = author.getByLabel('Review baseline', { exact: true });
+  const ready = (await readiness(page)); const baseline = author.getByLabel('Review baseline', { exact: true });
   const relay = author.getByRole('button', { name: `Commit current changes & relay ${peer}`, exact: true });
   await expect(relay).toBeVisible(); await expect(relay).toBeDisabled(); await expect(ready).not.toBeChecked();
   await expect(baseline).toHaveValue('b'.repeat(40));
@@ -689,10 +691,10 @@ for (const policy of ['peer', 'worker_reviewer'] as const) test(`dirty Commit sn
   // With an instruction the button does that work first; only an empty instruction hands the changes off as they stand.
   await codex.getByLabel('Instruction for Codex').fill('Implement retry support later.');
   await expect(codex.getByRole('button', { name: 'Send & commit Codex', exact: true })).toBeVisible();
-  await handOff(codex, 'commit_relay'); await codex.getByLabel('Ready for implementation').check();
+  await handOff(codex, 'commit_relay'); await (await readiness(page)).check();
   await expect(page.getByRole('region', { name: 'Uncommitted changes', exact: true })).toHaveCount(0);
   await expect(codex.getByRole('button', { name: 'Commit current changes & relay Claude', exact: true })).toBeEnabled();
-  await handOff(codex, 'commit'); await codex.getByLabel('Ready for implementation').check();
+  await handOff(codex, 'commit'); await (await readiness(page)).check();
   const send = codex.getByRole('button', { name: 'Commit current changes Codex', exact: true });
   await expect(send).toHaveAttribute('title', /snapshot all staged, unstaged and nonignored untracked changes as they stand/);
   await send.click(); await expect.poll(() => starts.length).toBe(1);
@@ -704,7 +706,7 @@ test('owned composer sends literal input only to the acknowledged holder and che
   const group = await post(request, 'groups', { name: 'Input controls', members: ['codex','claude'] });
   await openGroup(page, group); const initial = await openCard(page, 'Codex');
   await initial.getByLabel('Instruction for Codex').fill('Explain the current task.');
-  await initial.getByLabel('Ready for implementation').check(); await initial.getByRole('button', { name: 'Send Codex', exact: true }).click();
+  await (await readiness(page)).check(); await initial.getByRole('button', { name: 'Send Codex', exact: true }).click();
   const update = page.getByRole('region', { name: 'Input for Codex', exact: true });
   await update.getByLabel('Add detail for Codex').fill('Explain empty input.');
   await expect(update.getByRole('button', { name: 'Send update to Codex' })).toBeDisabled();
@@ -714,7 +716,8 @@ test('owned composer sends literal input only to the acknowledged holder and che
   const lifecycle = { commandId: turn.commandId, source: agent.agentType, paneId: agent.identity.paneId, socketPath: agent.identity.socketPath, identity: agent.identity,
     sessionId: 'fixture-input', sourceTurnId: 'fixture-input-turn', prompt: turn.wireText, settled: true, backgroundState: 'clear' };
   await post(request, 'events', { ...lifecycle, event: 'turn_started' });
-  const inspected = update.getByRole('checkbox', { name: /I inspected Codex/ }); await expect(inspected).toBeEnabled({ timeout: 8000 });
+  // The inspection check for literal input is shown once, in Control access.
+  const inspected = (await openAccess(page)).getByRole('checkbox', { name: /I inspected Codex/ }); await expect(inspected).toBeEnabled({ timeout: 8000 });
   await inspected.check(); await update.getByRole('button', { name: 'Send update to Codex' }).click();
   await expect(update.getByLabel('Add detail for Codex')).toHaveValue('');
   await expand(update, 'Terminal controls'); await update.getByLabel('Literal answer for Codex').fill('1');
@@ -727,9 +730,8 @@ test('owned composer sends literal input only to the acknowledged holder and che
   expect(current.interactions!.filter((r) => r.input.runId === run.id).map((r) => r.input.text)).toEqual(['Explain empty input.', '1']);
   await post(request, 'events', { ...lifecycle, event: 'turn_complete' }); await openController(page);
   const checkpoint = page.getByRole('region', { name: 'Input checkpoint' });
-  await expect(checkpoint.getByRole('button', { name: 'Review input and continue' })).toBeDisabled();
-  await checkpoint.getByRole('checkbox').check();
+  await expect(checkpoint.getByRole('checkbox')).toHaveCount(0); await expect(checkpoint.getByRole('button', { name: 'Review input and continue' })).toBeEnabled();
   await page.screenshot({ path: info.outputPath('input-checkpoint.png'), fullPage: true });
   await checkpoint.getByRole('button', { name: 'Review input and continue' }).click();
-  await expect(page.getByRole('button', { name: 'Controller · idle', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Control access · you', exact: true })).toBeVisible();
 });

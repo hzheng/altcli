@@ -1,9 +1,7 @@
 'use client';
-import { useState } from 'react';
 import type { BlockedHandoff as Handoff } from '../contracts/workflow';
 
 export function BlockedHandoff({ handoff, disabled, onRecheck }: { handoff: Handoff; disabled: boolean; onRecheck: () => void }) {
-  const [ready, setReady] = useState(false);
   const summary = handoff.backgroundSummary;
   return <section className="notice" aria-label="Blocked handoff">
     <h3>Handoff pending</h3>
@@ -12,7 +10,7 @@ export function BlockedHandoff({ handoff, disabled, onRecheck }: { handoff: Hand
     <p>Completion gate: {handoff.gate}</p>
     <p>Background state: {handoff.backgroundState}{summary && <> · Tasks: {summary.tasks ?? 'unknown'} · Scheduled wakeups: {summary.crons ?? 'unknown'}{summary.taskTypes.length > 0 && <> · Types: {summary.taskTypes.join(', ')}</>}</>}</p>
     <p className="fine">Recheck validates this turn’s completion, current workers, result and checkout. Missing clear evidence keeps the run paused. The original command is never resent.</p>
-    <label className="readiness"><input type="checkbox" checked={ready} disabled={disabled} onChange={e => setReady(e.target.checked)} />I inspected every checkout writer; prompts are empty, with no queued input or background work.</label>
-    <button disabled={disabled || !ready} onClick={() => { setReady(false); onRecheck(); }}>Recheck and relay</button>
+    <p className="fine">Relaying tells the controller every checkout writer is settled: empty prompts, no queued input or background work.</p>
+    <button disabled={disabled} onClick={onRecheck}>Recheck and relay</button>
   </section>;
 }
