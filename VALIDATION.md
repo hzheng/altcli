@@ -2896,3 +2896,87 @@ duplicating the shared Agent-selector entry.
 
 Temporary generated configuration was restored after testing. The running
 backend and live agent sessions were not restarted or modified.
+
+## 2026-09-26 — acknowledge Claude Stop before continuing the run
+
+The blocked Plan-to-Implementation run reused Claude's native source-turn ID
+for the next assignment and paused on a conflicting lifecycle payload. The
+controller could send that assignment while still handling the previous Stop's
+HTTP request, before the synchronous hook received its receipt and finished
+updating its binding. CX consequently remained waiting for its peer.
+
+The controller now returns the accepted completion receipt before continuing,
+then checks that the reporting Stop processes have exited under the original
+pane and CLI identity. The gate also covers events buffered during delivery,
+duplicate reporters and checkpoint capture. Process inspection is an additional
+delivery barrier; correlation, publication and background-evidence requirements
+are unchanged. Missing process evidence, a changed worker or a five-second
+timeout pauses without replay.
+
+- The original same-agent Plan-to-Implementation regression failed before the
+  fix because the next assignment was sent while Stop was still open.
+- Twelve new cases passed, covering duplicate reporters (including one arriving
+  during process inspection), buffered completion, pause, takeover, restart,
+  keyboard input, external prompts, worker changes, failed process inspection
+  and a stuck hook. The HTTP regression runs the actual hook subprocess with
+  real slot files, process exit, loopback HTTP, Git and SQLite; vendor payloads,
+  tmux identity, foreground inspection and terminal delivery are simulated.
+- `./scripts/check.sh` passed with Node 24.12.0 selected on PATH: 32 hook/setup,
+  43 smoke and 398 workflow cases, unit tests, type checking and production build.
+- Browser tests were not rerun for this server-only fix. Installed-provider
+  acceptance was not performed, and the previously paused run was not recovered.
+
+Changes are in `feature/ui1`; the main-checkout backend and live sessions were
+not modified or restarted.
+
+## 2026-09-27 — retain the Console project after worktree deletion
+
+Console now saves the canonical project ID with its selected worktree. Older
+path-only preferences can recover that ID from retained removal/discard records.
+A deleted checkout keeps its project selected, offers the remaining worktrees,
+and explains that another worktree must be chosen. An unresolved project no
+longer displays the deleted directory's basename as a project name.
+
+- The disappearing-worktree browser regression failed before the fix.
+- All 12 focused desktop/phone cases passed, covering deletion, reload, older
+  preferences, the discard flow, drafts, readiness and active-run preservation.
+- `./scripts/check.sh` passed with Node 24.12.0: 32 hook/setup, 43 smoke,
+  398 workflow and 76 unit cases, type checking and production build.
+- The full Playwright suite used isolated Next.js output directories. It was
+  stopped at the user's request after 44 passes, with one case interrupted and
+  261 not run. Full browser validation remains deferred to the final step.
+
+Browser tests use simulated discovery/API fixtures; this does not claim live
+agent or physical-device acceptance.
+
+## 2026-09-27 — transfer the pending UI fixes and link action readiness
+
+The seven staged files from `feature/ui1` were applied to `fix/ui` at main's
+`8b1a420`. The Console type and validation-history conflicts were resolved by
+preserving both changes. Git diff inspection confirmed that every added/removed
+line in the transferred staged patch matches the source patch; the source index
+was unchanged. This is transfer verification, not runtime acceptance.
+
+Implementation readiness hints now offer **Go to Control access**, which opens
+the existing panel and focuses its checkbox. **Ready for implementation** is
+visible label text as well as the accessibility name. The existing **Return to
+action** keeps the draft and a still-current confirmation. Browser assertions
+were updated for navigation, focus, visible naming, no automatic confirmation,
+draft preservation and no dispatch.
+
+No tests, type checks or builds were run for this combined worktree or the new
+navigation change; validation is deferred to the final step at the user's request.
+Earlier results above describe their original branches and revisions only.
+
+## 2026-09-27 — review: hook-exit observation ignores pane modes
+
+Review of `ea55f31` found that the Claude Stop hook-exit barrier applied the
+delivery-only copy-mode and synchronized-input gates while only observing
+processes. A Claude pane scrolled in tmux copy mode when its turn completed
+would pause the run instead of waiting for the hook to exit. The barrier now
+checks pane and CLI identity like process-evidence reads do; delivery keeps
+its own mode gates. A planning regression case covers a copy-mode pane.
+
+No tests, type checks or builds were run: this worktree has no installed web
+dependencies, and validation remains deferred to the final step at the user's
+request. The new case has not been observed passing.

@@ -365,7 +365,7 @@ changes the terminal shown, and it stays below the terminals, beside them on wid
 (**Control beside**) or in a bottom drawer on phones (**Open control drawer**). **Control access**
 lists what to notice before you take control and then asks once: **Take control…** ends this
 checkout's controller run, clears an uncertain-request warning, releases an older delivery hold
-and records your decision on earlier manual input, stopping at the first refusal. Its one entry
+and records your decision on earlier manual input, stopping at the first refusal. Its global entry
 sits in the page heading's status row; it also holds keyboard release, pause, one-click checkpoint
 or handoff continuation, **Mark <agent> Ready**, and each action's readiness check. **Open terminal** is
 observation; the ⌨️ **Claim keyboard** tool at a native terminal requires confirmation naming the
@@ -379,8 +379,9 @@ existing deliberate takeover; they do not become resumable through keyboard inpu
 
 Send does not require claiming the native keyboard. After an instruction is entered,
 a disabled Send shows its current blocker beside the button. When readiness is the
-remaining gate, the hint points to **Control access** at the top right and the
-**Ready for implementation** checkbox. Other gates, such as branch settings or
+remaining gate, **Go to Control access** beside the hint opens that panel and focuses the
+visibly labelled **Ready for implementation** checkbox without checking it. **Return to action**
+returns to the composer, keeping its draft and a still-current confirmation. Other gates, such as branch settings or
 another browser's keyboard hold, show their own reason instead.
 
 Add an absolute Git directory in Projects, select a main or task worktree, and

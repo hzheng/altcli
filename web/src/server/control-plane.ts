@@ -59,6 +59,8 @@ export class ControlPlane {
   private lifecycleRevision = 0;
   private lifecycleObservations = 0;
   private nativeObservations = 0;
+  /** Claude's Stop blocks its CLI until our HTTP response returns and the reporting hook exits. */
+  private readonly completingHooks = new Map<string, { commandId: string; reporters: Set<string> }>();
   /** Ephemeral identity proposals. Discovery never writes registrations or starts work. */
   private readonly discovered = new Map<string, ManagedSession>();
   /** Stored generation replaced by an idle discovery candidate; checked again before an explicit action binds it. */
@@ -810,10 +812,11 @@ export class ControlPlane {
   }
   /** Exactly one caller can claim a planned turn; browsers never create continuation commands. */
   private async pump(runId: string): Promise<void> {
-    if (this.authority.blocked) return;
+    if (this.authority.blocked || this.completingHooks.has(runId)) return;
     return this.authority.automated(() => this.pumpAdmitted(runId));
   }
   private async pumpAdmitted(runId: string): Promise<void> {
+    if (this.completingHooks.has(runId)) return;
     const run = this.workflow.run(runId); if (!run) return;
     if (run.planning && !run.implementation && run.status === 'waiting' && !run.restoredCheckpoint && !run.planning.next && run.autoContinue && !run.planning.request.requireApproval && planAgreed(run.planning)) {
       const plan = run.planning;
@@ -828,7 +831,8 @@ export class ControlPlane {
     for (const pending of this.workflow.pendingEvents(turn.commandId)) {
       const delivered = this.workflow.execution(turn.commandId)!;
       const evidence = pending.event === 'turn_complete' && pending.backgroundState === 'unknown' ? await this.evidence(delivered, pending.reporterPid) : null;
-      this.workflow.receive(pending, evidence, pending.event === 'turn_complete' ? await this.worktreeDigest(delivered) : null, await this.publication(delivered, pending), await this.planCapture(delivered, pending));
+      const receipt = this.workflow.receive(pending, evidence, pending.event === 'turn_complete' ? await this.worktreeDigest(delivered) : null, await this.publication(delivered, pending), await this.planCapture(delivered, pending));
+      this.deferClaudeHook(delivered, pending, receipt);
     }
     await this.captureCheckpoint(runId);
     const next = this.workflow.run(runId);
@@ -974,8 +978,50 @@ export class ControlPlane {
     const evidence = turn && input.event === 'turn_complete' && input.backgroundState === 'unknown' ? await this.evidence(turn, input.reporterPid) : null;
     const worktree = turn && input.event === 'turn_complete' ? await this.worktreeDigest(turn) : null;
     const receipt = this.workflow.receive(input, evidence, worktree, turn ? await this.publication(turn, input) : null, turn ? await this.planCapture(turn, input) : null);
+    if (turn) this.deferClaudeHook(turn, input, receipt);
     if (turn) { await this.captureCheckpoint(turn.runId); await this.pump(turn.runId); }
     return receipt;
+  }
+  private deferClaudeHook(turn: Execution, input: HookEvent, receipt: HookReceipt): void {
+    if (input.source !== 'claude' || input.event !== 'turn_complete' || !input.reporterPid || !receipt.accepted || receipt.completion !== 'finished' ||
+      this.workflow.execution(turn.commandId)?.status !== 'finished') return;
+    const pending = this.completingHooks.get(turn.runId);
+    if (pending) { if (pending.commandId === turn.commandId) pending.reporters.add(input.reporterPid); return; }
+    // A late duplicate must not create a new wait or pump a later assignment.
+    if (turn.status === 'finished') return;
+    const run = this.workflow.run(turn.runId)!;
+    if (!['running', 'waiting', 'paused'].includes(run.status)) return;
+    const member = run.participants.find(s => s.id === turn.agentId)!;
+    const barrier = { commandId: turn.commandId, reporters: new Set([input.reporterPid]) };
+    this.completingHooks.set(run.id, barrier);
+    void this.waitForClaudeHooks(run.id, member, barrier);
+  }
+  private async waitForClaudeHooks(runId: string, member: ManagedSession, barrier: { commandId: string; reporters: Set<string> }): Promise<void> {
+    try {
+      const deadline = Date.now() + 5000;
+      for (;;) {
+        // Return the receipt before polling: waiting inside the request would deadlock the synchronous Stop.
+        await new Promise(resolve => setTimeout(resolve, 50));
+        if (!this.store.db.open) return;
+        const run = this.workflow.run(runId);
+        if (!run || !['running', 'waiting'].includes(run.status) || this.workflow.owner(run.lockKey) !== runId) return;
+        const pane = await this.adapter.inspect(member.identity.paneId);
+        // Observing exit cannot type into the pane; copy mode or synchronized input must not turn a scrolled pane into a pause.
+        assertIdentity(member, { ...pane, inMode: false, synchronized: false });
+        if (!member.cliPid || await this.adapter.foreground(member) !== member.cliPid) throw new Error('The reporting CLI changed.');
+        const reporters = [...barrier.reporters];
+        const live = await this.adapter.processes(member);
+        // A duplicate reported during inspection needs a new snapshot that can include its process.
+        if (reporters.length === barrier.reporters.size && !reporters.some(pid => live.some(p => p.pid === pid))) break;
+        if (Date.now() >= deadline) throw new Error('The reporting Stop hook did not exit.');
+      }
+      this.completingHooks.delete(runId);
+      await this.captureCheckpoint(runId); await this.pump(runId);
+    } catch (error) {
+      if (this.store.db.open) this.workflow.pause(runId, `Claude hook exit could not be verified. ${messageOf(error)} Inspect the worker and take over; no command was replayed.`);
+    } finally {
+      if (this.completingHooks.get(runId) === barrier) this.completingHooks.delete(runId);
+    }
   }
   async submitInteraction(value: InteractionInput): Promise<InteractionRecord> { return this.authority.automated(() => this.submitInteractionAdmitted(value)); }
   private async submitInteractionAdmitted(value: InteractionInput): Promise<InteractionRecord> {
@@ -1035,6 +1081,7 @@ export class ControlPlane {
     return sessions.sort((a, b) => a.id.localeCompare(b.id));
   }
   private async captureCheckpoint(id: string): Promise<void> {
+    if (this.completingHooks.has(id)) return;
     const revision = this.nativeRevision;
     const run = this.workflow.run(id); if (!run || this.nativeObservations || this.interactions.pending(id)) return;
     const kind = run.status === 'waiting' && !run.interaction?.active ? 'waiting' : run.interaction?.active && !run.interaction.fault && run.interaction.disposition ? 'interaction' : null;

@@ -55,14 +55,25 @@ test('a typed instruction explains the disabled Send and readiness enables it wi
   await expect(hint).toHaveCount(0);
   await draft.fill('Explain the change.'); await expect(send).toBeDisabled();
   await expect(hint).toContainText('Send Codex is disabled.');
-  await expect(hint).toContainText('Control access at the top right');
+  await expect(hint).toContainText('in Control access');
   await expect(hint).toContainText('Ready for implementation');
-  await expect(send).toHaveAccessibleDescription(/Control access at the top right/);
+  await expect(send).toHaveAccessibleDescription(/in Control access/);
   await expect(page.locator('.page-heading').getByRole('img', { name: 'Keyboard: nobody', exact: true })).toBeVisible();
   await page.screenshot({ path: info.outputPath('disabled-send-hint.png'), fullPage: true });
   await draft.fill('   '); await expect(hint).toHaveCount(0);
   await draft.fill('Explain the change.');
-  await (await readiness(page)).check(); await expect(send).toBeEnabled(); await expect(hint).toHaveCount(0);
+  await hint.getByRole('button', { name: 'Go to Control access', exact: true }).click();
+  const access = page.getByRole('region', { name: 'Control access', exact: true });
+  const ready = access.getByLabel('Ready for implementation', { exact: true });
+  await expect(access).toBeVisible(); await expect(ready).toBeFocused(); await expect(ready).not.toBeChecked();
+  await expect(ready.locator('..')).toContainText('Ready for implementation'); // The name is visible, not just an accessibility label.
+  await expect(send).toBeDisabled(); await expect(draft).toHaveValue('Explain the change.');
+  await access.getByRole('button', { name: 'Return to action', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Control', exact: true })).toBeFocused();
+  await hint.getByRole('button', { name: 'Go to Control access', exact: true }).click();
+  await ready.check(); await access.getByRole('button', { name: 'Return to action', exact: true }).click();
+  await expect(send).toBeEnabled(); await expect(hint).toHaveCount(0); await expect(ready).toBeChecked();
+  await expect(draft).toHaveValue('Explain the change.');
   await expect(page.locator('.page-heading').getByRole('img', { name: 'Keyboard: nobody', exact: true })).toBeVisible();
   expect(sent).toEqual([]);
 });
@@ -71,7 +82,7 @@ test('the page heading row holds the one Control access entry, then the keyboard
   const heading = page.locator('.page-heading'), entry = heading.getByRole('button', { name: /^Control access · / });
   const keyboard = heading.getByRole('img', { name: /^Keyboard: / });
   await expect(entry).toBeVisible(); await expect(keyboard).toBeVisible();
-  // It is the only Control access opener: no top-bar copy and no scattered shortcuts.
+  // One global status entry; the implementation readiness hint can also open this same panel.
   await expect(page.locator('.topbar .access-entry')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Open Control access' })).toHaveCount(0);
   const middle = (box: { y: number; height: number }) => box.y + box.height / 2;
@@ -148,8 +159,8 @@ test('Control access is one panel on every tab; opening it sends nothing, and re
   const codex = page.getByRole('region', { name: 'Actions for Codex', exact: true });
   await codex.getByLabel('Instruction for Codex').fill('Explain the change.');
   // The composer explains the blocker; its one check, with what it authorizes, is in Control access.
-  await expect(codex.getByRole('checkbox')).toHaveCount(0); await expect(codex.getByRole('status')).toContainText('Control access at the top right');
-  await expect(codex.getByRole('button', { name: 'Open Control access' })).toHaveCount(0);
+  await expect(codex.getByRole('checkbox')).toHaveCount(0); await expect(codex.getByRole('status')).toContainText('in Control access');
+  await expect(codex.getByRole('button', { name: 'Go to Control access', exact: true })).toHaveCount(1);
   await ready.check(); await expect(access.getByRole('group', { name: 'Readiness for Codex' })).toContainText('Send Codex');
   // Closing, reopening and returning to the already visible action keep a current confirmation.
   await entry.click(); await expect(access).toBeHidden(); await expect(entry).toBeFocused();

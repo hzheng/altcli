@@ -87,8 +87,10 @@ send terminal input or continue a held run.
 
 Later on September 26: the claim is a ⌨️ icon tool in each terminal's tool row, right after the
 status badge, with its confirmation below the row. The page heading's status row reads Control
-access entry, then the ⌨️ keyboard status, then connection status; that entry is the only Control
-access opener, and notices, status lines and composers only name it.
+access entry, then the ⌨️ keyboard status, then connection status. The September 27 usability
+follow-up also permits **Go to Control access** beside implementation readiness hints. It opens
+the same panel and focuses the visibly labelled checkbox; **Return to action** goes back to
+the composer. Navigation alone neither confirms readiness nor sends work.
 
 September 27 update, at the owner's request: the user cannot be prevented from acting outside the
 app, so taking control is one explicit confirmation after a plain list of what to notice (an

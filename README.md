@@ -25,7 +25,8 @@ switch shows the terminals or that Control pane in one frame (Terminal first); s
 nothing and clears confirmations. Plan setup addresses the whole group and keeps its own section
 below the terminals. **Control access**, the one entry in the page heading's status row, gathers
 keyboard release, manual-input recovery, pause and takeover, other recovery and
-each action's readiness check; other places only name it. The ⌨️ status to its right reports the
+each action's readiness check. Implementation readiness hints offer **Go to Control access**
+to focus the checkbox; **Return to action** goes back to the composer. The ⌨️ status to its right reports the
 server-wide keyboard owner, beside connection status; claim it with the ⌨️ tool at the terminal
 where you want to type. Taking control is one confirmation after a list of what to notice; for
 earlier manual input its fixed acknowledgement is recorded as the decision note. Projects adds a project by its main/default starting checkout,

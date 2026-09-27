@@ -23,6 +23,17 @@ restores evidence and pauses without replay, including at a manual checkpoint.
 This is local sequential source support, not native runtime/host acceptance or
 the future concurrent/remote recovery machinery described below.
 
+The September 26 follow-up acknowledges a correlated Claude Stop before
+continuing the run, then verifies that its reporting hook processes have exited
+under the same pane and CLI instance. This also gates automatic Plan-to-Implementation
+entry and checkpoint capture. Claude's synchronous hook must receive the HTTP
+receipt and finish updating its turn binding before another assignment arrives.
+This is an additional delivery barrier, not completion or background-work
+evidence: existing correlation, publication and task/cron checks still apply.
+Unverifiable exit or a five-second timeout pauses without replay; restart retains
+the existing reconciliation requirement. See VALIDATION for isolated regression
+coverage; installed-provider acceptance remains open.
+
 ## Context
 
 Workspace inventory, role assignment, artifact publication, and execution evidence have different meanings. One server must combine them durably without deriving authority from browser selection or uncorrelated output.

@@ -32,7 +32,7 @@ const DEFAULT_TURN_LIMIT = 20;
 const timeOf = (iso: string) => new Date(iso).toLocaleTimeString();
 type Tab = 'console' | 'workspaces' | 'settings' | 'about';
 /** The selected workspace card and the checkout it belongs to; the console shows the agents registered on that checkout. */
-interface WorkspaceChoice { key: string; root: string }
+interface WorkspaceChoice { key: string; root: string; projectId?: string }
 /** What one Take control confirmation clears, with the identities its requests are checked against. */
 interface TakePlan { request: string | null; runs: { id: string; commandId: string; status: string; label: string }[]; delivery: string | null; manual: { id: string; revision: number }[] }
 interface AgentStatus { badge: 'ready' | 'working' | 'sending' | 'waiting' | 'attention' | 'unknown' | 'idle' | 'interrupted'; detail: string; when: string | null }
@@ -149,7 +149,8 @@ export function Console() {
     const limit = localStorage.getItem(TURN_LIMIT); if (limit && /^\d+$/.test(limit)) setTurnLimit(limit);
     // Remembered selections initialize the view only; the server validates every group at start.
     const saved = JSON.parse(localStorage.getItem(WORKSPACE) ?? 'null') as Partial<WorkspaceChoice> | null;
-    if (typeof saved?.key === 'string' && typeof saved.root === 'string') setWorkspace({ key: saved.key, root: saved.root }); } catch { /* preference only */ } }, []);
+    if (typeof saved?.key === 'string' && typeof saved.root === 'string') setWorkspace({ key: saved.key, root: saved.root,
+      ...(typeof saved.projectId === 'string' ? { projectId: saved.projectId } : {}) }); } catch { /* preference only */ } }, []);
   const limitValue = /^\d+$/.test(turnLimit) ? Number(turnLimit) : NaN; const limitValid = Number.isInteger(limitValue) && limitValue >= 1 && limitValue <= 200;
   useEffect(() => { const timer = setInterval(() => setClock(Date.now()), 1000); return () => clearInterval(timer); }, []);
   const refresh = useCallback(async (signal?: AbortSignal) => {
@@ -196,8 +197,18 @@ export function Console() {
   const project = workspace?.root ?? sessions[0]?.repository;
   const projectSessions = sessions.filter((s) => s.repository === project);
   const card = discovery?.workspaces.find((w) => workspace ? workspaceKey(w) === workspace.key : w.worktree.root === project);
-  const selectedProject = discovery?.projects?.find((p) => p.worktrees.some((w) => w.path === project));
+  // Older preferences have only a path, which may already have been discarded. The retained operation still identifies its project.
+  const previousProjects = discovery?.projects?.filter(p => [...(p.removals ?? []), ...(p.discards ?? [])].some(op => op.input.worktree.root === project)) ?? [];
+  const selectedProject = workspace?.projectId ? discovery?.projects?.find(p => p.id === workspace.projectId)
+    : discovery?.projects?.find(p => p.worktrees.some(w => w.path === project)) ?? (previousProjects.length === 1 ? previousProjects[0] : undefined);
+  const selectedProjectId = selectedProject?.id;
+  useEffect(() => {
+    if (!workspace || workspace.projectId || !selectedProjectId) return;
+    const choice = { ...workspace, projectId: selectedProjectId };
+    setWorkspace(choice); try { localStorage.setItem(WORKSPACE, JSON.stringify(choice)); } catch { /* preference only */ }
+  }, [workspace, selectedProjectId]);
   const selectedTree = selectedProject?.worktrees.find((w) => w.path === project);
+  const missingTree = !!selectedProject && !selectedProject.error && !selectedTree && !discoveryError && !discovery?.error;
   const projectOptions = (discovery?.projects ?? []).map((p) => ({ project: p, firstAgentTree: [...p.worktrees]
     .sort((a, b) => Number(b.main) - Number(a.main))
     .find(tree => discovery?.workspaces.some(w => w.worktree.root === tree.path && w.agents.some(a => a.eligible || a.observable))) }));
@@ -323,7 +334,7 @@ export function Console() {
   const resetBlocked = busy || stale || setupHeld || owned.length > 0 || !!transportHold || !!unknownRequest || !project || !!discoveryError || !!discovery?.error;
   const workspaceError = discoveryError || discovery?.error || '';
   const select = (id: string) => { setPaneChoice(id); setReady(false); };
-  const openAccess = () => { setControlDrawer(false); setAccessOpen(true); requestAnimationFrame(() => { accessPanel.current?.focus(); accessPanel.current?.scrollIntoView({ block: 'start' }); }); };
+  const openAccess = (target: HTMLElement | null = null) => { setControlDrawer(false); setAccessOpen(true); requestAnimationFrame(() => { const destination = target ?? accessPanel.current; destination?.focus(); destination?.scrollIntoView({ block: target ? 'nearest' : 'start' }); }); };
   const closeAccess = () => { setAccessOpen(false); requestAnimationFrame(() => accessEntry.current?.focus()); };
   /** Inspection only: shows an agent's terminal and leaves Control access open. Changing the view clears earlier confirmations; nothing is sent. */
   const showAgentTerminal = (id: string) => { if (tab !== 'console') showTab('console'); select(id); if (merged) setSurface('terminal');
@@ -345,12 +356,14 @@ export function Console() {
     unknownActivity: unknownActivity.map((s) => s.label), inputBlocks: visible.filter((s) => inputBlocks.has(s.id)).map((s) => ({ label: s.label, reason: inputBlocks.get(s.id)! })),
     agentReason: current && state ? cardReason(current) : '', setupHeld, stale: !!state && stale, checking, inputEnabled: state?.inputEnabled !== false });
   function chooseWorkspace(chosen: Workspace) {
-    const choice = { key: workspaceKey(chosen), root: chosen.worktree.root };
+    const choice = { key: workspaceKey(chosen), root: chosen.worktree.root,
+      projectId: discovery?.projects?.find(p => p.worktrees.some(w => w.path === chosen.worktree.root))?.id };
     setWorkspace(choice); try { localStorage.setItem(WORKSPACE, JSON.stringify(choice)); } catch { /* preference only */ }
     setReady(false); scrolls.current.console = 0; showTab('console');
   }
   function chooseWorktree(chosen: ProjectWorktree) {
-    const choice = { key: `worktree:${chosen.id}`, root: chosen.path };
+    const choice = { key: `worktree:${chosen.id}`, root: chosen.path,
+      projectId: discovery?.projects?.find(p => p.worktrees.some(w => w.id === chosen.id))?.id };
     setWorkspace(choice); try { localStorage.setItem(WORKSPACE, JSON.stringify(choice)); } catch { /* preference only */ }
     setReady(false); scrolls.current.console = 0; showTab('console');
   }
@@ -496,7 +509,7 @@ export function Console() {
     : stale ? <StatusIcon icon="🔴" label="Not current" align="end" help={`Not current: ${error || 'no update for more than 10 seconds'}. Last update ${lastUpdate}. Actions that depend on current state stay disabled until the console reconnects.`} />
     : <StatusIcon icon="🟢" label="Connected" align="end" help={`Connected to the host. Last update ${lastUpdate}; the console refreshes every 2 seconds.`} />}</div>;
   const keyboardLabel = !keyboardOwner || keyboardOwner.kind === 'unresolved' ? 'nobody' : keyboardOwner.kind === 'this-browser' ? `${keyboardOwner.label} (this browser)` : keyboardOwner.label;
-  // The one Control access opener, then the server-wide keyboard owner, then connection status: global, on every tab.
+  // The global Control access entry, then the server-wide keyboard owner, then connection status: on every tab.
   const headingStatus = <div className="heading-status">
     {state && <button type="button" ref={accessEntry} className={`quiet access-entry${access.attention ? ' attention' : ''}`} aria-expanded={accessOpen} aria-controls="control-access"
       onClick={() => accessOpen ? closeAccess() : openAccess()}>{access.attention && <span aria-hidden="true">⚠ </span>}Control access · {access.summary}{access.attention && <span className="sr-only"> (action needed)</span>}</button>}
@@ -635,7 +648,7 @@ export function Console() {
             <label>Project<select aria-label="Switch project" value={selectedProject?.id ?? ''} disabled={!projectOptions.length} onChange={event => {
               const tree = projectOptions.find(option => option.project.id === event.target.value)?.firstAgentTree; if (tree) switchWorktree(tree);
             }}>
-              {!selectedProject && <option value="" disabled>{project ? nameOf(project) : 'Choose project'}</option>}
+              {!selectedProject && <option value="" disabled>Choose project</option>}
               {projectOptions.map(({ project: p, firstAgentTree }) => <option key={p.id} value={p.id} disabled={!firstAgentTree}>{p.name}{firstAgentTree ? '' : ' — no agents'}</option>)}
             </select></label>
             <label>Worktree<select aria-label="Switch worktree" title={project} value={selectedTree?.id ?? ''} disabled={!worktreeOptions.length} onChange={event => {
@@ -668,7 +681,7 @@ export function Console() {
       {transportHold && !owned.length && <div className="notice">An older uncertain delivery holds this workspace. Inspect its terminals and any partially typed input before taking control in Control access. Nothing is replayed.</div>}
       {feedback}
       {!projectSessions.length && <section className="panel empty-console"><h2>No eligible agents here yet</h2>
-        <p className="muted">{selectedTree?.error ?? card?.agents.find((agent) => agent.reason && (agent.kind === 'codex' || agent.kind === 'claude'))?.reason ?? (project ? <>Start coding CLIs in <span className="mono">{project}</span>, then Recheck in Projects. Collaborators need the same directory. No registration is needed.</> : 'Choose a project and worktree with running coding agents. Nothing is sent until you explicitly start work.')}</p>
+        <p className="muted">{missingTree ? <>This worktree is no longer available. Choose another worktree in {selectedProject.name}.</> : selectedProject?.error ?? selectedTree?.error ?? card?.agents.find((agent) => agent.reason && (agent.kind === 'codex' || agent.kind === 'claude'))?.reason ?? (project ? <>Start coding CLIs in <span className="mono">{project}</span>, then Recheck in Projects. Collaborators need the same directory. No registration is needed.</> : 'Choose a project and worktree with running coding agents. Nothing is sent until you explicitly start work.')}</p>
         <button type="button" className="primary" onClick={() => showTab('workspaces')}>Open Projects</button></section>}
       {!!projectSessions.length && <>
         <RunSettingsBar settings={settings} git={git} members={members} sessions={sessions} displayed={current?.id} disabled={busy || !!(phase === 'implementation' && !showLegacy ? implementationReason : sharedReason)} notice={settingsNotice} legacy={!!showLegacy} onPhase={setPhase} />
@@ -732,7 +745,7 @@ export function Console() {
           <div className="control-heading"><h2>Control{phase === 'plan' && !inputRun && !showLegacy ? <span className="control-recipient"> · All agents</span> : current && <span className="control-recipient"> · {current.label}</span>}</h2>{controlDrawer && !merged && <button type="button" className="quiet drawer-close" onClick={() => toggleDrawer(false)}>Close drawer</button>}</div>
           <div className="control-body">
           {current && inputRun && !showLegacy && <InteractionComposer key={current.id} token={token} state={state} run={inputRun} agent={current} draftKey={`draft:${scope}:${current.id}`} disabled={busy || stale || setupHeld || manualHeld || !state.inputEnabled || !!identityBlockedReason || !!cardReason(current)} viewEpoch={viewEpoch} refresh={refresh} readinessSlot={readinessSlot} />}
-          {current && actionable && !inputRun && phase === 'implementation' && !showLegacy && <PaneActions key={current.id} {...common} group={pair} agent={current} settings={implementationSettings} blockedReason={implementationReason || cardReason(current)} keyboardHandoff={keyboardHandoff} viewEpoch={viewEpoch} draftKey={`draft:${scope}:${current.id}`} />}
+          {current && actionable && !inputRun && phase === 'implementation' && !showLegacy && <PaneActions key={current.id} {...common} group={pair} agent={current} settings={implementationSettings} blockedReason={implementationReason || cardReason(current)} keyboardHandoff={keyboardHandoff} viewEpoch={viewEpoch} draftKey={`draft:${scope}:${current.id}`} onOpenAccess={() => openAccess(readinessSlot?.querySelector('input'))} />}
         {phase === 'plan' && !inputRun && !showLegacy && <>{commandDivider}<PlanSetup {...common} group={pair && members.length ? pair : undefined} settings={planSettings} displayed={current?.id}
           blockedReason={sharedReason || cardReason(current)} draftKey={`plan:${scope}`} /></>}
         {showLegacy && commandDivider}

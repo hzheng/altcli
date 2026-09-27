@@ -88,6 +88,46 @@ test('Console switches projects and worktrees without writes, keeps drafts and r
   await page.reload(); await page.getByLabel('Host access token').fill(TOKEN); await page.getByRole('button', { name: 'Open console' }).click();
   await expect(trees).toHaveValue(main.id);
 });
+test('Console keeps the project when the selected worktree disappears, including after reload', async ({ page, request }) => {
+  const inventory = await (await request.get('/api/v1/workspaces', { headers })).json() as WorkspaceDiscovery;
+  const project = inventory.projects!.find(p => p.name === 'project')!, main = project.worktrees[0]!;
+  const linked = { ...main, id: 'layout-tree', path: '/demo/tasks/layout', branch: 'feature/layout', main: false, identity: null };
+  project.worktrees.push(linked);
+  await page.route('**/api/v1/workspaces', route => route.fulfill({ json: inventory }));
+  await unlock(page, TOKEN, false);
+  const projects = page.getByRole('combobox', { name: 'Switch project' }), trees = page.getByRole('combobox', { name: 'Switch worktree' });
+  await trees.selectOption(linked.id);
+  const writes: string[] = []; page.on('request', r => { if (r.method() !== 'GET') writes.push(r.url()); });
+  // No retained operation record: the browser must remember the canonical project independently of the worktree path.
+  project.worktrees = [main];
+  await page.locator('.context-bar').getByRole('button', { name: 'Recheck', exact: true }).click();
+  await expect(projects).toHaveValue(project.id); await expect(trees).toHaveValue('');
+  await expect(page.locator('.empty-console')).toContainText('This worktree is no longer available. Choose another worktree in project.');
+  await expect(page.locator('.empty-console')).not.toContainText('Start coding CLIs in');
+  await page.reload(); await page.getByLabel('Host access token').fill(TOKEN); await page.getByRole('button', { name: 'Open console' }).click();
+  await expect(projects).toHaveValue(project.id); await expect(trees).toHaveValue('');
+  await trees.selectOption(main.id); await expect(page.locator('.context-bar')).toContainText(main.path);
+  expect(writes).toEqual([]);
+});
+for (const operation of ['discard', 'removal'] as const) test(`Console recovers an older saved selection from its retained ${operation} record`, async ({ page, request }) => {
+  const inventory = await (await request.get('/api/v1/workspaces', { headers })).json() as WorkspaceDiscovery;
+  const project = inventory.projects!.find(p => p.name === 'project')!, main = project.worktrees[0]!;
+  const root = '/demo/tasks/layout';
+  const input = { projectId: project.id, worktreeId: 'layout-tree', requestId: crypto.randomUUID(),
+    worktree: { ...main.identity!, root }, branch: 'feature/layout', head: main.head!, targetRef: 'refs/heads/main', targetHead: main.head!, confirm: true as const };
+  const record = { message: 'The worktree was deleted.', updatedAt: new Date().toISOString() };
+  if (operation === 'discard') project.discards = [{ ...record, status: 'discarded', input: { ...input, dirty: false, changeCount: 0, fingerprint: 'e'.repeat(64), unmergedCommits: 0, confirmBranch: input.branch } }];
+  else project.removals = [{ ...record, status: 'removed', input: { ...input, integratedBy: 'ancestry', integratedCommit: main.head! } }];
+  await page.route('**/api/v1/workspaces', route => route.fulfill({ json: inventory }));
+  await page.addInitScript(saved => localStorage.setItem('altcli.workspace', JSON.stringify(saved)), { key: 'worktree:layout-tree', root });
+  await unlock(page, TOKEN, false);
+  const projects = page.getByRole('combobox', { name: 'Switch project' }), trees = page.getByRole('combobox', { name: 'Switch worktree' });
+  await expect(projects).toHaveValue(project.id); await expect(trees).toHaveValue('');
+  await expect(projects.getByRole('option', { name: 'layout', exact: true })).toHaveCount(0);
+  await expect(page.locator('.empty-console')).toContainText('This worktree is no longer available. Choose another worktree in project.');
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('altcli.workspace')!).projectId)).toBe(project.id);
+  await trees.selectOption(main.id); await expect(page.locator('.context-bar')).toContainText(main.path);
+});
 test('Console project switching leaves an active run intact', async ({ page, request }) => {
   const command = await post(request, 'commands', { requestId: crypto.randomUUID(), agentId: 'codex', kind: 'instruction', text: 'Keep running while browsing', confirmReady: true });
   await unlock(page, TOKEN, false);

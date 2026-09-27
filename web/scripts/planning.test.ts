@@ -2,9 +2,12 @@ import assert from 'node:assert/strict';
 import { afterEach, beforeEach, test } from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { contextKey } from '../../hooks/protocol.mjs';
 import { Store } from '../src/server/store.ts';
 import { Controller } from '../src/server/controller.ts';
 import { ControlPlane } from '../src/server/control-plane.ts';
@@ -74,6 +77,167 @@ function decision(id: string, more: Partial<PlanDecision> = {}): PlanDecision {
 async function finishPlan(id: string) {
   while (run(id).status === 'running' && !run(id).implementation) { const command = run(id).currentCommandId; publish(command); await complete(command); }
 }
+async function waitFor(check: () => boolean, timeout = 3000) {
+  const deadline = Date.now() + timeout;
+  while (!check()) { assert.ok(Date.now() < deadline, 'timed out waiting for the controller'); await new Promise(resolve => setTimeout(resolve, 10)); }
+}
+test('Claude Plan-to-Implementation acknowledges Stop before dispatch and waits for every reporting hook to exit', async () => {
+  const input = request({ requireApproval: false }); input.implementation.agentId = 'claude';
+  await plane.submitPlan(input);
+  for (let i = 0; i < 3; i++) { const id = run(input.requestId).currentCommandId; publish(id); await complete(id); }
+  const final = run(input.requestId).currentCommandId;
+  assert.equal(plane.workflow.execution(final)!.agentId, 'claude');
+  publish(final); await plane.recordEvent(event(final, { event: 'turn_started' }));
+  let hookRunning = true;
+  adapter.trees.set('claude', [{ pid: '900', command: 'node' }, { pid: '901', command: 'node' }]);
+  adapter.send = async (_session, text) => {
+    sent.push(text);
+    // Claude can reuse the prior prompt_id if the next prompt arrives while its synchronous Stop is still running.
+    const next = run(input.requestId).currentCommandId;
+    await plane.recordEvent(event(next, { event: 'turn_started', ...(hookRunning ? { sourceTurnId: `turn-${final}` } : {}) }));
+  };
+  const stop = event(final, { reporterPid: '900', completionSequence: 1 });
+  const receipt = await plane.recordEvent(stop);
+  assert.equal(receipt.completion, 'finished');
+  assert.equal(sent.length, 4, 'the Stop response must not wait for delivery back into the same CLI');
+  await plane.recordEvent({ ...stop, reporterPid: '901' });
+  await new Promise(resolve => setTimeout(resolve, 150));
+  assert.equal(sent.length, 4, 'a live reporting hook must hold continuation');
+  adapter.trees.set('claude', [{ pid: '901', command: 'node' }]);
+  await new Promise(resolve => setTimeout(resolve, 150));
+  assert.equal(sent.length, 4, 'a second identical Stop reporter must also exit');
+  hookRunning = false; adapter.trees.set('claude', []);
+  await waitFor(() => sent.length === 5 && plane.workflow.execution(run(input.requestId).currentCommandId)!.status === 'delivered');
+  assert.equal(run(input.requestId).status, 'running');
+  assert.equal(run(input.requestId).implementation!.turn, 1);
+  assert.equal(plane.workflow.execution(run(input.requestId).currentCommandId)!.sourceTurnId, `turn-${run(input.requestId).currentCommandId}`);
+  await plane.recordEvent(stop); assert.equal(sent.length, 5, 'late duplicate does not send again');
+});
+test('a Claude completion buffered during delivery also waits for the reporting hook before a solo implementation', async () => {
+  plane.removeGroup(group.id); group = await plane.createGroup({ name: 'Solo Claude', members: ['claude'] });
+  const input = request({ requireApproval: false });
+  adapter.trees.set('claude', [{ pid: '900', command: 'node' }]);
+  adapter.send = async (_session, text) => {
+    sent.push(text);
+    if (sent.length !== 1) return;
+    publish(input.requestId);
+    await plane.recordEvent(event(input.requestId, { event: 'turn_started' }));
+    const receipt = await plane.recordEvent(event(input.requestId, { reporterPid: '900', completionSequence: 1 }));
+    assert.match(receipt.reason, /Buffered/);
+  };
+  await plane.submitPlan(input);
+  assert.equal(sent.length, 1); assert.equal(run(input.requestId).implementation, undefined);
+  adapter.trees.set('claude', []);
+  await waitFor(() => sent.length === 2 && plane.workflow.execution(run(input.requestId).currentCommandId)!.status === 'delivered');
+  assert.equal(run(input.requestId).status, 'running'); assert.equal(run(input.requestId).implementation!.policy, 'solo');
+});
+test('a duplicate Claude Stop arriving during process inspection invalidates that snapshot', async () => {
+  plane.removeGroup(group.id); group = await plane.createGroup({ name: 'Solo Claude', members: ['claude'] });
+  const input = request({ requireApproval: false }); await plane.submitPlan(input); publish(input.requestId);
+  await plane.recordEvent(event(input.requestId, { event: 'turn_started' }));
+  const stop = event(input.requestId, { reporterPid: '900', completionSequence: 1 });
+  await plane.recordEvent(stop);
+  const processes = adapter.processes.bind(adapter); let duplicated = false;
+  adapter.processes = async session => {
+    const snapshot = await processes(session);
+    if (!duplicated) {
+      duplicated = true; adapter.trees.set('claude', [{ pid: '901', command: 'node' }]);
+      await plane.recordEvent({ ...stop, reporterPid: '901' });
+    }
+    return snapshot;
+  };
+  await waitFor(() => duplicated); await new Promise(resolve => setTimeout(resolve, 150));
+  assert.equal(sent.length, 1, 'a snapshot taken before the new reporter cannot establish its exit');
+  adapter.trees.set('claude', []);
+  await waitFor(() => sent.length === 2 && plane.workflow.execution(run(input.requestId).currentCommandId)!.status === 'delivered');
+  assert.equal(run(input.requestId).status, 'running');
+});
+for (const fault of ['pause', 'takeover', 'restart', 'keyboard', 'external prompt', 'changed CLI', 'unreadable processes', 'stuck hook'] as const) {
+  test(`Claude hook exit cannot dispatch after ${fault}`, async () => {
+    plane.removeGroup(group.id); group = await plane.createGroup({ name: 'Solo Claude', members: ['claude'] });
+    const input = request({ requireApproval: false }); await plane.submitPlan(input); publish(input.requestId);
+    await plane.recordEvent(event(input.requestId, { event: 'turn_started' }));
+    adapter.trees.set('claude', [{ pid: '900', command: 'node' }]);
+    await plane.recordEvent(event(input.requestId, { reporterPid: '900', completionSequence: 1 }));
+    assert.equal(sent.length, 1);
+    if (fault === 'pause' || fault === 'takeover') await plane.action({ runId: input.requestId, action: 'pause' });
+    if (fault === 'takeover') await plane.action({ runId: input.requestId, action: 'takeover', confirmReady: true });
+    if (fault === 'restart') plane = new ControlPlane(new Controller(config(), store, adapter));
+    if (fault === 'keyboard') plane.workflow.beginKeyboard(input.requestId);
+    if (fault === 'external prompt') await plane.recordEvent(event(input.requestId, { event: 'turn_started', commandId: undefined, sourceTurnId: 'external', prompt: 'desktop work' }));
+    if (fault === 'changed CLI') adapter.foregrounds.set('claude', '999');
+    if (fault === 'unreadable processes') adapter.processes = async () => { throw new Error('Process inspection unavailable.'); };
+    if (fault !== 'stuck hook') adapter.trees.set('claude', []);
+    await waitFor(() => ['paused', 'stopped'].includes(run(input.requestId).status), fault === 'stuck hook' ? 7000 : 3000);
+    await new Promise(resolve => setTimeout(resolve, 150));
+    assert.equal(sent.length, 1); assert.equal(run(input.requestId).implementation, undefined);
+    if (fault !== 'takeover') assert.equal(plane.workflow.owner(`${root}/.git/index`), input.requestId);
+    if (fault === 'changed CLI' || fault === 'unreadable processes' || fault === 'stuck hook') assert.match(run(input.requestId).reason, /hook exit could not be verified/);
+  });
+}
+test('a Claude pane in copy mode does not stop the hook-exit barrier', async () => {
+  plane.removeGroup(group.id); group = await plane.createGroup({ name: 'Solo Claude', members: ['claude'] });
+  const input = request({ requireApproval: false }); await plane.submitPlan(input); publish(input.requestId);
+  await plane.recordEvent(event(input.requestId, { event: 'turn_started' }));
+  // Scrolling the pane's history only observes it; exit evidence does not need the delivery-only mode gates.
+  const paneId = run(input.requestId).participants[0]!.identity.paneId, inspect = adapter.inspect.bind(adapter); let copyMode = true;
+  adapter.inspect = async (id) => ({ ...await inspect(id), inMode: copyMode && id === paneId });
+  adapter.trees.set('claude', [{ pid: '900', command: 'node' }]);
+  await plane.recordEvent(event(input.requestId, { reporterPid: '900', completionSequence: 1 }));
+  await new Promise(resolve => setTimeout(resolve, 150));
+  assert.ok(['running', 'waiting'].includes(run(input.requestId).status)); assert.equal(sent.length, 1);
+  copyMode = false; adapter.trees.set('claude', []);
+  await waitFor(() => sent.length === 2 && plane.workflow.execution(run(input.requestId).currentCommandId)!.status === 'delivered');
+  assert.equal(run(input.requestId).status, 'running');
+});
+test('real Claude hook HTTP acknowledgement and process exit precede the next assignment', async () => {
+  plane.removeGroup(group.id); group = await plane.createGroup({ name: 'Solo Claude', members: ['claude'] });
+  const input = request({ requireApproval: false }); await plane.submitPlan(input); publish(input.requestId);
+  const member = run(input.requestId).participants[0]!;
+  const home = join(directory, 'hook-home'), bin = join(home, 'bin'); mkdirSync(bin, { recursive: true });
+  // Only tmux identity and foreground inspection are simulated; hooks, slot files, HTTP, SQLite and process exit are real.
+  writeFileSync(join(bin, 'tmux'), `#!/bin/sh\nprintf '%s\\n' '${Object.values(member.identity).join('\t')}'\n`, { mode: 0o700 });
+  writeFileSync(join(bin, 'ps'), `#!/bin/sh\nprintf '${member.cliPid}\\n'\n`, { mode: 0o700 });
+  const envFile = join(home, 'hook.env'); writeFileSync(envFile, `ALTCLI_TOKEN=${'a'.repeat(64)}\n`, { mode: 0o600 });
+  const server = createServer(async (request, response) => {
+    const chunks = []; for await (const chunk of request) chunks.push(chunk);
+    try {
+      const receipt = await plane.recordEvent(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+      response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(receipt));
+    } catch { response.writeHead(500); response.end(); }
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address(); assert.ok(address && typeof address !== 'string');
+  const env = { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH ?? ''}`, TMUX_PANE: member.identity.paneId,
+    TMUX: `${member.identity.socketPath},${member.identity.serverPid},0`, ALTCLI_ENV: envFile, ALTCLI_URL: `http://127.0.0.1:${address.port}` };
+  const hook = fileURLToPath(new URL('../../hooks/altcli-turn-complete.mjs', import.meta.url));
+  const invoke = (payload: object) => new Promise<void>((resolve, reject) => {
+    const child = execFile(process.execPath, [hook, 'claude'], { env, timeout: 5000 }, (error, stdout, stderr) => {
+      if (error) reject(error); else { try { assert.equal(stdout, ''); assert.equal(stderr, ''); resolve(); } catch (failure) { reject(failure); } }
+    });
+    child.stdin!.on('error', reject); child.stdin!.end(JSON.stringify({ session_id: 'hook-session', ...payload }));
+    adapter.trees.set('claude', [{ pid: String(child.pid), command: process.execPath }]);
+    child.once('exit', () => adapter.trees.set('claude', []));
+  });
+  try {
+    await invoke({ hook_event_name: 'UserPromptSubmit', prompt_id: 'planning-prompt', prompt: plane.workflow.execution(input.requestId)!.wireText });
+    const slot = join(home, '.local/share/altcli/hook-turns', `${contextKey(member.identity, 'hook-session')}.json`);
+    let finishedBeforeDelivery = false;
+    adapter.send = async (_session, text) => {
+      finishedBeforeDelivery = JSON.parse(readFileSync(slot, 'utf8')).phase === 'finished';
+      assert.deepEqual(adapter.trees.get('claude'), [], 'Stop subprocess must exit before delivery');
+      sent.push(text);
+      await invoke({ hook_event_name: 'UserPromptSubmit', prompt_id: 'implementation-prompt', prompt: text });
+    };
+    await invoke({ hook_event_name: 'Stop', prompt_id: 'planning-prompt', last_assistant_message: 'Plan published.', background_tasks: [], session_crons: [] });
+    await waitFor(() => sent.length === 2 && plane.workflow.execution(run(input.requestId).currentCommandId)!.status === 'delivered');
+    assert.equal(finishedBeforeDelivery, true); assert.equal(run(input.requestId).status, 'running');
+    assert.equal(plane.workflow.execution(run(input.requestId).currentCommandId)!.sourceTurnId, 'implementation-prompt');
+    assert.equal(JSON.parse(readFileSync(slot, 'utf8')).context.commandId, run(input.requestId).currentCommandId);
+  } finally {
+    server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+});
 test('Plan binds discovered solo identity at Start and keeps the frozen binding into Implementation', async () => {
   const template = request(); plane.removeGroup(group.id); plane.remove('codex'); plane.remove('claude');
   const list = adapter.listPanes.bind(adapter); adapter.listPanes = async () => (await list()).filter((pane) => pane.identity.paneId === '%0');

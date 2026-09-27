@@ -296,6 +296,8 @@ test('discard warns about the work that would be lost and requires the exact bra
     return route.fulfill({ json: { input: route.request().postDataJSON(), status: 'discarded', message: 'Discarded feature/finished: its worktree and branch are deleted. Run history is retained.', updatedAt: new Date().toISOString() } });
   });
   await page.getByRole('button', { name: 'Recheck', exact: true }).click(); await expandWorktree(page, 'finished');
+  await page.getByRole('button', { name: 'Open finished', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Projects', exact: true }).click();
   await page.getByRole('button', { name: 'Discard feature/finished', exact: true }).click();
   const region = page.getByRole('region', { name: 'Discard feature/finished', exact: true });
   await expect(region).toContainText('Lost: 3 commits not in main and 2 uncommitted changes');
@@ -308,6 +310,10 @@ test('discard warns about the work that would be lost and requires the exact bra
   await expect(page.getByRole('button', { name: 'Open finished', exact: true })).toHaveCount(0);
   await expect(notice(page, 'worktree and branch are deleted')).toBeVisible();
   expect(posted).toEqual([{ ...shown, confirmBranch: 'feature/finished', confirm: true }]);
+  await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Console', exact: true }).click();
+  await expect(page.getByRole('combobox', { name: 'Switch project' })).toHaveValue(project.id);
+  await expect(page.getByRole('combobox', { name: 'Switch worktree' })).toHaveValue('');
+  await expect(page.locator('.empty-console')).toContainText(`This worktree is no longer available. Choose another worktree in ${project.name}.`);
 });
 test('deletion actions stay clickable while agents occupy a worktree: the hint names them and the click shows the server refusal', async ({ page, request }) => {
   const inventory = await fixture(page, request); const project = inventory.projects![0]!;
