@@ -90,7 +90,7 @@ test('each worktree keeps its buttons on one row, with reasons and opened forms 
   const topOf = async (name: string, selector: string) => card(name).locator(selector).evaluateAll((all) => all.map((e) => e.getBoundingClientRect().top));
   for (const name of ['login', 'inspect']) {
     await expandWorktree(page, name);
-    await expect(card(name).locator('.worktree-controls button')).toHaveText(['Open console', 'Squash into main', 'Finish branch…', 'Check removal', 'Discard…', 'Launch agents…']);
+    await expect(card(name).locator('.worktree-controls button')).toHaveText(['Open console', 'Squash into main', 'Update from main', 'Rename…', 'Finish branch…', 'Check removal', 'Discard…', 'Launch agents…']);
     const buttons = await rows(name), bottom = Math.max(...buttons.map((b) => b.bottom));
     // A phone may wrap the row, but never overflows it; the desktop card is wide enough for one row.
     if (info.project.name === 'desktop') expect(new Set(buttons.map((b) => b.middle)).size).toBe(1);
@@ -101,8 +101,8 @@ test('each worktree keeps its buttons on one row, with reasons and opened forms 
   await card('login').getByRole('button', { name: 'Launch agents…' }).click();
   const form = card('login').getByRole('region', { name: 'Launch agents in /home/fixture/tasks/login' }); await expect(form).toBeVisible();
   const buttons = await rows('login');
-  if (info.project.name === 'desktop') expect(new Set(buttons.slice(0, 6).map((b) => b.middle)).size).toBe(1);
-  expect((await form.boundingBox())!.y).toBeGreaterThanOrEqual(Math.max(...buttons.slice(0, 6).map((b) => b.bottom)));
+  if (info.project.name === 'desktop') expect(new Set(buttons.slice(0, 8).map((b) => b.middle)).size).toBe(1);
+  expect((await form.boundingBox())!.y).toBeGreaterThanOrEqual(Math.max(...buttons.slice(0, 8).map((b) => b.bottom)));
   await page.screenshot({ path: info.outputPath('worktree-button-row.png'), fullPage: true });
 });
 
@@ -265,9 +265,9 @@ test('squash into main previews the exact operation and message, requires confir
     return route.fulfill({ json: { input: route.request().postDataJSON(), status: 'integrated', message: 'Squashed feature/finished into main as 0123456789ab. Use Check removal when you are done.', updatedAt: new Date().toISOString(), commit: '0123456789ab' + 'f'.repeat(28) } });
   });
   await page.getByRole('button', { name: 'Recheck', exact: true }).click(); await expandWorktree(page, 'finished');
-  // The lifecycle actions read top to bottom: squash, finish branch, removal check, discard; the branch is not repeated in the visible labels.
+  // The lifecycle actions read left to right: squash, update, rename, finish branch, removal check, discard; the branch is not repeated in the visible labels.
   const card = page.getByRole('list', { name: 'Available worktrees' }).getByRole('listitem').filter({ hasText: 'finished' });
-  await expect(card.locator('.worktree-controls').getByRole('button')).toHaveText(['Open console', 'Squash into main', 'Finish branch…', 'Check removal', 'Discard…', 'Launch agents…']);
+  await expect(card.locator('.worktree-controls').getByRole('button')).toHaveText(['Open console', 'Squash into main', 'Update from main', 'Rename…', 'Finish branch…', 'Check removal', 'Discard…', 'Launch agents…']);
   await page.getByRole('button', { name: 'Squash feature/finished into main', exact: true }).click();
   const region = page.getByRole('region', { name: 'Squash feature/finished', exact: true });
   await expect(region).toContainText('Squash 2 commits from feature/finished (bbbbbbb..aaaaaaa) into main');
@@ -283,6 +283,86 @@ test('squash into main previews the exact operation and message, requires confir
   // The confirmation is compact: consent digest plus the edited message, never the (possibly large) preview echoed back.
   expect(posted).toEqual([{ projectId: project.id, worktreeId: target.id, through: shown.through, requestId: shown.requestId, consent: shown.consent, message: 'feat: finished\n\nSquash of feature/finished.\n', confirm: true }]);
   await expect(page.getByRole('button', { name: 'Squash feature/finished into main', exact: true })).toBeVisible();
+});
+test('Update from main previews the replay and the kept old tip, and confirms only the previewed consent', async ({ page, request }, info) => {
+  const inventory = await fixture(page, request); const project = inventory.projects![0]!;
+  const target = tree('/home/fixture/tasks/finished', 'feature/finished'); project.worktrees.push(target);
+  const shown = { projectId: project.id, worktreeId: target.id, requestId: crypto.randomUUID(), worktree: target.identity, branch: 'feature/finished', head: target.head,
+    targetRef: 'refs/heads/main', targetHead: 'b'.repeat(40), boundaryBy: 'squash', boundary: 'c'.repeat(40), replay: [{ sha: 'd'.repeat(40), subject: 'later task work', tree: 'e'.repeat(40) }],
+    tree: 'e'.repeat(40), fastForward: false, commands: ['git -C /home/fixture/tasks/finished checkout --no-overwrite-ignore --no-recurse-submodules -B feature/finished <last replayed commit>'], consent: 'f'.repeat(64) };
+  const posted: unknown[] = [];
+  await page.route('**/api/v1/projects/worktrees/update/preview', (route) => route.fulfill({ json: shown }));
+  await page.route('**/api/v1/projects/worktrees/update', (route) => {
+    posted.push(route.request().postDataJSON());
+    return route.fulfill({ json: { input: { ...shown, recoveryRef: `refs/altcli/preserved/${shown.requestId}`, confirm: true }, status: 'updated', message: 'Updated feature/finished by replaying 1 commit onto main.', updatedAt: new Date().toISOString(), commit: '0'.repeat(40) } });
+  });
+  await page.getByRole('button', { name: 'Recheck', exact: true }).click(); await expandWorktree(page, 'finished');
+  await page.getByRole('button', { name: 'Update feature/finished from main', exact: true }).click();
+  const region = page.getByRole('region', { name: 'Update feature/finished', exact: true });
+  await expect(region).toContainText('Replay 1 commit of feature/finished onto main at bbbbbbbbbbbb, without conflicts.');
+  await expect(region).toContainText('main already contains the task commits through cccccccccccc as a squash.');
+  await expect(region).toContainText('later task work'); await expect(region).toContainText('kept under refs/altcli/preserved');
+  await expect(region).toContainText('Agents here must be idle'); expect(posted).toEqual([]);
+  await page.screenshot({ path: info.outputPath('update-worktree.png'), fullPage: true });
+  await region.getByRole('button', { name: 'Confirm update', exact: true }).click();
+  await expect(notice(page, 'Updated feature/finished by replaying 1 commit onto main.')).toBeVisible();
+  expect(posted).toEqual([{ projectId: project.id, worktreeId: target.id, requestId: shown.requestId, consent: shown.consent, confirm: true }]);
+});
+test('Rename previews the unchanged directory and uncommitted work, and editing the name revokes the preview', async ({ page, request }) => {
+  const inventory = await fixture(page, request); const project = inventory.projects![0]!;
+  const target = tree('/home/fixture/tasks/finished', 'feature/finished'); project.worktrees.push(target);
+  const previews: { newBranch: string }[] = []; const posted: unknown[] = [];
+  await page.route('**/api/v1/projects/worktrees/rename/preview', (route) => {
+    const body = route.request().postDataJSON() as { newBranch: string }; previews.push(body);
+    return route.fulfill({ json: { projectId: project.id, worktreeId: target.id, newBranch: body.newBranch, requestId: crypto.randomUUID(), worktree: target.identity, branch: 'feature/finished',
+      head: target.head, fingerprint: '1'.repeat(64), dirty: true, checkpoints: 1, commands: [`git -C /home/fixture/tasks/finished branch -m feature/finished ${body.newBranch}`] } });
+  });
+  await page.route('**/api/v1/projects/worktrees/rename', (route) => {
+    posted.push(route.request().postDataJSON());
+    return route.fulfill({ json: { input: route.request().postDataJSON(), status: 'renamed', message: 'Renamed feature/finished to feature/next.', updatedAt: new Date().toISOString() } });
+  });
+  await page.getByRole('button', { name: 'Recheck', exact: true }).click(); await expandWorktree(page, 'finished');
+  await page.getByRole('button', { name: 'Rename branch feature/finished', exact: true }).click();
+  const field = page.getByLabel('New branch name', { exact: true }); await expect(field).toHaveValue('feature/finished');
+  await expect(page.getByRole('button', { name: 'Preview rename', exact: true })).toBeDisabled(); // the same name renames nothing
+  await field.fill('feature/draft'); await page.getByRole('button', { name: 'Preview rename', exact: true }).click();
+  const region = page.getByRole('region', { name: 'Rename feature/finished', exact: true });
+  await expect(region).toContainText('Rename feature/finished to feature/draft');
+  await expect(region).toContainText('including your uncommitted changes'); await expect(region).toContainText('1 recorded squash batch carries over');
+  await field.fill('feature/next'); await expect(region).toHaveCount(0); expect(posted).toEqual([]); // editing the name revokes the preview
+  await page.getByRole('button', { name: 'Preview rename', exact: true }).click();
+  await page.getByRole('button', { name: 'Confirm rename', exact: true }).click();
+  await expect(notice(page, 'Renamed feature/finished to feature/next.')).toBeVisible();
+  expect(previews.map((p) => p.newBranch)).toEqual(['feature/draft', 'feature/next']);
+  expect(posted).toEqual([expect.objectContaining({ newBranch: 'feature/next', branch: 'feature/finished', fingerprint: '1'.repeat(64), confirm: true })]);
+});
+test('a lost rename response stays inspectable after a view change, and is never resent', async ({ page, request }) => {
+  const inventory = await fixture(page, request); const project = inventory.projects![0]!;
+  const target = tree('/home/fixture/tasks/finished', 'feature/finished'); project.worktrees.push(target);
+  const shown = { projectId: project.id, worktreeId: target.id, newBranch: 'feature/next', requestId: crypto.randomUUID(), worktree: target.identity, branch: 'feature/finished',
+    head: target.head, fingerprint: '1'.repeat(64), dirty: false, checkpoints: 0, commands: ['git -C /home/fixture/tasks/finished branch -m feature/finished feature/next'] };
+  let renames = 0; const inspected: unknown[] = [];
+  await page.route('**/api/v1/projects/worktrees/rename/preview', (route) => route.fulfill({ json: shown }));
+  await page.route('**/api/v1/projects/worktrees/rename', (route) => { renames++; return route.abort(); });
+  await page.route('**/api/v1/projects/worktrees/rename/reconcile', (route) => {
+    inspected.push(route.request().postDataJSON());
+    return route.fulfill({ json: { input: { ...shown, confirm: true }, status: 'renamed', message: 'Rename to feature/next verified; no Git changes were made by inspection.', updatedAt: new Date().toISOString() } });
+  });
+  await page.getByRole('button', { name: 'Recheck', exact: true }).click(); await expandWorktree(page, 'finished');
+  await page.getByRole('button', { name: 'Rename branch feature/finished', exact: true }).click();
+  await page.getByLabel('New branch name', { exact: true }).fill('feature/next');
+  await page.getByRole('button', { name: 'Preview rename', exact: true }).click();
+  await page.getByRole('button', { name: 'Confirm rename', exact: true }).click();
+  const inspect = page.getByRole('button', { name: 'Inspect this rename result', exact: true }); await expect(inspect).toBeVisible();
+  // Changing views revokes the confirmation, not the identity of the request already sent.
+  const sections = page.getByRole('navigation', { name: 'Sections' });
+  await sections.getByRole('button', { name: 'Console', exact: true }).click(); await sections.getByRole('button', { name: 'Projects', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Rename feature/finished', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Preview rename', exact: true })).toBeDisabled();
+  await inspect.click();
+  await expect(notice(page, 'Rename to feature/next verified')).toBeVisible();
+  expect(inspected).toEqual([{ requestId: shown.requestId }]); expect(renames).toBe(1);
+  await expect(inspect).toHaveCount(0); await expect(page.getByRole('button', { name: 'Rename branch feature/finished', exact: true })).toBeEnabled();
 });
 test('discard warns about the work that would be lost and requires the exact branch name', async ({ page, request }, info) => {
   const inventory = await fixture(page, request); const project = inventory.projects![0]!;

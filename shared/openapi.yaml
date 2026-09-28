@@ -719,6 +719,116 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/WorktreeIntegration'}
         '404': {description: Unknown integration request}
+  /api/v1/projects/worktrees/update/preview:
+    post:
+      operationId: previewWorktreeUpdate
+      summary: Preview Update from main without changing refs, index or checkout
+      description: Requires a linked task worktree on a named non-integration branch with a clean checkout, no stopped merge, rebase, cherry-pick, revert or bisect, no sparse checkout and no submodules in either tip. The target is the local integration branch (main, else the recorded default); nothing is fetched. A task HEAD the target contains fast-forwards. A branch fully proven integrated by squash evidence moves to the target tip; commits after the last applicable squash checkpoint, or after the single merge base when nothing is integrated, are replayed with `git merge-tree` (at most 100, linear only). A replay that conflicts or produces no change is refused. Replay needs a committer identity and refuses commit signing and non-default message encodings. The boundary, target and every replayed commit are inspected before the first merge calculation, and every generated tree (including the one the checkout writes) before the preview is returned. Selected content filters, external filesystem-monitor hooks and configured merge drivers are refused, including attributes that become effective only in the combined tree. A non-fast-forward update refuses a branch with an upstream or a remote-tracking copy of the same name. Untracked or ignored files in the way of incoming tracked files refuse it. Run or delivery ownership refuses the preview. Preview may create unreachable Git objects.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WorktreeUpdateInput'}
+      responses:
+        '200':
+          description: The exact boundary, replayed commits, resulting tree and Git operations
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorktreeUpdatePreview'}
+        '409': {description: Dirty, busy, published or unsupported worktree, already current, ambiguous baseline, replay conflict or redundant commit, local obstruction}
+  /api/v1/projects/worktrees/update:
+    post:
+      operationId: updateWorktree
+      summary: Confirmed Update from main
+      description: The compact confirmation repeats the preview's consent digest; the server re-derives the preview and refuses a changed digest. The claim is recorded in one transaction with the run ledger (a run or unresolved delivery on the worktree refuses it, and run starts refuse a worktree with an applying or uncertain update). Ownership and writer evidence for every pane in the worktree are rechecked before and after re-deriving; published handoff content is archived in the journal. Replayed commits are written with `git commit-tree --no-gpg-sign`, keeping author, date and message, before anything visible changes. After a final writer check it creates `refs/altcli/preserved/<requestId>` at the old tip (create-only) and runs `git checkout --no-overwrite-ignore --no-recurse-submodules -B <branch> <tip>` with hooks disabled. The branch attached and clean at the recorded tip, the preserved old tip, the previewed replay chain and the branch's previous value are verified; anything else after the first Git write is uncertain and never retried or rolled back. A verified update retires the worktree's squash checkpoints. Nothing is pushed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WorktreeUpdateRequest'}
+      responses:
+        '200':
+          description: Durable update result; uncertain results retain ownership and are never retried
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorktreeUpdate'}
+        '403': {description: Host input disabled}
+        '409': {description: Changed consent, conflicting request, project setup owner or run ownership}
+  /api/v1/projects/worktrees/update/reconcile:
+    post:
+      operationId: inspectWorktreeUpdate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [requestId]
+              properties:
+                requestId: {type: string, format: uuid}
+      responses:
+        '200':
+          description: Read-only inspection. The verified result, or a branch that has moved on from the recorded tip with the replay chain and preserved old tip intact, completes the update. A clean checkout still at the old tip releases the hold as failed once writer evidence is settled; a created recovery ref is kept and reported. Anything else retains ownership; nothing is retried
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorktreeUpdate'}
+        '404': {description: Unknown update request}
+  /api/v1/projects/worktrees/rename/preview:
+    post:
+      operationId: previewWorktreeRename
+      summary: Preview renaming a task branch in place
+      description: Requires a linked task worktree on a named non-integration branch. The new name must be a valid, unused task branch name that is not an integration branch and does not clash with an existing branch by case or path prefix. A branch with an upstream or a remote-tracking copy of the same name, or a worktree in a stopped Git operation, is refused. Uncommitted work is allowed and pinned by content fingerprint. The directory does not move.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WorktreeRenameInput'}
+      responses:
+        '200':
+          description: The exact rename, the pinned content and the squash checkpoints that carry over
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorktreeRenamePreview'}
+        '409': {description: Same, taken, conflicting, integration or published name, busy worktree or inaccessible worktree}
+  /api/v1/projects/worktrees/rename:
+    post:
+      operationId: renameWorktreeBranch
+      summary: Confirmed branch rename
+      description: The whole preview plus confirm:true is the consent; the server re-derives it before and after the ownership and writer checks and refuses any difference, including the content fingerprint. Writer evidence is checked once more after the final re-derivation, immediately before Git runs, with one activity revision spanning the request. The claim is recorded with the same run-ledger transaction as Update. It runs `git branch -m <branch> <newBranch>` (never -M) with hooks disabled and verifies the new name at the confirmed head, the old name gone and HEAD attached to the new name. Squash checkpoints follow the rename. Files, the directory, agents and tmux session names are unchanged; nothing is pushed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WorktreeRenameConfirm'}
+      responses:
+        '200':
+          description: Durable rename result; uncertain results retain ownership and are never retried
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorktreeRename'}
+        '403': {description: Host input disabled}
+        '409': {description: Changed worktree, conflicting request, project setup owner or run ownership}
+  /api/v1/projects/worktrees/rename/reconcile:
+    post:
+      operationId: inspectWorktreeRename
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [requestId]
+              properties:
+                requestId: {type: string, format: uuid}
+      responses:
+        '200':
+          description: Read-only inspection. The verified rename completes it; the old name still at the confirmed head with no new name releases the hold as failed; anything else retains ownership. Nothing is retried
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WorktreeRename'}
+        '404': {description: Unknown rename request}
   /api/v1/projects/worktrees/discard/preview:
     post:
       operationId: previewWorktreeDiscard
@@ -1614,6 +1724,14 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/TaskFinish'
+        updates:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorktreeUpdate'
+        renames:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorktreeRename'
     ProjectWorktree:
       type: object
       required: [id, path, branch, head, main, identity, error]
@@ -1776,6 +1894,112 @@ components:
         message: {type: string}
         updatedAt: {type: string, format: date-time}
         commit: {type: [string, 'null'], description: The verified squash commit on the integration branch.}
+    WorktreeUpdateInput:
+      type: object
+      additionalProperties: false
+      required: [projectId, worktreeId]
+      properties:
+        projectId: {type: string}
+        worktreeId: {type: string}
+    WorktreeUpdatePreview:
+      type: object
+      required: [projectId, worktreeId, requestId, worktree, branch, head, targetRef, targetHead, boundaryBy, boundary, replay, tree, fastForward, commands, consent]
+      properties:
+        projectId: {type: string}
+        worktreeId: {type: string}
+        requestId: {type: string, format: uuid}
+        worktree: {$ref: '#/components/schemas/WorktreeIdentity'}
+        branch: {type: string}
+        head: {$ref: '#/components/schemas/GitSha', description: The current task tip, kept under the recovery ref when the update is confirmed.}
+        targetRef: {type: string}
+        targetHead: {$ref: '#/components/schemas/GitSha'}
+        boundaryBy: {type: string, enum: [ancestry, squash, base], description: 'ancestry: the target contains the task tip; squash: squash evidence or a checkpoint proves the content through the boundary; base: nothing is integrated, so every commit after the merge base is replayed.'}
+        boundary: {$ref: '#/components/schemas/GitSha', description: Last task commit whose content the target already contains; equals head when fully integrated.}
+        replay:
+          type: array
+          maxItems: 100
+          description: Commits after the boundary, oldest first, each with the tree it produces on the target; empty for a fully integrated branch.
+          items:
+            type: object
+            additionalProperties: false
+            required: [sha, subject, tree]
+            properties:
+              sha: {$ref: '#/components/schemas/GitSha'}
+              subject: {type: string}
+              tree: {$ref: '#/components/schemas/GitSha'}
+        tree: {$ref: '#/components/schemas/GitSha', description: Tree of the new branch tip.}
+        fastForward: {type: boolean, description: The old tip is an ancestor of the new one, so no history is rewritten.}
+        commands: {type: array, maxItems: 4, items: {type: string}, description: The exact Git operations confirmation authorizes, for display.}
+        consent: {type: string, pattern: '^[0-9a-f]{64}$', description: Server digest of every pinned field except requestId.}
+    WorktreeUpdateRequest:
+      type: object
+      additionalProperties: false
+      required: [projectId, worktreeId, requestId, consent, confirm]
+      description: Compact confirmation; the server re-derives the preview and requires its consent digest to match.
+      properties:
+        projectId: {type: string, maxLength: 200}
+        worktreeId: {type: string, maxLength: 200}
+        requestId: {type: string, format: uuid}
+        consent: {type: string, pattern: '^[0-9a-f]{64}$'}
+        confirm: {type: boolean, const: true}
+    WorktreeUpdateConfirm:
+      description: The durable consent record, the re-derived preview with the create-only recovery ref.
+      allOf:
+      - $ref: '#/components/schemas/WorktreeUpdatePreview'
+      - type: object
+        required: [recoveryRef, confirm]
+        properties:
+          recoveryRef: {type: string, pattern: '^refs/altcli/preserved/', description: refs/altcli/preserved/<requestId>, created at the old tip before the branch moves and never deleted by the app.}
+          confirm: {type: boolean, const: true}
+      unevaluatedProperties: false
+    WorktreeUpdate:
+      type: object
+      required: [input, status, message, updatedAt, commit]
+      properties:
+        input: {$ref: '#/components/schemas/WorktreeUpdateConfirm'}
+        status: {type: string, enum: [applying, updated, uncertain, failed]}
+        message: {type: string}
+        updatedAt: {type: string, format: date-time}
+        commit: {type: [string, 'null'], description: The new branch tip, recorded before the branch moves (the target head or the last replayed commit).}
+    WorktreeRenameInput:
+      type: object
+      additionalProperties: false
+      required: [projectId, worktreeId, newBranch]
+      properties:
+        projectId: {type: string}
+        worktreeId: {type: string}
+        newBranch: {type: string, maxLength: 150, pattern: '^[A-Za-z0-9][A-Za-z0-9/_.-]*$'}
+    WorktreeRenamePreview:
+      type: object
+      required: [projectId, worktreeId, newBranch, requestId, worktree, branch, head, fingerprint, dirty, checkpoints, commands]
+      properties:
+        projectId: {type: string}
+        worktreeId: {type: string}
+        newBranch: {type: string}
+        requestId: {type: string, format: uuid}
+        worktree: {$ref: '#/components/schemas/WorktreeIdentity'}
+        branch: {type: string, description: The current branch name.}
+        head: {$ref: '#/components/schemas/GitSha'}
+        fingerprint: {type: string, pattern: '^[0-9a-f]{64}$', description: Digest of HEAD, index entries, unstaged content and untracked file contents; uncommitted work is carried unchanged.}
+        dirty: {type: boolean}
+        checkpoints: {type: integer, minimum: 0, description: Recorded squash batches whose boundary carries over to the new name.}
+        commands: {type: array, maxItems: 10, items: {type: string}}
+    WorktreeRenameConfirm:
+      allOf:
+      - $ref: '#/components/schemas/WorktreeRenamePreview'
+      - type: object
+        required: [confirm]
+        properties:
+          confirm: {type: boolean, const: true}
+      unevaluatedProperties: false
+    WorktreeRename:
+      type: object
+      required: [input, status, message, updatedAt]
+      properties:
+        input: {$ref: '#/components/schemas/WorktreeRenameConfirm'}
+        status: {type: string, enum: [applying, renamed, uncertain, failed]}
+        message: {type: string}
+        updatedAt: {type: string, format: date-time}
     WorktreeDiscardInput:
       type: object
       additionalProperties: false

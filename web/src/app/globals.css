@@ -163,6 +163,8 @@ details.advanced[open] summary { margin-bottom:12px; }
 .worktrees-heading > .create-worktree > :not(button) { flex-basis:100%; min-width:0; max-width:100%; order:1; }
 .worktree-actions .notice { margin-bottom:4px; }
 .worktree-actions .notice label { display:grid; gap:6px; margin:10px 0; }
+.worktree-actions .notice ol { margin:6px 0 10px; padding-left:18px; }
+.worktree-actions .notice ol li { border:0; border-radius:0; background:none; min-width:0; }
 .worktree-actions textarea, .worktree-actions input { width:100%; font:inherit; line-height:1.5; background:#101a1d; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:9px 11px; }
 .worktree-actions textarea { min-height:110px; resize:vertical; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
 .commands { white-space:pre-wrap; overflow-wrap:anywhere; }

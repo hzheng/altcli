@@ -20,7 +20,7 @@ import { parseDiscard, parseIntegrate, parseWorktreeCreate, parseWorktreePreview
 import { jsonBody } from '../src/server/http.ts';
 import { MAX_MESSAGE_JSON_BYTES, messageJsonBytes } from '../src/core/squash-message.ts';
 import type { HookEvent, ManagedSession, Workspace } from '../src/contracts/workflow.ts';
-import type { WorktreeCreateInput, WorktreeIntegrationPreview } from '../src/contracts/projects.ts';
+import type { WorktreeCreateInput, WorktreeIntegrationPreview, WorktreeRename, WorktreeUpdate, WorktreeUpdatePreview } from '../src/contracts/projects.ts';
 
 // Real Git / SQLite, isolated task-worktree root. No installed agents, actual home or live controller is used.
 let directory: string; let root: string; let store: Store; let catalog: ProjectCatalog; let config: Config;
@@ -875,14 +875,14 @@ test('the store version advances for the new operation owners: unresolved integr
   store.saveWorktreeIntegration({ input: integration, status: 'uncertain', message: 'fixture', updatedAt: new Date().toISOString(), commit: null });
   const discard = { ...await catalog.previewDiscard(target), confirmBranch: 'feature/finished', confirm: true as const };
   store.saveWorktreeDiscard({ input: discard, status: 'uncertain', message: 'fixture', updatedAt: new Date().toISOString() });
-  assert.equal(store.db.pragma('user_version', { simple: true }), 16);
+  assert.equal(store.db.pragma('user_version', { simple: true }), 17);
   store.close(); store = new Store(config.dataDir); catalog = new ProjectCatalog(store, config);
-  assert.equal(store.db.pragma('user_version', { simple: true }), 16);
+  assert.equal(store.db.pragma('user_version', { simple: true }), 17);
   assert.deepEqual(store.worktreeIntegrations().map((op) => [op.input.requestId, op.status]), [[integration.requestId, 'uncertain']]);
   assert.deepEqual(store.worktreeDiscards().map((op) => [op.input.requestId, op.status]), [[discard.requestId, 'uncertain']]);
   assert.throws(() => catalog.assertWorktreeReady(root), /squash integration/); assert.throws(() => catalog.assertWorktreeReady(request.path), /discard/);
   await assert.rejects(catalog.create(await input('another')), /owns this project/);
-  store.db.pragma('user_version = 17'); store.close();
+  store.db.pragma('user_version = 18'); store.close();
   assert.throws(() => new Store(config.dataDir), /Unsupported database version/);
   store = new Store(join(directory, 'fresh-metadata')); // afterEach closes this one
 });
@@ -1062,7 +1062,7 @@ test('v10 full-branch squash records remain valid batch boundaries after upgrade
   const legacy = JSON.parse(JSON.stringify(result)); delete legacy.input.through; delete legacy.input.previousCommit;
   store.saveWorktreeIntegration(legacy); store.db.pragma('user_version = 10'); store.close();
   store = new Store(config.dataDir); catalog = new ProjectCatalog(store, config);
-  assert.equal(store.db.pragma('user_version', { simple: true }), 16);
+  assert.equal(store.db.pragma('user_version', { simple: true }), 17);
   assert.equal((await catalog.previewRemoval(target)).integratedCommit, result.commit);
   writeFileSync(join(request.path, 'later.txt'), 'later batch\n'); git(request.path, 'add', '.'); git(request.path, 'commit', '-m', 'later');
   const next = await catalog.previewIntegration(target);
@@ -1158,4 +1158,221 @@ test('adding the checkout the browser showed refuses a retargeted symlink, a rep
   // Path-only entry stays compatible for existing callers and deduplicates by the common directory.
   assert.deepEqual(await catalog.add({ path: root }), added);
   await assert.rejects(catalog.add({ path: root, expected: { ...expected, extra: 1 } }), /Unknown/);
+});
+
+/** Update from main and branch rename: real Git and SQLite in disposable directories. */
+const confirmUpdate = (preview: WorktreeUpdatePreview) => ({ projectId: preview.projectId, worktreeId: preview.worktreeId, requestId: preview.requestId, consent: preview.consent, confirm: true as const });
+const excludeLocally = (pattern: string) => writeFileSync(join(root, '.git', 'info', 'exclude'), `${pattern}\n`); // shared by every worktree of the repository
+function commitOnMain(file: string, content: string) { writeFileSync(join(root, file), content); git(root, 'add', file); git(root, 'commit', '-qm', `main ${file}`); return git(root, 'rev-parse', 'HEAD'); }
+test('update fast-forwards a branch main already contains, keeping its directory and ignored environment', async () => {
+  const { request, target } = await taskFixture(); const old = git(request.path, 'rev-parse', 'HEAD');
+  git(root, 'merge', '--ff-only', '-q', 'feature/finished'); const main = commitOnMain('later.txt', 'later\n');
+  excludeLocally('local.env'); writeFileSync(join(request.path, 'local.env'), 'SECRET_FIXTURE=1\n');
+  const marker = join(directory, 'hook-ran');
+  for (const hook of ['reference-transaction', 'post-checkout']) { writeFileSync(join(root, '.git', 'hooks', hook), `#!/bin/sh\necho ${hook} >> '${marker}'\n`); chmodSync(join(root, '.git', 'hooks', hook), 0o755); }
+  const preview = await catalog.previewUpdate(target);
+  assert.deepEqual([preview.boundaryBy, preview.boundary, preview.replay, preview.fastForward, preview.targetHead], ['ancestry', old, [], true, main]);
+  const result = await catalog.update(confirmUpdate(preview), noGuard, noArchive);
+  assert.equal(result.status, 'updated', result.message); assert.equal(result.commit, main);
+  assert.equal(git(request.path, 'rev-parse', 'HEAD'), main); assert.equal(git(request.path, 'symbolic-ref', 'HEAD'), 'refs/heads/feature/finished');
+  assert.equal(git(root, 'rev-parse', `refs/altcli/preserved/${preview.requestId}`), old);
+  assert.equal(readFileSync(join(request.path, 'local.env'), 'utf8'), 'SECRET_FIXTURE=1\n'); assert.equal((await branchState(request.path)).clean, true);
+  assert.equal(existsSync(marker), false); // hooks are disabled for the recovery ref and the checkout
+  assert.equal(catalog.projectHeld(target.projectId), false);
+});
+test('update after a full squash moves the branch to main, keeps the old tip and retires the squash boundary', async () => {
+  const { request, target } = await taskFixture(); const old = git(request.path, 'rev-parse', 'HEAD');
+  assert.equal((await catalog.integrate(confirmSquash(await catalog.previewIntegration(target)), noGuard)).status, 'integrated');
+  const preview = await catalog.previewUpdate(target); const main = git(root, 'rev-parse', 'HEAD');
+  assert.deepEqual([preview.boundaryBy, preview.boundary, preview.replay.length, preview.fastForward], ['squash', old, 0, false]);
+  let archived = 0;
+  const result = await catalog.update(confirmUpdate(preview), noGuard, async () => { archived++; return 2; });
+  assert.equal(result.status, 'updated', result.message); assert.equal(archived, 1); assert.match(result.message, /2 handoff commits were archived/);
+  assert.equal(git(request.path, 'rev-parse', 'HEAD'), main); assert.equal(git(root, 'rev-parse', `refs/altcli/preserved/${preview.requestId}`), old);
+  assert.deepEqual(store.worktreeIntegrations().map((op) => op.retired), [true]);
+  await assert.rejects(catalog.previewIntegration(target), /already integrated/); // the next batch starts from the updated baseline
+  await assert.rejects(catalog.previewUpdate(target), { code: 'ALREADY_CURRENT' });
+});
+test('update replays the commits after a squash batch onto main, keeping authors, dates and messages', async () => {
+  const { request, target } = await taskFixture();
+  const [second, first] = git(request.path, 'rev-list', '-2', 'HEAD').split('\n');
+  assert.equal((await catalog.integrate(confirmSquash(await catalog.previewIntegration({ ...target, through: first! })), noGuard)).status, 'integrated');
+  const main = commitOnMain('unrelated.txt', 'main work\n');
+  writeFileSync(join(request.path, 'third.txt'), 'third\n'); git(request.path, 'add', 'third.txt');
+  git(request.path, 'commit', '-qm', 'third task commit\n\nWith a body.', '--author', 'Ann Author <ann@example.invalid>', '--date', '2001-02-03T04:05:06+05:30');
+  const third = git(request.path, 'rev-parse', 'HEAD');
+  const preview = await catalog.previewUpdate(target);
+  assert.deepEqual([preview.boundaryBy, preview.boundary, preview.replay.map((step) => [step.sha, step.subject])], ['squash', first, [[second, 'second'], [third, 'third task commit']]]);
+  const result = await catalog.update(confirmUpdate(preview), noGuard, noArchive);
+  assert.equal(result.status, 'updated', result.message);
+  const [newThird, newSecond] = git(request.path, 'rev-list', '-2', 'HEAD').split('\n');
+  assert.equal(git(request.path, 'rev-parse', `${newSecond}^`), main);
+  assert.equal(git(request.path, 'log', '-1', '--format=%an|%ae|%ad|%B', '--date=raw', newThird!), git(request.path, 'log', '-1', '--format=%an|%ae|%ad|%B', '--date=raw', third));
+  assert.deepEqual(['app.txt', 'new.txt', 'third.txt', 'unrelated.txt'].map((file) => readFileSync(join(request.path, file), 'utf8')), ['two\n', 'added\n', 'third\n', 'main work\n']);
+  const next = await catalog.previewIntegration(target); // retired boundary: the next batch covers exactly the replayed commits
+  assert.deepEqual([next.mergeBase, next.commitCount, next.previousCommit], [main, 2, null]);
+});
+test('update rebases an unintegrated branch onto a newer main', async () => {
+  const { request, target } = await taskFixture(); const main = commitOnMain('unrelated.txt', 'main work\n');
+  const preview = await catalog.previewUpdate(target);
+  assert.deepEqual([preview.boundaryBy, preview.replay.length, preview.fastForward], ['base', 2, false]);
+  assert.equal((await catalog.update(confirmUpdate(preview), noGuard, noArchive)).status, 'updated');
+  assert.equal(git(request.path, 'rev-parse', 'HEAD~2'), main); assert.equal(readFileSync(join(request.path, 'unrelated.txt'), 'utf8'), 'main work\n');
+});
+test('update refuses conflicts, redundant and merge commits, dirty checkouts, obstructions and published copies without changing anything', async () => {
+  const { request, target } = await taskFixture(); const head = git(request.path, 'rev-parse', 'HEAD');
+  const unchanged = () => { assert.equal(git(request.path, 'rev-parse', 'HEAD'), head); assert.equal(store.worktreeUpdates().length, 0); };
+  commitOnMain('app.txt', 'main disagrees\n');
+  await assert.rejects(catalog.previewUpdate(target), (error: { code?: string; message: string }) => error.code === 'REPLAY_CONFLICT' && /app\.txt/.test(error.message)); unchanged();
+  git(root, 'reset', '-q', '--hard', 'HEAD~1'); commitOnMain('app.txt', 'one\n'); // main already has the first task commit's change
+  await assert.rejects(catalog.previewUpdate(target), { code: 'REPLAY_REDUNDANT' }); unchanged();
+  git(root, 'reset', '-q', '--hard', 'HEAD~1'); commitOnMain('unrelated.txt', 'main work\n');
+  writeFileSync(join(request.path, 'app.txt'), 'dirty\n'); await assert.rejects(catalog.previewUpdate(target), { code: 'WORKTREE_DIRTY' });
+  git(request.path, 'checkout', '-q', '--', 'app.txt');
+  git(root, 'update-ref', 'refs/remotes/origin/feature/finished', head);
+  await assert.rejects(catalog.previewUpdate(target), { code: 'UPDATE_PUBLISHED' }); git(root, 'update-ref', '-d', 'refs/remotes/origin/feature/finished');
+  excludeLocally('unrelated.txt'); writeFileSync(join(request.path, 'unrelated.txt'), 'local copy\n');
+  await assert.rejects(catalog.previewUpdate(target), (error: { code?: string; message: string }) => error.code === 'LOCAL_OBSTRUCTION' && /unrelated\.txt/.test(error.message));
+  assert.equal(readFileSync(join(request.path, 'unrelated.txt'), 'utf8'), 'local copy\n'); unlinkSync(join(request.path, 'unrelated.txt'));
+  git(request.path, 'switch', '-q', '-c', 'side', 'HEAD~1'); writeFileSync(join(request.path, 'side.txt'), 'side\n'); git(request.path, 'add', 'side.txt'); git(request.path, 'commit', '-qm', 'side');
+  git(request.path, 'switch', '-q', 'feature/finished'); git(request.path, 'merge', '-q', '--no-ff', '-m', 'merge side', 'side');
+  await assert.rejects(catalog.previewUpdate(target), { code: 'REPLAY_MERGE' });
+  assert.equal(store.worktreeUpdates().length, 0);
+});
+test('update refuses a replay whose combined attributes select a configured filter that neither input selects alone', async () => {
+  const { request, target } = await taskFixture(); const marker = join(directory, 'filter-ran');
+  // The task defines a macro nobody uses; main uses it in a nested file without defining it. Only the replayed tree selects the filter.
+  writeFileSync(join(request.path, '.gitattributes'), '[attr]reviewfilter filter=reviewfixture\n'); git(request.path, 'add', '.gitattributes'); git(request.path, 'commit', '-qm', 'define macro');
+  mkdirSync(join(root, 'sub')); writeFileSync(join(root, 'sub', '.gitattributes'), 'doc.txt reviewfilter\n'); writeFileSync(join(root, 'sub', 'doc.txt'), 'main doc\n');
+  git(root, 'add', 'sub'); git(root, 'commit', '-qm', 'use macro'); const head = git(request.path, 'rev-parse', 'HEAD');
+  const preview = await catalog.previewUpdate(target); // no command is configured for the filter yet
+  assert.equal(preview.boundaryBy, 'base');
+  // Configure the command after the fixture commits, so setup never invokes it.
+  git(root, 'config', 'filter.reviewfixture.smudge', `echo ran >> '${marker}'; cat`); git(root, 'config', 'filter.reviewfixture.clean', 'cat');
+  await assert.rejects(catalog.previewUpdate(target), { code: 'INTEGRATION_CONFIG' });
+  await assert.rejects(catalog.update(confirmUpdate(preview), noGuard, noArchive), { code: 'INTEGRATION_CONFIG' }); // confirmation re-derives the same check
+  assert.equal(existsSync(marker), false); assert.equal(git(request.path, 'rev-parse', 'HEAD'), head);
+  assert.equal(git(request.path, 'for-each-ref', 'refs/altcli/'), ''); assert.equal(store.worktreeUpdates().length, 0);
+});
+test('update confirmation refuses stale consent, is idempotent, and keeps an unverified result owned until read-only inspection', async () => {
+  const { request, target } = await taskFixture(); const head = git(request.path, 'rev-parse', 'HEAD');
+  commitOnMain('unrelated.txt', 'main work\n'); const stale = await catalog.previewUpdate(target); commitOnMain('later.txt', 'later\n');
+  await assert.rejects(catalog.update(confirmUpdate(stale), noGuard, noArchive), { code: 'WORKTREE_CHANGED' }); assert.equal(store.worktreeUpdates().length, 0);
+  const preview = await catalog.previewUpdate(target);
+  const exact = catalog['updatedExactly'].bind(catalog);
+  catalog['updatedExactly'] = async (operation: WorktreeUpdate, fresh: boolean) => fresh ? false : exact(operation, fresh);
+  const uncertain = await catalog.update(confirmUpdate(preview), noGuard, noArchive);
+  assert.equal(uncertain.status, 'uncertain', uncertain.message);
+  assert.deepEqual(await catalog.update(confirmUpdate(preview), noGuard, noArchive), uncertain); // a lost response is never replayed
+  await assert.rejects(catalog.update({ ...confirmUpdate(preview), consent: 'f'.repeat(64) }, noGuard, noArchive), { code: 'ID_CONFLICT' });
+  assert.equal(catalog.projectHeld(target.projectId), true); assert.throws(() => catalog.assertWorktreeReady(request.path), /update or branch rename/);
+  assert.equal(store.worktreeChangeHeld(request.path), true);
+  catalog = new ProjectCatalog(store, config); // restart keeps the owner; inspection verifies the recorded result
+  const inspected = await catalog.reconcileUpdate(preview.requestId, noGuard);
+  assert.equal(inspected.status, 'updated', inspected.message); assert.equal(git(request.path, 'rev-parse', 'HEAD~2'), git(root, 'rev-parse', 'HEAD'));
+  assert.equal(git(root, 'rev-parse', `refs/altcli/preserved/${preview.requestId}`), head); assert.equal(catalog.projectHeld(target.projectId), false);
+});
+test('an update whose checkout is refused after the recovery ref is inspected, released and keeps that ref', async () => {
+  const { request, target } = await taskFixture(); const head = git(request.path, 'rev-parse', 'HEAD');
+  commitOnMain('unrelated.txt', 'main work\n'); excludeLocally('unrelated.txt');
+  const preview = await catalog.previewUpdate(target); let calls = 0;
+  // A local file appears after the last check: the guarded checkout refuses to overwrite it.
+  const result = await catalog.update(confirmUpdate(preview), async () => { if (++calls === 3) writeFileSync(join(request.path, 'unrelated.txt'), 'appeared\n'); }, noArchive);
+  assert.equal(result.status, 'uncertain', result.message); assert.equal(git(request.path, 'rev-parse', 'HEAD'), head);
+  assert.equal(readFileSync(join(request.path, 'unrelated.txt'), 'utf8'), 'appeared\n');
+  const inspected = await catalog.reconcileUpdate(preview.requestId, noGuard);
+  assert.equal(inspected.status, 'failed', inspected.message); assert.match(inspected.message, /recovery ref .* is kept/);
+  assert.equal(git(root, 'rev-parse', `refs/altcli/preserved/${preview.requestId}`), head);
+});
+test('update and rename refuse unsettled writers through the control plane and admit an idle shell', async () => {
+  const { request, target } = await taskFixture(); commitOnMain('unrelated.txt', 'main work\n');
+  const { plane, adapter, panes } = await squashPlane();
+  const shell = { ...mockPanes()[2]!, cwd: request.path }; panes.push(shell);
+  let background = true;
+  adapter.foreground = async (session) => session.identity.paneId === shell.identity.paneId ? shell.identity.panePid : '100';
+  adapter.processes = async (session) => session.identity.paneId !== shell.identity.paneId ? [{ pid: '100', command: 'codex' }] : background ? [{ pid: '200', command: 'npm' }] : [];
+  await assert.rejects(plane.previewUpdate(target), (error: { code?: string; message: string }) => error.code === 'WORKTREE_WRITERS' && /process 200 \(npm\)/.test(error.message));
+  await assert.rejects(plane.previewRename({ ...target, newBranch: 'feature/next' }), { code: 'WORKTREE_WRITERS' });
+  background = false;
+  const preview = await plane.previewUpdate(target);
+  plane.workflow.store.db.prepare('INSERT INTO workflow_owners(lock_key, run_id) VALUES (?, ?)').run(preview.worktree.indexPath, 'fixture-run');
+  await assert.rejects(plane.updateWorktree(confirmUpdate(preview)), { code: 'WORKTREE_BUSY' }); // claimed with the run ledger in one transaction
+  plane.workflow.store.db.prepare('DELETE FROM workflow_owners WHERE run_id=?').run('fixture-run');
+  assert.equal((await plane.updateWorktree(confirmUpdate(preview))).status, 'updated');
+});
+test('update refuses hidden index flags, installed hook or skill links and the running host checkout; rename refuses only the flags', async () => {
+  const { request, target } = await taskFixture(); commitOnMain('unrelated.txt', 'main work\n');
+  git(request.path, 'update-index', '--skip-worktree', 'app.txt'); // the file's local state is hidden from status
+  await assert.rejects(catalog.previewUpdate(target), /assume-unchanged or skip-worktree/);
+  await assert.rejects(catalog.previewRename({ ...target, newBranch: 'feature/next' }), /assume-unchanged or skip-worktree/);
+  git(request.path, 'update-index', '--no-skip-worktree', 'app.txt');
+  const { plane } = await squashPlane(); const codex = join(directory, 'codex', 'skills'); mkdirSync(codex, { recursive: true });
+  symlinkSync(join(request.path, 'skills', 'review-handoff'), join(codex, 'review-handoff'));
+  await assert.rejects(plane.previewUpdate(target), (error: { code?: string; message: string }) => error.code === 'WORKTREE_INSTALLED' && /codex\/skills\/review-handoff/.test(error.message));
+  assert.equal((await plane.previewRename({ ...target, newBranch: 'feature/next' })).branch, 'feature/finished'); // a rename changes no file a link reads
+  unlinkSync(join(codex, 'review-handoff'));
+  const cwd = process.cwd(); mkdirSync(join(request.path, 'web'));
+  try { process.chdir(join(request.path, 'web')); await assert.rejects(plane.previewUpdate(target), { code: 'WORKTREE_HOST' }); }
+  finally { process.chdir(cwd); }
+  assert.equal((await plane.previewUpdate(target)).branch, 'feature/finished'); assert.equal(store.worktreeUpdates().length, 0);
+});
+test('a native turn that starts during the final rename inspection refuses the rename before Git runs', async () => {
+  const { request, target } = await taskFixture(); const { plane, started } = await squashPlane();
+  const preview = await plane.previewRename({ ...target, newBranch: 'feature/review-next' });
+  const inspect = plane.projects.previewRename.bind(plane.projects); let calls = 0;
+  plane.projects.previewRename = async (raw: Parameters<typeof inspect>[0]) => { const result = await inspect(raw); if (++calls === 2) await started(); return result; };
+  const result = await plane.renameWorktree({ ...preview, confirm: true });
+  assert.equal(calls, 2); assert.equal(result.status, 'failed', result.message); assert.match(result.message, /settled agents/);
+  assert.equal(git(request.path, 'branch', '--show-current'), 'feature/finished'); assert.equal(git(root, 'branch', '--list', 'feature/review-next'), '');
+  assert.equal(plane.projects.projectHeld(target.projectId), false);
+});
+test('a run cannot start on a worktree whose update is unresolved', async () => {
+  const { request, target } = await taskFixture(); commitOnMain('unrelated.txt', 'main work\n');
+  const preview = await catalog.previewUpdate(target);
+  store.saveWorktreeUpdate({ input: { ...preview, recoveryRef: `refs/altcli/preserved/${preview.requestId}`, confirm: true }, status: 'uncertain', message: 'fixture', updatedAt: new Date().toISOString(), commit: null });
+  const workflow = new WorkflowStore(store, join(directory, 'assignments'));
+  const session = { ...mockSessions()[0]!, repository: request.path, worktree: await resolveWorktree(request.path), registrationId: randomUUID() } as ManagedSession;
+  assert.throws(() => workflow.start({ requestId: randomUUID(), agentId: session.id, kind: 'instruction', text: 'work', confirmReady: true }, [session], null), { code: 'WORKTREE_SETUP_BUSY' });
+});
+test('rename keeps the directory and uncommitted work and carries the squash boundary to the new name', async () => {
+  const { request, target } = await taskFixture(); const [, first] = git(request.path, 'rev-list', '-2', 'HEAD').split('\n');
+  const squash = await catalog.integrate(confirmSquash(await catalog.previewIntegration({ ...target, through: first! })), noGuard);
+  writeFileSync(join(request.path, 'new.txt'), 'uncommitted edit\n'); writeFileSync(join(request.path, 'notes.txt'), 'untracked\n');
+  const status = git(request.path, 'status', '--porcelain');
+  const preview = await catalog.previewRename({ ...target, newBranch: 'feature/renamed' });
+  assert.deepEqual([preview.branch, preview.dirty, preview.checkpoints], ['feature/finished', true, 1]);
+  const result = await catalog.rename({ ...preview, confirm: true }, noGuard);
+  assert.equal(result.status, 'renamed', result.message);
+  assert.equal(git(request.path, 'symbolic-ref', 'HEAD'), 'refs/heads/feature/renamed'); assert.equal(git(root, 'branch', '--list', 'feature/finished'), '');
+  assert.equal(git(request.path, 'status', '--porcelain'), status); assert.equal(readFileSync(join(request.path, 'notes.txt'), 'utf8'), 'untracked\n');
+  const next = await catalog.previewIntegration(target); // same worktree identity; the recorded batch still bounds the next one
+  assert.deepEqual([next.branch, next.previousCommit, next.mergeBase], ['feature/renamed', squash.commit, first]);
+});
+test('rename refuses collisions, integration names, published branches and content that changed after preview', async () => {
+  const { request, target } = await taskFixture(); const head = git(request.path, 'rev-parse', 'HEAD');
+  git(root, 'branch', 'feature/taken'); git(root, 'branch', 'team'); git(root, 'branch', 'Feature/Other');
+  await assert.rejects(catalog.previewRename({ ...target, newBranch: 'feature/taken' }), /already exists/);
+  await assert.rejects(catalog.previewRename({ ...target, newBranch: 'main' }), { code: 'INTEGRATION_BRANCH' });
+  await assert.rejects(catalog.previewRename({ ...target, newBranch: 'team/x' }), { code: 'RENAME_CONFLICT' });
+  await assert.rejects(catalog.previewRename({ ...target, newBranch: 'feature' }), /already exists|conflicts with the existing branch/); // a/b and a cannot coexist
+  // Case-only duplicates collide: Git itself reports one on a case-insensitive disk, the name check on any other.
+  await assert.rejects(catalog.previewRename({ ...target, newBranch: 'feature/other' }), /already exists|conflicts with the existing branch/);
+  await assert.rejects(catalog.previewRename({ ...target, newBranch: 'feature/finished' }), { code: 'RENAME_SAME' });
+  git(root, 'update-ref', 'refs/remotes/origin/feature/finished', head);
+  await assert.rejects(catalog.previewRename({ ...target, newBranch: 'feature/next' }), { code: 'RENAME_PUBLISHED' }); git(root, 'update-ref', '-d', 'refs/remotes/origin/feature/finished');
+  const preview = await catalog.previewRename({ ...target, newBranch: 'feature/next' });
+  writeFileSync(join(request.path, 'app.txt'), 'edited after preview\n');
+  const result = await catalog.rename({ ...preview, confirm: true }, noGuard);
+  assert.equal(result.status, 'failed'); assert.match(result.message, /changed/);
+  assert.equal(git(request.path, 'symbolic-ref', 'HEAD'), 'refs/heads/feature/finished'); assert.equal(catalog.projectHeld(target.projectId), false);
+});
+test('an unverified rename stays owned until inspection and is never repeated', async () => {
+  const { request, target } = await taskFixture();
+  const preview = await catalog.previewRename({ ...target, newBranch: 'feature/next' });
+  const exact = catalog['renamedExactly'].bind(catalog); let first = true;
+  catalog['renamedExactly'] = async (operation: WorktreeRename) => { if (first) { first = false; return false; } return exact(operation); };
+  const result = await catalog.rename({ ...preview, confirm: true }, noGuard);
+  assert.equal(result.status, 'uncertain'); assert.deepEqual(await catalog.rename({ ...preview, confirm: true }, noGuard), result);
+  assert.equal(catalog.projectHeld(target.projectId), true);
+  assert.equal((await catalog.reconcileRename(preview.requestId)).status, 'renamed'); assert.equal(git(request.path, 'symbolic-ref', 'HEAD'), 'refs/heads/feature/next');
 });

@@ -11,7 +11,7 @@ import { assertAgentCommand, assertIdentity, suggestAgentType } from '../core/po
 import { Controller } from './controller.ts';
 import { WorkflowStore, wireText } from './workflow-store.ts';
 import { currentBranch, resolveWorktree, sameWorktree, worktreeFingerprint } from './worktree.ts';
-import { assertExternalDataDir } from './paths.ts';
+import { assertExternalDataDir, isWithin } from './paths.ts';
 import { isCodexHelper } from './processes.ts';
 import { discoverWorkspaces, mockCheckout } from './workspaces.ts';
 import type { BranchState, CommitAssignment, Group, GroupInput, GroupSelection, ImplementationRun, ImplementationStart, PolicyChange, PublicationResult, ReviewPreviewInput, StandaloneStart } from '../contracts/implementation.ts';
@@ -27,7 +27,7 @@ import { assertPlanArtifacts, assertPlanBaseline, capturePlanResult, planRoot } 
 import { ProjectCatalog } from './projects.ts';
 import { installedInside } from './cli-install.ts';
 import { AgentActivityTracker } from './agent-activity.ts';
-import type { WorktreeCreateInput, WorktreeDiscardConfirm, WorktreeDiscardFinish, WorktreeDiscardInput, WorktreeIntegrateRequest, WorktreeIntegrationInput, WorktreePreviewInput, WorktreeRemovalInput, WorktreeRemoveInput } from '../contracts/projects.ts';
+import type { WorktreeCreateInput, WorktreeDiscardConfirm, WorktreeDiscardFinish, WorktreeDiscardInput, WorktreeIntegrateRequest, WorktreeIntegrationInput, WorktreePreviewInput, WorktreeRemovalInput, WorktreeRemoveInput, WorktreeRenameConfirm, WorktreeRenameInput, WorktreeUpdateInput, WorktreeUpdateRequest } from '../contracts/projects.ts';
 import type { Checkpoint, CheckpointInput, InteractionInput, InteractionRecord } from '../contracts/interactions.ts';
 import type { RelayRun } from '../contracts/workflow.ts';
 import { InteractionStore } from './interaction-store.ts';
@@ -320,12 +320,33 @@ export class ControlPlane {
       if (this.workflow.owner(source.indexPath) || this.store.activeFor(source.root)) throw new AppError('WORKTREE_BUSY', 'A run or unresolved delivery owns the task worktree. Let it finish or take over before squashing its branch.', 409);
     };
     ownership();
-    const unknown = (detail = 'Current activity or process evidence is unavailable or changed.') => new AppError('INTEGRATION_WRITERS', `Squash requires settled agents and clear process evidence in both checkouts. ${detail} Inspect the panes and stop background work, then Recheck.`, 409);
+    await this.settledWriters([target, source], revision, 'INTEGRATION_WRITERS', 'Squash requires settled agents and clear process evidence in both checkouts.');
+    ownership();
+  }
+  /** Update and rename change a task worktree's branch in place, so it may not be owned and every pane in it must be settled.
+   * Update also rewrites tracked files, so neither the host's installed hooks and skills nor the running host may live there. */
+  private async changeGuard(worktree: NonNullable<ManagedSession['worktree']>, revision: number, action: 'Update' | 'Rename'): Promise<void> {
+    if (action === 'Update') {
+      const installed = await installedInside(worktree.root, this.config);
+      if (installed.length) throw new AppError('WORKTREE_INSTALLED', `The host's CLI hooks or skills point into this worktree: ${installed.join(', ')}. Updating would change them under every session. Reinstall them from the main checkout (node scripts/install-hooks.mjs and node scripts/install-skills.mjs there), then Recheck.`, 409);
+      if (isWithin(worktree.root, await realpath(resolve(process.cwd(), '..')).catch(() => resolve(process.cwd(), '..')))) throw new AppError('WORKTREE_HOST', 'AltCLI itself runs from this worktree, so updating it would change the running host\'s code. Run the host from another checkout, or update this branch by hand.', 409);
+    }
+    const ownership = () => {
+      if (this.workflow.owner(worktree.indexPath) || this.store.activeFor(worktree.root)) throw new AppError('WORKTREE_BUSY', `A run or unresolved delivery owns this worktree, including a paused run bound to its current commits. Let it finish or take over before the ${action.toLowerCase()}.`, 409);
+    };
+    ownership();
+    await this.settledWriters([worktree], revision, 'WORKTREE_WRITERS', `${action} requires settled agents and clear process evidence in this worktree.`);
+    ownership();
+  }
+  /** Every pane in the checkouts, including subdirectories and unselected agents, must be a verified CLI with settled native turn
+   * evidence or an idle shell, with a fresh process scan showing no task processes. Native idle/ready alone is only turn evidence. */
+  private async settledWriters(trees: NonNullable<ManagedSession['worktree']>[], revision: number, code: string, requirement: string): Promise<void> {
+    const unknown = (detail = 'Current activity or process evidence is unavailable or changed.') => new AppError(code, `${requirement} ${detail} Inspect the panes and stop background work, then Recheck.`, 409);
     const inventory = async () => {
       const result = [];
       for (const pane of await this.adapter.listPanes()) {
         const cwd = await realpath(pane.cwd).catch(() => pane.cwd);
-        const tree = [target, source].find(w => cwd === w.root || cwd.startsWith(`${w.root}/`));
+        const tree = trees.find(w => cwd === w.root || cwd.startsWith(`${w.root}/`));
         if (tree) result.push({ pane, cwd, tree });
       }
       return result.sort((a, b) => JSON.stringify(a.pane.identity).localeCompare(JSON.stringify(b.pane.identity)));
@@ -352,8 +373,7 @@ export class ControlPlane {
       }
       const scope = (rows: typeof panes) => rows.map(({ pane, cwd }) => [pane.identity, cwd, pane.command, pane.dead]);
       if (!isDeepStrictEqual(scope(await inventory()), scope(panes)) || this.nativeObservations || revision !== this.nativeRevision) throw unknown();
-    } catch (error) { if (error instanceof AppError && error.code === 'INTEGRATION_WRITERS') throw error; throw unknown(); }
-    ownership();
+    } catch (error) { if (error instanceof AppError && error.code === code) throw error; throw unknown(); }
   }
   async previewIntegration(input: WorktreeIntegrationInput) {
     const revision = this.nativeRevision;
@@ -371,6 +391,35 @@ export class ControlPlane {
     const revision = this.nativeRevision;
     return this.projects.reconcileIntegration(requestId, (target, source) => this.integrationGuard(target, source, revision));
   }
+  async previewUpdate(input: WorktreeUpdateInput) {
+    const revision = this.nativeRevision;
+    await this.workspaces();
+    const preview = await this.projects.previewUpdate(input);
+    await this.changeGuard(preview.worktree, revision, 'Update'); return preview;
+  }
+  async updateWorktree(input: WorktreeUpdateRequest) { return this.authority.automated(() => this.updateWorktreeAdmitted(input)); }
+  private async updateWorktreeAdmitted(input: WorktreeUpdateRequest) {
+    // One revision spans the whole operation, so a native turn that starts and finishes between checks still refuses it.
+    const revision = this.nativeRevision;
+    await this.workspaces();
+    return this.projects.update(input, (worktree) => this.changeGuard(worktree, revision, 'Update'), (worktree) => this.archiveJournal(worktree.root));
+  }
+  async reconcileUpdate(requestId: string) {
+    const revision = this.nativeRevision;
+    return this.projects.reconcileUpdate(requestId, (worktree) => this.changeGuard(worktree, revision, 'Update'));
+  }
+  async previewRename(input: WorktreeRenameInput) {
+    const revision = this.nativeRevision;
+    await this.workspaces();
+    const preview = await this.projects.previewRename(input);
+    await this.changeGuard(preview.worktree, revision, 'Rename'); return preview;
+  }
+  async renameWorktree(input: WorktreeRenameConfirm) { return this.authority.automated(() => this.renameWorktreeAdmitted(input)); }
+  private async renameWorktreeAdmitted(input: WorktreeRenameConfirm) {
+    const revision = this.nativeRevision;
+    await this.workspaces(); return this.projects.rename(input, (worktree) => this.changeGuard(worktree, revision, 'Rename'));
+  }
+  async reconcileRename(requestId: string) { return this.projects.reconcileRename(requestId); }
   async previewDiscard(input: WorktreeDiscardInput) {
     await this.workspaces();
     const preview = await this.projects.previewDiscard(input);

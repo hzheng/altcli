@@ -50,3 +50,13 @@ async function inspectCheckout(path: string, mergeInputs: string[] | undefined, 
     for (let i = 2; i < attributes.length; i += 3) if (filters.has(attributes[i]!)) throw unsupported();
   }
 }
+/** Listings sized by the repository (every tracked path or changed file), with the large-output allowance of the inspections above. */
+export function gitListing(path: string, args: string[]): Promise<string> {
+  return inspect(path, args);
+}
+/** Whether the checkout's index or any given tree records a submodule. Worktree updates leave such checkouts to the user. */
+export async function hasSubmodules(path: string, trees: string[] = []): Promise<boolean> {
+  if ((await inspect(path, ['ls-files', '--stage', '-z'])).split('\0').some((entry) => entry.startsWith('160000 '))) return true;
+  for (const tree of trees) if ((await inspect(path, ['ls-tree', '-r', '-z', tree])).split('\0').some((entry) => entry.startsWith('160000 '))) return true;
+  return false;
+}

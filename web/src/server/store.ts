@@ -5,7 +5,7 @@ import type { AgentId, CommandRecord, RelayPair, Reservation, SessionRegistratio
 import { AppError } from "../core/errors.ts";
 import { sameRequest, suggestAgentType } from "../core/policy.ts";
 import type { Group } from "../contracts/implementation.ts";
-import type { ProjectRecord, TaskFinish, WorktreeCreation, WorktreeDiscard, WorktreeIntegration, WorktreeRemoval } from '../contracts/projects.ts';
+import type { ProjectRecord, TaskFinish, WorktreeCreation, WorktreeDiscard, WorktreeIntegration, WorktreeRemoval, WorktreeRename, WorktreeUpdate } from '../contracts/projects.ts';
 export class Store {
   readonly db: Database.Database;
   constructor(directory: string) {
@@ -17,7 +17,7 @@ export class Store {
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("busy_timeout = 5000");
     const version = this.db.pragma("user_version", { simple: true }) as number;
-    if (version > 16) throw new Error("Unsupported database version. Do not downgrade this store.");
+    if (version > 17) throw new Error("Unsupported database version. Do not downgrade this store.");
     this.db.transaction(() => {
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -40,6 +40,8 @@ export class Store {
         CREATE TABLE IF NOT EXISTS worktree_integrations (id TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS worktree_discards (id TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS task_finishes (id TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS worktree_updates (id TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS worktree_renames (id TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE UNIQUE INDEX IF NOT EXISTS worktree_creation_owner ON worktree_creations(project_id) WHERE status IN ('applying', 'uncertain');
         CREATE INDEX IF NOT EXISTS interactions_repository ON interactions(repository);
         CREATE INDEX IF NOT EXISTS interactions_run ON interactions(json_extract(value, '$.input.runId'));
@@ -47,7 +49,7 @@ export class Store {
       if (version === 1) this.migrateFromV1();
       if (version < 5) for (const pair of this.pairs()) this.saveGroup({ id: pair.id, name: pair.name, repository: pair.repository,
         cwd: null, members: pair.sessions, revision: 1, createdAt: pair.createdAt, legacyPairId: pair.id });
-      this.db.exec("PRAGMA user_version = 16"); // older servers must not reconcile away a pending launch cleanup
+      this.db.exec("PRAGMA user_version = 17"); // older servers must not ignore an unresolved worktree update or branch rename
     })();
   }
   /** v1 had one global reservation in `control` and sessions without agentType. */
@@ -102,6 +104,27 @@ export class Store {
   }
   saveWorktreeDiscard(operation: WorktreeDiscard): void {
     this.db.prepare('INSERT INTO worktree_discards(id,value) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(operation.input.requestId, JSON.stringify(operation));
+  }
+  worktreeUpdates(): WorktreeUpdate[] {
+    return (this.db.prepare('SELECT value FROM worktree_updates ORDER BY rowid').all() as { value: string }[]).map((row) => JSON.parse(row.value));
+  }
+  saveWorktreeUpdate(operation: WorktreeUpdate): void {
+    this.db.prepare('INSERT INTO worktree_updates(id,value) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(operation.input.requestId, JSON.stringify(operation));
+  }
+  worktreeRenames(): WorktreeRename[] {
+    return (this.db.prepare('SELECT value FROM worktree_renames ORDER BY rowid').all() as { value: string }[]).map((row) => JSON.parse(row.value));
+  }
+  saveWorktreeRename(operation: WorktreeRename): void {
+    this.db.prepare('INSERT INTO worktree_renames(id,value) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(operation.input.requestId, JSON.stringify(operation));
+  }
+  /** An unsettled update or branch rename owns its checkout: runs must not start there, checked in the same transaction as their owner. */
+  worktreeChangeHeld(root: string): boolean {
+    return [...this.worktreeUpdates(), ...this.worktreeRenames()].some((op) => op.input.worktree.root === root && ['applying', 'uncertain'].includes(op.status));
+  }
+  /** Whether a run owns this index. The run ledger's table exists once a workflow store has opened this database. */
+  indexOwned(indexPath: string): boolean {
+    if (!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='workflow_owners'").get()) return false;
+    return !!this.db.prepare('SELECT 1 FROM workflow_owners WHERE lock_key=?').get(indexPath);
   }
   taskFinishes(): TaskFinish[] {
     return (this.db.prepare('SELECT value FROM task_finishes ORDER BY rowid').all() as { value: string }[]).map((row) => JSON.parse(row.value));

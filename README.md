@@ -64,8 +64,10 @@ branch. There, Implementation's Control offers it by default for a two-member
 group; committed handoffs stay on task branches. A host whose `web/.env.local`
 still says `ALTCLI_ENABLE_LEGACY_RELAY=false` (older templates wrote this) keeps it
 off until that line is removed or set to `true` and the backend is restarted. Its
-staging contract is unchanged. Reusing a task worktree after integration (update
-from main, branch rename, directory move) is accepted design, not yet implemented.
+staging contract is unchanged. A task worktree can be reused after integration:
+**Update from main** moves its branch onto main in place, replaying later commits,
+and **Rename…** renames its branch. Moving the directory is accepted design, not
+yet implemented.
 
 Use [ROADMAP](ROADMAP.md#migration-and-implementation-sequence) for rollout, [OPEN-DECISIONS](docs/OPEN-DECISIONS.md) for unresolved choices, and [DESIGN-MIGRATION](docs/DESIGN-MIGRATION.md) to locate the content formerly held in the standalone collaboration draft. The draft is no longer a required document.
 

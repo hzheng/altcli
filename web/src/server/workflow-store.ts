@@ -223,6 +223,7 @@ export class WorkflowStore {
       const lockKey = first.worktree?.indexPath ?? first.repository;
       if (this.owner(lockKey)) throw new AppError('RUN_ACTIVE', 'This worktree already has an execution owner. Pause or take over the existing run first.', 409);
       if (this.store.activeFor(first.repository)) throw new AppError('TURN_ACTIVE', 'Reconcile the older uncertain delivery before starting a run.', 409);
+      if (this.store.worktreeChangeHeld(first.repository)) throw new AppError('WORKTREE_SETUP_BUSY', 'A worktree update or branch rename is applying or uncertain. Inspect its result in Projects before starting work.', 409);
       const timestamp = now();
       const run: RelayRun = { id: input.requestId, repository: first.repository, lockKey, pairId, participants,
         autoContinue: input.autoContinue === true, pauseOnObjection: input.pauseOnObjection === true, pauseRequested: false, status: 'running', reason: 'Waiting for this command to finish.',

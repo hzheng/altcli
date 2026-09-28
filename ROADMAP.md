@@ -10,11 +10,11 @@ device acceptance remain open.
 branch-scoped Stage relay on `main` or the recorded default. The server enforces eligibility,
 binds the run to the branch and commit rechecked before each delivery and completion, and holds
 pre-upgrade runs. `main` is always an integration name, and Control's Relay mode replaces the
-Settings preference (ADR-0014, D51). Reusing linked task worktrees (update from main, fully
-integrated first and suffix replay later; branch rename; directory move) is accepted design
-sequenced after it, each increment with its own acceptance gate. Its open objections must be
-resolved first (ADR-0013, D52, OPEN-DECISIONS). Installed-host acceptance of Stage relay
-remains open.
+Settings preference (ADR-0014, D51). Linked task worktrees can now be reused: Update from main
+(fully integrated moves and replay of unintegrated commits) and branch rename are implemented
+locally, with the plan objections resolved (ADR-0013, D52). Directory move remains accepted
+design with its own acceptance gate. Installed-host acceptance of Stage relay and of worktree
+reuse remains open.
 
 The completion follow-up removes `stop_hook_active` from background-task
 classification and retains exact Claude turn bindings until acknowledged clear

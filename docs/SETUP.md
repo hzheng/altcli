@@ -189,6 +189,17 @@ the main checkout first). Only a
 read-only host, a request in flight or unreadable state disables them. All three
 record a durable result; an uncertain one is inspected, never retried.
 
+To reuse a prepared task worktree instead of removing it, use **Update from main**
+on a clean checkout. It moves the branch onto local main/default in place,
+keeping the directory, ignored files such as dependencies, and the agents. A
+branch main already contains moves to main. Commits after the last squash batch,
+or all commits when nothing is integrated, are replayed on top. The preview lists
+them and refuses conflicts. A rewritten branch keeps its old tip under
+`refs/altcli/preserved/`, which you delete yourself when no longer needed; give
+agents fresh instructions afterwards. **Rename…** renames the task branch in place,
+uncommitted work included. Both refuse published branches, since the app never
+pushes, and need idle agents in the worktree.
+
 Dirty or unavailable workspaces remain readable, but Plan and Implementation
 starts are disabled until the index and nonignored worktree are clean. The console
 lists staged, unstaged and untracked files. Commit intended changes on your task

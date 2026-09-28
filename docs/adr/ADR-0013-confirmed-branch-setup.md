@@ -4,7 +4,7 @@
 >
 > September 25 extension: [Confirmed closing of launched sessions](#confirmed-closing-of-launched-sessions) adds a fifth, narrow end-of-task exception: **Finish branch** closes only the tmux sessions AltCLI itself launched for a linked task worktree, then hands over to the existing removal or discard.
 >
-> September 27 extension: `main` is always an integration name, because it runs Stage relay ([ADR-0014](ADR-0014-commit-relay-and-deprecation.md#branch-scoped-stage-relay-september-27-2026)); this is implemented. [Reusable task worktrees](#reusable-task-worktrees-update-rename-and-move) accepts three more narrow exceptions (update from main, branch rename, directory move) as design direction. They are **not implemented**, and their open objections must be resolved first.
+> September 27 extension: `main` is always an integration name, because it runs Stage relay ([ADR-0014](ADR-0014-commit-relay-and-deprecation.md#branch-scoped-stage-relay-september-27-2026)); this is implemented. [Reusable task worktrees](#reusable-task-worktrees-update-rename-and-move) accepts three more narrow exceptions. Update from main, including replay of unintegrated commits, and branch rename are implemented; directory move is accepted design, **not implemented**.
 
 
 Date: September 19, 2026
@@ -364,18 +364,26 @@ kill or Git command.
 ### Reusable task worktrees: update, rename and move
 
 User requirement, September 27, 2026 (Plan run with human-approved frozen plan, items P-2 and P-6 to P-15):
-reuse a prepared linked task worktree after integration instead of removing and recreating it. **Accepted
-design direction, not implemented.** These are three more narrow Git-write exceptions for linked task
-worktrees only; primary checkouts are excluded. None runs automatically.
+reuse a prepared linked task worktree after integration instead of removing and recreating it. These are
+three more narrow Git-write exceptions for linked task worktrees only; primary checkouts are excluded. None
+runs automatically. **Update from main (with replay) and Rename branch are implemented (September 27,
+2026); Move directory is accepted design, not implemented.** Where the implementation narrows this design,
+the operation's section says so.
 
 **Shared contract.**
 - **Preview.** Read-only. It pins these facts in a consent digest: project and worktree identity; branch,
   HEAD and cleanliness; target ref and SHA, or the new name or path; integration evidence; every pane in the
   worktree and its subdirectories; upstream facts; obstruction findings; the recovery ref; and the exact
-  commands.
+  commands. As implemented, Update's digest covers identity, branch, HEAD, target, boundary, replay steps
+  and trees, the resulting tree, fast-forward and commands; Rename's whole preview, including the content
+  fingerprint, is its consent. Panes are not pinned: every pane is rechecked with current evidence before
+  each Git step (see objection 1). Upstream and obstruction facts are re-derived at confirmation, and the
+  recovery ref is named from the confirmed request ID.
 - **Confirmation.** Re-derives the preview and refuses any change.
 - **Holds.** Holds are claimed in the same transaction that checks the index owner. Start, dispatch,
-  setup, launch, the other lifecycle operations and keyboard acquisition all respect them.
+  setup, launch, the other lifecycle operations and keyboard acquisition all respect them. As implemented,
+  keyboard acquisition is refused while an operation runs (the shared automation gate); as for the other
+  setup operations, an uncertain record does not block keyboard input.
 - **Refusals.** Each operation refuses:
   - run owners, including paused runs;
   - unresolved deliveries, launches or setup;
@@ -393,31 +401,47 @@ worktrees only; primary checkouts are excluded. None runs automatically.
   or automatic repair, and a duplicate request returns its record.
 
 **Update from main.**
-- **Scope.** A clean linked task worktree whose whole branch is proven integrated: by ancestry, by a
-  verified squash checkpoint through HEAD, or by an exact patch match.
+- **Scope.** A clean linked task worktree. The boundary is the last task commit the target already
+  contains. By ancestry it is HEAD, and the branch fast-forwards. With a verified squash checkpoint through
+  HEAD or an exact patch match, it is also HEAD, and the branch moves to the target tip. Otherwise it is
+  the last applicable squash checkpoint, or the single merge base when nothing is integrated; the commits
+  after it are replayed. A target the branch already contains is refused as current.
 - **Target.** The squash target (local `main`, else the recorded default) at a pinned SHA, with no fetch.
 - **Steps.**
-  1. Archive the journal.
-  2. Create the create-only recovery ref `refs/altcli/preserved/<requestId>` at the old tip.
-  3. Check for local obstructions: ignored files, files where directories go, case collisions, symlinked
-     parents.
-  4. Run `git checkout --no-overwrite-ignore --no-recurse-submodules -B <branch> <SHA>`.
-  5. Verify that HEAD is attached, that `<branch>@{1}` is the old tip, the checkout is clean with the
-     expected tree, the recovery ref is in place and the identity is unchanged.
-  6. Retire the worktree's squash checkpoints.
+  1. Check for local obstructions in the preview: ignored files, files where directories go, case
+     collisions, symlinked parents.
+  2. Archive the journal.
+  3. Write any replayed commits to the object database and record the expected new tip.
+  4. Create the create-only recovery ref `refs/altcli/preserved/<requestId>` at the old tip.
+  5. Run `git checkout --no-overwrite-ignore --no-recurse-submodules -B <branch> <SHA>`.
+  6. Verify that HEAD is attached, that `<branch>@{1}` is the old tip, the checkout is clean at the
+     recorded tip, the replayed chain has the previewed trees on the target, the recovery ref is in place
+     and the identity is unchanged.
+  7. Retire the worktree's squash checkpoints.
 - **Never.** `git rebase`, `reset --hard` or `reset --keep`. In scratch tests with Git 2.47, both
   `git rebase` and `git reset --keep` silently overwrote an ignored local file that
   `checkout --no-overwrite-ignore` refused.
 - **Remote copies.** A non-fast-forward update is refused when the branch has an upstream or a
   remote-tracking counterpart.
 - **Intent.** Continue task or new task is recorded. Old runs never resume across rewritten history.
-- **Later increment.** Replaying unintegrated suffix commits uses `git merge-tree` and `git commit-tree` in
-  the object database. It refuses conflicts, merges, more than 100 commits, redundant commits and
-  signed-commit configuration before any ref or worktree change.
+  As implemented, the intent is **not recorded**: the result asks the user to give agents fresh
+  instructions. A run owner, including a paused run, refuses the update, so no run spans it.
+- **Replay.** Replaying the commits after the boundary uses `git merge-tree` and
+  `git commit-tree --no-gpg-sign` in the object database, keeping each commit's author, date and message.
+  Before any ref or worktree change it refuses conflicts, merges, more than 100 commits, redundant commits,
+  signed-commit configuration and non-default message encodings.
+- **Also refused.** A worktree the host's installed CLI hooks or skill links point into, and the running
+  host's own checkout, since both would change under the host.
 
 **Rename branch.**
-- **Command.** `git branch -m` only, never `-M`, with a validated new name.
+- **Command.** `git branch -m` only, never `-M`, with a validated new name. The new name may not be an
+  integration name, an existing branch, a case-only variant of one, or a path prefix of one.
 - **Refused** when the branch has an upstream or remote-tracking counterpart.
+- **Dirty content.** Allowed. The preview pins it by content fingerprint, and the confirmation re-derives
+  the whole preview before and after the writer check. The writer check runs once more after that final
+  inspection, immediately before `git branch -m`.
+- **Narrowed refusals.** A rename changes no file, so sparse checkout, submodules, installed hook or skill
+  links and the host's own checkout are not refused. Hidden index flags and stopped Git operations are.
 - **Unchanged.** The directory, tmux session names and launch records.
 - **Squash batches.** Their boundaries follow verified rename records instead of the branch name alone.
 
@@ -431,16 +455,29 @@ worktrees only; primary checkouts are excluded. None runs automatically.
   rejected.
 - **Agents.** Relaunch is a separate launch preview. Resuming a conversation is not claimed.
 
-**Unresolved before implementation.** A peer raised these objections when the plan was approved by human
-override; OPEN-DECISIONS tracks them.
+**Objections and their resolution.** A peer raised these objections when the plan was approved by human
+override. Update and Rename resolve them as follows; Move must do the same.
 1. Ready or Idle activity is not proof that writers have settled. Current process and background evidence
-   is needed for every affected pane.
+   is needed for every affected pane. *Resolved:* every pane in the worktree, including subdirectories,
+   passes squash's settled-writer check (current settled native evidence, or an idle root shell, plus a
+   fresh process scan). It runs at preview and around re-deriving the confirmation. The last check follows
+   the final inspection, immediately before the first Git write: before the branch moves for Update, and
+   before `git branch -m` for Rename. One activity revision spans the whole operation, so a native turn
+   that starts during any inspection refuses it.
 2. `git merge-tree` honors configured merge drivers, which run commands. Check the effective configuration
-   and attributes, and refuse external drivers before any replay preview. The existing squash preview now
-   enforces this as described above; future replay must preserve the same boundary for every input tree.
-3. A failed recovery-ref creation stays uncertain unless the ref's absence is proven.
+   and attributes, and refuse external drivers before any replay preview. *Resolved:* the squash
+   inspection preflight runs over the boundary, the target and every replayed commit before the first merge
+   calculation. Combining the sides can make attributes effective that neither input selects alone, such
+   as a macro defined on one side and used on the other. So every generated tree, including the one the
+   checkout writes, is inspected before the preview is returned; confirmation re-derives the preview and
+   repeats both checks. Without replay the preflight covers the target and HEAD trees the checkout writes.
+3. A failed recovery-ref creation stays uncertain unless the ref's absence is proven. *Resolved:* creation
+   is the first step after the attempt is recorded, so any failure is uncertain. Inspection releases the
+   update as failed only for a clean checkout still at the old tip, after a writer check. It reports and
+   keeps a recovery ref that was created.
 4. The dirty-state policy is set per operation. Update requires a clean checkout. Rename and move may carry
-   dirty content only if the preview pins it and verification checks it.
+   dirty content only if the preview pins it and verification checks it. *Resolved:* Update requires a
+   clean checkout; Rename pins the content fingerprint as described above.
 
 ### Branch consent and Plan approval are separate gates
 

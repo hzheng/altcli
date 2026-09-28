@@ -212,7 +212,8 @@ export function Console() {
     .sort((a, b) => Number(b.main) - Number(a.main))
     .find(tree => discovery?.workspaces.some(w => w.worktree.root === tree.path && w.agents.some(a => a.eligible || a.observable))) }));
   const worktreeOptions = [...(selectedProject?.worktrees ?? [])].sort((a, b) => Number(b.main) - Number(a.main));
-  const setupHolds = discovery?.projects?.flatMap((p) => [...p.creations.filter((op) => ['applying', 'uncertain'].includes(op.status)).map((op) => op.input.path), ...(p.removals ?? []).filter((op) => ['applying', 'uncertain'].includes(op.status)).map((op) => op.input.worktree.root)]) ?? [];
+  const setupHolds = discovery?.projects?.flatMap((p) => [...p.creations.filter((op) => ['applying', 'uncertain'].includes(op.status)).map((op) => op.input.path),
+    ...[...(p.removals ?? []), ...(p.updates ?? []), ...(p.renames ?? [])].filter((op) => ['applying', 'uncertain'].includes(op.status)).map((op) => op.input.worktree.root)]) ?? [];
   const setupHeld = !!project && setupHolds.includes(project);
   const groups = state?.groups ?? [];
   const pairs = groups.map((g) => ({ ...g, sessions: g.members }));

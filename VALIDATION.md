@@ -3319,3 +3319,86 @@ browser case failed before the fix and passed after it. Observed: type checking,
 iPhone run of the new default-branch case failed once with Playwright's `Route is
 already handled!` in its `/api/v1/state` interception; it then passed three
 repeats on each viewport. The full suite and `./scripts/check.sh` were not rerun.
+
+## 2026-09-27 — Update from main and branch rename for task worktrees
+
+Implements ADR-0013's Update from main, including replay of unintegrated commits, and
+Rename branch. Directory move is not implemented. The four plan-approval objections are
+resolved as ADR-0013 records. The store moves to version 17 with durable update and rename
+owners.
+
+Update and Rename narrow the ADR in three places:
+
+- the continue/new-task intent is not recorded;
+- an uncertain record does not block keyboard input, as for the other setup operations;
+- Rename skips the file-state refusals, since it changes no file.
+
+Observed on Git 2.47.0, Node 24.12.0, macOS:
+
+- `./scripts/check.sh` exit 0:
+  - skill-link check;
+  - 32 hook/setup, 44 smoke, 459 workflow and 83 unit tests;
+  - type checking and the production build.
+- The workflow count includes new real-Git cases for:
+  - fast-forward, full-squash, post-batch replay and unintegrated rebase;
+  - kept authors, dates and messages, ignored files, and disabled repository hooks;
+  - refusals, stale consent, idempotence and uncertain-result inspection;
+  - control-plane writer, ownership, installed-link and host-checkout checks;
+  - blocked run starts;
+  - rename with dirty work and carried squash batches, its refusals and uncertain rename.
+- Reverting the hook-disabling flag on the recovery-ref write made the hook assertion fail.
+- Playwright `e2e/projects.spec.ts` on desktop and iPhone: 56 passed. This includes the
+  new Update from main and Rename cases and the eight-button worktree row.
+- The OpenAPI file parsed with Ruby's YAML loader, every `$ref` resolved and every route
+  was documented.
+
+Not run: `./scripts/check.sh --e2e` (the full browser suite, deferred to pre-merge),
+`npm run test:native` and installed-host acceptance. No real task worktree was updated or
+renamed. The development backend was not restarted; the running host serves the main
+checkout. Nothing was staged or committed.
+
+## 2026-09-27 — review fixes for Update from main and branch rename
+
+This addresses the reviewer's two High findings on 33feb0c.
+
+- **Update:** Combining two sides could select a configured content filter that neither
+  input selected on its own, for example a macro defined by the task and used by main. The
+  checkout then ran the filter. The preview now inspects every generated replay tree,
+  including the one the checkout writes, before returning. It also inspects every
+  replayed commit, not just the tip, before the first merge calculation. Confirmation
+  re-derives the preview, so both checks repeat there.
+- **Rename:** A native turn that started during the final inspection could still rename the
+  branch. The writer check now runs once more after that inspection, immediately before
+  `git branch -m`, under the operation's single activity revision.
+
+Observed on Git 2.47.0, Node 24.12.0, macOS:
+
+- Both new regressions failed before the fixes, with the same results as the review (the
+  preview accepted the filtered replay; the rename finished as `renamed`), and pass after.
+- Removing only the generated-tree inspection makes the filter regression fail again.
+- `./scripts/check.sh` exit 0 with 32 hook/setup, 44 smoke, 461 workflow and 83 unit tests,
+  type checking and the production build.
+- The OpenAPI file parses with Ruby's YAML loader and every `$ref` resolves.
+
+Not run: Playwright (no UI change in this revision), `./scripts/check.sh --e2e`,
+`npm run test:native` and installed-host acceptance.
+
+## 2026-09-27 — keep a lost rename response inspectable across view changes
+
+This addresses the reviewer's Medium finding on f12763a. A view change cleared the rename
+preview, which also held the request ID needed to inspect a lost response, so
+**Inspect this rename result** did nothing. The rest of the rename controls stayed
+disabled. The component now keeps the ID of the sent request separately. It is cleared
+only by a definitive result or a server refusal. A view change still revokes the
+confirmation preview.
+
+Observed on Node 24.12.0, macOS:
+
+- Playwright ran the new lost-response plus view-switch case. It failed against the
+  committed component (no inspection request was sent) and passes with the fix.
+- `e2e/projects.spec.ts` on desktop and iPhone: 58 passed.
+- `./scripts/check.sh` exit 0 with 32 hook/setup, 44 smoke, 461 workflow and 83 unit tests,
+  type checking and the production build.
+
+Not run: `./scripts/check.sh --e2e` (full browser suite, deferred to pre-merge),
+`npm run test:native` and installed-host acceptance.

@@ -6,13 +6,13 @@ import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import type { SessionRegistration } from '../contracts/api.ts';
 import { FINISH_HOLDING } from '../contracts/projects.ts';
-import type { FinishGit, Project, ProjectRecord, ProjectWorktree, WorktreeCreateInput, WorktreeCreation, WorktreeDiscard, WorktreeDiscardConfirm, WorktreeDiscardFinish, WorktreeDiscardInput, WorktreeDiscardPreview, WorktreeIntegrateInput, WorktreeIntegrateRequest, WorktreeIntegration, WorktreeIntegrationInput, WorktreeIntegrationPreview, WorktreePreview, WorktreePreviewInput, WorktreeRemoval, WorktreeRemovalInput, WorktreeRemovalPreview, WorktreeRemoveInput } from '../contracts/projects.ts';
+import type { FinishGit, Project, ProjectRecord, ProjectWorktree, WorktreeCreateInput, WorktreeCreation, WorktreeDiscard, WorktreeDiscardConfirm, WorktreeDiscardFinish, WorktreeDiscardInput, WorktreeDiscardPreview, WorktreeIntegrateInput, WorktreeIntegrateRequest, WorktreeIntegration, WorktreeIntegrationInput, WorktreeIntegrationPreview, WorktreePreview, WorktreePreviewInput, WorktreeRemoval, WorktreeRemovalInput, WorktreeRemovalPreview, WorktreeRemoveInput, WorktreeRename, WorktreeRenameConfirm, WorktreeRenameInput, WorktreeRenamePreview, WorktreeUpdate, WorktreeUpdateConfirm, WorktreeUpdateInput, WorktreeUpdatePreview, WorktreeUpdateRequest } from '../contracts/projects.ts';
 import type { Workspace, WorktreeIdentity } from '../contracts/workflow.ts';
 import { AppError, messageOf } from '../core/errors.ts';
-import { parseDiscard, parseDiscardFinish, parseDiscardPreview, parseIntegrate, parseIntegrationPreview, parseProjectAdd, parseWorktreeCreate, parseWorktreePreview, parseRemoval, parseRemovalPreview } from '../core/project-validation.ts';
+import { parseDiscard, parseDiscardFinish, parseDiscardPreview, parseIntegrate, parseIntegrationPreview, parseProjectAdd, parseRename, parseRenamePreview, parseUpdate, parseUpdatePreview, parseWorktreeCreate, parseWorktreePreview, parseRemoval, parseRemovalPreview } from '../core/project-validation.ts';
 import { defaultSquashMessage } from '../core/squash-message.ts';
 import { branchState, defaultBranch, integrationNames, validateNewBranch } from './commit-handoff.ts';
-import { assertGitInspection } from './git-inspection.ts';
+import { assertGitInspection, gitListing, hasSubmodules } from './git-inspection.ts';
 import type { Config } from './config.ts';
 import type { Store } from './store.ts';
 import { currentBranch, gitEnvironment, resolveWorktree, sameWorktree, worktreeFingerprint } from './worktree.ts';
@@ -35,6 +35,34 @@ function git(args: string[]): Promise<string> {
 function gitAnswer(args: string[]): Promise<{ code: number; stdout: string }> {
   return new Promise((done, fail) => execFile('git', ['--no-replace-objects', ...args], { encoding: 'utf8', shell: false, timeout: 60000, maxBuffer: 2 * 1024 * 1024, env: gitEnvironment() },
     (error, stdout) => !error ? done({ code: 0, stdout }) : error.code === 1 ? done({ code: 1, stdout }) : fail(new AppError('PROJECT_GIT', 'Git could not complete the project operation. Inspect the host; nothing will be retried automatically.', 409))));
+}
+/** Git with standard input and environment overrides: replayed commits and create-only ref transactions. */
+function gitWith(args: string[], options: { input?: string; env?: Record<string, string> } = {}): Promise<string> {
+  return new Promise((done, fail) => {
+    const child = execFile('git', ['--no-replace-objects', ...args], { encoding: 'utf8', shell: false, timeout: 60000, maxBuffer: 2 * 1024 * 1024, env: { ...gitEnvironment(), ...options.env } },
+      (error, stdout) => error ? fail(new AppError('PROJECT_GIT', 'Git could not complete the project operation. Inspect the host; nothing will be retried automatically.', 409)) : done(stdout));
+    child.stdin?.on('error', () => {}); // execFile reports an early exit.
+    child.stdin?.end(options.input);
+  });
+}
+const short = (sha: string) => sha.slice(0, 12);
+/** What an update confirmation consents to: every pinned preview field except the per-preview request ID. */
+const updateConsent = (preview: Omit<WorktreeUpdatePreview, 'requestId' | 'consent'>) => createHash('sha256').update(JSON.stringify(canonical(preview))).digest('hex');
+/** The Git operation a worktree is in the middle of (a stopped merge, rebase, cherry-pick, revert or bisect), or null. */
+async function operationInProgress(path: string): Promise<string | null> {
+  for (const [name, label] of [['MERGE_HEAD', 'merge'], ['rebase-merge', 'rebase'], ['rebase-apply', 'rebase'], ['CHERRY_PICK_HEAD', 'cherry-pick'], ['REVERT_HEAD', 'revert'], ['sequencer', 'cherry-pick or revert'], ['BISECT_LOG', 'bisect']] as const) {
+    const location = (await git(['-C', path, 'rev-parse', '--git-path', name])).trim();
+    if (await exists(isAbsolute(location) ? location : join(path, location))) return label;
+  }
+  return null;
+}
+/** Where else this branch lives: its configured upstream or a remote-tracking copy of the same name. Null when it is only local. */
+async function publishedCopy(path: string, branch: string): Promise<string | null> {
+  const upstream = (await gitAnswer(['-C', path, 'config', '--get', `branch.${branch}.remote`])).stdout.trim();
+  if (upstream) return `its upstream on ${upstream}`;
+  const refs = (await git(['-C', path, 'for-each-ref', '--format=%(refname)', 'refs/remotes/'])).split('\n').filter(Boolean);
+  const copy = refs.find((ref) => ref.split('/').slice(3).join('/') === branch);
+  return copy ? copy.replace('refs/remotes/', '') : null;
 }
 const treeDiff = (from: string, to: string) => ['diff', '--binary', '--full-index', '--no-renames', '--no-ext-diff', '--no-textconv', '--ignore-submodules=none', '--no-relative', '--src-prefix=a/', '--dst-prefix=b/', from, to, '--'];
 /** Stream the already merged tree into the real index without buffering binary patches or overwriting ignored local files.
@@ -111,6 +139,8 @@ export class ProjectCatalog {
     for (const operation of store.worktreeIntegrations().filter((op) => op.status === 'applying')) this.integrationFinish(operation, 'uncertain', 'Backend restarted during squash integration. Inspect the integration checkout; nothing is retried.');
     for (const operation of store.worktreeDiscards().filter((op) => op.status === 'applying')) this.discardFinish(operation, 'uncertain', 'Backend restarted during discard. Inspect its result; nothing is retried.');
     for (const operation of store.worktreeCreations().filter((op) => op.status === 'applying')) this.finish(operation, 'uncertain', 'Backend restarted during worktree creation. Inspect and reconcile; do not retry.');
+    for (const operation of store.worktreeUpdates().filter((op) => op.status === 'applying')) this.updateFinish(operation, 'uncertain', 'Backend restarted during the update. Inspect its result; nothing is retried.');
+    for (const operation of store.worktreeRenames().filter((op) => op.status === 'applying')) this.renameFinish(operation, 'uncertain', 'Backend restarted during the branch rename. Inspect its result; nothing is retried.');
   }
   /** Explicit path entry is metadata only: no shell, tmux server creation or Git mutation. With `expected` (what the directory
    * browser showed), the path is inspected again and a changed checkout, repository or branch refuses instead of adding another. */
@@ -181,7 +211,8 @@ export class ProjectCatalog {
       } catch { error = 'Project Git metadata is unavailable. Its saved identity has been kept; inspect the host and Recheck.'; }
       return { ...project, worktrees: trees, error, removals: this.store.worktreeRemovals().filter((op) => op.input.projectId === project.id), creations: this.store.worktreeCreations().filter((op) => op.input.projectId === project.id),
         integrations: this.store.worktreeIntegrations().filter((op) => op.input.projectId === project.id), discards: this.store.worktreeDiscards().filter((op) => op.input.projectId === project.id),
-        finishes: this.store.taskFinishes().filter((op) => op.preview.projectId === project.id) };
+        finishes: this.store.taskFinishes().filter((op) => op.preview.projectId === project.id),
+        updates: this.store.worktreeUpdates().filter((op) => op.input.projectId === project.id), renames: this.store.worktreeRenames().filter((op) => op.input.projectId === project.id) };
     }));
     return this.views;
   }
@@ -201,6 +232,7 @@ export class ProjectCatalog {
     if (this.store.worktreeIntegrations().some((op) => (op.input.target.root === root || op.input.worktree.root === root) && ['applying', 'uncertain'].includes(op.status))) throw new AppError('WORKTREE_SETUP_BUSY', 'A squash integration involving this checkout is applying or uncertain. Inspect its result in Projects before using it.', 409);
     if (this.store.worktreeCreations().some((op) => op.input.path === root && ['applying', 'uncertain'].includes(op.status))) throw new AppError('WORKTREE_SETUP_BUSY', 'This worktree creation is still applying or uncertain. Inspect and reconcile it in Projects before binding agents or starting work.', 409);
     if (this.store.taskFinishes().some((op) => op.preview.worktree.root === root && FINISH_HOLDING.includes(op.status))) throw new AppError('WORKTREE_SETUP_BUSY', 'Finish branch owns this worktree. Inspect or complete it in Projects before starting or resuming work here.', 409);
+    if (this.store.worktreeChangeHeld(root)) throw new AppError('WORKTREE_SETUP_BUSY', 'A worktree update or branch rename is applying or uncertain. Inspect its result in Projects before using this worktree.', 409);
   }
   private async source(input: WorktreePreviewInput) {
     if (this.config.mode === 'mock') throw new AppError('MOCK_WORKTREE', 'Simulated panes cannot create real Git worktrees.', 409);
@@ -324,7 +356,8 @@ export class ProjectCatalog {
   /** Whether a setup, launch or Finish branch operation owns the project. `parent` admits exactly one child operation: the removal or
    * discard that holding Finish branch recorded, by request ID. Public requests pass none. */
   projectHeld(projectId: string, parent?: { finish: string; child: string }): boolean {
-    return this.pendingLaunch(projectId) || [...this.store.worktreeCreations(), ...this.store.worktreeRemovals(), ...this.store.worktreeIntegrations(), ...this.store.worktreeDiscards()].some((op) => op.input.projectId === projectId && ['applying', 'uncertain'].includes(op.status))
+    return this.pendingLaunch(projectId) || [...this.store.worktreeCreations(), ...this.store.worktreeRemovals(), ...this.store.worktreeIntegrations(), ...this.store.worktreeDiscards(),
+      ...this.store.worktreeUpdates(), ...this.store.worktreeRenames()].some((op) => op.input.projectId === projectId && ['applying', 'uncertain'].includes(op.status))
       || this.store.taskFinishes().some((op) => op.preview.projectId === projectId && FINISH_HOLDING.includes(op.status) && !(parent && op.requestId === parent.finish && op.child?.requestId === parent.child));
   }
   /** The local integration branch that verification and squash target: main when it exists, else the recorded default. */
@@ -478,7 +511,8 @@ export class ProjectCatalog {
   /** A completed batch is a boundary only in its source and target lineages.
    * Inapplicable records fall back to current Git evidence. Pre-batch records integrated their full HEAD. */
   private async integrationCheckpoint(projectId: string, worktreeId: string, branch: string, head: string, targetRef: string, targetHead: string, path: string): Promise<{ through: string; commit: string } | null> {
-    const previous = this.store.worktreeIntegrations().filter((op) => op.status === 'integrated' && !op.retired && op.input.projectId === projectId && op.input.worktreeId === worktreeId && op.input.branch === branch && op.input.targetRef === targetRef).at(-1);
+    const names = this.branchNames(projectId, worktreeId, branch);
+    const previous = this.store.worktreeIntegrations().filter((op) => op.status === 'integrated' && !op.retired && op.input.projectId === projectId && op.input.worktreeId === worktreeId && names.has(op.input.branch) && op.input.targetRef === targetRef).at(-1);
     if (!previous?.commit) return null;
     const through = previous.input.through ?? previous.input.head;
     try {
@@ -622,6 +656,308 @@ export class ProjectCatalog {
       await guard(input.target, input.worktree);
       if (tip === input.targetHead) return this.integrationFinish(operation, 'failed', 'The integration checkout is unchanged at its previous commit. Nothing was squashed; preview again if needed.');
       return this.integrationFinish(operation, 'failed', `${name} moved from ${input.targetHead.slice(0, 12)} to ${tip.slice(0, 12)} without the previewed squash commit: it was integrated, reset or rewritten by hand. The hold is released; nothing was retried. Check removal or a new squash preview will judge the current history on its own evidence.`);
+    } catch { /* Missing evidence retains ownership. */ }
+    return operation;
+  }
+
+  /** This branch's earlier names on the worktree, following verified renames back from its current name. */
+  private branchNames(projectId: string, worktreeId: string, branch: string): Set<string> {
+    const names = new Set([branch]);
+    const renames = this.store.worktreeRenames().filter((op) => op.status === 'renamed' && op.input.projectId === projectId && op.input.worktreeId === worktreeId);
+    for (let added = true; added;) {
+      added = false;
+      for (const op of renames) if (names.has(op.input.newBranch) && !names.has(op.input.branch)) { names.add(op.input.branch); added = true; }
+    }
+    return names;
+  }
+  /** Tracked paths the new tip adds where an untracked (in a clean checkout: ignored) file or directory already sits, including a
+   * file standing where a directory is needed. The guarded checkout also refuses them; the preview names them first. */
+  private async obstructions(path: string, from: string, to: string): Promise<string[]> {
+    const fields = (await gitListing(path, ['diff', '--name-status', '-z', '--no-renames', from, to, '--'])).split('\0');
+    const added: string[] = []; const deleted = new Set<string>();
+    for (let i = 0; i + 1 < fields.length; i += 2) { if (fields[i] === 'A') added.push(fields[i + 1]!); if (fields[i] === 'D') deleted.add(fields[i + 1]!); }
+    const found: string[] = [];
+    for (const file of added) {
+      if (found.length >= 20) break;
+      const parts = file.split('/');
+      for (let depth = 1; depth <= parts.length; depth++) {
+        const prefix = parts.slice(0, depth).join('/');
+        const info = await lstat(join(path, prefix)).catch(() => null);
+        if (info && (depth === parts.length || (!info.isDirectory() && !deleted.has(prefix)))) { found.push(prefix); break; }
+        if (!info) break;
+      }
+    }
+    return [...new Set(found)];
+  }
+  /** Read-only: how Update from main would move this task branch onto the local integration branch. Nothing changes; computing a
+   * replay can write unreachable Git objects only. A fully integrated branch moves to the target's tip; later commits are replayed. */
+  async previewUpdate(raw: WorktreeUpdateInput): Promise<WorktreeUpdatePreview> {
+    const input = parseUpdatePreview(raw);
+    if (this.config.mode === 'mock') throw new AppError('MOCK_WORKTREE', 'Simulated panes cannot update real Git branches.', 409);
+    const { tree, primary } = await this.taskWorktree(input.projectId, input.worktreeId, 'updated');
+    await assertGitInspection(tree.path, []);
+    const state = await branchState(tree.path);
+    if (state.head !== tree.head || state.branch !== tree.branch) throw new AppError('WORKTREE_CHANGED', 'The task worktree changed during inspection. Recheck.', 409);
+    if (!state.clean) throw new AppError('WORKTREE_DIRTY', `${tree.branch} has ${state.changeCount} uncommitted change${state.changeCount === 1 ? '' : 's'}. Commit or clean them yourself before updating; nothing is stashed.`, 409);
+    const busy = await operationInProgress(tree.path);
+    if (busy) throw new AppError('UPDATE_UNSUPPORTED', `A ${busy} is in progress in this worktree. Finish or abort it yourself, then Recheck.`, 409);
+    if ((await gitAnswer(['-C', tree.path, 'config', '--type=bool', '--get', 'core.sparseCheckout'])).stdout.trim() === 'true') throw new AppError('UPDATE_UNSUPPORTED', 'Sparse checkouts are not updated by the app. Update this branch by hand.', 409);
+    const { name, targetRef, targetHead } = await this.integrationRef(tree.path, primary);
+    if (targetHead === tree.head) throw new AppError('ALREADY_CURRENT', `${tree.branch} is already at ${name}. There is nothing to update.`, 409);
+    if (await hasSubmodules(tree.path, [targetHead])) throw new AppError('UPDATE_UNSUPPORTED', 'Worktrees with submodules are not updated by the app. Update this branch by hand.', 409);
+    const bases = (await git(['-C', tree.path, 'merge-base', '--all', tree.head, targetHead])).trim().split('\n').filter(Boolean);
+    if (bases.length !== 1) throw new AppError('INTEGRATION_UNKNOWN', 'The integration baseline is ambiguous. Update this branch by hand.', 409);
+    // The boundary is the last task commit the target already contains; only commits after it are replayed.
+    let boundary = tree.head; let boundaryBy: WorktreeUpdatePreview['boundaryBy'] = 'ancestry';
+    if (bases[0] !== tree.head) {
+      let full = false;
+      try { await this.integrationEvidence(input.projectId, input.worktreeId, tree.path, tree.branch, tree.head, primary); full = true; }
+      catch (error) { if (!(error instanceof AppError) || !['NOT_INTEGRATED', 'INTEGRATION_UNKNOWN'].includes(error.code)) throw error; }
+      const checkpoint = full ? null : await this.integrationCheckpoint(input.projectId, input.worktreeId, tree.branch, tree.head, targetRef, targetHead, tree.path);
+      if (full) boundaryBy = 'squash';
+      else if (checkpoint) { boundary = checkpoint.through; boundaryBy = 'squash'; }
+      else if (bases[0] === targetHead) throw new AppError('ALREADY_CURRENT', `${tree.branch} already contains ${name}. There is nothing to update.`, 409);
+      else { boundary = bases[0]!; boundaryBy = 'base'; }
+    }
+    const replay: WorktreeUpdatePreview['replay'] = [];
+    let newTree = (await git(['-C', tree.path, 'rev-parse', `${targetHead}^{tree}`])).trim();
+    if (boundary !== tree.head) {
+      const rows = (await git(['-C', tree.path, 'rev-list', '--reverse', '--topo-order', '--parents', `${boundary}..${tree.head}`])).trim().split('\n').filter(Boolean).map((line) => line.split(' '));
+      if (rows.length > 100) throw new AppError('REPLAY_RANGE', `${rows.length} task commits follow the integrated boundary; the app replays at most 100. Squash some into ${name} first, or rebase by hand.`, 409);
+      let parent = boundary;
+      for (const [sha, ...parents] of rows) {
+        if (parents.length !== 1 || parents[0] !== parent) throw new AppError('REPLAY_MERGE', `The commits after ${short(boundary)} are not one linear chain (merge commits are not replayed). Rebase this branch by hand.`, 409);
+        parent = sha!;
+      }
+      await git(['-C', tree.path, 'var', 'GIT_COMMITTER_IDENT']).catch(() => { throw new AppError('INTEGRATION_IDENTITY', 'Git has no committer identity here. Configure user.name and user.email, then Recheck.', 409); });
+      if ((await gitAnswer(['-C', tree.path, 'config', '--type=bool', '--get', 'commit.gpgSign'])).stdout.trim() === 'true') throw new AppError('UPDATE_UNSUPPORTED', 'Commits here are configured to be signed, which the app does not do. Rebase this branch by hand.', 409);
+      // Merge drivers and filters selected by any input, including every replayed commit, are refused before the first merge calculation.
+      await assertGitInspection(tree.path, [boundary, targetHead, ...rows.map(([sha]) => sha!)]);
+      for (const [sha] of rows) {
+        const raw = await git(['-C', tree.path, 'cat-file', 'commit', sha!]);
+        const split = raw.indexOf('\n\n');
+        if (/^encoding /m.test(raw.slice(0, split))) throw new AppError('UPDATE_UNSUPPORTED', `Commit ${short(sha!)} declares a non-default message encoding. Rebase this branch by hand.`, 409);
+        const merged = await gitAnswer(['-C', tree.path, 'merge-tree', '--write-tree', '--no-messages', '--name-only', `--merge-base=${sha}^`, newTree, sha!]);
+        const lines = merged.stdout.split('\n');
+        if (merged.code !== 0 || !/^[0-9a-f]{40,64}$/.test(lines[0] ?? '')) {
+          const conflicted = [...new Set(lines.slice(1).filter(Boolean))].slice(0, 20);
+          throw new AppError('REPLAY_CONFLICT', `Replaying ${short(sha!)} onto ${name} would conflict${conflicted.length ? ` in ${conflicted.join(', ')}` : ''}. Nothing was changed; resolve it on the task branch or rebase by hand.`, 409);
+        }
+        if (lines[0] === newTree) throw new AppError('REPLAY_REDUNDANT', `Commit ${short(sha!)} changes nothing on top of ${name}; it is probably integrated already. Nothing was changed; rebase this branch by hand.`, 409);
+        replay.push({ sha: sha!, subject: raw.slice(split + 2).split('\n')[0] ?? '', tree: lines[0]! }); newTree = lines[0]!;
+      }
+      // Combining the sides can make attributes effective that neither input selects alone (a macro defined on one side and used on
+      // the other), so every generated tree, including the one the checkout writes, is inspected before the preview is returned.
+      await assertGitInspection(tree.path, replay.map((step) => step.tree));
+    } else await assertGitInspection(tree.path, [tree.head, targetHead]); // the checkout writes the target's files through the same attributes
+    const fastForward = boundaryBy === 'ancestry';
+    if (!fastForward) {
+      const copy = await publishedCopy(tree.path, tree.branch);
+      if (copy) throw new AppError('UPDATE_PUBLISHED', `${tree.branch} also exists as ${copy}. Rewriting it would leave that copy diverged, and the app never pushes. Update it by hand.`, 409);
+    }
+    const blocked = await this.obstructions(tree.path, tree.head, newTree);
+    if (blocked.length) throw new AppError('LOCAL_OBSTRUCTION', `Untracked or ignored files are in the way of ${name}'s tracked files: ${blocked.join(', ')}. Move them yourself; nothing is overwritten.`, 409);
+    const tip = replay.length ? '<last replayed commit>' : targetHead;
+    const commands = [
+      ...(replay.length ? [`git -C ${tree.path} commit-tree <replayed tree> -p <parent> -F - (×${replay.length}; each keeps its author and message)`] : []),
+      `git -C ${tree.path} update-ref --stdin <<< "create refs/altcli/preserved/<request> ${tree.head}"`,
+      `git -C ${tree.path} checkout --no-overwrite-ignore --no-recurse-submodules -B ${tree.branch} ${tip}`,
+    ];
+    const pinned = { ...input, worktree: tree.identity, branch: tree.branch, head: tree.head, targetRef, targetHead, boundaryBy, boundary, replay, tree: newTree, fastForward, commands };
+    return { ...pinned, requestId: randomUUID(), consent: updateConsent(pinned) };
+  }
+  private updateFinish(operation: WorktreeUpdate, status: WorktreeUpdate['status'], message: string, commit: string | null = operation.commit): WorktreeUpdate {
+    const updated = { ...operation, status, message, commit, updatedAt: new Date().toISOString() };
+    // Old squash boundaries described the rewritten history; they are kept for history but never reused.
+    this.store.db.transaction(() => {
+      if (status === 'updated') this.store.retireWorktreeIntegrations(operation.input.projectId, operation.input.worktreeId);
+      this.store.saveWorktreeUpdate(updated);
+    })(); return updated;
+  }
+  /** One commit with the replayed tree on the new parent, keeping the original author, date and message. Hooks do not run. */
+  private async replayCommit(root: string, step: WorktreeUpdatePreview['replay'][number], parent: string): Promise<string> {
+    const raw = await git(['-C', root, 'cat-file', 'commit', step.sha]);
+    const split = raw.indexOf('\n\n');
+    const author = /^author (.*) <([^>]*)> (\d+ [+-]\d{4})$/m.exec(raw.slice(0, split));
+    if (!author) throw new AppError('UPDATE_UNSUPPORTED', `Commit ${short(step.sha)} has an unreadable author.`, 409);
+    const sha = (await gitWith(['-C', root, 'commit-tree', '--no-gpg-sign', step.tree, '-p', parent, '-F', '-'],
+      { input: raw.slice(split + 2), env: { GIT_AUTHOR_NAME: author[1]!, GIT_AUTHOR_EMAIL: author[2]!, GIT_AUTHOR_DATE: author[3]! } })).trim();
+    if ((await git(['-C', root, 'rev-parse', `${sha}^{tree}`])).trim() !== step.tree) throw new Error('A replayed commit does not match the preview.');
+    return sha;
+  }
+  /** Whether `tip` is exactly the confirmed replay: one new commit per previewed step, each with its previewed tree, on the target. */
+  private async replayedChain(root: string, tip: string, input: WorktreeUpdateConfirm): Promise<boolean> {
+    let current = tip;
+    for (const step of [...input.replay].reverse()) {
+      const [sha, parent, extra] = (await git(['-C', root, 'rev-list', '--parents', '-n', '1', current])).trim().split(' ');
+      if (!parent || extra || (await git(['-C', root, 'rev-parse', `${sha}^{tree}`])).trim() !== step.tree) return false;
+      current = parent;
+    }
+    return current === input.targetHead;
+  }
+  /** The confirmed result: the branch attached and clean at the recorded tip, with the old tip kept under the recovery ref. Right
+   * after the move (`fresh`), the branch's previous value must also be the confirmed old tip, so a concurrent commit is noticed. */
+  private async updatedExactly(operation: WorktreeUpdate, fresh: boolean): Promise<boolean> {
+    const { input, commit } = operation; const root = input.worktree.root;
+    if (!commit) return false;
+    try {
+      await assertGitInspection(root, []);
+      const state = await branchState(root);
+      if (!state.clean || state.branch !== input.branch || state.head !== commit) return false;
+      if (!sameWorktree(await resolveWorktree(root), input.worktree)) return false;
+      if ((await gitAnswer(['-C', root, 'rev-parse', '--verify', '--quiet', `${input.recoveryRef}^{commit}`])).stdout.trim() !== input.head) return false;
+      if (!await this.replayedChain(root, commit, input)) return false;
+      return !fresh || (await gitAnswer(['-C', root, 'rev-parse', '--verify', '--quiet', `refs/heads/${input.branch}@{1}`])).stdout.trim() === input.head;
+    } catch { return false; }
+  }
+  /** One confirmed update. Guard (supplied by ControlPlane) rechecks run ownership and writer evidence for every pane in the worktree;
+   * archive keeps published handoff content in the journal before the branch moves. */
+  async update(raw: WorktreeUpdateRequest, guard: (worktree: WorktreeIdentity) => Promise<void>, archive: (worktree: WorktreeIdentity) => Promise<number>): Promise<WorktreeUpdate> {
+    const request = parseUpdate(raw);
+    if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'The host has disabled Git setup and terminal input.', 403);
+    const existing = this.store.worktreeUpdates().find((op) => op.input.requestId === request.requestId);
+    if (existing) {
+      if (existing.input.projectId !== request.projectId || existing.input.worktreeId !== request.worktreeId || existing.input.consent !== request.consent) throw new AppError('ID_CONFLICT', 'This update ID belongs to a different request.', 409);
+      return existing;
+    }
+    const project = this.known.get(request.projectId);
+    if (!project) throw new AppError('PROJECT_CHANGED', 'Recheck this project.', 409);
+    const changed = new AppError('WORKTREE_CHANGED', 'The task branch, the integration branch or the replay result changed. Preview and confirm again.', 409);
+    const derived = await this.previewUpdate({ projectId: request.projectId, worktreeId: request.worktreeId });
+    if (derived.consent !== request.consent) throw changed;
+    const input: WorktreeUpdateConfirm = { ...derived, requestId: request.requestId, recoveryRef: `refs/altcli/preserved/${request.requestId}`, confirm: true };
+    let operation: WorktreeUpdate = { input, status: 'applying', message: 'Checking the confirmed update.', updatedAt: new Date().toISOString(), commit: null };
+    this.store.db.transaction(() => {
+      if (this.store.worktreeUpdates().some((op) => op.input.requestId === input.requestId)) throw new AppError('ID_CONFLICT', 'This update ID was already claimed while inspecting Git. Inspect its result.', 409);
+      if (this.projectHeld(input.projectId)) throw new AppError('PROJECT_SETUP_BUSY', 'Another worktree operation owns this project. Inspect its result first.', 409);
+      // Checked in one transaction with the run ledger, whose starts check this record in theirs.
+      if (this.store.indexOwned(input.worktree.indexPath) || this.store.activeFor(input.worktree.root)) throw new AppError('WORKTREE_BUSY', 'A run or unresolved delivery owns this worktree. Let it finish or take over first.', 409);
+      this.store.saveProject(project); this.store.saveWorktreeUpdate(operation);
+    }).immediate();
+    const root = input.worktree.root; let attempted = false;
+    try {
+      await guard(input.worktree);
+      if ((await this.previewUpdate({ projectId: input.projectId, worktreeId: input.worktreeId })).consent !== input.consent) throw changed;
+      await guard(input.worktree);
+      const archived = await archive(input.worktree);
+      // Replayed commits go to the object database first: until the branch moves, nothing a user sees has changed.
+      let tip = input.targetHead;
+      for (const step of input.replay) tip = await this.replayCommit(root, step, tip);
+      operation = this.updateFinish(operation, 'applying', 'Moving the task branch; the old tip is kept first.', tip);
+      await guard(input.worktree);
+      attempted = true;
+      await gitWith(['-C', root, '-c', 'core.hooksPath=/dev/null', 'update-ref', '--stdin'], { input: `create ${input.recoveryRef} ${input.head}\n` });
+      await git(['-C', root, '-c', 'core.hooksPath=/dev/null', '-c', 'submodule.recurse=false', 'checkout', '--quiet', '--no-overwrite-ignore', '--no-recurse-submodules', '-B', input.branch, tip]);
+      if (!await this.updatedExactly(operation, true)) throw new Error('Update verification failed.');
+      const target = input.targetRef.replace('refs/heads/', '');
+      return this.updateFinish(operation, 'updated', `Updated ${input.branch} ${input.replay.length ? `by replaying ${input.replay.length} commit${input.replay.length === 1 ? '' : 's'} onto` : 'to'} ${target} at ${short(input.targetHead)}; it is now ${short(tip)}. The old tip ${short(input.head)} is kept at ${input.recoveryRef}${archived ? `, and ${archived} handoff commit${archived === 1 ? ' was' : 's were'} archived in the journal` : ''}. The directory, ignored files and agents are unchanged; give agents fresh instructions for the new baseline.`);
+    } catch (error) {
+      return this.updateFinish(operation, attempted ? 'uncertain' : 'failed', attempted
+        ? `The update or its verification is uncertain. ${messageOf(error)} Inspect ${root}; the old tip is kept at ${input.recoveryRef} if it was created. Nothing is retried or rolled back.` : messageOf(error));
+    }
+  }
+  /** Read-only inspection of an uncertain update. The recorded result, even under later commits, completes it; a branch still at its
+   * old tip in a clean checkout releases it as failed once writers are settled; anything else keeps the owner. Nothing is changed. */
+  async reconcileUpdate(requestId: string, guard: (worktree: WorktreeIdentity) => Promise<void>): Promise<WorktreeUpdate> {
+    const operation = this.store.worktreeUpdates().find((op) => op.input.requestId === requestId);
+    if (!operation) throw new AppError('NOT_FOUND', 'Update operation not found.', 404);
+    if (operation.status !== 'uncertain') return operation;
+    const { input } = operation; const root = input.worktree.root;
+    try {
+      if (await this.updatedExactly(operation, false)) return this.updateFinish(operation, 'updated', `Update verified. The old tip is kept at ${input.recoveryRef}; no Git changes were made by inspection.`);
+      const tip = (await gitAnswer(['-C', root, 'rev-parse', '--verify', '--quiet', `refs/heads/${input.branch}^{commit}`])).stdout.trim();
+      const kept = (await gitAnswer(['-C', root, 'rev-parse', '--verify', '--quiet', `${input.recoveryRef}^{commit}`])).stdout.trim() === input.head;
+      if (operation.commit && tip && kept && (await gitAnswer(['-C', root, 'merge-base', '--is-ancestor', operation.commit, tip])).code === 0 && await this.replayedChain(root, operation.commit, input))
+        return this.updateFinish(operation, 'updated', `Update verified; ${input.branch} has moved on since. The old tip is kept at ${input.recoveryRef}; no Git changes were made by inspection.`);
+      await assertGitInspection(root, []);
+      const state = await branchState(root);
+      if (state.clean && state.branch === input.branch && state.head === input.head && tip === input.head) {
+        await guard(input.worktree);
+        return this.updateFinish(operation, 'failed', `${input.branch} is unchanged at ${short(input.head)}; nothing was updated.${kept ? ` The recovery ref ${input.recoveryRef} was created and is kept; delete it yourself when you no longer need it.` : ''} Preview again if needed.`);
+      }
+    } catch { /* Missing evidence retains ownership. */ }
+    return operation;
+  }
+  /** Read-only: renaming this task branch in place. Uncommitted work is pinned by fingerprint and carried unchanged. */
+  async previewRename(raw: WorktreeRenameInput): Promise<WorktreeRenamePreview> {
+    const input = parseRenamePreview(raw);
+    if (this.config.mode === 'mock') throw new AppError('MOCK_WORKTREE', 'Simulated panes cannot rename real Git branches.', 409);
+    const { tree, primary } = await this.taskWorktree(input.projectId, input.worktreeId, 'renamed');
+    if (input.newBranch === tree.branch) throw new AppError('RENAME_SAME', `${tree.branch} already has that name.`, 409);
+    if (integrationNames(primary, this.config.integrationBranches).includes(input.newBranch)) throw new AppError('INTEGRATION_BRANCH', `${input.newBranch} is an integration branch name. Choose a task branch name.`, 409);
+    await validateNewBranch(tree.path, input.newBranch);
+    // Loose refs share one directory tree: a/b cannot coexist with a, and case-only differences collide on case-insensitive disks.
+    const others = (await git(['-C', tree.path, 'for-each-ref', '--format=%(refname)', 'refs/heads/'])).split('\n').filter(Boolean).map((ref) => ref.slice('refs/heads/'.length)).filter((name) => name !== tree.branch);
+    const clash = others.find((name) => name.toLowerCase() === input.newBranch.toLowerCase() || name.startsWith(`${input.newBranch}/`) || input.newBranch.startsWith(`${name}/`));
+    if (clash) throw new AppError('RENAME_CONFLICT', `${input.newBranch} conflicts with the existing branch ${clash}. Choose another name.`, 409);
+    const copy = await publishedCopy(tree.path, tree.branch);
+    if (copy) throw new AppError('RENAME_PUBLISHED', `${tree.branch} also exists as ${copy}; a local rename would leave that copy under the old name, and the app never pushes. Rename it by hand.`, 409);
+    const busy = await operationInProgress(tree.path);
+    if (busy) throw new AppError('RENAME_UNSUPPORTED', `A ${busy} is in progress in this worktree. Finish or abort it yourself, then Recheck.`, 409);
+    const state = await branchState(tree.path);
+    if (state.branch !== tree.branch || state.head !== tree.head) throw new AppError('WORKTREE_CHANGED', 'The task worktree changed during inspection. Recheck.', 409);
+    const names = this.branchNames(input.projectId, input.worktreeId, tree.branch);
+    const checkpoints = this.store.worktreeIntegrations().filter((op) => op.status === 'integrated' && !op.retired && op.input.projectId === input.projectId && op.input.worktreeId === input.worktreeId && names.has(op.input.branch)).length;
+    return { ...input, requestId: randomUUID(), worktree: tree.identity, branch: tree.branch, head: tree.head, fingerprint: await worktreeFingerprint(tree.path),
+      dirty: !state.clean, checkpoints, commands: [`git -C ${tree.path} branch -m ${tree.branch} ${input.newBranch}`] };
+  }
+  private renameFinish(operation: WorktreeRename, status: WorktreeRename['status'], message: string): WorktreeRename {
+    const updated = { ...operation, status, message, updatedAt: new Date().toISOString() };
+    this.store.saveWorktreeRename(updated); return updated;
+  }
+  private async renamedExactly(operation: WorktreeRename): Promise<boolean> {
+    const { input } = operation; const root = input.worktree.root;
+    try {
+      const tip = async (name: string) => (await gitAnswer(['-C', root, 'rev-parse', '--verify', '--quiet', `refs/heads/${name}`])).stdout.trim();
+      return await tip(input.newBranch) === input.head && !await tip(input.branch)
+        && (await gitAnswer(['-C', root, 'symbolic-ref', '--quiet', 'HEAD'])).stdout.trim() === `refs/heads/${input.newBranch}`
+        && sameWorktree(await resolveWorktree(root), input.worktree);
+    } catch { return false; }
+  }
+  /** One confirmed `git branch -m`. The whole preview, including the content fingerprint, must still hold immediately before it. */
+  async rename(raw: WorktreeRenameConfirm, guard: (worktree: WorktreeIdentity) => Promise<void>): Promise<WorktreeRename> {
+    const input = parseRename(raw);
+    if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'The host has disabled Git setup and terminal input.', 403);
+    const existing = this.store.worktreeRenames().find((op) => op.input.requestId === input.requestId);
+    if (existing) {
+      if (!isDeepStrictEqual(existing.input, input)) throw new AppError('ID_CONFLICT', 'This rename ID belongs to a different request.', 409);
+      return existing;
+    }
+    const project = this.known.get(input.projectId);
+    if (!project) throw new AppError('PROJECT_CHANGED', 'Recheck this project.', 409);
+    const operation: WorktreeRename = { input, status: 'applying', message: 'Checking the confirmed branch rename.', updatedAt: new Date().toISOString() };
+    this.store.db.transaction(() => {
+      if (this.store.worktreeRenames().some((op) => op.input.requestId === input.requestId)) throw new AppError('ID_CONFLICT', 'This rename ID was already claimed. Inspect its result.', 409);
+      if (this.projectHeld(input.projectId)) throw new AppError('PROJECT_SETUP_BUSY', 'Another worktree operation owns this project. Inspect its result first.', 409);
+      if (this.store.indexOwned(input.worktree.indexPath) || this.store.activeFor(input.worktree.root)) throw new AppError('WORKTREE_BUSY', 'A run or unresolved delivery owns this worktree. Let it finish or take over first.', 409);
+      this.store.saveProject(project); this.store.saveWorktreeRename(operation);
+    }).immediate();
+    const unchanged = async () => isDeepStrictEqual({ ...await this.previewRename({ projectId: input.projectId, worktreeId: input.worktreeId, newBranch: input.newBranch }), requestId: input.requestId, confirm: true }, input);
+    let attempted = false;
+    try {
+      if (!await unchanged()) throw new AppError('WORKTREE_CHANGED', 'The branch, its commit or the uncommitted work changed. Preview and confirm again.', 409);
+      await guard(input.worktree);
+      if (!await unchanged()) throw new AppError('WORKTREE_CHANGED', 'The worktree changed during rename checks.', 409);
+      await guard(input.worktree); // a turn that started during that final inspection is refused before Git runs
+      attempted = true;
+      await git(['-C', input.worktree.root, '-c', 'core.hooksPath=/dev/null', 'branch', '-m', input.branch, input.newBranch]);
+      if (!await this.renamedExactly(operation)) throw new Error('Rename verification failed.');
+      return this.renameFinish(operation, 'renamed', `Renamed ${input.branch} to ${input.newBranch}. The directory, files, agents and tmux session names are unchanged${input.checkpoints ? '; squash batches continue from the recorded boundary' : ''}.`);
+    } catch (error) {
+      return this.renameFinish(operation, attempted ? 'uncertain' : 'failed', attempted
+        ? `The rename or its verification is uncertain. ${messageOf(error)} Inspect the branches in ${input.worktree.root}; nothing is retried.` : messageOf(error));
+    }
+  }
+  async reconcileRename(requestId: string): Promise<WorktreeRename> {
+    const operation = this.store.worktreeRenames().find((op) => op.input.requestId === requestId);
+    if (!operation) throw new AppError('NOT_FOUND', 'Rename operation not found.', 404);
+    if (operation.status !== 'uncertain') return operation;
+    const { input } = operation; const root = input.worktree.root;
+    try {
+      if (await this.renamedExactly(operation)) return this.renameFinish(operation, 'renamed', `Rename to ${input.newBranch} verified; no Git changes were made by inspection.`);
+      const tip = async (name: string) => (await gitAnswer(['-C', root, 'rev-parse', '--verify', '--quiet', `refs/heads/${name}`])).stdout.trim();
+      if (await tip(input.branch) === input.head && !await tip(input.newBranch) && (await gitAnswer(['-C', root, 'symbolic-ref', '--quiet', 'HEAD'])).stdout.trim() === `refs/heads/${input.branch}`)
+        return this.renameFinish(operation, 'failed', `${input.branch} still has its old name; nothing was renamed. Preview again if needed.`);
     } catch { /* Missing evidence retains ownership. */ }
     return operation;
   }

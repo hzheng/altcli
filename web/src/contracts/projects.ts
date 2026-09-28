@@ -19,6 +19,8 @@ export interface Project extends ProjectRecord {
   integrations?: WorktreeIntegration[];
   discards?: WorktreeDiscard[];
   finishes?: TaskFinish[];
+  updates?: WorktreeUpdate[];
+  renames?: WorktreeRename[];
 }
 export interface WorktreePreviewInput { projectId: string; sourceWorktreeId: string; branch: string }
 export interface WorktreePreview extends WorktreePreviewInput {
@@ -100,6 +102,67 @@ export interface WorktreeIntegration {
   updatedAt: string;
   /** The squash commit on the integration branch once verified. */
   commit: string | null;
+}
+
+/** Update from main: move a linked task worktree's branch onto the local integration branch (main, else the recorded default) in place,
+ * keeping its directory, ignored environment and agents. Commits after the proven integrated boundary are replayed on top. */
+export interface WorktreeUpdateInput { projectId: string; worktreeId: string }
+export interface WorktreeUpdatePreview extends WorktreeUpdateInput {
+  requestId: string;
+  worktree: WorktreeIdentity;
+  branch: string;
+  head: string;
+  targetRef: string;
+  targetHead: string;
+  /** How the boundary was proven: the target contains the task commits (ancestry), a squash (checkpoint or exact patch) contains them,
+   * or `base`: the plain merge base, so every task commit after it is replayed. */
+  boundaryBy: 'ancestry' | 'squash' | 'base';
+  /** The last task commit whose content the target already contains; replay starts after it. Equals `head` when fully integrated. */
+  boundary: string;
+  /** Commits after the boundary, oldest first, each with the tree it produces on the target. Empty for a fully integrated branch. */
+  replay: { sha: string; subject: string; tree: string }[];
+  /** Tree of the new branch tip. */
+  tree: string;
+  /** The old tip is an ancestor of the new one, so no history is rewritten. */
+  fastForward: boolean;
+  /** The exact Git operations confirmation authorizes, for display. */
+  commands: string[];
+  /** Server digest of every pinned field above except requestId; the compact confirmation repeats it. */
+  consent: string;
+}
+export interface WorktreeUpdateRequest { projectId: string; worktreeId: string; requestId: string; consent: string; confirm: true }
+/** The durable consent record: the re-derived preview, plus the create-only ref that keeps the old tip. */
+export interface WorktreeUpdateConfirm extends WorktreeUpdatePreview { recoveryRef: string; confirm: true }
+export interface WorktreeUpdate {
+  input: WorktreeUpdateConfirm;
+  status: 'applying' | 'updated' | 'uncertain' | 'failed';
+  message: string;
+  updatedAt: string;
+  /** The new branch tip, recorded before the branch moves (the target head, or the last replayed commit). */
+  commit: string | null;
+}
+
+/** Rename a linked task worktree's branch in place. Files, the directory, agents and tmux session names are unchanged. */
+export interface WorktreeRenameInput { projectId: string; worktreeId: string; newBranch: string }
+export interface WorktreeRenamePreview extends WorktreeRenameInput {
+  requestId: string;
+  worktree: WorktreeIdentity;
+  /** The current branch name. */
+  branch: string;
+  head: string;
+  /** Digest of HEAD, index entries, unstaged and untracked content: uncommitted work is carried unchanged, never touched. */
+  fingerprint: string;
+  dirty: boolean;
+  /** Recorded squash batches whose boundary carries over to the new name. */
+  checkpoints: number;
+  commands: string[];
+}
+export interface WorktreeRenameConfirm extends WorktreeRenamePreview { confirm: true }
+export interface WorktreeRename {
+  input: WorktreeRenameConfirm;
+  status: 'applying' | 'renamed' | 'uncertain' | 'failed';
+  message: string;
+  updatedAt: string;
 }
 
 /** Forced removal of a task worktree and deletion of its branch without integration evidence. */

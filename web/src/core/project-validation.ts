@@ -1,4 +1,4 @@
-import type { DirectoryListInput, FinishConfirm, FinishContinue, FinishInput, FinishOutcome, FinishReconcile, ProjectAddInput, WorktreeCreateInput, WorktreeDiscardConfirm, WorktreeDiscardFinish, WorktreeDiscardInput, WorktreeIntegrateRequest, WorktreeIntegrationInput, WorktreePreviewInput, WorktreeRemovalInput, WorktreeRemoveInput } from '../contracts/projects.ts';
+import type { DirectoryListInput, FinishConfirm, FinishContinue, FinishInput, FinishOutcome, FinishReconcile, ProjectAddInput, WorktreeCreateInput, WorktreeDiscardConfirm, WorktreeDiscardFinish, WorktreeDiscardInput, WorktreeIntegrateRequest, WorktreeIntegrationInput, WorktreePreviewInput, WorktreeRemovalInput, WorktreeRemoveInput, WorktreeRenameConfirm, WorktreeRenameInput, WorktreeUpdateInput, WorktreeUpdateRequest } from '../contracts/projects.ts';
 import { AppError } from './errors.ts';
 import { object, requestId } from './validation.ts';
 import { sha } from './implementation-validation.ts';
@@ -129,4 +129,40 @@ export function parseFinishReconcile(value: unknown): FinishReconcile {
   const note = body.note === undefined ? undefined : text(body.note);
   if (body.action === 'decide' && (!note?.trim() || note.length > 1000)) throw new AppError('INVALID_WORKTREE', 'Record what you inspected, in at most 1,000 characters.');
   return { requestId: requestId(body.requestId), revision: body.revision as number, action: body.action as FinishReconcile['action'], ...(note === undefined ? {} : { note }) };
+}
+
+export function parseUpdatePreview(value: unknown): WorktreeUpdateInput {
+  const body = object(value); fields(body, ['projectId', 'worktreeId']);
+  return { projectId: text(body.projectId), worktreeId: text(body.worktreeId) };
+}
+/** Compact confirmation: the server re-derives the preview and requires its consent digest to match. */
+export function parseUpdate(value: unknown): WorktreeUpdateRequest {
+  const body = object(value); fields(body, ['projectId', 'worktreeId', 'requestId', 'consent', 'confirm']);
+  if (body.confirm !== true) throw new AppError('CONFIRM_REQUIRED', 'Confirm the exact worktree update.');
+  if (typeof body.consent !== 'string' || !/^[0-9a-f]{64}$/.test(body.consent)) throw new AppError('INVALID_WORKTREE', 'Confirm the previewed update; its consent digest is missing.');
+  const projectId = text(body.projectId); const worktreeId = text(body.worktreeId);
+  if (projectId.length > MAX_IDENTIFIER || worktreeId.length > MAX_IDENTIFIER) throw new AppError('INVALID_WORKTREE', 'Recheck the project; its identifiers are not ones this host issued.');
+  return { projectId, worktreeId, requestId: requestId(body.requestId), consent: body.consent, confirm: true };
+}
+function branchName(value: unknown): string {
+  const branch = text(value);
+  if (branch.length > 150 || !/^[A-Za-z0-9][A-Za-z0-9/_.-]*$/.test(branch)) throw new AppError('INVALID_WORKTREE', 'Use a branch name of at most 150 letters, digits, slashes, dots, underscores or hyphens.');
+  return branch;
+}
+export function parseRenamePreview(value: unknown): WorktreeRenameInput {
+  const body = object(value); fields(body, ['projectId', 'worktreeId', 'newBranch']);
+  return { projectId: text(body.projectId), worktreeId: text(body.worktreeId), newBranch: branchName(body.newBranch) };
+}
+/** The whole preview is the consent; the server re-derives it and refuses any difference, including the content fingerprint. */
+export function parseRename(value: unknown): WorktreeRenameConfirm {
+  const body = object(value);
+  fields(body, ['projectId', 'worktreeId', 'newBranch', 'requestId', 'worktree', 'branch', 'head', 'fingerprint', 'dirty', 'checkpoints', 'commands', 'confirm']);
+  if (body.confirm !== true) throw new AppError('CONFIRM_REQUIRED', 'Confirm the exact branch rename.');
+  const worktree = object(body.worktree); fields(worktree, ['root', 'gitDir', 'indexPath']);
+  if (typeof body.fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(body.fingerprint)) throw new AppError('INVALID_WORKTREE', 'Confirm the previewed rename; its content fingerprint is missing.');
+  if (typeof body.dirty !== 'boolean' || !Number.isInteger(body.checkpoints) || (body.checkpoints as number) < 0 || (body.checkpoints as number) > 10000) throw new AppError('INVALID_WORKTREE', 'Invalid rename preview.');
+  if (!Array.isArray(body.commands) || body.commands.length > 10) throw new AppError('INVALID_WORKTREE', 'Invalid rename preview.');
+  return { ...parseRenamePreview({ projectId: body.projectId, worktreeId: body.worktreeId, newBranch: body.newBranch }), requestId: requestId(body.requestId),
+    worktree: { root: text(worktree.root), gitDir: text(worktree.gitDir), indexPath: text(worktree.indexPath) }, branch: text(body.branch), head: sha(body.head),
+    fingerprint: body.fingerprint, dirty: body.dirty, checkpoints: body.checkpoints as number, commands: body.commands.map(text), confirm: true };
 }

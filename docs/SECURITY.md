@@ -87,8 +87,14 @@ the staging controller issues no Git mutations and does not independently prove 
 Since September 27, 2026 that flow runs as Stage relay only on `main` or the recorded default
 branch. Each run is bound to the branch and commit confirmed at start and rechecked read-only
 before every delivery and at each completion; a change pauses the run with ownership retained.
-The accepted but unimplemented worktree-reuse operations (ADR-0013) would add controller Git writes,
-including create-only `refs/altcli/preserved/*` recovery refs; none exists yet.
+Confirmed **Update from main** (ADR-0013) adds controller Git writes to a clean linked task worktree:
+replayed commits written with `git commit-tree --no-gpg-sign` (object database only), a create-only
+`refs/altcli/preserved/<requestId>` ref at the old tip, and
+`git checkout --no-overwrite-ignore --no-recurse-submodules -B`. Repository hooks are disabled for both
+ref writes. The app never deletes recovery refs, so old task history stays reachable locally until the
+user deletes them. Confirmed **Rename** runs `git branch -m` with hooks disabled. Both require settled
+writer evidence for every pane in the worktree and refuse run ownership. Neither fetches nor pushes.
+Directory move is not implemented.
 
 ---
 
