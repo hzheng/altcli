@@ -1,15 +1,19 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
+import type { SessionRegistration } from '../contracts/api';
 import type { LaunchBatch, LaunchInstance, LaunchPreview, LaunchProfile } from '../contracts/launches';
 import type { ProjectWorktree } from '../contracts/projects';
 import { api, HttpError } from '../client/api';
 import { isDirectCodexProfile, lacksCodexNoDaemon } from '../core/policy';
 import { LaunchCleanup } from './LaunchCleanup';
-export function LaunchAgents({token,projectId,tree,enabled,inputEnabled,held,onChanged,viewEpoch=0,requested=0,busy:outerBusy=false}:{token:string;projectId:string;tree:ProjectWorktree;enabled:boolean;inputEnabled:boolean;held:boolean;onChanged:(notice:string)=>Promise<void>;viewEpoch?:number;requested?:number;busy?:boolean}) {
+export function LaunchAgents({token,projectId,tree,sessions,enabled,inputEnabled,held,onChanged,viewEpoch=0,requested=0,busy:outerBusy=false}:{token:string;projectId:string;tree:ProjectWorktree;sessions:SessionRegistration[];enabled:boolean;inputEnabled:boolean;held:boolean;onChanged:(notice:string)=>Promise<void>;viewEpoch?:number;requested?:number;busy?:boolean}) {
   const [open,setOpen]=useState(false),[profiles,setProfiles]=useState<LaunchProfile[]>([]),[agents,setAgents]=useState<{profileId:string}[]>([]),[preview,setPreview]=useState<LaunchPreview|null>(null),[batches,setBatches]=useState<LaunchBatch[]>([]);
   const [busy,setBusy]=useState(false),[error,setError]=useState(''),[unknown,setUnknown]=useState<string|null>(null),[inspectId,setInspectId]=useState<string|null>(null),[note,setNote]=useState('');
   const [inspections,setInspections]=useState<Record<string,{state:'checking'|'done'|'error';message:string}>>({});
   const form=useRef<HTMLElement>(null),scrolledRequest=useRef(0);
+  const labelOf=(item:LaunchInstance)=>sessions.find(s=>s.repository===item.worktree.root&&item.identity&&
+    s.identity.socketPath===item.identity.socketPath&&s.identity.serverPid===item.identity.serverPid&&s.identity.serverStarted===item.identity.serverStarted&&
+    s.identity.paneId===item.identity.paneId&&s.identity.panePid===item.identity.panePid)?.label??item.sessionName;
   const refresh=async()=>{setBatches(await api<LaunchBatch[]>(token,'launches'));};
   useEffect(()=>{if(requested){setOpen(true);void api<LaunchProfile[]>(token,'launch-profiles').then(setProfiles).catch(e=>setError(e.message));}},[requested,token]);
   // The outer wrapper has display:contents; scroll the rendered form once per explicit request.
@@ -26,7 +30,7 @@ export function LaunchAgents({token,projectId,tree,enabled,inputEnabled,held,onC
     const unchanged=result.status===item.status&&result.message===item.message&&!result.closed;
     const message=`Checked at ${new Date().toLocaleTimeString()} — ${result.status}${unchanged?' (unchanged)':''}. ${result.message}`;
     setInspections(previous=>({...previous,[item.id]:{state:'done',message}}));
-    await onChanged(`${item.sessionName}: ${message}`);
+    await onChanged(`${labelOf(item)}: ${message}`);
   });}
   const items=batches.flatMap(b=>b.items).filter(i=>i.worktreeId===tree.id&&!i.closed);
   return <div className="launch-agents" id={`launch-${tree.id}`}><button type="button" disabled={!enabled||busy||held||!!tree.error} onClick={()=>void act(async()=>{setOpen(x=>!x);setProfiles(await api<LaunchProfile[]>(token,'launch-profiles'));await refresh();})}>Launch agents…</button>
@@ -42,9 +46,9 @@ export function LaunchAgents({token,projectId,tree,enabled,inputEnabled,held,onC
         <button type="button" disabled={busy||!enabled||held||!!preview.blockers.length||!!unknown} onClick={()=>void act(async()=>{setUnknown(preview.requestId);try{await api<LaunchBatch>(token,'launches',{body:{requestId:preview.requestId,previewDigest:preview.digest,confirm:true}});}catch(e){if(e instanceof HttpError&&e.status<500)setUnknown(null);throw e;}setUnknown(null);setPreview(null);await refresh();await onChanged('Launch results recorded. Inspect startup before starting a task.');})}>Launch {preview.items.length} sessions</button></div>}
       {unknown&&<p role="alert">Launch {unknown} needs inspection. <button type="button" onClick={()=>void act(async()=>{await refresh();const all=await api<LaunchBatch[]>(token,'launches');if(all.some(b=>b.requestId===unknown))setUnknown(null);})}>Inspect recorded request</button></p>}
     </section>}
-    {items.map(item=>{const inspection=inspections[item.id];return <div className="notice" key={item.id} role="group" aria-label={`Launch ${item.sessionName}`}><strong>{item.sessionName} · last observed: {item.status}</strong><p>{item.message}</p><div className="row-tools launch-actions">
+    {items.map(item=>{const inspection=inspections[item.id],label=labelOf(item);return <div className="notice" key={item.id} role="group" aria-label={`Launch ${label}`}><strong>{label} · last observed: {item.status}</strong>{label!==item.sessionName&&<p className="fine">tmux session: {item.sessionName}</p>}<p>{item.message}</p><div className="row-tools launch-actions">
       <button type="button" disabled={busy} onClick={()=>void inspect(item)}>{inspection?.state==='checking'?'Checking…':'Refresh launch status'}</button>
-      <LaunchCleanup token={token} item={item} enabled={inputEnabled&&!busy&&!outerBusy} viewEpoch={viewEpoch} onChanged={async()=>{await refresh();await onChanged('Cleanup result recorded; launch history retained.');}} />
+      <LaunchCleanup token={token} item={item} label={label} enabled={inputEnabled&&!busy&&!outerBusy} viewEpoch={viewEpoch} onChanged={async()=>{await refresh();await onChanged('Cleanup result recorded; launch history retained.');}} />
       {!item.cleanup&&!['running','reconciled','failed','applying'].includes(item.status)&&<button type="button" onClick={()=>{setInspectId(item.id);setNote('');}}>Reconcile after host inspection…</button>}</div>
       {inspection&&<p className="launch-inspection" role={inspection.state==='error'?'alert':'status'}>{inspection.message}</p>}
       {inspectId===item.id&&<div><p>Inspect the original operation, all possible sessions and background effects on the host. A missing session does not prove the program never ran. This releases the reservation and retains that uncertainty in history.</p><label>Inspection note<input value={note} maxLength={1000} onChange={e=>setNote(e.target.value)}/></label><button type="button" disabled={!note.trim()||busy} onClick={()=>void act(async()=>{await api(token,`launches/${item.id}/reconcile`,{body:{requestId:crypto.randomUUID(),confirmInspected:true,note}});setInspectId(null);await refresh();await onChanged('Launch reconciled by human inspection. Nothing was replayed.');})}>Record inspected reconciliation</button><button type="button" onClick={()=>setInspectId(null)}>Cancel</button></div>}

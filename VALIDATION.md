@@ -3217,3 +3217,62 @@ Observed (Node v24.12.0, Git 2.47.0, macOS):
 
 Not run: the full browser suite (the author reported 326 passed at `fa9f588`), private-tmux native suites and
 installed-agent acceptance.
+
+## 2026-09-27 — saved agent names on launch cards
+
+Authenticated browser and API inspection found that the agent table and current
+group already used saved display names, while the launch cards below them still
+used the original tmux session names. Launch cards, status feedback and cleanup
+panels now use the saved name matched by checkout and complete pane identity.
+The original tmux name is shown separately when different. This is a display
+change; registration IDs, group membership, launch records and history retain
+their existing behavior.
+
+The inspected sessions were all live. Cleanup refused them because it only
+removes exited or missing sessions, independent of group selection. Blocked
+previews now explain that exclusion does not stop a CLI and that a running CLI
+must exit before cleanup. That advice is conditioned on the still-running blocker,
+because blocked previews also cover changed markers, shared windows and missing
+identity, which need inspection instead. No live-session closing capability was added.
+
+- A renamed-launch browser assertion failed against the original UI. After the
+  fix, all eight desktop/iPhone cleanup cases passed, covering dead, missing,
+  live and lost-response scenarios with fixture cleanup evidence/effects.
+- Two desktop/iPhone status-refresh cases passed with added inline-rename checks
+  on an already mounted card, including feedback, exact registration identity,
+  group ID/revision/membership and the other agent's unchanged name. The first
+  added assertion also compared the synthetic group's creation timestamp; it was
+  corrected to check the intended membership invariants.
+- `./scripts/check.sh` passed on Node 24.12.0: 32 hook/setup, 44 smoke,
+  446 workflow and 83 unit tests, type checking and the production build.
+- `./scripts/check.sh --e2e` completed its non-browser checks, then was stopped
+  at the owner's request to defer testing until before commit (exit 130).
+  The browser summary was 234 passed, one failed, one interrupted, three skipped
+  and 97 not run. Before cancellation, the iPhone heading-row layout assertion
+  at `web/e2e/layout.spec.ts:92` failed at a 1440-pixel viewport (28.09375-pixel
+  vertical difference, expected less than 3). It was not investigated or rerun;
+  the interrupted case is separate from that failure. Full browser acceptance
+  remains pending pre-commit validation.
+
+The required builds replaced a client bundle referenced by the running production
+host. Its original hashed bundle was restored from an existing build; authenticated
+browser navigation then passed with no failed asset requests. The backend was not
+restarted and still serves the prior UI. No user agent was stopped, no group was
+reset, and nothing was staged or committed. Private-tmux and physical-device tests
+were not run for this display change. The diff and this record were screened for
+secrets; no credentials or private endpoints were included.
+
+## 2026-09-27 — close running sessions through cleanup
+
+The existing cleanup flow now offers **Close agent** with explicit interruption
+consent. It retains identity/ownership checks, guarded tmux removal and recovery
+without retries. Tests and builds were not run, as requested. No backend was
+restarted and no user session was closed. Regression cases are updated but unrun.
+
+Reviewer follow-up (Node 24.12.0, tmux 3.5a, macOS): the private-tmux launch test now
+closes a real running launch only after stop consent, and shows that a live close
+leaves a respawned replacement process running. Removing the pane-PID binding makes
+that assertion fail. Observed passing: `scripts/launch-cleanup.test.ts` (20),
+`scripts/native-launch.test.ts` (6), type checking, and the desktop/iPhone launch
+status and cleanup browser cases (10). Not run: `./scripts/check.sh`, the full
+browser suite and installed-agent acceptance.

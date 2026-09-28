@@ -53,6 +53,9 @@ for(const existing of [false,true])test(`private tmux service launch: ${existing
     await run(['respawn-pane','-k','-t',item.identity!.paneId,'/bin/sleep','300']);
     await launches.cleanupHost.kill(item);
     assert.equal((await run(['display-message','-p','-t',item.identity!.paneId,'#{pane_dead}'])).trim(),'0');
+    // A confirmed live close binds the recorded pane process; the respawned replacement must survive it.
+    await launches.cleanupHost.kill({...item,cleanup:{requestId:randomUUID(),digest:'fixture',status:'applying',acknowledgedAt:new Date().toISOString(),confirmStop:true}});
+    assert.equal((await run(['display-message','-p','-t',item.identity!.paneId,'#{pane_dead}'])).trim(),'0');
     await run(['respawn-pane','-k','-t',item.identity!.paneId,'/usr/bin/true']);
     for(let n=0;n<100;n++){if((await run(['display-message','-p','-t',item.identity!.paneId,'#{pane_dead}'])).trim()==='1')break;await wait(20);}
     const cleanup=await launches.previewCleanup(item.id);
@@ -64,6 +67,18 @@ for(const existing of [false,true])test(`private tmux service launch: ${existing
     const forget=await launches.previewCleanup(missing.id);assert.equal(forget.state,'missing');
     assert.ok((await launches.confirmCleanup(missing.id,{requestId:forget.requestId,digest:forget.digest,confirmInspected:true})).closed);
     assert.ok((await run(['list-sessions','-F','#{session_name}'])).includes(missing.sessionName),'the reused name belongs to another live session');
+    // A running original process is closed only with explicit stop consent, once, by its recorded identity.
+    const sleeper=(await launches.profile({label:'Live fixture',executable:'/bin/sleep',args:['300'],adapterHint:'manual',enabled:true}))!;
+    const third=await launches.preview({projectId:project.id,items:[{worktreeId:tree.id,profileId:sleeper.id,count:1}]});
+    const live=(await launches.confirm({requestId:third.requestId,previewDigest:third.digest,confirm:true})).items[0]!;
+    const close=await launches.previewCleanup(live.id);assert.equal(close.state,'live',close.blockers.join(' '));
+    const consent={requestId:close.requestId,digest:close.digest,confirmInspected:true};
+    await assert.rejects(launches.confirmCleanup(live.id,consent),/Confirm stopping/);
+    assert.ok((await run(['list-sessions','-F','#{session_id}'])).split('\n').includes(live.sessionId!),'refused consent leaves the agent running');
+    const closed=await launches.confirmCleanup(live.id,{...consent,confirmStop:true});
+    assert.ok(closed.closed,closed.message);assert.equal(closed.cleanup?.confirmStop,true);
+    assert.equal((await run(['list-sessions','-F','#{session_id}'])).split('\n').includes(live.sessionId!),false);
+    assert.ok((await run(['list-sessions','-F','#{session_name}'])).includes(missing.sessionName),'closing never targets another session');
   }finally{for(const [key,value] of Object.entries(original)){if(value===undefined)delete process.env[key];else process.env[key]=value;}await run(['kill-server']).catch(()=>{});store.close();await rm(directory,{recursive:true,force:true});}
 });
 test('child environment policy retains explicit nonsecret hook references and rejects process injection names',()=>{

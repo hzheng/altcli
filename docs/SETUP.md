@@ -367,7 +367,8 @@ To launch agents from AltCLI:
    when taken), the
    literal executable and arguments and the commit. Resolve any listed blocker,
    then confirm with **Launch N sessions** before the two-minute preview expires.
-5. Each launch card shows status and recovery actions. **Refresh launch status**
+5. Each launch card uses the agent's saved display name, with its original tmux
+   session name shown separately after a rename, and shows status and recovery actions. **Refresh launch status**
    checks the recorded process and shows its result and check time beside the
    button, including unchanged results. This does not establish agent activity
    or readiness. An unresolved launch also offers
@@ -378,11 +379,12 @@ To launch agents from AltCLI:
    answer prompts. If startup has not exposed a supported agent yet, inspect its
    tmux session on the host. Startup is not readiness.
 
-Use **Clean up…** on a launch card when its tmux pane is dead or its recorded
-session has already been killed. Preview the exact session, acknowledge possible
+Use **Clean up…** on a launch card when its tmux pane is dead, its recorded
+session has already been killed, or you want to stop its agent. Preview the exact session, acknowledge possible
 background processes, then choose **Remove dead session** or **Remove launch card**.
-Cleanup keeps the history and leaves live sessions alone, including a newer session
-with the same name. If the result is uncertain, use **Refresh launch status**; it checks the
+For a running session, acknowledge the interruption and choose **Close agent**.
+Cleanup retains history and never targets a replacement session with the same name.
+If the result is uncertain, use **Refresh launch status**; it checks the
 original session without repeating removal. Shared windows or extra panes need
 Finish branch or host inspection. A keyboard on another pane may remain active;
 its reconciliation barrier is kept.

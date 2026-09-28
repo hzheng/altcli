@@ -91,7 +91,7 @@ export function Workspaces(props: Props) {
         }}>Open console</button>{!tree.main && <WorktreeActions project={project} tree={tree} token={props.token}
           disabled={!!squashReason} disabledReason={squashReason} deletionReason={hardReason} deletionHint={ownerReason || occupied}
           onChanged={props.onChanged} viewEpoch={props.viewEpoch} />}
-          <LaunchAgents requested={launchRequest?.treeId === tree.id ? launchRequest.nonce : 0} token={props.token} projectId={project.id} tree={tree} enabled={props.launchEnabled === true && props.inputEnabled} inputEnabled={props.inputEnabled} held={props.manualHeld === true} onChanged={props.onChanged} viewEpoch={props.viewEpoch} busy={props.disabled}/></div></details></li>;
+          <LaunchAgents requested={launchRequest?.treeId === tree.id ? launchRequest.nonce : 0} token={props.token} projectId={project.id} tree={tree} sessions={props.sessions} enabled={props.launchEnabled === true && props.inputEnabled} inputEnabled={props.inputEnabled} held={props.manualHeld === true} onChanged={props.onChanged} viewEpoch={props.viewEpoch} busy={props.disabled}/></div></details></li>;
       })}</ul>
       <LifecycleResults project={project} token={props.token} onChanged={props.onChanged} />
     </section>}

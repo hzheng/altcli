@@ -211,8 +211,8 @@ export class LaunchService {
       if(!panes?.length||absent===null)blockers.push('The original session could not be verified as present or absent. Inspect again.');
       else if(panes.some(p=>p.sessionId!==item.sessionId||p.marker!==item.id||p.serverPid!==identity.serverPid||p.serverStarted!==identity.serverStarted||p.socketPath!==identity.socketPath))blockers.push('The tmux server, session or launch marker changed. Nothing will be removed.');
       else if(panes.length!==1||panes[0]!.paneId!==identity.paneId||panes[0]!.windowId!==item.windowId||panes[0]!.linked)blockers.push('This session has changed panes or shared windows. Inspect it with Finish branch or on the host.');
-      else if(!panes[0]!.dead)blockers.push('This session is still running. Cleanup cannot stop a live session.');
-      return {state:blockers.length?'blocked':'dead',panes,blockers};
+      else if(!panes[0]!.dead&&(!item.identity||panes[0]!.panePid!==item.identity.panePid))blockers.push('The original running process could not be verified. Inspect it on the host before closing it.');
+      return {state:blockers.length?'blocked':panes![0]!.dead?'dead':'live',panes,blockers};
     }catch(e){return {state:'blocked',panes:null,blockers:[...blockers,messageOf(e)]};}
   }
   async previewCleanup(id:string):Promise<LaunchCleanupPreview> {
@@ -224,12 +224,15 @@ export class LaunchService {
     this.cleanupPreviews.set(request,{preview,evidence:captured});return preview;
   }
   async confirmCleanup(id:string,value:unknown):Promise<LaunchInstance> {
-    const b=terminalFields(value,['requestId','digest','confirmInspected']), request=requestId(b.requestId), hash=terminalText(b.digest);
+    const b=terminalFields(value,['requestId','digest','confirmInspected','confirmStop']), request=requestId(b.requestId), hash=terminalText(b.digest);
     if(b.confirmInspected!==true)throw new AppError('CONFIRM_REQUIRED','Confirm inspection of possible background processes before cleanup.');
+    if(b.confirmStop!==undefined&&b.confirmStop!==true)throw new AppError('CONFIRM_REQUIRED','Confirm stopping this live agent.');
     let {batch,item}=this.lookup(id);
-    if(item.cleanup){if(item.cleanup.requestId!==request||item.cleanup.digest!==hash)throw new AppError('LAUNCH_CHANGED','Cleanup was already requested. Inspect its result.',409);return item;}
+    if(item.cleanup){if(item.cleanup.requestId!==request||item.cleanup.digest!==hash||item.cleanup.confirmStop!==b.confirmStop)throw new AppError('LAUNCH_CHANGED','Cleanup was already requested. Inspect its result.',409);return item;}
     const held=this.cleanupPreviews.get(request);
     if(!held||held.preview.launchId!==id||held.preview.digest!==hash||Date.parse(held.preview.expiresAt)<Date.now()||held.preview.blockers.length)throw new AppError('LAUNCH_CHANGED','Cleanup preview changed or is blocked. Preview again.',409);
+    const stopLive=held.preview.state==='live';
+    if(stopLive!==(b.confirmStop===true))throw new AppError('CONFIRM_REQUIRED',stopLive?'Confirm stopping this live agent, including possible unfinished work.':'This preview does not authorize closing a live agent.');
     const evidence=await this.cleanupEvidence(item);
     if(digest({item,evidence})!==held.evidence||evidence.blockers.length)throw new AppError('LAUNCH_CHANGED','The launch or session changed. Preview cleanup again.',409);
     // Claim before the only possible kill; concurrent confirmations return this record and never execute it again.
@@ -238,11 +241,11 @@ export class LaunchService {
     if(digest({item,evidence})!==held.evidence)throw new AppError('LAUNCH_CHANGED','The launch changed. Preview cleanup again.',409);
     this.store.db.transaction(()=>{
       this.cleanupGate(item);
-      this.update(batch,item,{status:'uncertain',cleanup:{requestId:request,digest:hash,status:'applying',acknowledgedAt:new Date().toISOString()},message:'Cleaning up the confirmed dead or missing session.'});
+      this.update(batch,item,{status:'uncertain',cleanup:{requestId:request,digest:hash,status:'applying',acknowledgedAt:new Date().toISOString(),...(stopLive?{confirmStop:true as const}:{})},message:stopLive?'Closing the confirmed running session.':'Cleaning up the confirmed dead or missing session.'});
       this.store.db.prepare('INSERT OR IGNORE INTO launch_reservations(index_path,launch_id) VALUES(?,?)').run(item.worktree.indexPath,batch.requestId);
     }).immediate();
     this.cleanupPreviews.delete(request);
-    try{if(evidence.state==='dead')await this.cleanupHost.kill(item);}catch{/* Only verified absence can finish cleanup. Never retry a kill. */}
+    try{if(evidence.state==='dead'||stopLive)await this.cleanupHost.kill(item);}catch{/* Only verified absence can finish cleanup. Never retry a kill. */}
     return this.inspectCleanup(id);
   }
   private async inspectCleanup(id:string):Promise<LaunchInstance> {

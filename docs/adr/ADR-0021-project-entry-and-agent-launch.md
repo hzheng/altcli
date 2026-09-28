@@ -42,7 +42,7 @@ full launch marker. Confirmation acknowledges possible surviving background work
 For a retained dead session, only the original single pane/window, unshared and
 still dead, can be removed; tmux rechecks these conditions in its command queue.
 A missing original session only retires its card. Names are never removal targets,
-and a replacement or live session is never stopped by cleanup. Expanded/shared
+and a replacement session is never stopped by cleanup. Expanded/shared
 sessions require the broader Finish branch preview or manual host inspection.
 
 The cleanup decision and checkout reservation persist before any removal. Unknown
@@ -55,6 +55,11 @@ targeting that pane block cleanup. A keyboard on another pane may remain active;
 its manual-input barrier, snapshots and workflow checkpoints are preserved. This
 does not certify that background work stopped or that the task completed. SQLite
 v16 prevents older backends from reconciling away an unresolved cleanup.
+
+September 27 update: cleanup also offers **Close agent** for a running session,
+with explicit acknowledgement of interrupted work. The final tmux check binds the
+original pane PID. Group membership does not gate closing; existing identity,
+ownership, background-work and no-retry safeguards still apply.
 
 See [the protocol](../TERMINAL-PROTOCOL.md) for API, environment and recovery rules.
 Remote/provider/mobile acceptance remains separate from fake and private-fixture

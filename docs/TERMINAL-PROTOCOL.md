@@ -283,15 +283,17 @@ Git step). Only sessions proven by server identity, session ID and full launch m
 inside the worktree, are closed, by session ID; survivors and uncertain results keep the owner.
 A closed launch is retired from terminal and discovery targets and keeps its history.
 
-For a dead or missing launch, `POST /api/v1/launches/{id}/cleanup/preview` captures
+For a recorded launch, `POST /api/v1/launches/{id}/cleanup/preview` captures
 the original session's current evidence. `POST …/cleanup` requires that preview's
 request ID and digest plus `confirmInspected: true`, acknowledging possible
-background effects. Only the original unshared, single dead pane can be removed;
-the final tmux condition refuses a revived pane, new window/split or changed marker.
+background effects. A `live` preview additionally requires `confirmStop: true`,
+acknowledging interruption. Only the original unshared single pane can be removed;
+tmux rechecks its process PID for live closing or dead status for dead cleanup,
+and refuses new windows/splits or a changed marker.
 Verified absence can retire an already-killed session without touching a reused
 name. The decision and launch reservation are durable before execution. Duplicates
 return the recorded operation, and `POST …/inspect` verifies uncertain cleanup
-without retrying removal. Live sessions and conflicting owners are refused; a
+without retrying removal. Conflicting owners are refused; a
 keyboard targeting another pane keeps its existing barrier and checkpoints.
 Cleanup hides retired cards while keeping their records. See the
 [ADR-0021 cleanup extension](adr/ADR-0021-project-entry-and-agent-launch.md).

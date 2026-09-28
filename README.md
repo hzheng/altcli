@@ -39,7 +39,11 @@ launched there after a preview and confirmation, then can remove or discard the 
 through the usual confirmations. Each launch card also offers **Clean up…** for a dead or
 missing app session, with a preview and background-work acknowledgement; its launch card and
 console entry disappear after verification, without resetting the workspace. History and the
-remaining agents' names and selection are retained. Live sessions are refused by cleanup.
+remaining agents' names and selection are retained. For a running session, **Close agent**
+requires acknowledgement that closing it interrupts its work.
+Launch cards and cleanup previews use the agent's saved display name; after a
+rename, the original tmux session name is shown separately. Excluding an agent
+from the group does not stop its CLI; closing requires separate confirmation.
 Sessions you opened yourself are never closed. This is host-shell
 power for the authenticated owner. See [the protocol](docs/TERMINAL-PROTOCOL.md)
 and [validation](VALIDATION.md); feature activation is not acceptance.

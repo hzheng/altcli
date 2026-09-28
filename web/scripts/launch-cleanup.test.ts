@@ -56,8 +56,18 @@ test('a missing, already reconciled launch can be cleaned without touching a reu
   const result = await service.confirmCleanup(item.id, { requestId: p.requestId, digest: p.digest, confirmInspected: true });
   assert.ok(result.closed); assert.equal(result.humanDecision?.note, 'killed'); assert.deepEqual(killed, []);
 });
-for (const change of ['live', 'marker', 'server', 'shared', 'extra pane'] as const) test(`cleanup refuses ${change} evidence`, async () => {
-  if (change === 'live') panes![0]!.dead = false;
+test('live cleanup requires explicit stop consent and closes the original session once', async () => {
+  panes![0]!.dead = false;
+  assert.equal((await service.previewCleanup(item.id)).state, 'live');
+  const input = await confirm();
+  await assert.rejects(service.confirmCleanup(item.id, input), /Confirm stopping/);
+  assert.deepEqual(killed, []);
+  const stop = { ...input, confirmStop: true };
+  assert.ok((await service.confirmCleanup(item.id, stop)).closed);
+  assert.equal(read().cleanup?.confirmStop, true);
+  await service.confirmCleanup(item.id, stop); assert.deepEqual(killed, ['$9']);
+});
+for (const change of ['marker', 'server', 'shared', 'extra pane'] as const) test(`cleanup refuses ${change} evidence`, async () => {
   if (change === 'marker') panes![0]!.marker = randomUUID();
   if (change === 'server') panes![0]!.serverStarted = '456';
   if (change === 'shared') panes![0]!.linked = true;

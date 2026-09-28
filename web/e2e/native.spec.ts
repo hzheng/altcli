@@ -1,6 +1,6 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import type { WorkflowState } from '../src/contracts/workflow';
-import { expandWorktree, openAccess, openCard, pane, readiness, showSurface } from './ui';
+import { expandAgents, expandWorktree, openAccess, openCard, pane, readiness, showSurface } from './ui';
 const headers={Authorization:`Bearer ${'a'.repeat(64)}`};
 async function state(request:APIRequestContext):Promise<WorkflowState>{return (await request.get('/api/v1/state',{headers})).json();}
 async function post(request:APIRequestContext,path:string,data:unknown){const r=await request.post(`/api/v1/${path}`,{headers,data});expect(r.ok(),await r.text()).toBe(true);return r.json();}
@@ -744,6 +744,23 @@ test('launch status refresh shows checking, unchanged results, changes and failu
     await check.click();await expect(card.getByRole('alert')).toContainText('Host inspection unavailable.');
     await expect(card.getByRole('status')).toHaveCount(0);await expect(sibling.getByRole('alert')).toHaveCount(0);expect(inspections).toBe(3);
     await check.click();await expect(card.getByRole('alert')).toHaveCount(0);await expect(card.getByRole('status')).toContainText('exited (unchanged)');
+    // Inline renames propagate to the already-mounted launch card and its actions without changing membership or tmux identity.
+    const before=await state(request),agent=before.sessions.find(s=>s.identity.paneId===item.identity.paneId)!;
+    const group=before.groups.find(g=>g.repository===tree.path)!;
+    await expandAgents(page,name);
+    const label=`Renamed ${info.project.name}`;
+    const nameInput=page.getByLabel(`Name for Codex ${item.identity.paneId}`,{exact:true});
+    await nameInput.fill(label);await nameInput.press('Enter');
+    const renamed=page.getByRole('group',{name:`Launch ${label}`,exact:true});
+    await expect(renamed.locator('strong').first()).toHaveText(`${label} · last observed: exited`);
+    await expect(renamed).toContainText(`tmux session: ${item.sessionName}`);
+    await expect(page.getByLabel('Workspace group members')).toContainText(label);
+    await renamed.getByRole('button',{name:'Refresh launch status',exact:true}).click();
+    await expect(page.locator('.feedback[role="status"]:visible')).toContainText(`${label}: Checked at`);
+    const after=await state(request);
+    expect(after.sessions.find(s=>s.id===agent.id)).toEqual({...agent,label});
+    expect(after.groups.find(g=>g.id===group.id)).toMatchObject({id:group.id,revision:group.revision,members:group.members});
+    await expect(sibling.locator('strong').first()).toContainText(other.sessionName);
   } finally {release();}
 });
 for(const scenario of ['dead','missing','live','lost'] as const)test(`launch cleanup: ${scenario} session requires explicit acknowledgement and preserves other sessions`,async({page,request},info)=>{
@@ -775,9 +792,10 @@ for(const scenario of ['dead','missing','live','lost'] as const)test(`launch cle
     await route.fulfill({response,json:body});
   });
   await page.route('**/api/v1/launches',route=>route.fulfill({json:[batch]}));
-  await page.route(`**/api/v1/launches/${item.id}/cleanup/preview`,route=>route.fulfill({json:{requestId:crypto.randomUUID(),digest:'fixture',expiresAt:new Date(Date.now()+120000).toISOString(),launchId:item.id,sessionName:item.sessionName,state:scenario==='live'?'blocked':scenario==='missing'?'missing':'dead',blockers:scenario==='live'?['This session is still running. Cleanup cannot stop a live session.']:[]}}));
+  await page.route(`**/api/v1/launches/${item.id}/cleanup/preview`,route=>route.fulfill({json:{requestId:crypto.randomUUID(),digest:'fixture',expiresAt:new Date(Date.now()+120000).toISOString(),launchId:item.id,sessionName:item.sessionName,state:scenario==='live'?'live':scenario==='missing'?'missing':'dead',blockers:[]}}));
   await page.route(`**/api/v1/launches/${item.id}/cleanup`,async route=>{
     confirms++;expect(route.request().postDataJSON()).toMatchObject({confirmInspected:true,digest:'fixture'});
+    expect(route.request().postDataJSON().confirmStop).toBe(scenario==='live'?true:undefined);
     item.closed={cleanupId:route.request().postDataJSON().requestId,at:new Date().toISOString()};
     if(scenario==='lost')await route.abort('failed');else await route.fulfill({json:item});
   });
@@ -790,23 +808,23 @@ for(const scenario of ['dead','missing','live','lost'] as const)test(`launch cle
   await expect(removedPane).toHaveCount(1);await expect(keptPane).toHaveCount(1);
   await page.getByRole('navigation',{name:'Agent'}).getByRole('button',{name:removed.label,exact:true}).click();
   await page.getByRole('navigation',{name:'Sections'}).getByRole('button',{name:'Projects',exact:true}).click();
-  const card=page.getByRole('group',{name:`Launch ${item.sessionName}`,exact:true});
+  const card=page.getByRole('group',{name:`Launch ${removed.label}`,exact:true});
+  await expect(card.locator('strong').first()).toHaveText(`${removed.label} · last observed: running`);
+  await expect(card).toContainText(`tmux session: ${item.sessionName}`);
   await card.getByRole('button',{name:'Clean up…',exact:true}).click();
-  const panel=card.getByRole('region',{name:`Clean up ${item.sessionName}`});
-  const remove=panel.getByRole('button',{name:scenario==='missing'?'Remove launch card':'Remove dead session',exact:true});
+  const panel=card.getByRole('region',{name:`Clean up ${removed.label}`});
+  const remove=panel.getByRole('button',{name:scenario==='live'?'Close agent':scenario==='missing'?'Remove launch card':'Remove dead session',exact:true});
   await expect(remove).toBeDisabled();expect(confirms).toBe(0);
-  if(scenario==='live') {await expect(panel).toContainText('still running');await expect(panel.getByRole('checkbox')).toHaveCount(0);}
-  else {
-    await panel.getByRole('button',{name:'Cancel cleanup'}).click();await expect(panel).toHaveCount(0);expect(confirms).toBe(0);
-    await card.getByRole('button',{name:'Clean up…',exact:true}).click();
-    await panel.getByRole('checkbox').check();await remove.click();
-    if(scenario==='lost'){await expect(card).toContainText('response was lost');expect(confirms).toBe(1);await card.getByRole('button',{name:'Inspect cleanup result'}).click();expect(inspections).toBe(1);}
-    await expect(card).toHaveCount(0);expect(confirms).toBe(1);
-  }
-  await expect(page.getByRole('group',{name:`Launch ${other.sessionName}`,exact:true})).toBeVisible();
+  if(scenario==='live')await expect(panel).toContainText('interrupts any work');
+  await panel.getByRole('button',{name:'Cancel cleanup'}).click();await expect(panel).toHaveCount(0);expect(confirms).toBe(0);
+  await card.getByRole('button',{name:'Clean up…',exact:true}).click();
+  await panel.getByRole('checkbox').check();await remove.click();
+  if(scenario==='lost'){await expect(card).toContainText('response was lost');expect(confirms).toBe(1);await card.getByRole('button',{name:'Inspect cleanup result'}).click();expect(inspections).toBe(1);}
+  await expect(card).toHaveCount(0);expect(confirms).toBe(1);
+  await expect(page.getByRole('group',{name:`Launch ${kept.label}`,exact:true})).toBeVisible();
   await page.getByRole('navigation',{name:'Sections'}).getByRole('button',{name:'Console',exact:true}).click();
   await expect(keptPane).toHaveCount(1);
-  await expect(removedPane).toHaveCount(scenario==='live'?1:0);
+  await expect(removedPane).toHaveCount(0);
   await expect(page.getByRole('region',{name:'Agent identity changed'})).toHaveCount(0);
-  if(scenario!=='live')await expect(page.getByRole('navigation',{name:'Agent'}).getByRole('button',{name:kept.label,exact:true})).toHaveAttribute('aria-pressed','true');
+  await expect(page.getByRole('navigation',{name:'Agent'}).getByRole('button',{name:kept.label,exact:true})).toHaveAttribute('aria-pressed','true');
 });

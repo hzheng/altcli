@@ -13,10 +13,10 @@ export interface LaunchInstance extends LaunchItem {
   placeholder: PaneIdentity|null; updatedAt: string; humanDecision?: { requestId: string; note: string; at: string };
   /** Explicitly closed or cleaned up: no longer a terminal or discovery target; history is kept. */
   closed?: ({ finishId: string } | { cleanupId: string }) & { at: string };
-  cleanup?: { requestId: string; digest: string; status: 'applying'|'uncertain'|'done'; acknowledgedAt: string };
+  cleanup?: { requestId: string; digest: string; status: 'applying'|'uncertain'|'done'; acknowledgedAt: string; confirmStop?: true };
 }
 export interface LaunchBatch { requestId: string; previewDigest: string; items: LaunchInstance[]; createdAt: string }
 export interface LaunchCleanupPreview {
   requestId: string; digest: string; expiresAt: string; launchId: string; sessionName: string;
-  state: 'dead'|'missing'|'blocked'; blockers: string[];
+  state: 'dead'|'missing'|'live'|'blocked'; blockers: string[];
 }
