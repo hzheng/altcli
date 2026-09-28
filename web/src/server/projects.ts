@@ -56,6 +56,14 @@ async function operationInProgress(path: string): Promise<string | null> {
   }
   return null;
 }
+/** Tracked changes, staged and unstaged, that a reset discards. Untracked files are not listed: they stay. */
+async function trackedChanges(path: string): Promise<{ code: string; path: string; original: string | null }[]> {
+  const entries = (await gitListing(path, ['status', '--porcelain=v1', '-z', '--untracked-files=no', '--ignore-submodules=none'])).split('\0');
+  const changes: { code: string; path: string; original: string | null }[] = [];
+  // In -z format a rename or copy is the destination first, then its source as a separate entry.
+  for (let i = 0; i < entries.length - 1; i++) { const entry = entries[i]!; const code = entry.slice(0, 2); changes.push({ code, path: entry.slice(3), original: /[RC]/.test(code) ? entries[++i]! : null }); }
+  return changes;
+}
 /** Where else this branch lives: its configured upstream or a remote-tracking copy of the same name. Null when it is only local. */
 async function publishedCopy(path: string, branch: string): Promise<string | null> {
   const upstream = (await gitAnswer(['-C', path, 'config', '--get', `branch.${branch}.remote`])).stdout.trim();
@@ -676,52 +684,73 @@ export class ProjectCatalog {
     const fields = (await gitListing(path, ['diff', '--name-status', '-z', '--no-renames', from, to, '--'])).split('\0');
     const added: string[] = []; const deleted = new Set<string>();
     for (let i = 0; i + 1 < fields.length; i += 2) { if (fields[i] === 'A') added.push(fields[i + 1]!); if (fields[i] === 'D') deleted.add(fields[i + 1]!); }
+    return this.occupied(path, added, deleted);
+  }
+  /** Which of `files` something already occupies on disk: the path itself, or a parent that is a file or symbolic link instead of a
+   * directory. A parent the same change `vacates` does not count. At most 20 are named. */
+  private async occupied(path: string, files: string[], vacated = new Set<string>()): Promise<string[]> {
     const found: string[] = [];
-    for (const file of added) {
+    for (const file of files) {
       if (found.length >= 20) break;
       const parts = file.split('/');
       for (let depth = 1; depth <= parts.length; depth++) {
         const prefix = parts.slice(0, depth).join('/');
         const info = await lstat(join(path, prefix)).catch(() => null);
-        if (info && (depth === parts.length || (!info.isDirectory() && !deleted.has(prefix)))) { found.push(prefix); break; }
+        if (info && (depth === parts.length || (!info.isDirectory() && !vacated.has(prefix)))) { found.push(prefix); break; }
         if (!info) break;
       }
     }
     return [...new Set(found)];
   }
-  /** Read-only: how Update from main would move this task branch onto the local integration branch. Nothing changes; computing a
-   * replay can write unreachable Git objects only. A fully integrated branch moves to the target's tip; later commits are replayed. */
+  /** Reset restores HEAD's deleted/renamed paths before moving the branch; the fingerprint excludes ignored files there. */
+  private async assertResetPaths(path: string, changes: Awaited<ReturnType<typeof trackedChanges>>): Promise<void> {
+    const restored = changes.flatMap((change) => [...(change.code.includes('D') ? [change.path] : []), ...(change.original ? [change.original] : [])]);
+    const occupied = await this.occupied(path, restored);
+    if (occupied.length) throw new AppError('LOCAL_OBSTRUCTION', `Untracked or ignored content sits where tracked files would be restored: ${occupied.join(', ')}. Move it yourself; nothing is overwritten.`, 409);
+  }
+  /** Read-only: how aligning this task branch with the local integration branch would go. Nothing changes; computing a replay can
+   * write unreachable Git objects only. Update moves a fully integrated branch to the target's tip and replays only the commits after
+   * the proven integrated boundary; rebase replays every commit since the merge base; reset drops the branch's commits and uncommitted
+   * tracked changes. */
   async previewUpdate(raw: WorktreeUpdateInput): Promise<WorktreeUpdatePreview> {
-    const input = parseUpdatePreview(raw);
+    const input = parseUpdatePreview(raw); const { mode } = input;
     if (this.config.mode === 'mock') throw new AppError('MOCK_WORKTREE', 'Simulated panes cannot update real Git branches.', 409);
-    const { tree, primary } = await this.taskWorktree(input.projectId, input.worktreeId, 'updated');
+    const { tree, primary } = await this.taskWorktree(input.projectId, input.worktreeId, mode === 'update' ? 'updated' : mode === 'rebase' ? 'rebased' : 'reset');
     await assertGitInspection(tree.path, []);
     const state = await branchState(tree.path);
     if (state.head !== tree.head || state.branch !== tree.branch) throw new AppError('WORKTREE_CHANGED', 'The task worktree changed during inspection. Recheck.', 409);
-    if (!state.clean) throw new AppError('WORKTREE_DIRTY', `${tree.branch} has ${state.changeCount} uncommitted change${state.changeCount === 1 ? '' : 's'}. Commit or clean them yourself before updating; nothing is stashed.`, 409);
+    // Reset discards uncommitted tracked changes, which the preview lists; update and rebase keep all work, so they need a clean checkout.
+    const changes = mode === 'reset' ? await trackedChanges(tree.path) : [];
+    if (mode !== 'reset' && !state.clean) throw new AppError('WORKTREE_DIRTY', `${tree.branch} has ${state.changeCount} uncommitted change${state.changeCount === 1 ? '' : 's'}. Commit or clean them yourself before ${mode === 'rebase' ? 'rebasing' : 'updating'}; nothing is stashed. Reset to main discards them instead.`, 409);
     const busy = await operationInProgress(tree.path);
     if (busy) throw new AppError('UPDATE_UNSUPPORTED', `A ${busy} is in progress in this worktree. Finish or abort it yourself, then Recheck.`, 409);
     if ((await gitAnswer(['-C', tree.path, 'config', '--type=bool', '--get', 'core.sparseCheckout'])).stdout.trim() === 'true') throw new AppError('UPDATE_UNSUPPORTED', 'Sparse checkouts are not updated by the app. Update this branch by hand.', 409);
     const { name, targetRef, targetHead } = await this.integrationRef(tree.path, primary);
-    if (targetHead === tree.head) throw new AppError('ALREADY_CURRENT', `${tree.branch} is already at ${name}. There is nothing to update.`, 409);
+    if (targetHead === tree.head && !changes.length) throw new AppError('ALREADY_CURRENT', `${tree.branch} is already at ${name}. There is nothing to ${mode}.`, 409);
     if (await hasSubmodules(tree.path, [targetHead])) throw new AppError('UPDATE_UNSUPPORTED', 'Worktrees with submodules are not updated by the app. Update this branch by hand.', 409);
-    const bases = (await git(['-C', tree.path, 'merge-base', '--all', tree.head, targetHead])).trim().split('\n').filter(Boolean);
-    if (bases.length !== 1) throw new AppError('INTEGRATION_UNKNOWN', 'The integration baseline is ambiguous. Update this branch by hand.', 409);
-    // The boundary is the last task commit the target already contains; only commits after it are replayed.
+    // The boundary is the last task commit the target already contains; only commits after it are replayed. Update trusts squash
+    // evidence for it; rebase, like `git rebase`, starts after the merge base; reset replays nothing.
     let boundary = tree.head; let boundaryBy: WorktreeUpdatePreview['boundaryBy'] = 'ancestry';
-    if (bases[0] !== tree.head) {
-      let full = false;
-      try { await this.integrationEvidence(input.projectId, input.worktreeId, tree.path, tree.branch, tree.head, primary); full = true; }
-      catch (error) { if (!(error instanceof AppError) || !['NOT_INTEGRATED', 'INTEGRATION_UNKNOWN'].includes(error.code)) throw error; }
-      const checkpoint = full ? null : await this.integrationCheckpoint(input.projectId, input.worktreeId, tree.branch, tree.head, targetRef, targetHead, tree.path);
-      if (full) boundaryBy = 'squash';
-      else if (checkpoint) { boundary = checkpoint.through; boundaryBy = 'squash'; }
-      else if (bases[0] === targetHead) throw new AppError('ALREADY_CURRENT', `${tree.branch} already contains ${name}. There is nothing to update.`, 409);
-      else { boundary = bases[0]!; boundaryBy = 'base'; }
+    if (mode === 'reset') { boundary = targetHead; boundaryBy = 'reset'; }
+    else {
+      const bases = (await git(['-C', tree.path, 'merge-base', '--all', tree.head, targetHead])).trim().split('\n').filter(Boolean);
+      if (bases.length !== 1) throw new AppError('INTEGRATION_UNKNOWN', 'The integration baseline is ambiguous. Update this branch by hand.', 409);
+      if (bases[0] !== tree.head) {
+        let full = false;
+        if (mode === 'update') {
+          try { await this.integrationEvidence(input.projectId, input.worktreeId, tree.path, tree.branch, tree.head, primary); full = true; }
+          catch (error) { if (!(error instanceof AppError) || !['NOT_INTEGRATED', 'INTEGRATION_UNKNOWN'].includes(error.code)) throw error; }
+        }
+        const checkpoint = mode !== 'update' || full ? null : await this.integrationCheckpoint(input.projectId, input.worktreeId, tree.branch, tree.head, targetRef, targetHead, tree.path);
+        if (full) boundaryBy = 'squash';
+        else if (checkpoint) { boundary = checkpoint.through; boundaryBy = 'squash'; }
+        else if (bases[0] === targetHead) throw new AppError('ALREADY_CURRENT', `${tree.branch} already contains ${name}. There is nothing to ${mode}.`, 409);
+        else { boundary = bases[0]!; boundaryBy = 'base'; }
+      }
     }
     const replay: WorktreeUpdatePreview['replay'] = [];
     let newTree = (await git(['-C', tree.path, 'rev-parse', `${targetHead}^{tree}`])).trim();
-    if (boundary !== tree.head) {
+    if (boundaryBy !== 'reset' && boundary !== tree.head) {
       const rows = (await git(['-C', tree.path, 'rev-list', '--reverse', '--topo-order', '--parents', `${boundary}..${tree.head}`])).trim().split('\n').filter(Boolean).map((line) => line.split(' '));
       if (rows.length > 100) throw new AppError('REPLAY_RANGE', `${rows.length} task commits follow the integrated boundary; the app replays at most 100. Squash some into ${name} first, or rebase by hand.`, 409);
       let parent = boundary;
@@ -743,14 +772,23 @@ export class ProjectCatalog {
           const conflicted = [...new Set(lines.slice(1).filter(Boolean))].slice(0, 20);
           throw new AppError('REPLAY_CONFLICT', `Replaying ${short(sha!)} onto ${name} would conflict${conflicted.length ? ` in ${conflicted.join(', ')}` : ''}. Nothing was changed; resolve it on the task branch or rebase by hand.`, 409);
         }
-        if (lines[0] === newTree) throw new AppError('REPLAY_REDUNDANT', `Commit ${short(sha!)} changes nothing on top of ${name}; it is probably integrated already. Nothing was changed; rebase this branch by hand.`, 409);
+        if (lines[0] === newTree) throw new AppError('REPLAY_REDUNDANT', `Commit ${short(sha!)} changes nothing on top of ${name}; it is probably integrated already. Nothing was changed; ${mode === 'rebase' ? `Update from main skips commits squashed into ${name}, and Reset to main drops them` : 'rebase this branch by hand'}.`, 409);
         replay.push({ sha: sha!, subject: raw.slice(split + 2).split('\n')[0] ?? '', tree: lines[0]! }); newTree = lines[0]!;
       }
       // Combining the sides can make attributes effective that neither input selects alone (a macro defined on one side and used on
       // the other), so every generated tree, including the one the checkout writes, is inspected before the preview is returned.
       await assertGitInspection(tree.path, replay.map((step) => step.tree));
     } else await assertGitInspection(tree.path, [tree.head, targetHead]); // the checkout writes the target's files through the same attributes
-    const fastForward = boundaryBy === 'ancestry';
+    let lost: WorktreeUpdatePreview['lost'] = null;
+    if (mode === 'reset') {
+      // Restoring a deleted tracked path would overwrite whatever untracked or ignored content now sits there: it must be moved first.
+      await this.assertResetPaths(tree.path, changes);
+      const recent = (await git(['-C', tree.path, 'log', '-n', '20', '--format=%H%x00%s', `${targetHead}..${tree.head}`])).split('\n').filter(Boolean)
+        .map((line) => { const [sha, subject] = line.split('\0'); return { sha: sha!, subject: subject ?? '' }; });
+      lost = { commits: Number((await git(['-C', tree.path, 'rev-list', '--count', `${targetHead}..${tree.head}`])).trim()), recent,
+        changes: changes.length, paths: changes.slice(0, 20).map((change) => change.path), fingerprint: await worktreeFingerprint(tree.path) };
+    }
+    const fastForward = lost ? lost.commits === 0 : boundaryBy === 'ancestry';
     if (!fastForward) {
       const copy = await publishedCopy(tree.path, tree.branch);
       if (copy) throw new AppError('UPDATE_PUBLISHED', `${tree.branch} also exists as ${copy}. Rewriting it would leave that copy diverged, and the app never pushes. Update it by hand.`, 409);
@@ -761,9 +799,13 @@ export class ProjectCatalog {
     const commands = [
       ...(replay.length ? [`git -C ${tree.path} commit-tree <replayed tree> -p <parent> -F - (×${replay.length}; each keeps its author and message)`] : []),
       `git -C ${tree.path} update-ref --stdin <<< "create refs/altcli/preserved/<request> ${tree.head}"`,
+      // In-place discard can restore deleted paths, whose obstructions are checked again immediately before writing.
+      ...(changes.length ? [`git -C ${tree.path} reset --hard HEAD (discards the ${changes.length} uncommitted tracked change${changes.length === 1 ? '' : 's'}; untracked and ignored files stay)`] : []),
       `git -C ${tree.path} checkout --no-overwrite-ignore --no-recurse-submodules -B ${tree.branch} ${tip}`,
     ];
-    const pinned = { ...input, worktree: tree.identity, branch: tree.branch, head: tree.head, targetRef, targetHead, boundaryBy, boundary, replay, tree: newTree, fastForward, commands };
+    const equivalent = mode === 'reset' ? `git reset --hard ${name}` : mode === 'rebase' || boundaryBy === 'base' ? `git rebase ${name}`
+      : boundaryBy === 'ancestry' ? `git merge --ff-only ${name}` : replay.length ? `git rebase --onto ${name} ${short(boundary)}` : `git checkout -B ${tree.branch} ${name}`;
+    const pinned = { ...input, worktree: tree.identity, branch: tree.branch, head: tree.head, targetRef, targetHead, boundaryBy, boundary, replay, tree: newTree, fastForward, equivalent, commands, lost };
     return { ...pinned, requestId: randomUUID(), consent: updateConsent(pinned) };
   }
   private updateFinish(operation: WorktreeUpdate, status: WorktreeUpdate['status'], message: string, commit: string | null = operation.commit): WorktreeUpdate {
@@ -803,7 +845,9 @@ export class ProjectCatalog {
     try {
       await assertGitInspection(root, []);
       const state = await branchState(root);
-      if (!state.clean || state.branch !== input.branch || state.head !== commit) return false;
+      // A reset leaves untracked and ignored files where they were; everything tracked must match the new tip.
+      const clean = input.mode === 'reset' ? !(await trackedChanges(root)).length : state.clean;
+      if (!clean || state.branch !== input.branch || state.head !== commit) return false;
       if (!sameWorktree(await resolveWorktree(root), input.worktree)) return false;
       if ((await gitAnswer(['-C', root, 'rev-parse', '--verify', '--quiet', `${input.recoveryRef}^{commit}`])).stdout.trim() !== input.head) return false;
       if (!await this.replayedChain(root, commit, input)) return false;
@@ -822,9 +866,11 @@ export class ProjectCatalog {
     }
     const project = this.known.get(request.projectId);
     if (!project) throw new AppError('PROJECT_CHANGED', 'Recheck this project.', 409);
-    const changed = new AppError('WORKTREE_CHANGED', 'The task branch, the integration branch or the replay result changed. Preview and confirm again.', 409);
-    const derived = await this.previewUpdate({ projectId: request.projectId, worktreeId: request.worktreeId });
+    const changed = new AppError('WORKTREE_CHANGED', 'The task branch, its uncommitted changes, the integration branch or the replay result changed. Preview and confirm again.', 409);
+    const derived = await this.previewUpdate({ projectId: request.projectId, worktreeId: request.worktreeId, mode: request.mode });
     if (derived.consent !== request.consent) throw changed;
+    // Older clients may still send the typed branch; the preview and one confirmation now authorize reset.
+    if (request.confirmBranch !== undefined && request.confirmBranch !== derived.branch) throw new AppError('CONFIRM_REQUIRED', 'The confirmed branch does not match the preview.');
     const input: WorktreeUpdateConfirm = { ...derived, requestId: request.requestId, recoveryRef: `refs/altcli/preserved/${request.requestId}`, confirm: true };
     let operation: WorktreeUpdate = { input, status: 'applying', message: 'Checking the confirmed update.', updatedAt: new Date().toISOString(), commit: null };
     this.store.db.transaction(() => {
@@ -837,7 +883,7 @@ export class ProjectCatalog {
     const root = input.worktree.root; let attempted = false;
     try {
       await guard(input.worktree);
-      if ((await this.previewUpdate({ projectId: input.projectId, worktreeId: input.worktreeId })).consent !== input.consent) throw changed;
+      if ((await this.previewUpdate({ projectId: input.projectId, worktreeId: input.worktreeId, mode: input.mode })).consent !== input.consent) throw changed;
       await guard(input.worktree);
       const archived = await archive(input.worktree);
       // Replayed commits go to the object database first: until the branch moves, nothing a user sees has changed.
@@ -845,15 +891,24 @@ export class ProjectCatalog {
       for (const step of input.replay) tip = await this.replayCommit(root, step, tip);
       operation = this.updateFinish(operation, 'applying', 'Moving the task branch; the old tip is kept first.', tip);
       await guard(input.worktree);
+      // Consent covered this exact uncommitted content; an edit since then, even during the archive step, is never discarded.
+      if (input.lost) {
+        if (await worktreeFingerprint(root) !== input.lost.fingerprint) throw changed;
+        await this.assertResetPaths(root, await trackedChanges(root));
+        await guard(input.worktree); // recheck controller ownership after the final content inspection
+      }
       attempted = true;
       await gitWith(['-C', root, '-c', 'core.hooksPath=/dev/null', 'update-ref', '--stdin'], { input: `create ${input.recoveryRef} ${input.head}\n` });
+      if (input.lost?.changes) await git(['-C', root, '-c', 'core.hooksPath=/dev/null', '-c', 'submodule.recurse=false', 'reset', '--quiet', '--hard', 'HEAD']);
       await git(['-C', root, '-c', 'core.hooksPath=/dev/null', '-c', 'submodule.recurse=false', 'checkout', '--quiet', '--no-overwrite-ignore', '--no-recurse-submodules', '-B', input.branch, tip]);
       if (!await this.updatedExactly(operation, true)) throw new Error('Update verification failed.');
-      const target = input.targetRef.replace('refs/heads/', '');
-      return this.updateFinish(operation, 'updated', `Updated ${input.branch} ${input.replay.length ? `by replaying ${input.replay.length} commit${input.replay.length === 1 ? '' : 's'} onto` : 'to'} ${target} at ${short(input.targetHead)}; it is now ${short(tip)}. The old tip ${short(input.head)} is kept at ${input.recoveryRef}${archived ? `, and ${archived} handoff commit${archived === 1 ? ' was' : 's were'} archived in the journal` : ''}. The directory, ignored files and agents are unchanged; give agents fresh instructions for the new baseline.`);
+      const target = input.targetRef.replace('refs/heads/', ''); const steps = input.replay.length;
+      const done = input.mode === 'reset' ? `Reset ${input.branch} to ${target} at ${short(input.targetHead)}${input.lost?.changes ? `, discarding ${input.lost.changes} uncommitted change${input.lost.changes === 1 ? '' : 's'}` : ''}.`
+        : `${input.mode === 'rebase' ? 'Rebased' : 'Updated'} ${input.branch} ${steps ? `by replaying ${steps} commit${steps === 1 ? '' : 's'} onto` : 'to'} ${target} at ${short(input.targetHead)}; it is now ${short(tip)}.`;
+      return this.updateFinish(operation, 'updated', `${done} The old tip ${short(input.head)} is kept at ${input.recoveryRef}${archived ? `, and ${archived} handoff commit${archived === 1 ? ' was' : 's were'} archived in the journal` : ''}. The directory, ${input.mode === 'reset' ? 'untracked and ' : ''}ignored files and agents are unchanged; give agents fresh instructions for the new baseline.`);
     } catch (error) {
       return this.updateFinish(operation, attempted ? 'uncertain' : 'failed', attempted
-        ? `The update or its verification is uncertain. ${messageOf(error)} Inspect ${root}; the old tip is kept at ${input.recoveryRef} if it was created. Nothing is retried or rolled back.` : messageOf(error));
+        ? `The ${input.mode ?? 'update'} or its verification is uncertain. ${messageOf(error)} Inspect ${root}; the old tip is kept at ${input.recoveryRef} if it was created. Nothing is retried or rolled back.` : messageOf(error));
     }
   }
   /** Read-only inspection of an uncertain update. The recorded result, even under later commits, completes it; a branch still at its
@@ -867,13 +922,24 @@ export class ProjectCatalog {
       if (await this.updatedExactly(operation, false)) return this.updateFinish(operation, 'updated', `Update verified. The old tip is kept at ${input.recoveryRef}; no Git changes were made by inspection.`);
       const tip = (await gitAnswer(['-C', root, 'rev-parse', '--verify', '--quiet', `refs/heads/${input.branch}^{commit}`])).stdout.trim();
       const kept = (await gitAnswer(['-C', root, 'rev-parse', '--verify', '--quiet', `${input.recoveryRef}^{commit}`])).stdout.trim() === input.head;
-      if (operation.commit && tip && kept && (await gitAnswer(['-C', root, 'merge-base', '--is-ancestor', operation.commit, tip])).code === 0 && await this.replayedChain(root, operation.commit, input))
+      // A reset target may already be in the old history. Its ancestry then proves nothing about whether the reset ran,
+      // even if new task commits were added afterwards; only the exact-result or unchanged-checkout checks can release it.
+      // Likewise a reset that dropped commits leaves the old tip off the branch: one that still contains it was merged by hand.
+      if (operation.commit && tip && kept
+        && (input.mode !== 'reset' || (await gitAnswer(['-C', root, 'merge-base', '--is-ancestor', operation.commit, input.head])).code === 1)
+        && (input.mode !== 'reset' || !input.lost?.commits || (await gitAnswer(['-C', root, 'merge-base', '--is-ancestor', input.head, tip])).code === 1)
+        && (await gitAnswer(['-C', root, 'merge-base', '--is-ancestor', operation.commit, tip])).code === 0 && await this.replayedChain(root, operation.commit, input))
         return this.updateFinish(operation, 'updated', `Update verified; ${input.branch} has moved on since. The old tip is kept at ${input.recoveryRef}; no Git changes were made by inspection.`);
       await assertGitInspection(root, []);
       const state = await branchState(root);
-      if (state.clean && state.branch === input.branch && state.head === input.head && tip === input.head) {
-        await guard(input.worktree);
-        return this.updateFinish(operation, 'failed', `${input.branch} is unchanged at ${short(input.head)}; nothing was updated.${kept ? ` The recovery ref ${input.recoveryRef} was created and is kept; delete it yourself when you no longer need it.` : ''} Preview again if needed.`);
+      if (state.branch === input.branch && state.head === input.head && tip === input.head) {
+        // The branch never moved. A reset may still have discarded the uncommitted changes, a definite outcome that also releases it.
+        const untouched = input.lost ? await worktreeFingerprint(root) === input.lost.fingerprint : state.clean;
+        const discarded = !!input.lost && !untouched && !(await trackedChanges(root)).length;
+        if (untouched || discarded) {
+          await guard(input.worktree);
+          return this.updateFinish(operation, 'failed', `${discarded ? `${input.branch} is still at ${short(input.head)}: its uncommitted changes were discarded, but the branch did not move.` : `${input.branch} is unchanged at ${short(input.head)}; nothing was ${input.mode === 'reset' ? 'reset' : 'updated'}.`}${kept ? ` The recovery ref ${input.recoveryRef} was created and is kept; delete it yourself when you no longer need it.` : ''} Preview again if needed.`);
+        }
       }
     } catch { /* Missing evidence retains ownership. */ }
     return operation;
@@ -938,7 +1004,7 @@ export class ProjectCatalog {
       if (!await unchanged()) throw new AppError('WORKTREE_CHANGED', 'The branch, its commit or the uncommitted work changed. Preview and confirm again.', 409);
       await guard(input.worktree);
       if (!await unchanged()) throw new AppError('WORKTREE_CHANGED', 'The worktree changed during rename checks.', 409);
-      await guard(input.worktree); // a turn that started during that final inspection is refused before Git runs
+      await guard(input.worktree); // recheck controller ownership after the final inspection
       attempted = true;
       await git(['-C', input.worktree.root, '-c', 'core.hooksPath=/dev/null', 'branch', '-m', input.branch, input.newBranch]);
       if (!await this.renamedExactly(operation)) throw new Error('Rename verification failed.');

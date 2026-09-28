@@ -4,7 +4,7 @@
 >
 > September 25 extension: [Confirmed closing of launched sessions](#confirmed-closing-of-launched-sessions) adds a fifth, narrow end-of-task exception: **Finish branch** closes only the tmux sessions AltCLI itself launched for a linked task worktree, then hands over to the existing removal or discard.
 >
-> September 27 extension: `main` is always an integration name, because it runs Stage relay ([ADR-0014](ADR-0014-commit-relay-and-deprecation.md#branch-scoped-stage-relay-september-27-2026)); this is implemented. [Reusable task worktrees](#reusable-task-worktrees-update-rename-and-move) accepts three more narrow exceptions. Update from main, including replay of unintegrated commits, and branch rename are implemented; directory move is accepted design, **not implemented**.
+> September 27 extension: `main` is always an integration name, because it runs Stage relay ([ADR-0014](ADR-0014-commit-relay-and-deprecation.md#branch-scoped-stage-relay-september-27-2026)); this is implemented. [Reusable task worktrees](#reusable-task-worktrees-update-rename-and-move) accepts three more narrow exceptions. Update from main, including replay of unintegrated commits, and branch rename are implemented, and so are Rebase onto main and Reset to main (September 28); directory move is accepted design, **not implemented**.
 
 
 Date: September 19, 2026
@@ -367,8 +367,8 @@ User requirement, September 27, 2026 (Plan run with human-approved frozen plan, 
 reuse a prepared linked task worktree after integration instead of removing and recreating it. These are
 three more narrow Git-write exceptions for linked task worktrees only; primary checkouts are excluded. None
 runs automatically. **Update from main (with replay) and Rename branch are implemented (September 27,
-2026); Move directory is accepted design, not implemented.** Where the implementation narrows this design,
-the operation's section says so.
+2026), and Rebase onto main and Reset to main (September 28, 2026); Move directory is accepted design,
+not implemented.** Where the implementation narrows this design, the operation's section says so.
 
 **Shared contract.**
 - **Preview.** Read-only. It pins these facts in a consent digest: project and worktree identity; branch,
@@ -376,10 +376,20 @@ the operation's section says so.
   worktree and its subdirectories; upstream facts; obstruction findings; the recovery ref; and the exact
   commands. As implemented, Update's digest covers identity, branch, HEAD, target, boundary, replay steps
   and trees, the resulting tree, fast-forward and commands; Rename's whole preview, including the content
-  fingerprint, is its consent. Panes are not pinned: every pane is rechecked with current evidence before
-  each Git step (see objection 1). Upstream and obstruction facts are re-derived at confirmation, and the
+  fingerprint, is its consent. Panes are not pinned: Update, Rebase, Reset and Rename rely on the human's
+  acknowledgment of concurrent agent risks (see objection 1).
+  Upstream and obstruction facts are re-derived at confirmation, and the
   recovery ref is named from the confirmed request ID.
 - **Confirmation.** Re-derives the preview and refuses any change.
+- **Agent activity (September 28, 2026 user revision).** Update, Rebase, Reset and Rename show their consequences
+  and proceed after one explicit confirmation. Missing or active native turns, human readiness acknowledgments,
+  background processes and unavailable process evidence do not block preview, confirmation or inspection.
+  The app does not stop agents. Update and Rebase advise ensuring nobody is actively editing in the branch
+  directory and explain that code conflicts need manual resolution; conflicts leave the branch unchanged.
+  Reset explicitly warns that uncommitted tracked work is permanently discarded and branch contents are
+  replaced by main; untracked and ignored files remain, and the old tip stays under the recovery ref.
+  Rename advises avoiding concurrent Git commands and telling agents the new branch name; agents may still
+  refer to the old name. Exact Git content/identity checks and controller ownership holds still apply.
 - **Holds.** Holds are claimed in the same transaction that checks the index owner. Start, dispatch,
   setup, launch, the other lifecycle operations and keyboard acquisition all respect them. As implemented,
   keyboard acquisition is refused while an operation runs (the shared automation gate); as for the other
@@ -418,9 +428,11 @@ the operation's section says so.
      recorded tip, the replayed chain has the previewed trees on the target, the recovery ref is in place
      and the identity is unchanged.
   7. Retire the worktree's squash checkpoints.
-- **Never.** `git rebase`, `reset --hard` or `reset --keep`. In scratch tests with Git 2.47, both
-  `git rebase` and `git reset --keep` silently overwrote an ignored local file that
-  `checkout --no-overwrite-ignore` refused.
+- **Never.** `git rebase`, `reset --hard` or `reset --keep` to move the branch. In scratch tests with
+  Git 2.47, both `git rebase` and `git reset --keep` silently overwrote an ignored local file that
+  `checkout --no-overwrite-ignore` refused. On September 28, `git reset --hard main` and
+  `git checkout -f --no-overwrite-ignore` did the same, and `-f` also overwrote an untracked file in the
+  way. Only the non-forced checkout refused both.
 - **Remote copies.** A non-fast-forward update is refused when the branch has an upstream or a
   remote-tracking counterpart.
 - **Intent.** Continue task or new task is recorded. Old runs never resume across rewritten history.
@@ -433,13 +445,50 @@ the operation's section says so.
 - **Also refused.** A worktree the host's installed CLI hooks or skill links point into, and the running
   host's own checkout, since both would change under the host.
 
+**Rebase onto main and Reset to main.** User requirement, September 28, 2026: reset a task worktree to
+main with a preview and warning, rebase it onto main with a preview and confirmation, and make Update's
+case clear. The September 28 menu revision groups all three with **Squash into main** in the persistent
+**Main** dropdown; **Branch** groups Rename, Finish branch, Check removal and Discard. Both support hover,
+click and keyboard, with forms below the controls. Every preview
+states which case applies, the equivalent Git command, and the exact commands that run instead. Rebase and
+Reset share Update's contract above: holds, warned confirmation, recovery ref, disabled hooks, no fetch or push,
+the published-copy refusal when history is rewritten, verification and uncertainty.
+- **Rebase onto main.** Equivalent to `git rebase main`. It needs a clean checkout, like Update. It
+  ignores squash evidence: it fast-forwards a contained branch, and otherwise replays every commit after
+  the single merge base with the same object-database replay. Commits main already has, such as squashed
+  ones, are refused as redundant, and the refusal points to Update from main, which skips them, or to
+  Reset. It never runs `git rebase`.
+- **Reset to main.** Equivalent to `git reset --hard main`.
+  - **Preview.** Allowed in a dirty checkout. It lists the commits that leave the branch (they stay
+    reachable under the recovery ref) and the uncommitted tracked changes, staged and unstaged, that are
+    discarded for good. Untracked and ignored files stay. The content is pinned by fingerprint.
+  - **Refused content.** Untracked or ignored content where a deleted tracked file would be restored, or
+    where main adds a tracked file: the case plain `git reset --hard main` overwrites.
+  - **Confirmation.** One **Confirm reset** button accepts the previewed loss; no typed branch is required.
+    After the archive step, the fingerprint must still match.
+  - **Steps.** After the recovery ref, `git reset --hard HEAD` discards the tracked changes in place.
+    It can restore deleted or renamed paths, so their obstructions are checked again after archiving
+    and the final fingerprint check; ignored files are outside that fingerprint. Controller ownership is
+    rechecked after these content reads. The branch then moves with the same non-forced
+    `checkout --no-overwrite-ignore -B`. Verification checks tracked files only, because untracked and
+    ignored files stay.
+  - **Inspection.** A reset whose changes were discarded but whose branch never moved is a definite
+    outcome, so inspection releases it as failed. An unchanged checkout also releases as failed.
+    Ancestry already present before a reset is never proof it ran: if the target was already in the old
+    history and later commits obscure the exact result, inspection retains uncertainty and ownership.
+    Nor is ancestry added afterwards: a reset that dropped commits leaves the old tip off the branch, so
+    a branch that still contains it (main merged by hand) also retains uncertainty.
+- **Update from main** keeps its own case: after a squash, it replays only the later commits. With no
+  squash evidence, its preview says it is the same as Rebase onto main.
+
 **Rename branch.**
 - **Command.** `git branch -m` only, never `-M`, with a validated new name. The new name may not be an
   integration name, an existing branch, a case-only variant of one, or a path prefix of one.
 - **Refused** when the branch has an upstream or remote-tracking counterpart.
 - **Dirty content.** Allowed. The preview pins it by content fingerprint, and the confirmation re-derives
-  the whole preview before and after the writer check. The writer check runs once more after that final
-  inspection, immediately before `git branch -m`.
+  the whole preview before and after the ownership check. Controller ownership is checked again after
+  the final inspection, immediately before `git branch -m`. Native activity and process evidence do not
+  block Rename; its explicit confirmation accepts the warning about concurrent Git work and the old name.
 - **Narrowed refusals.** A rename changes no file, so sparse checkout, submodules, installed hook or skill
   links and the host's own checkout are not refused. Hidden index flags and stopped Git operations are.
 - **Unchanged.** The directory, tmux session names and launch records.
@@ -456,14 +505,13 @@ the operation's section says so.
 - **Agents.** Relaunch is a separate launch preview. Resuming a conversation is not claimed.
 
 **Objections and their resolution.** A peer raised these objections when the plan was approved by human
-override. Update and Rename resolve them as follows; Move must do the same.
+override. The September 28 user revision changes the writer-evidence policy for alignment and Rename;
+the accepted Move design retains its occupancy checks.
 1. Ready or Idle activity is not proof that writers have settled. Current process and background evidence
-   is needed for every affected pane. *Resolved:* every pane in the worktree, including subdirectories,
-   passes squash's settled-writer check (current settled native evidence, or an idle root shell, plus a
-   fresh process scan). It runs at preview and around re-deriving the confirmation. The last check follows
-   the final inspection, immediately before the first Git write: before the branch moves for Update, and
-   before `git branch -m` for Rename. One activity revision spans the whole operation, so a native turn
-   that starts during any inspection refuses it.
+   is needed to prove it for every affected pane. *Revised:* Update, Rebase, Reset and Rename explain the
+   risk and accept explicit human confirmation instead of requiring this proof. Missing, active or changed
+   native evidence and background processes do not veto that consent. Controller ownership and exact Git
+   inspection still apply.
 2. `git merge-tree` honors configured merge drivers, which run commands. Check the effective configuration
    and attributes, and refuse external drivers before any replay preview. *Resolved:* the squash
    inspection preflight runs over the boundary, the target and every replayed commit before the first merge
@@ -473,7 +521,7 @@ override. Update and Rename resolve them as follows; Move must do the same.
    repeats both checks. Without replay the preflight covers the target and HEAD trees the checkout writes.
 3. A failed recovery-ref creation stays uncertain unless the ref's absence is proven. *Resolved:* creation
    is the first step after the attempt is recorded, so any failure is uncertain. Inspection releases the
-   update as failed only for a clean checkout still at the old tip, after a writer check. It reports and
+   update as failed only for a clean checkout still at the old tip, after an ownership check. It reports and
    keeps a recovery ref that was created.
 4. The dirty-state policy is set per operation. Update requires a clean checkout. Rename and move may carry
    dirty content only if the preview pins it and verification checks it. *Resolved:* Update requires a

@@ -748,6 +748,12 @@ test('launch status refresh shows checking, unchanged results, changes and failu
     const sibling=page.getByRole('group',{name:`Launch ${other.sessionName}`,exact:true});
     const check=card.getByRole('button',{name:'Refresh launch status',exact:true});
     await expect(check).toBeVisible();
+    const statuses=page.getByRole('region',{name:`Agent status in ${tree.path}`,exact:true});
+    const statusBox=(await statuses.boundingBox())!;
+    const controls=page.getByRole('button',{name:`Open ${name}`,exact:true});
+    expect(statusBox.y+statusBox.height).toBeLessThanOrEqual((await controls.boundingBox())!.y);
+    const agents=page.locator('.workspace-detail > summary').filter({hasText:'Agents & group'}).filter({visible:true});
+    const agentsBox=(await agents.boundingBox())!;expect(agentsBox.y+agentsBox.height).toBeLessThanOrEqual(statusBox.y);
     const checkBox=(await check.boundingBox())!,cleanupBox=(await card.getByRole('button',{name:'Clean up…',exact:true}).boundingBox())!;
     expect(Math.abs(checkBox.y+checkBox.height/2-cleanupBox.y-cleanupBox.height/2)).toBeLessThanOrEqual(1);
     expect(cleanupBox.x).toBeGreaterThanOrEqual(checkBox.x+checkBox.width);

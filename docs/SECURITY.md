@@ -87,13 +87,19 @@ the staging controller issues no Git mutations and does not independently prove 
 Since September 27, 2026 that flow runs as Stage relay only on `main` or the recorded default
 branch. Each run is bound to the branch and commit confirmed at start and rechecked read-only
 before every delivery and at each completion; a change pauses the run with ownership retained.
-Confirmed **Update from main** (ADR-0013) adds controller Git writes to a clean linked task worktree:
-replayed commits written with `git commit-tree --no-gpg-sign` (object database only), a create-only
-`refs/altcli/preserved/<requestId>` ref at the old tip, and
-`git checkout --no-overwrite-ignore --no-recurse-submodules -B`. Repository hooks are disabled for both
-ref writes. The app never deletes recovery refs, so old task history stays reachable locally until the
-user deletes them. Confirmed **Rename** runs `git branch -m` with hooks disabled. Both require settled
-writer evidence for every pane in the worktree and refuse run ownership. Neither fetches nor pushes.
+Confirmed **Update from main** and **Rebase onto main** (ADR-0013) add controller Git writes to a clean
+linked task worktree: replayed commits written with `git commit-tree --no-gpg-sign` (object database
+only), a create-only `refs/altcli/preserved/<requestId>` ref at the old tip, and
+`git checkout --no-overwrite-ignore --no-recurse-submodules -B`. Confirmed **Reset to main** writes the
+same ref and checkout. Before the checkout, it discards the uncommitted tracked changes the user previewed
+and explicitly confirmed losing, with `git reset --hard HEAD`. Those changes cannot be recovered; untracked and
+ignored files are untouched. Repository hooks are disabled for every ref and worktree write. The app never deletes recovery refs, so old task history stays reachable locally until the
+user deletes them. Update, Rebase and Reset warn about concurrent editing and proceed on human confirmation
+without native activity or process-evidence prerequisites. Update and Rebase leave conflicts for manual
+resolution; Reset warns about permanent loss of uncommitted tracked work. They do not stop agents.
+Confirmed **Rename** runs `git branch -m` with hooks disabled. Its warning advises avoiding concurrent
+Git commands and telling agents the new branch name; missing or active native/process evidence does
+not block preview or confirmation. All refuse run ownership. None fetches or pushes.
 Directory move is not implemented.
 
 ---

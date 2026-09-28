@@ -722,8 +722,8 @@ paths:
   /api/v1/projects/worktrees/update/preview:
     post:
       operationId: previewWorktreeUpdate
-      summary: Preview Update from main without changing refs, index or checkout
-      description: Requires a linked task worktree on a named non-integration branch with a clean checkout, no stopped merge, rebase, cherry-pick, revert or bisect, no sparse checkout and no submodules in either tip. The target is the local integration branch (main, else the recorded default); nothing is fetched. A task HEAD the target contains fast-forwards. A branch fully proven integrated by squash evidence moves to the target tip; commits after the last applicable squash checkpoint, or after the single merge base when nothing is integrated, are replayed with `git merge-tree` (at most 100, linear only). A replay that conflicts or produces no change is refused. Replay needs a committer identity and refuses commit signing and non-default message encodings. The boundary, target and every replayed commit are inspected before the first merge calculation, and every generated tree (including the one the checkout writes) before the preview is returned. Selected content filters, external filesystem-monitor hooks and configured merge drivers are refused, including attributes that become effective only in the combined tree. A non-fast-forward update refuses a branch with an upstream or a remote-tracking copy of the same name. Untracked or ignored files in the way of incoming tracked files refuse it. Run or delivery ownership refuses the preview. Preview may create unreachable Git objects.
+      summary: Preview aligning a task branch with main (update, rebase or reset) without changing refs, index or checkout
+      description: mode (default update) chooses how. Update replays only the commits after the proven integrated boundary, skipping squashed work; rebase always starts after the merge base, like `git rebase main`, and refuses commits main already has; reset drops the branch's commits and uncommitted tracked changes, like `git reset --hard main`. The preview names the equivalent command and the exact steps that run instead. Reset allows a dirty checkout; it lists the commits that leave the branch (kept under the recovery ref) and the uncommitted tracked changes it discards, pins the content by fingerprint, keeps untracked and ignored files, and refuses untracked or ignored content where a deleted tracked file would be restored. Otherwise requires a linked task worktree on a named non-integration branch with a clean checkout, no stopped merge, rebase, cherry-pick, revert or bisect, no sparse checkout and no submodules in either tip. The target is the local integration branch (main, else the recorded default); nothing is fetched. A task HEAD the target contains fast-forwards. A branch fully proven integrated by squash evidence moves to the target tip; commits after the last applicable squash checkpoint, or after the single merge base when nothing is integrated, are replayed with `git merge-tree` (at most 100, linear only). A replay that conflicts or produces no change is refused. Replay needs a committer identity and refuses commit signing and non-default message encodings. The boundary, target and every replayed commit are inspected before the first merge calculation, and every generated tree (including the one the checkout writes) before the preview is returned. Selected content filters, external filesystem-monitor hooks and configured merge drivers are refused, including attributes that become effective only in the combined tree. A non-fast-forward update refuses a branch with an upstream or a remote-tracking copy of the same name. Untracked or ignored files in the way of incoming tracked files refuse it. Run or delivery ownership refuses the preview. Native activity and process evidence do not gate alignment; the human accepts concurrent editing risks. Update and Rebase advise stopping active editing and leave conflicts for manual resolution; Reset warns about permanent loss of uncommitted tracked changes. Preview may create unreachable Git objects.
       requestBody:
         required: true
         content:
@@ -739,8 +739,8 @@ paths:
   /api/v1/projects/worktrees/update:
     post:
       operationId: updateWorktree
-      summary: Confirmed Update from main
-      description: The compact confirmation repeats the preview's consent digest; the server re-derives the preview and refuses a changed digest. The claim is recorded in one transaction with the run ledger (a run or unresolved delivery on the worktree refuses it, and run starts refuse a worktree with an applying or uncertain update). Ownership and writer evidence for every pane in the worktree are rechecked before and after re-deriving; published handoff content is archived in the journal. Replayed commits are written with `git commit-tree --no-gpg-sign`, keeping author, date and message, before anything visible changes. After a final writer check it creates `refs/altcli/preserved/<requestId>` at the old tip (create-only) and runs `git checkout --no-overwrite-ignore --no-recurse-submodules -B <branch> <tip>` with hooks disabled. The branch attached and clean at the recorded tip, the preserved old tip, the previewed replay chain and the branch's previous value are verified; anything else after the first Git write is uncertain and never retried or rolled back. A verified update retires the worktree's squash checkpoints. Nothing is pushed.
+      summary: Confirmed update, rebase or reset of a task branch onto main
+      description: The compact confirmation repeats the preview's mode and consent digest; the server re-derives the preview and refuses a changed digest. One confirmation accepts the previewed changes and concurrent editing risks; a reset does not require a typed branch name. After the archive step, reset requires the worktree content to still match the previewed fingerprint. Deleted or renamed paths are checked again for obstructions because ignored files are outside the fingerprint, and controller ownership is rechecked after those content reads. After creating the recovery ref, reset discards the uncommitted tracked changes with `git reset --hard HEAD`, moves with the same guarded checkout, and verifies tracked files only because untracked and ignored files stay. Inspection releases a reset whose changes were discarded but whose branch never moved. The claim is recorded in one transaction with the run ledger (a run or unresolved delivery on the worktree refuses it, and run starts refuse a worktree with an applying or uncertain update). Controller ownership is rechecked before and after re-deriving; native activity and process evidence are not prerequisites; published handoff content is archived in the journal. Replayed commits are written with `git commit-tree --no-gpg-sign`, keeping author, date and message, before anything visible changes. After a final ownership check it creates `refs/altcli/preserved/<requestId>` at the old tip (create-only) and runs `git checkout --no-overwrite-ignore --no-recurse-submodules -B <branch> <tip>` with hooks disabled. The branch attached and clean at the recorded tip, the preserved old tip, the previewed replay chain and the branch's previous value are verified; anything else after the first Git write is uncertain and never retried or rolled back. A verified update retires the worktree's squash checkpoints. Nothing is pushed.
       requestBody:
         required: true
         content:
@@ -752,6 +752,7 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/WorktreeUpdate'}
+        '400': {description: Missing confirmation or a mismatched optional legacy branch name}
         '403': {description: Host input disabled}
         '409': {description: Changed consent, conflicting request, project setup owner or run ownership}
   /api/v1/projects/worktrees/update/reconcile:
@@ -769,7 +770,7 @@ paths:
                 requestId: {type: string, format: uuid}
       responses:
         '200':
-          description: Read-only inspection. The verified result, or a branch that has moved on from the recorded tip with the replay chain and preserved old tip intact, completes the update. A clean checkout still at the old tip releases the hold as failed once writer evidence is settled; a created recovery ref is kept and reported. Anything else retains ownership; nothing is retried
+          description: Read-only inspection. The verified result, or a branch that has moved on from the recorded tip with the replay chain and preserved old tip intact, completes the operation. For reset, ancestry already present in the old history is not proof the reset ran, nor is a branch that still contains the dropped old tip (main merged by hand); later commits obscuring the exact result retain uncertainty. A checkout still at the old tip releases the hold as failed after checking controller ownership, when it is clean (update, rebase), unchanged from the previewed content (reset), or had its uncommitted changes discarded without moving (reset); a created recovery ref is kept and reported. Anything else retains ownership; nothing is retried
           content:
             application/json:
               schema: {$ref: '#/components/schemas/WorktreeUpdate'}
@@ -778,7 +779,7 @@ paths:
     post:
       operationId: previewWorktreeRename
       summary: Preview renaming a task branch in place
-      description: Requires a linked task worktree on a named non-integration branch. The new name must be a valid, unused task branch name that is not an integration branch and does not clash with an existing branch by case or path prefix. A branch with an upstream or a remote-tracking copy of the same name, or a worktree in a stopped Git operation, is refused. Uncommitted work is allowed and pinned by content fingerprint. The directory does not move.
+      description: Requires a linked task worktree on a named non-integration branch. The new name must be a valid, unused task branch name that is not an integration branch and does not clash with an existing branch by case or path prefix. A branch with an upstream or a remote-tracking copy of the same name, or a worktree in a stopped Git operation, is refused. Uncommitted work is allowed and pinned by content fingerprint. Native activity and process evidence do not block the preview; confirmation warns about concurrent Git work and agents still using the old branch name. The directory does not move.
       requestBody:
         required: true
         content:
@@ -795,7 +796,7 @@ paths:
     post:
       operationId: renameWorktreeBranch
       summary: Confirmed branch rename
-      description: The whole preview plus confirm:true is the consent; the server re-derives it before and after the ownership and writer checks and refuses any difference, including the content fingerprint. Writer evidence is checked once more after the final re-derivation, immediately before Git runs, with one activity revision spanning the request. The claim is recorded with the same run-ledger transaction as Update. It runs `git branch -m <branch> <newBranch>` (never -M) with hooks disabled and verifies the new name at the confirmed head, the old name gone and HEAD attached to the new name. Squash checkpoints follow the rename. Files, the directory, agents and tmux session names are unchanged; nothing is pushed.
+      description: The whole preview plus confirm:true is the consent; the server re-derives it around ownership checks and refuses any difference, including the content fingerprint. The human accepts the warning about concurrent Git work and agents still referring to the old branch name. Native activity and process evidence do not gate rename. Controller ownership is checked again after the final re-derivation, immediately before Git runs. The claim is recorded with the same run-ledger transaction as Update. It runs `git branch -m <branch> <newBranch>` (never -M) with hooks disabled and verifies the new name at the confirmed head, the old name gone and HEAD attached to the new name. Squash checkpoints follow the rename. Files, the directory, agents and tmux session names are unchanged; nothing is pushed.
       requestBody:
         required: true
         content:
@@ -1894,6 +1895,10 @@ components:
         message: {type: string}
         updatedAt: {type: string, format: date-time}
         commit: {type: [string, 'null'], description: The verified squash commit on the integration branch.}
+    WorktreeUpdateMode:
+      type: string
+      enum: [update, rebase, reset]
+      description: 'update: replay only the commits after the proven integrated boundary; rebase: replay every commit since the merge base; reset: drop the branch''s commits and uncommitted tracked changes. Absent means update.'
     WorktreeUpdateInput:
       type: object
       additionalProperties: false
@@ -1901,20 +1906,22 @@ components:
       properties:
         projectId: {type: string}
         worktreeId: {type: string}
+        mode: {$ref: '#/components/schemas/WorktreeUpdateMode'}
     WorktreeUpdatePreview:
       type: object
-      required: [projectId, worktreeId, requestId, worktree, branch, head, targetRef, targetHead, boundaryBy, boundary, replay, tree, fastForward, commands, consent]
+      required: [projectId, worktreeId, mode, requestId, worktree, branch, head, targetRef, targetHead, boundaryBy, boundary, replay, tree, fastForward, equivalent, commands, lost, consent]
       properties:
         projectId: {type: string}
         worktreeId: {type: string}
+        mode: {$ref: '#/components/schemas/WorktreeUpdateMode'}
         requestId: {type: string, format: uuid}
         worktree: {$ref: '#/components/schemas/WorktreeIdentity'}
         branch: {type: string}
         head: {$ref: '#/components/schemas/GitSha', description: The current task tip, kept under the recovery ref when the update is confirmed.}
         targetRef: {type: string}
         targetHead: {$ref: '#/components/schemas/GitSha'}
-        boundaryBy: {type: string, enum: [ancestry, squash, base], description: 'ancestry: the target contains the task tip; squash: squash evidence or a checkpoint proves the content through the boundary; base: nothing is integrated, so every commit after the merge base is replayed.'}
-        boundary: {$ref: '#/components/schemas/GitSha', description: Last task commit whose content the target already contains; equals head when fully integrated.}
+        boundaryBy: {type: string, enum: [ancestry, squash, base, reset], description: 'ancestry: the target contains the task tip; squash: squash evidence or a checkpoint proves the content through the boundary; base: every commit after the merge base is replayed; reset: nothing is replayed, the target replaces the branch.'}
+        boundary: {$ref: '#/components/schemas/GitSha', description: Last task commit whose content the target already contains; equals head when fully integrated and the target head for a reset.}
         replay:
           type: array
           maxItems: 100
@@ -1929,7 +1936,31 @@ components:
               tree: {$ref: '#/components/schemas/GitSha'}
         tree: {$ref: '#/components/schemas/GitSha', description: Tree of the new branch tip.}
         fastForward: {type: boolean, description: The old tip is an ancestor of the new one, so no history is rewritten.}
+        equivalent: {type: string, description: 'The familiar Git command this is equivalent to, for orientation (for example git rebase main); commands is what actually runs.'}
         commands: {type: array, maxItems: 4, items: {type: string}, description: The exact Git operations confirmation authorizes, for display.}
+        lost:
+          description: Reset only; null otherwise.
+          oneOf:
+          - type: 'null'
+          - type: object
+            additionalProperties: false
+            required: [commits, recent, changes, paths, fingerprint]
+            properties:
+              commits: {type: integer, minimum: 0, description: Commits that leave the branch; they stay reachable under the recovery ref.}
+              recent:
+                type: array
+                maxItems: 20
+                description: The newest of those commits.
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [sha, subject]
+                  properties:
+                    sha: {$ref: '#/components/schemas/GitSha'}
+                    subject: {type: string}
+              changes: {type: integer, minimum: 0, description: Uncommitted tracked changes (staged and unstaged) that are discarded for good.}
+              paths: {type: array, maxItems: 20, items: {type: string}}
+              fingerprint: {type: string, pattern: '^[0-9a-f]{64}$', description: Digest of HEAD, index entries, unstaged content and untracked file contents; consent binds to this exact content.}
         consent: {type: string, pattern: '^[0-9a-f]{64}$', description: Server digest of every pinned field except requestId.}
     WorktreeUpdateRequest:
       type: object
@@ -1939,8 +1970,10 @@ components:
       properties:
         projectId: {type: string, maxLength: 200}
         worktreeId: {type: string, maxLength: 200}
+        mode: {$ref: '#/components/schemas/WorktreeUpdateMode'}
         requestId: {type: string, format: uuid}
         consent: {type: string, pattern: '^[0-9a-f]{64}$'}
+        confirmBranch: {type: string, maxLength: 200, description: Optional compatibility field for older clients; if supplied it must equal the previewed branch exactly.}
         confirm: {type: boolean, const: true}
     WorktreeUpdateConfirm:
       description: The durable consent record, the re-derived preview with the create-only recovery ref.

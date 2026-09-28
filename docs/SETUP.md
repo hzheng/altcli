@@ -189,16 +189,33 @@ the main checkout first). Only a
 read-only host, a request in flight or unreadable state disables them. All three
 record a durable result; an uncertain one is inspected, never retried.
 
-To reuse a prepared task worktree instead of removing it, use **Update from main**
-on a clean checkout. It moves the branch onto local main/default in place,
-keeping the directory, ignored files such as dependencies, and the agents. A
-branch main already contains moves to main. Commits after the last squash batch,
-or all commits when nothing is integrated, are replayed on top. The preview lists
-them and refuses conflicts. A rewritten branch keeps its old tip under
-`refs/altcli/preserved/`, which you delete yourself when no longer needed; give
-agents fresh instructions afterwards. **Rename…** renames the task branch in place,
-uncommitted work included. Both refuse published branches, since the app never
-pushes, and need idle agents in the worktree.
+The persistent **Main** menu groups **Squash into main** and the three ways to reuse a prepared
+task worktree. The latter move the branch onto local main/default in place, keeping the
+directory, ignored files such as dependencies, and the agents. Choose one of:
+
+- **Update from main**, after **Squash into main**. A branch main already contains
+  moves to main; only commits made after the last squash batch are replayed.
+- **Rebase onto main**, like `git rebase main`. It replays every commit since the
+  branch left main, and refuses commits main already has, such as squashed ones.
+- **Reset to main…**, like `git reset --hard main`. It drops the branch's commits
+  and its uncommitted tracked changes; untracked and ignored files stay. Its preview
+  lists what is dropped and discarded; **Confirm reset** accepts that loss.
+
+Every preview states the case, the equivalent Git command and the exact commands
+the app runs instead. Those commands never overwrite untracked or ignored files, and
+the preview refuses conflicts, which you resolve manually. Update and rebase need a clean checkout.
+Their warning advises making sure nobody, including agents, is actively editing in the branch
+directory. Reset warns that uncommitted tracked work will be lost. Each proceeds after one confirmation;
+missing activity evidence or running agent processes do not block it, and agents are not stopped.
+A rewritten
+branch keeps its old tip under `refs/altcli/preserved/`, which you delete yourself
+when no longer needed. Uncommitted changes discarded by a reset cannot be
+recovered. Give agents fresh instructions afterwards. The **Branch** menu groups **Rename branch**, **Finish branch**, **Check removal** and **Discard**.
+Both menus open on hover or click, work with keyboard and touch, and stay visible above opened forms.
+Rename changes the task branch name in place, uncommitted work included. All of them refuse published branches
+when history would change, since the app never pushes. Controller ownership still prevents overlapping
+operations. Rename also proceeds on warned confirmation without agent-evidence checks; avoid concurrent
+Git commands and tell agents the new branch name afterwards.
 
 Dirty or unavailable workspaces remain readable, but Plan and Implementation
 starts are disabled until the index and nonignored worktree are clean. The console

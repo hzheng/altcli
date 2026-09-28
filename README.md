@@ -69,9 +69,12 @@ group; committed handoffs stay on task branches. A host whose `web/.env.local`
 still says `ALTCLI_ENABLE_LEGACY_RELAY=false` (older templates wrote this) keeps it
 off until that line is removed or set to `true` and the backend is restarted. Its
 staging contract is unchanged. A task worktree can be reused after integration:
-**Update from main** moves its branch onto main in place, replaying later commits,
-and **Rename…** renames its branch. Moving the directory is accepted design, not
-yet implemented.
+**Main** groups Squash into main, Update from main, Rebase onto main and Reset to main.
+The alignment actions update its branch after a squash, rebase it onto
+main, or reset it to main, each with a preview and one confirmation. Update and Rebase warn about
+active editing and manual conflict resolution; Reset warns about losing uncommitted tracked work.
+Agent activity evidence does not block alignment or a confirmed branch rename. **Branch** groups Rename branch, Finish branch,
+Check removal and Discard. Both menus stay visible while forms open below them and support hover, click and keyboard. Moving the directory is accepted design, not yet implemented.
 
 Use [ROADMAP](ROADMAP.md#migration-and-implementation-sequence) for rollout, [OPEN-DECISIONS](docs/OPEN-DECISIONS.md) for unresolved choices, and [DESIGN-MIGRATION](docs/DESIGN-MIGRATION.md) to locate the content formerly held in the standalone collaboration draft. The draft is no longer a required document.
 

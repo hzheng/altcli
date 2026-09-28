@@ -3492,3 +3492,179 @@ Observed on Node v24.12.0, macOS:
 
 Browser checks used isolated mock hosts. No installed-agent or physical-device acceptance
 was performed. No live backend restart, staging or commit was performed.
+
+## 2026-09-28 — Align with main: update, rebase and reset for task worktrees
+
+This responds to the request for a reset-to-main button (`git reset --hard main`) and
+rebase-from-main, each with a preview and confirmation, and for a clearer Update from main.
+All three now sit behind one **Align with main…** chooser that explains each option. Every
+preview states which case applies, the equivalent Git command and the exact commands that
+run.
+
+Rebase replays every commit since the merge base. Reset drops the branch's commits (kept
+under the recovery ref) and its uncommitted tracked changes after the typed branch name,
+keeping untracked and ignored files.
+
+ADR-0013 still forbids moving a branch with `git rebase` or `reset`. A September 28 scratch
+repository showed why:
+
+- `git reset --hard main` and `git checkout -f --no-overwrite-ignore -B task main` both
+  silently replaced an ignored `local.json` that main starts tracking.
+- The `-f` form also overwrote an untracked file in the way.
+- Only the non-forced `checkout --no-overwrite-ignore` refused.
+
+So both operations run the protected steps instead. Reset uses `git reset --hard HEAD` only
+in place, after refusing content at deleted tracked paths, then the non-forced checkout.
+
+Observed on Git 2.47.0, Node 24.12.0, macOS:
+
+- `./scripts/check.sh` exit 0 with 32 hook/setup, 44 smoke, 465 workflow and 84 unit tests,
+  type checking and the production build.
+- The new real-Git cases cover:
+  - rebase replay and fast-forward, and its refusals of dirty checkouts and of squashed
+    commits (which Update skips);
+  - reset's dropped and discarded listing, the typed branch, kept untracked and ignored
+    files, the recovery ref and disabled hooks;
+  - reset's refusals of the ignored-file case above, of content at restored paths, and of
+    edits after the preview or during archiving;
+  - an uncertain reset that inspection releases as "changes discarded, branch not moved".
+- Playwright `e2e/projects.spec.ts` on desktop and iPhone: 62 passed. This includes the
+  chooser, Update, Rebase and Reset cases.
+- The Playwright dev-server build cache (`web/.next-e2e-altcli-*`) had served CSS older than
+  the committed stylesheet. It was deleted and rebuilt; the fresh build contains the
+  preview-list styles.
+- The OpenAPI file parses with Ruby's YAML loader and every `$ref` resolves.
+
+Not run: `./scripts/check.sh --e2e` (full browser suite, deferred to pre-merge),
+`npm run test:native` and installed-host acceptance. No real task worktree was reset or
+rebased. The development backend was not restarted.
+
+## 2026-09-28 — reset checks and interrupted-reset recovery
+
+Review of `bef760c` reproduced three defects in four isolated real-Git regressions:
+
+- After restart between creation of the recovery ref and the reset, an ancestor already
+  in the task history falsely proved success, both with unchanged work and after another
+  task commit. Recovery now rejects that ancestry as proof: unchanged work releases as
+  failed, while later commits that obscure the exact result retain uncertainty.
+- An ignored file appearing at a deleted tracked path during archiving escaped the
+  fingerprint and was deleted. Restored-path obstructions are checked again after the
+  archive and final fingerprint check, before any Git write.
+- A native turn starting before the final content reads did not prevent reset. Writer
+  evidence is now rechecked after those reads, preserving the uncommitted work.
+
+Observed on Node 24.12.0, macOS:
+
+- All four new regressions failed before the fixes and passed afterwards. The focused
+  rebase/reset run passed all 8 cases.
+- `./scripts/check.sh` exited 0: 32 hook/setup, 44 smoke, 469 workflow and 84 unit tests,
+  type checking and the production build.
+- `ALTCLI_E2E_PORT=19787 npm --prefix web run e2e -- e2e/projects.spec.ts` passed all 62
+  desktop/iPhone cases against isolated mock hosts.
+- OpenAPI parses with Ruby's YAML loader and all local references resolve.
+
+Not run: the full browser suite (`./scripts/check.sh --e2e`), `npm run test:native` or
+installed-host acceptance. This correction changes server behavior only; the Projects
+browser suite exercised the incoming alignment UI. The live backend serves the separate
+main checkout and was not restarted. All test servers exited before publication.
+
+## 2026-09-28 — review of the reset recovery fixes
+
+Reviewed and accepted a03b3a5 (bef760c..a03b3a5). Its three fixes are correct:
+
+- restored paths are re-checked for obstructions after archiving;
+- writer evidence is rechecked after the final content reads;
+- ancestry already in the old history no longer proves an interrupted reset.
+
+All four of its regressions failed when run against the bef760c server and passed with the
+fix.
+
+Improvement (needs review): the same false proof remained for ancestry added *after* an
+interrupted reset. If the user merged main into the task branch by hand, inspection
+reported the reset as verified and retired its squash checkpoints. A reset that drops
+commits leaves the old tip off the branch, so inspection now keeps ownership when the branch
+still contains it. The new regression failed on a03b3a5 (`updated`) and passes. The same
+test shows that a completed reset followed by more task work is still verified.
+
+Observed on Git 2.47.0, Node 24.12.0, macOS:
+
+- On a03b3a5, `./scripts/check.sh` exited 0 with 32 hook/setup, 44 smoke, 469 workflow and
+  84 unit tests, type checking and the production build. The OpenAPI file parses and every
+  `$ref` resolves.
+- After the improvement, the update/rebase/reset/rename cases in
+  `scripts/projects.test.ts` pass (27), and `./scripts/check.sh` exited 0 again with 470
+  workflow tests.
+
+Not run: Playwright (no UI change), `./scripts/check.sh --e2e`, `npm run test:native` and
+installed-host acceptance.
+
+
+## 2026-09-28 — confirmation instead of agent-evidence blockers for alignment
+
+Update, Rebase and Reset now accept explicit human confirmation without requiring settled
+native turns or process evidence. Update and Rebase warn about concurrent editing and manual
+conflict resolution. Reset warns about permanent loss of uncommitted tracked work and uses
+one confirmation button. Controller ownership and exact Git content checks remain.
+
+Observed locally:
+
+- The focused server run passed all 18 cases, including all three modes with unknown,
+  human-acknowledged, active, background and unavailable agent evidence.
+- The focused desktop/iPhone browser run passed all 12 cases, including warning text,
+  one-button reset, revoked consent after view changes and inspection without resending.
+- `./scripts/check.sh` passed: 32 hook/setup, 44 smoke, 485 workflow and 86 unit tests,
+  type checking and the production build.
+- `./scripts/check.sh --e2e` repeated those code checks successfully. The broad browser
+  suite was stopped at the user's request: 26 passed, 1 interrupted, 345 did not run.
+  No full browser-suite acceptance is claimed.
+- OpenAPI parsed and all 483 local references resolved. The task diff and documentation
+  were screened for secrets; none were found.
+- With no controller owners, deliveries or applying worktree operations, the local host
+  was restarted from main. Its authenticated state and home page returned HTTP 200;
+  the served browser assets contained all three new warning messages.
+
+Git mutations were exercised only in isolated test repositories. No live worktree was
+reset, updated or rebased for validation; native CLI mutation acceptance was not run.
+
+
+## 2026-09-28 — persistent Main and Branch worktree menus
+
+Main groups Squash, Update, Rebase and Reset; Branch groups Rename, Finish branch,
+Check removal and Discard. Menus stay visible above forms, support mouse hover,
+click/touch and keyboard, and retain action state and unknown-result inspection.
+
+Observed: type checking and the production build passed. Across focused desktop/iPhone
+runs, all 28 selected cases passed after fixing pointer-leave handling for portal items
+and updating the Finish test to dismiss its open dropdown before continuing. Coverage
+includes all eight actions, menu navigation, compact layout, rename draft preservation
+and inspection after lost responses. A mistyped squash test filter selected no tests;
+the corrected filter passed both viewport cases.
+
+The local host was observed restarting while deployment was being checked; no duplicate
+restart was sent. Its authenticated state and home page returned HTTP 200 and its served
+bundle contains the new menus. No secrets were found in the task diff and new menu source.
+The broad test suites were not rerun, following the user's instruction to avoid unneeded tests.
+
+
+## 2026-09-28 — agent status above worktree actions
+
+Moved the existing launch status cards into an Agent status section below Agents & group
+and above the action row. The focused existing status-refresh scenario passed on desktop
+and iPhone, including assertions for that layout order (2 cases). The production build
+and its type checking passed. The live host serves the updated component. No broad
+suites ran; this was a presentation-only movement.
+
+
+## 2026-09-28 — warned Rename without agent-evidence blockers
+
+Rename now uses its explicit confirmation instead of settled native activity or process
+evidence. The warning covers concurrent Git commands and agents referring to the old name.
+Controller ownership, exact preview content, name checks and uncertain-result handling remain.
+
+The unknown-agent regression reproduced WORKTREE_WRITERS before the fix. Afterwards all 9
+focused rename-related server tests passed, including unknown/background/unavailable evidence,
+a native turn during final inspection, preserved dirty files, ownership and stale consent.
+The existing Rename browser scenario passed on desktop and iPhone (2 cases); the production
+build and type checking passed. No broad test suite ran. The local host was restarted with
+no controller delivery active and serves the new warning. No live branch was renamed.
+The read-only rename preview for the checkout containing pane %10 returned HTTP 200.

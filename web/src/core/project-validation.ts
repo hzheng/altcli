@@ -1,4 +1,4 @@
-import type { DirectoryListInput, FinishConfirm, FinishContinue, FinishInput, FinishOutcome, FinishReconcile, ProjectAddInput, WorktreeCreateInput, WorktreeDiscardConfirm, WorktreeDiscardFinish, WorktreeDiscardInput, WorktreeIntegrateRequest, WorktreeIntegrationInput, WorktreePreviewInput, WorktreeRemovalInput, WorktreeRemoveInput, WorktreeRenameConfirm, WorktreeRenameInput, WorktreeUpdateInput, WorktreeUpdateRequest } from '../contracts/projects.ts';
+import type { DirectoryListInput, FinishConfirm, FinishContinue, FinishInput, FinishOutcome, FinishReconcile, ProjectAddInput, WorktreeCreateInput, WorktreeDiscardConfirm, WorktreeDiscardFinish, WorktreeDiscardInput, WorktreeIntegrateRequest, WorktreeIntegrationInput, WorktreePreviewInput, WorktreeRemovalInput, WorktreeRemoveInput, WorktreeRenameConfirm, WorktreeRenameInput, WorktreeUpdateInput, WorktreeUpdateMode, WorktreeUpdateRequest } from '../contracts/projects.ts';
 import { AppError } from './errors.ts';
 import { object, requestId } from './validation.ts';
 import { sha } from './implementation-validation.ts';
@@ -131,18 +131,25 @@ export function parseFinishReconcile(value: unknown): FinishReconcile {
   return { requestId: requestId(body.requestId), revision: body.revision as number, action: body.action as FinishReconcile['action'], ...(note === undefined ? {} : { note }) };
 }
 
-export function parseUpdatePreview(value: unknown): WorktreeUpdateInput {
-  const body = object(value); fields(body, ['projectId', 'worktreeId']);
-  return { projectId: text(body.projectId), worktreeId: text(body.worktreeId) };
+function updateMode(value: unknown): WorktreeUpdateMode {
+  if (value === undefined) return 'update';
+  if (value === 'update' || value === 'rebase' || value === 'reset') return value;
+  throw new AppError('INVALID_WORKTREE', 'Choose update, rebase or reset.');
+}
+export function parseUpdatePreview(value: unknown): Required<WorktreeUpdateInput> {
+  const body = object(value); fields(body, ['projectId', 'worktreeId', 'mode']);
+  return { projectId: text(body.projectId), worktreeId: text(body.worktreeId), mode: updateMode(body.mode) };
 }
 /** Compact confirmation: the server re-derives the preview and requires its consent digest to match. */
-export function parseUpdate(value: unknown): WorktreeUpdateRequest {
-  const body = object(value); fields(body, ['projectId', 'worktreeId', 'requestId', 'consent', 'confirm']);
+export function parseUpdate(value: unknown): WorktreeUpdateRequest & { mode: WorktreeUpdateMode } {
+  const body = object(value); fields(body, ['projectId', 'worktreeId', 'mode', 'requestId', 'consent', 'confirmBranch', 'confirm']);
   if (body.confirm !== true) throw new AppError('CONFIRM_REQUIRED', 'Confirm the exact worktree update.');
   if (typeof body.consent !== 'string' || !/^[0-9a-f]{64}$/.test(body.consent)) throw new AppError('INVALID_WORKTREE', 'Confirm the previewed update; its consent digest is missing.');
   const projectId = text(body.projectId); const worktreeId = text(body.worktreeId);
   if (projectId.length > MAX_IDENTIFIER || worktreeId.length > MAX_IDENTIFIER) throw new AppError('INVALID_WORKTREE', 'Recheck the project; its identifiers are not ones this host issued.');
-  return { projectId, worktreeId, requestId: requestId(body.requestId), consent: body.consent, confirm: true };
+  const confirmBranch = body.confirmBranch === undefined ? undefined : text(body.confirmBranch);
+  if (confirmBranch !== undefined && confirmBranch.length > MAX_IDENTIFIER) throw new AppError('INVALID_WORKTREE', 'Type the exact branch name.');
+  return { projectId, worktreeId, mode: updateMode(body.mode), requestId: requestId(body.requestId), consent: body.consent, ...(confirmBranch === undefined ? {} : { confirmBranch }), confirm: true };
 }
 function branchName(value: unknown): string {
   const branch = text(value);

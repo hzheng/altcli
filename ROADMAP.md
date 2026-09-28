@@ -11,9 +11,11 @@ branch-scoped Stage relay on `main` or the recorded default. The server enforces
 binds the run to the branch and commit rechecked before each delivery and completion, and holds
 pre-upgrade runs. `main` is always an integration name, and Control's Relay mode replaces the
 Settings preference (ADR-0014, D51). Linked task worktrees can now be reused: Update from main
-(fully integrated moves and replay of unintegrated commits) and branch rename are implemented
-locally, with the plan objections resolved (ADR-0013, D52). Directory move remains accepted
-design with its own acceptance gate. Installed-host acceptance of Stage relay and of worktree
+(fully integrated moves and replay of unintegrated commits), Rebase onto main and Reset to main
+(in the Main menu beside Squash, with warned confirmation instead of agent-evidence blockers)
+and branch rename are implemented locally, with the plan
+objections resolved (ADR-0013, D52). Directory move remains accepted design with its own
+acceptance gate. Installed-host acceptance of Stage relay and of worktree
 reuse remains open.
 
 The completion follow-up removes `stop_hook_active` from background-task

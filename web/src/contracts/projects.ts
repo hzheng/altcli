@@ -104,10 +104,14 @@ export interface WorktreeIntegration {
   commit: string | null;
 }
 
-/** Update from main: move a linked task worktree's branch onto the local integration branch (main, else the recorded default) in place,
- * keeping its directory, ignored environment and agents. Commits after the proven integrated boundary are replayed on top. */
-export interface WorktreeUpdateInput { projectId: string; worktreeId: string }
+/** Align a linked task worktree's branch with the local integration branch (main, else the recorded default) in place, keeping its
+ * directory, ignored environment and agents. `update` replays only the commits after the proven integrated boundary, so squashed
+ * work is skipped; `rebase` replays every commit since the merge base, like `git rebase main`; `reset` drops the branch's commits
+ * and uncommitted tracked changes, like `git reset --hard main`. Absent means `update`. */
+export type WorktreeUpdateMode = 'update' | 'rebase' | 'reset';
+export interface WorktreeUpdateInput { projectId: string; worktreeId: string; mode?: WorktreeUpdateMode }
 export interface WorktreeUpdatePreview extends WorktreeUpdateInput {
+  mode: WorktreeUpdateMode;
   requestId: string;
   worktree: WorktreeIdentity;
   branch: string;
@@ -115,9 +119,10 @@ export interface WorktreeUpdatePreview extends WorktreeUpdateInput {
   targetRef: string;
   targetHead: string;
   /** How the boundary was proven: the target contains the task commits (ancestry), a squash (checkpoint or exact patch) contains them,
-   * or `base`: the plain merge base, so every task commit after it is replayed. */
-  boundaryBy: 'ancestry' | 'squash' | 'base';
-  /** The last task commit whose content the target already contains; replay starts after it. Equals `head` when fully integrated. */
+   * or `base`: the plain merge base, so every task commit after it is replayed. `reset` replays nothing: the target replaces the branch. */
+  boundaryBy: 'ancestry' | 'squash' | 'base' | 'reset';
+  /** The last task commit whose content the target already contains; replay starts after it. Equals `head` when fully integrated,
+   * and the target head for a reset. */
   boundary: string;
   /** Commits after the boundary, oldest first, each with the tree it produces on the target. Empty for a fully integrated branch. */
   replay: { sha: string; subject: string; tree: string }[];
@@ -125,12 +130,18 @@ export interface WorktreeUpdatePreview extends WorktreeUpdateInput {
   tree: string;
   /** The old tip is an ancestor of the new one, so no history is rewritten. */
   fastForward: boolean;
+  /** The familiar Git command this is equivalent to, for orientation; `commands` is what actually runs. */
+  equivalent: string;
   /** The exact Git operations confirmation authorizes, for display. */
   commands: string[];
+  /** Reset only (null otherwise): the commits no longer on the branch (kept under the recovery ref) and the uncommitted tracked
+   * changes that are discarded for good. Untracked and ignored files stay. The fingerprint pins the content shown. */
+  lost: { commits: number; recent: { sha: string; subject: string }[]; changes: number; paths: string[]; fingerprint: string } | null;
   /** Server digest of every pinned field above except requestId; the compact confirmation repeats it. */
   consent: string;
 }
-export interface WorktreeUpdateRequest { projectId: string; worktreeId: string; requestId: string; consent: string; confirm: true }
+/** One confirmation accepts the previewed changes and agent risks. confirmBranch is optional for older clients. */
+export interface WorktreeUpdateRequest { projectId: string; worktreeId: string; mode?: WorktreeUpdateMode; requestId: string; consent: string; confirmBranch?: string; confirm: true }
 /** The durable consent record: the re-derived preview, plus the create-only ref that keeps the old tip. */
 export interface WorktreeUpdateConfirm extends WorktreeUpdatePreview { recoveryRef: string; confirm: true }
 export interface WorktreeUpdate {

@@ -1284,19 +1284,171 @@ test('an update whose checkout is refused after the recovery ref is inspected, r
   assert.equal(inspected.status, 'failed', inspected.message); assert.match(inspected.message, /recovery ref .* is kept/);
   assert.equal(git(root, 'rev-parse', `refs/altcli/preserved/${preview.requestId}`), head);
 });
-test('update and rename refuse unsettled writers through the control plane and admit an idle shell', async () => {
+const confirmReset = (preview: WorktreeUpdatePreview) => ({ ...confirmUpdate(preview), mode: 'reset' as const });
+for (const advanced of [false, true]) test(`reset inspection cannot prove a reset from ancestry already present before it, advanced=${advanced}`, async () => {
+  const { request, target } = await taskFixture(); const head = git(request.path, 'rev-parse', 'HEAD');
+  writeFileSync(join(request.path, 'app.txt'), 'unfinished work\n');
+  const preview = await catalog.previewUpdate({ ...target, mode: 'reset' });
+  const recoveryRef = `refs/altcli/preserved/${preview.requestId}`;
+  // Restart after preserving the old tip, before either reset command ran. Main was already an ancestor of HEAD.
+  git(root, 'update-ref', recoveryRef, head);
+  store.saveWorktreeUpdate({ input: { ...preview, recoveryRef, confirm: true }, status: 'applying', message: 'fixture', updatedAt: new Date().toISOString(), commit: preview.targetHead });
+  store.close(); store = new Store(config.dataDir); catalog = new ProjectCatalog(store, config);
+  if (advanced) { git(request.path, 'add', 'app.txt'); git(request.path, 'commit', '-qm', 'more task work without reset'); }
+  const inspected = await catalog.reconcileUpdate(preview.requestId, noGuard);
+  assert.equal(inspected.status, advanced ? 'uncertain' : 'failed', inspected.message);
+  assert.equal(catalog.projectHeld(target.projectId), advanced);
+  assert.equal(readFileSync(join(request.path, 'app.txt'), 'utf8'), 'unfinished work\n');
+  assert.equal(git(root, 'rev-parse', recoveryRef), head);
+});
+test('reset inspection does not take a hand merge of main after an interrupted reset for the reset, but verifies a reset that moved on', async () => {
+  const { request, target } = await taskFixture(); const head = git(request.path, 'rev-parse', 'HEAD'); const main = commitOnMain('unrelated.txt', 'main work\n');
+  const preview = await catalog.previewUpdate({ ...target, mode: 'reset' }); const recoveryRef = `refs/altcli/preserved/${preview.requestId}`;
+  assert.equal(preview.lost?.commits, 2); // main was not in the old history, so the candidate's ancestry rule alone does not apply
+  git(root, 'update-ref', recoveryRef, head);
+  store.saveWorktreeUpdate({ input: { ...preview, recoveryRef, confirm: true }, status: 'uncertain', message: 'fixture', updatedAt: new Date().toISOString(), commit: preview.targetHead });
+  git(request.path, 'merge', '-q', '--no-edit', 'main'); // the human merged main by hand instead: the dropped commits are still there
+  const merged = await catalog.reconcileUpdate(preview.requestId, noGuard);
+  assert.equal(merged.status, 'uncertain', merged.message); assert.equal(catalog.projectHeld(target.projectId), true);
+  // Had the reset run, the old tip is gone from the branch; later task work on top of main is still verified from history.
+  git(request.path, 'reset', '-q', '--hard', main); writeFileSync(join(request.path, 'later.txt'), 'later\n'); git(request.path, 'add', 'later.txt'); git(request.path, 'commit', '-qm', 'later');
+  const verified = await catalog.reconcileUpdate(preview.requestId, noGuard);
+  assert.equal(verified.status, 'updated', verified.message); assert.match(verified.message, /has moved on since/);
+});
+test('reset refuses an ignored obstruction at a restored path that appears during archiving', async () => {
+  const { request, target } = await taskFixture(); const head = git(request.path, 'rev-parse', 'HEAD');
+  git(request.path, 'rm', '-q', 'new.txt'); excludeLocally('new.txt');
+  const preview = await catalog.previewUpdate({ ...target, mode: 'reset' });
+  const result = await catalog.update(confirmReset(preview), noGuard, async () => { writeFileSync(join(request.path, 'new.txt'), 'local ignored work\n'); return 0; });
+  assert.equal(readFileSync(join(request.path, 'new.txt'), 'utf8'), 'local ignored work\n');
+  assert.equal(result.status, 'failed', result.message); assert.match(result.message, /obstruction|restored|changed/i);
+  assert.equal(git(request.path, 'rev-parse', 'HEAD'), head); assert.equal(git(root, 'for-each-ref', 'refs/altcli/'), '');
+});
+test('confirmed reset accepts a native turn starting before its final content inspection', async () => {
+  const { request, target } = await taskFixture(); const { plane, started } = await squashPlane();
+  writeFileSync(join(request.path, 'app.txt'), 'unfinished work\n');
+  const preview = await plane.previewUpdate({ ...target, mode: 'reset' });
+  const guard = plane['changeGuard'].bind(plane); let calls = 0;
+  plane['changeGuard'] = async (...args: Parameters<typeof guard>) => { await guard(...args); if (++calls === 3) await started(); };
+  const result = await plane.updateWorktree(confirmReset(preview));
+  assert.equal(result.status, 'updated', result.message);
+  assert.equal(readFileSync(join(request.path, 'app.txt'), 'utf8'), 'baseline\n');
+  assert.equal(git(request.path, 'rev-parse', 'HEAD'), preview.targetHead);
+  assert.equal(git(root, 'rev-parse', `refs/altcli/preserved/${preview.requestId}`), preview.head);
+});
+for (const mode of ['update', 'rebase', 'reset'] as const)
+for (const evidence of ['unknown', 'acknowledged', 'working', 'background', 'unavailable'] as const)
+test(`confirmed ${mode} proceeds with ${evidence} agent evidence`, async () => {
+  const { request, target } = await taskFixture(); const { plane, adapter, panes, started } = await squashPlane();
+  commitOnMain('unrelated.txt', 'main work\n');
+  const pane = { ...mockPanes()[1]!, cwd: request.path }; panes.push(pane);
+  if (evidence === 'acknowledged') {
+    const session = (await plane.state()).sessions.find(s => s.identity.paneId === pane.identity.paneId)!;
+    await plane.resetActivity({ agentId: session.id, registrationId: session.registrationId, expectedUpdatedAt: null, confirmReady: true });
+  }
+  if (evidence === 'working') await started(pane);
+  if (evidence === 'background') adapter.processes = async () => [{ pid: '200', command: 'node writer.js' }];
+  if (evidence === 'unavailable') adapter.processes = async () => { throw new Error('process evidence unavailable'); };
+  const preview = await plane.previewUpdate({ ...target, mode });
+  const result = await plane.updateWorktree({ ...confirmUpdate(preview), mode });
+  assert.equal(result.status, 'updated', result.message);
+  assert.equal(git(request.path, 'rev-parse', 'HEAD'), result.commit);
+  assert.equal(readFileSync(join(request.path, 'unrelated.txt'), 'utf8'), 'main work\n');
+  assert.equal(git(root, 'rev-parse', `refs/altcli/preserved/${preview.requestId}`), preview.head);
+});
+test('rebase replays every commit since the branch left main, fast-forwards a contained branch, and refuses squashed commits that update skips', async () => {
+  const { request, target } = await taskFixture(); const [second, first] = git(request.path, 'rev-list', '-2', 'HEAD').split('\n');
+  writeFileSync(join(request.path, 'app.txt'), 'dirty\n');
+  await assert.rejects(catalog.previewUpdate({ ...target, mode: 'rebase' }), (error: { code?: string; message: string }) => error.code === 'WORKTREE_DIRTY' && /before rebasing.*Reset to main discards them/.test(error.message));
+  git(request.path, 'checkout', '-q', '--', 'app.txt');
+  const main = commitOnMain('unrelated.txt', 'main work\n');
+  const preview = await catalog.previewUpdate({ ...target, mode: 'rebase' });
+  assert.deepEqual([preview.mode, preview.boundaryBy, preview.replay.map((step) => step.sha), preview.equivalent, preview.lost], ['rebase', 'base', [first, second], 'git rebase main', null]);
+  const result = await catalog.update({ ...confirmUpdate(preview), mode: 'rebase' }, noGuard, noArchive);
+  assert.equal(result.status, 'updated', result.message); assert.match(result.message, /^Rebased feature\/finished by replaying 2 commits onto main/);
+  assert.equal(git(request.path, 'rev-parse', 'HEAD~2'), main);
+  // After a squash batch, rebase meets a commit main already has and refuses; update knows the squash boundary and skips it.
+  assert.equal((await catalog.integrate(confirmSquash(await catalog.previewIntegration({ ...target, through: git(request.path, 'rev-parse', 'HEAD~1') })), noGuard)).status, 'integrated');
+  commitOnMain('later.txt', 'later\n');
+  await assert.rejects(catalog.previewUpdate({ ...target, mode: 'rebase' }), (error: { code?: string; message: string }) => error.code === 'REPLAY_REDUNDANT' && /Update from main skips commits squashed into main/.test(error.message));
+  const update = await catalog.previewUpdate(target);
+  assert.deepEqual([update.mode, update.boundaryBy, update.replay.length, update.equivalent], ['update', 'squash', 1, `git rebase --onto main ${git(request.path, 'rev-parse', '--short=12', 'HEAD~1')}`]);
+  git(root, 'reset', '-q', '--hard', 'feature/finished'); commitOnMain('forward.txt', 'ahead\n'); // main contains the whole branch: rebase fast-forwards, like git rebase
+  const forward = await catalog.previewUpdate({ ...target, mode: 'rebase' });
+  assert.deepEqual([forward.boundaryBy, forward.fastForward, forward.replay, forward.equivalent], ['ancestry', true, [], 'git rebase main']);
+});
+test('reset drops the branch commits and uncommitted tracked changes after one confirmation, keeping untracked and ignored files', async () => {
+  const { request, target } = await taskFixture(); const old = git(request.path, 'rev-parse', 'HEAD'); const main = commitOnMain('unrelated.txt', 'main work\n');
+  writeFileSync(join(request.path, 'app.txt'), 'edited\n'); writeFileSync(join(request.path, 'staged.txt'), 'staged\n'); git(request.path, 'add', 'staged.txt');
+  writeFileSync(join(request.path, 'notes.txt'), 'untracked\n'); excludeLocally('local.env'); writeFileSync(join(request.path, 'local.env'), 'SECRET_FIXTURE=1\n');
+  const marker = join(directory, 'hook-ran');
+  for (const hook of ['reference-transaction', 'post-checkout']) { writeFileSync(join(root, '.git', 'hooks', hook), `#!/bin/sh\necho ${hook} >> '${marker}'\n`); chmodSync(join(root, '.git', 'hooks', hook), 0o755); }
+  await assert.rejects(catalog.previewUpdate({ ...target, mode: 'hard' as 'reset' }), { code: 'INVALID_WORKTREE' });
+  const preview = await catalog.previewUpdate({ ...target, mode: 'reset' });
+  assert.deepEqual([preview.mode, preview.boundaryBy, preview.replay, preview.fastForward, preview.equivalent], ['reset', 'reset', [], false, 'git reset --hard main']);
+  assert.deepEqual([preview.lost?.commits, preview.lost?.recent.map((commit) => commit.subject), preview.lost?.changes, preview.lost?.paths.sort()], [2, ['second', 'first'], 2, ['app.txt', 'staged.txt']]);
+  assert.ok(preview.commands.some((command) => command.includes('reset --hard HEAD'))); assert.ok(preview.commands.at(-1)!.includes('checkout --no-overwrite-ignore'));
+  await assert.rejects(catalog.update({ ...confirmReset(preview), confirm: false as true }, noGuard, noArchive), { code: 'CONFIRM_REQUIRED' });
+  await assert.rejects(catalog.update({ ...confirmReset(preview), confirmBranch: 'feature/finishe' }, noGuard, noArchive), { code: 'CONFIRM_REQUIRED' });
+  assert.equal(store.worktreeUpdates().length, 0); assert.equal(readFileSync(join(request.path, 'app.txt'), 'utf8'), 'edited\n');
+  const result = await catalog.update(confirmReset(preview), noGuard, noArchive);
+  assert.equal(result.status, 'updated', result.message); assert.match(result.message, /^Reset feature\/finished to main at .*, discarding 2 uncommitted changes\./);
+  assert.equal(git(request.path, 'rev-parse', 'HEAD'), main); assert.equal(git(request.path, 'status', '--porcelain', '--untracked-files=no'), '');
+  assert.equal(readFileSync(join(request.path, 'app.txt'), 'utf8'), 'baseline\n'); assert.equal(existsSync(join(request.path, 'staged.txt')), false);
+  assert.equal(readFileSync(join(request.path, 'notes.txt'), 'utf8'), 'untracked\n'); assert.equal(readFileSync(join(request.path, 'local.env'), 'utf8'), 'SECRET_FIXTURE=1\n');
+  assert.equal(git(root, 'rev-parse', `refs/altcli/preserved/${preview.requestId}`), old); // the dropped commits stay reachable
+  assert.equal(existsSync(marker), false); // hooks are disabled for the recovery ref, the in-place discard and the checkout
+  await assert.rejects(catalog.previewUpdate({ ...target, mode: 'reset' }), { code: 'ALREADY_CURRENT' });
+  writeFileSync(join(request.path, 'app.txt'), 'again\n'); // at main, a reset still discards uncommitted changes
+  const discard = await catalog.previewUpdate({ ...target, mode: 'reset' });
+  assert.deepEqual([discard.lost?.commits, discard.lost?.changes, discard.fastForward], [0, 1, true]);
+});
+test('reset refuses to overwrite untracked or ignored content, and never discards edits made after its preview', async () => {
+  const { request, target } = await taskFixture();
+  // The case plain `git reset --hard main` gets wrong: main starts tracking a path that holds an ignored local file.
+  excludeLocally('local.json'); writeFileSync(join(request.path, 'local.json'), '{"secret":1}\n');
+  writeFileSync(join(root, 'local.json'), '{"from":"main"}\n'); git(root, 'add', '-f', 'local.json'); git(root, 'commit', '-qm', 'main tracks local.json');
+  await assert.rejects(catalog.previewUpdate({ ...target, mode: 'reset' }), (error: { code?: string; message: string }) => error.code === 'LOCAL_OBSTRUCTION' && /local\.json/.test(error.message));
+  assert.equal(readFileSync(join(request.path, 'local.json'), 'utf8'), '{"secret":1}\n'); unlinkSync(join(request.path, 'local.json'));
+  git(request.path, 'rm', '-q', '--cached', 'new.txt'); // still on disk, untracked, where the restored tracked file would go
+  await assert.rejects(catalog.previewUpdate({ ...target, mode: 'reset' }), (error: { code?: string; message: string }) => error.code === 'LOCAL_OBSTRUCTION' && /restored: new\.txt/.test(error.message));
+  git(request.path, 'add', 'new.txt');
+  writeFileSync(join(request.path, 'app.txt'), 'edited\n');
+  const preview = await catalog.previewUpdate({ ...target, mode: 'reset' });
+  writeFileSync(join(request.path, 'app.txt'), 'edited again\n');
+  await assert.rejects(catalog.update(confirmReset(preview), noGuard, noArchive), { code: 'WORKTREE_CHANGED' });
+  const fresh = await catalog.previewUpdate({ ...target, mode: 'reset' });
+  const result = await catalog.update(confirmReset(fresh), noGuard, async () => { writeFileSync(join(request.path, 'app.txt'), 'during archive\n'); return 0; });
+  assert.equal(result.status, 'failed', result.message); assert.equal(readFileSync(join(request.path, 'app.txt'), 'utf8'), 'during archive\n');
+  assert.equal(git(request.path, 'for-each-ref', 'refs/altcli/'), ''); assert.equal(catalog.projectHeld(target.projectId), false);
+});
+test('a reset whose checkout is refused after discarding changes is inspected and released, keeping the recovery ref', async () => {
+  const { request, target } = await taskFixture(); const head = git(request.path, 'rev-parse', 'HEAD');
+  commitOnMain('unrelated.txt', 'main work\n'); excludeLocally('unrelated.txt'); writeFileSync(join(request.path, 'app.txt'), 'edited\n');
+  const preview = await catalog.previewUpdate({ ...target, mode: 'reset' }); let calls = 0;
+  // An ignored file appears after the last check: the in-place discard runs, then the guarded checkout refuses to overwrite it.
+  const result = await catalog.update(confirmReset(preview), async () => { if (++calls === 3) writeFileSync(join(request.path, 'unrelated.txt'), 'appeared\n'); }, noArchive);
+  assert.equal(result.status, 'uncertain', result.message); assert.match(result.message, /^The reset or its verification is uncertain/);
+  assert.equal(git(request.path, 'rev-parse', 'HEAD'), head); assert.equal(readFileSync(join(request.path, 'unrelated.txt'), 'utf8'), 'appeared\n');
+  assert.equal(catalog.projectHeld(target.projectId), true);
+  const inspected = await catalog.reconcileUpdate(preview.requestId, noGuard);
+  assert.equal(inspected.status, 'failed', inspected.message); assert.match(inspected.message, /uncommitted changes were discarded, but the branch did not move.*is kept/);
+  assert.equal(git(root, 'rev-parse', `refs/altcli/preserved/${preview.requestId}`), head); assert.equal(catalog.projectHeld(target.projectId), false);
+});
+test('update and rename accept background work, while controller ownership still blocks them', async () => {
   const { request, target } = await taskFixture(); commitOnMain('unrelated.txt', 'main work\n');
   const { plane, adapter, panes } = await squashPlane();
   const shell = { ...mockPanes()[2]!, cwd: request.path }; panes.push(shell);
   let background = true;
   adapter.foreground = async (session) => session.identity.paneId === shell.identity.paneId ? shell.identity.panePid : '100';
   adapter.processes = async (session) => session.identity.paneId !== shell.identity.paneId ? [{ pid: '100', command: 'codex' }] : background ? [{ pid: '200', command: 'npm' }] : [];
-  await assert.rejects(plane.previewUpdate(target), (error: { code?: string; message: string }) => error.code === 'WORKTREE_WRITERS' && /process 200 \(npm\)/.test(error.message));
-  await assert.rejects(plane.previewRename({ ...target, newBranch: 'feature/next' }), { code: 'WORKTREE_WRITERS' });
+  assert.equal((await plane.previewUpdate(target)).mode, 'update');
+  const rename = await plane.previewRename({ ...target, newBranch: 'feature/next' });
   background = false;
   const preview = await plane.previewUpdate(target);
   plane.workflow.store.db.prepare('INSERT INTO workflow_owners(lock_key, run_id) VALUES (?, ?)').run(preview.worktree.indexPath, 'fixture-run');
   await assert.rejects(plane.updateWorktree(confirmUpdate(preview)), { code: 'WORKTREE_BUSY' }); // claimed with the run ledger in one transaction
+  await assert.rejects(plane.renameWorktree({ ...rename, confirm: true }), { code: 'WORKTREE_BUSY' });
   plane.workflow.store.db.prepare('DELETE FROM workflow_owners WHERE run_id=?').run('fixture-run');
   assert.equal((await plane.updateWorktree(confirmUpdate(preview))).status, 'updated');
 });
@@ -1316,14 +1468,28 @@ test('update refuses hidden index flags, installed hook or skill links and the r
   finally { process.chdir(cwd); }
   assert.equal((await plane.previewUpdate(target)).branch, 'feature/finished'); assert.equal(store.worktreeUpdates().length, 0);
 });
-test('a native turn that starts during the final rename inspection refuses the rename before Git runs', async () => {
+for (const evidence of ['unknown', 'background', 'unavailable'] as const) test(`confirmed rename proceeds with ${evidence} agent evidence`, async () => {
+  const { request, target } = await taskFixture(); const { plane, adapter, panes } = await squashPlane();
+  panes.push({ ...mockPanes()[1]!, command: 'codex', cwd: request.path });
+  if (evidence === 'background') adapter.processes = async () => [{ pid: '200', command: 'node writer.js' }];
+  if (evidence === 'unavailable') adapter.processes = async () => { throw new Error('process evidence unavailable'); };
+  writeFileSync(join(request.path, 'app.txt'), 'unfinished work\n');
+  const preview = await plane.previewRename({ ...target, newBranch: 'feature/next' });
+  const result = await plane.renameWorktree({ ...preview, confirm: true });
+  assert.equal(result.status, 'renamed', result.message);
+  assert.equal(git(request.path, 'branch', '--show-current'), 'feature/next');
+  assert.equal(git(request.path, 'rev-parse', 'HEAD'), preview.head);
+  assert.equal(readFileSync(join(request.path, 'app.txt'), 'utf8'), 'unfinished work\n');
+});
+test('confirmed rename accepts a native turn starting during the final inspection', async () => {
   const { request, target } = await taskFixture(); const { plane, started } = await squashPlane();
   const preview = await plane.previewRename({ ...target, newBranch: 'feature/review-next' });
   const inspect = plane.projects.previewRename.bind(plane.projects); let calls = 0;
   plane.projects.previewRename = async (raw: Parameters<typeof inspect>[0]) => { const result = await inspect(raw); if (++calls === 2) await started(); return result; };
   const result = await plane.renameWorktree({ ...preview, confirm: true });
-  assert.equal(calls, 2); assert.equal(result.status, 'failed', result.message); assert.match(result.message, /settled agents/);
-  assert.equal(git(request.path, 'branch', '--show-current'), 'feature/finished'); assert.equal(git(root, 'branch', '--list', 'feature/review-next'), '');
+  assert.equal(calls, 2); assert.equal(result.status, 'renamed', result.message);
+  assert.equal(git(request.path, 'branch', '--show-current'), 'feature/review-next'); assert.equal(git(root, 'branch', '--list', 'feature/finished'), '');
+  assert.equal(git(request.path, 'rev-parse', 'HEAD'), preview.head);
   assert.equal(plane.projects.projectHeld(target.projectId), false);
 });
 test('a run cannot start on a worktree whose update is unresolved', async () => {

@@ -142,9 +142,20 @@ details.advanced[open] summary { margin-bottom:12px; }
 .worktree-cards summary::-webkit-details-marker { display:none; }
 /* Every worktree's trigger buttons share one wrapping row; reasons, opened forms and launch cards follow it at full width. */
 .worktree-controls { display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:0 16px 14px; }
-.worktree-controls .worktree-actions, .worktree-controls .worktree-actions > div, .worktree-controls > .launch-agents { display:contents; }
-.worktree-controls .worktree-actions > div > :not(button), .worktree-controls > .launch-agents > :not(button) { order:1; flex-basis:100%; min-width:0; }
+.worktree-controls .worktree-actions, .worktree-controls .worktree-actions > div:not(.worktree-menu), .worktree-controls > .launch-agents { display:contents; }
+.worktree-controls .worktree-actions > div:not(.worktree-menu) > :not(button), .worktree-controls > .launch-agents > :not(button) { order:1; flex-basis:100%; min-width:0; }
 .worktree-controls .worktree-actions > div > .fine { margin:4px 0 0; }
+/* Launch status belongs beside Agents & group, above the menus and their action forms. */
+.worktree-controls > .launch-agents > .worktree-agent-status { order:-1; margin-bottom:6px; }
+.worktree-agent-status > h3 { margin:0 0 8px; font-size:12px; color:var(--muted); }
+.worktree-menu { position:relative; }
+.worktree-menu-list { position:absolute; left:0; top:100%; z-index:40; display:grid; width:190px; padding:4px;
+  background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:0 8px 20px rgba(0,0,0,.45); }
+.worktree-menu-branch .worktree-menu-list { left:auto; right:0; }
+.worktree-menu-list[hidden] { display:none; }
+.worktree-menu-item { display:contents; }
+.worktree-menu-list button { width:100%; border:0; border-radius:5px; background:transparent; text-align:left; padding:10px; font-weight:500; }
+.worktree-menu-list button:hover:not(:disabled), .worktree-menu-list button:focus-visible { background:#293b33; }
 /* Each worktree card's own Agents & group editor, between its summary and its action row. */
 .worktree-cards .workspace-detail { margin:0 16px 12px; padding-top:10px; border-top:1px solid var(--line); }
 .worktree-cards .workspace-detail > summary { font-size:12px; color:var(--muted); overflow-wrap:anywhere; }

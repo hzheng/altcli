@@ -1,14 +1,16 @@
 'use client';
 import { useEffect, useId, useState } from 'react';
-import type { Project, ProjectWorktree, WorktreeDiscard, WorktreeDiscardPreview, WorktreeIntegration, WorktreeIntegrationPreview, WorktreeRemoval, WorktreeRemovalPreview, WorktreeRename, WorktreeRenamePreview, WorktreeUpdate, WorktreeUpdatePreview } from '../contracts/projects';
+import type { Project, ProjectWorktree, WorktreeDiscard, WorktreeDiscardPreview, WorktreeIntegration, WorktreeIntegrationPreview, WorktreeRemoval, WorktreeRemovalPreview, WorktreeRename, WorktreeRenamePreview, WorktreeUpdate, WorktreeUpdateMode, WorktreeUpdatePreview } from '../contracts/projects';
 import { api, HttpError } from '../client/api';
 import { useTildify } from '../client/home';
 import { MAX_MESSAGE_JSON_BYTES, messageJsonBytes } from '../core/squash-message';
 import { SquashAdvice } from './SquashAdvice';
 import { FinishBranch } from './FinishBranch';
 import { FINISH_HOLDING } from '../contracts/projects';
+import { WorktreeMenu, WorktreeMenuItem, type WorktreeMenuSlot } from './WorktreeMenu';
 
 interface ActionProps { project: Project; tree: ProjectWorktree; token: string; disabled: boolean; disabledReason?: string; onChanged: (notice: string) => Promise<void>;
+  menu?: WorktreeMenuSlot;
   /** Increases whenever the view changes; hiding a confirmation revokes it. */
   viewEpoch?: number;
   /** ID of the shared blocker or hint that WorktreeActions shows once for this action. */
@@ -27,18 +29,24 @@ const refName = (ref: string) => ref.replace('refs/heads/', '');
  * Blockers and hints shared by several actions are shown once below them; each action refers to its notice by ID. */
 export function WorktreeActions(props: ActionProps & { deletionReason?: string; deletionHint?: string }) {
   const baseId = useId(); const held = isHeld(props.project);
+  const [openMenu, setOpenMenu] = useState<'main' | 'branch' | null>(null);
+  useEffect(() => { setOpenMenu(null); }, [props.viewEpoch]);
   const heldReason = held ? 'A worktree operation is applying, uncertain or waiting (Finish branch). Inspect or complete it first.' : '';
   const squashBlock = props.disabled ? props.disabledReason || 'These actions are unavailable. Recheck the worktree.' : heldReason;
   const deletionBlock = props.deletionReason || heldReason; const hint = deletionBlock ? '' : props.deletionHint ?? '';
   const notices = [...new Set([squashBlock, deletionBlock, hint].filter(Boolean))];
   const idOf = (text: string) => text ? `${baseId}-${notices.indexOf(text)}` : undefined;
   return <div className="worktree-actions">
-    <IntegrateWorktree {...props} noticeId={idOf(squashBlock)} />
-    <UpdateWorktree {...props} noticeId={idOf(squashBlock)} />
-    <RenameBranch {...props} noticeId={idOf(squashBlock)} />
-    <FinishBranch {...props} disabled={!!props.deletionReason} noticeId={idOf(props.deletionReason ?? '')} />
-    <RemoveWorktree {...props} disabled={!!props.deletionReason} noticeId={idOf(deletionBlock || hint)} />
-    <DiscardWorktree {...props} disabled={!!props.deletionReason} noticeId={idOf(deletionBlock || hint)} />
+    <WorktreeMenu label="Main" name={nameFor(props.tree)} open={openMenu === 'main'} onOpen={() => setOpenMenu('main')} onClose={() => setOpenMenu(null)}>{menu => <>
+      <IntegrateWorktree {...props} menu={menu} noticeId={idOf(squashBlock)} />
+      <AlignWorktree {...props} menu={menu} noticeId={idOf(squashBlock)} />
+    </>}</WorktreeMenu>
+    <WorktreeMenu label="Branch" name={nameFor(props.tree)} open={openMenu === 'branch'} onOpen={() => setOpenMenu('branch')} onClose={() => setOpenMenu(null)}>{menu => <>
+      <RenameBranch {...props} menu={menu} noticeId={idOf(squashBlock)} />
+      <FinishBranch {...props} menu={menu} disabled={!!props.deletionReason} noticeId={idOf(props.deletionReason ?? '')} />
+      <RemoveWorktree {...props} menu={menu} disabled={!!props.deletionReason} noticeId={idOf(deletionBlock || hint)} />
+      <DiscardWorktree {...props} menu={menu} disabled={!!props.deletionReason} noticeId={idOf(deletionBlock || hint)} />
+    </>}</WorktreeMenu>
     {notices.map((text, index) => <div key={text}><p className="fine" id={`${baseId}-${index}`} role="status">{text}</p></div>)}
   </div>;
 }
@@ -49,7 +57,7 @@ const localReason = (unknown: boolean, busy: boolean, what: string) =>
 const describedBy = (...ids: (string | false | undefined)[]) => ids.filter(Boolean).join(' ') || undefined;
 
 /** One squash commit on the integration branch, made in the checkout that has it checked out. The task worktree is untouched. */
-export function IntegrateWorktree({ project, tree, token, disabled, noticeId, onChanged }: ActionProps) {
+export function IntegrateWorktree({ project, tree, token, disabled, noticeId, onChanged, menu }: ActionProps) {
   const tilde = useTildify();
   const [preview, setPreview] = useState<WorktreeIntegrationPreview | null>(null); const [message, setMessage] = useState('');
   const [choosing, setChoosing] = useState(false); const [through, setThrough] = useState('');
@@ -94,7 +102,7 @@ export function IntegrateWorktree({ project, tree, token, disabled, noticeId, on
     finally { setBusy(false); }
   }
   return <div className="create-worktree">
-    {!choosing && <button type="button" className="quiet" aria-label={`Squash ${name} into main`} aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={blocked || !!blockedReason} onClick={() => void inspect()}>Squash into main</button>}
+    <WorktreeMenuItem menu={menu}><button type="button" className="quiet" aria-label={`Squash ${name} into main`} aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={blocked || !!blockedReason} onClick={() => void inspect()}>Squash into main</button></WorktreeMenuItem>
     {reason && <p className="fine" id={`${controlId}-reason`} role="status">{reason}</p>}
     {choosing && <div className="notice">
       <label>Squash through commit<input aria-label="Squash through commit" placeholder="Leave empty for HEAD, or paste a SHA" list={`${controlId}-commits`} value={through} disabled={busy || unknown}
@@ -122,30 +130,53 @@ export function IntegrateWorktree({ project, tree, token, disabled, noticeId, on
   </div>;
 }
 
-/** Update from main: move the task branch onto main in place, so the directory, its ignored environment and the agents are reused.
- * A fully integrated branch moves to main's tip; later commits are replayed on top. The old tip is kept under refs/altcli/preserved. */
-export function UpdateWorktree({ project, tree, token, disabled, noticeId, onChanged }: ActionProps) {
-  const [preview, setPreview] = useState<WorktreeUpdatePreview | null>(null);
+/** The three ways to align a task branch with main. */
+const ALIGN: Record<WorktreeUpdateMode, { label: string; aria: (name: string) => string; region: (name: string) => string; about: string }> = {
+  update: { label: 'Update from main', aria: (name) => `Update ${name} from main`, region: (name) => `Update ${name}`,
+    about: 'Brings in main and keeps only the commits main does not have yet, skipping those already squashed into it. Use it after Squash into main.' },
+  rebase: { label: 'Rebase onto main', aria: (name) => `Rebase ${name} onto main`, region: (name) => `Rebase ${name}`,
+    about: 'Replays every commit since the branch left main, like git rebase main. It refuses commits main already has, such as squashed ones.' },
+  reset: { label: 'Reset to main…', aria: (name) => `Reset ${name} to main`, region: (name) => `Reset ${name}`,
+    about: 'Drops this branch\'s commits and uncommitted changes, like git reset --hard main. Untracked and ignored files stay.' },
+};
+/** What the previewed alignment does, in one sentence: which case applies decides what is replayed. */
+function alignSummary(preview: WorktreeUpdatePreview): string {
+  const target = refName(preview.targetRef); const at = `${target} at ${short(preview.targetHead)}`;
+  const count = preview.replay.length; const commits = `${count} commit${count === 1 ? '' : 's'}`;
+  if (preview.mode === 'reset') return `Reset ${preview.branch} to ${at}.`;
+  if (preview.boundaryBy === 'ancestry') return `Fast-forward ${preview.branch} to ${at}: ${target} already contains every commit on this branch.`;
+  if (preview.boundaryBy === 'squash' && !count) return `Move ${preview.branch} to ${at}: every commit on this branch is already squashed into ${target}.`;
+  if (preview.boundaryBy === 'squash') return `Replay the ${commits} made after the last squash (through ${short(preview.boundary)}) onto ${at}, without conflicts.`;
+  return `Replay all ${commits} since ${preview.branch} left ${target} onto ${at}, without conflicts.${preview.mode === 'update' ? ' Nothing on this branch is squashed yet, so this is the same as Rebase onto main.' : ''}`;
+}
+/** Align the task branch with main in place, so the directory, its ignored environment and the agents are reused: update after a
+ * squash, rebase, or reset. Each previews its exact steps; a rewritten branch keeps its old tip under refs/altcli/preserved. */
+export function AlignWorktree({ project, tree, token, disabled, noticeId, onChanged, viewEpoch, menu }: ActionProps) {
+  const [mode, setMode] = useState<WorktreeUpdateMode>('update');
+  const [preview, setPreview] = useState<WorktreeUpdatePreview | null>(null); const [previewEpoch, setPreviewEpoch] = useState(viewEpoch);
+  // A view change revokes confirmation, but keeps the request ID available to inspect an unknown result.
   const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [unknown, setUnknown] = useState(false);
   const controlId = useId(); const held = isHeld(project); const name = nameFor(tree);
-  const blocked = disabled || held; const blockedReason = localReason(unknown, busy, 'Update');
-  const current = preview?.head === tree.head && preview?.branch === tree.branch && preview?.worktree.root === tree.path;
-  const reason = blockedReason || (preview && !current ? 'The worktree changed. Preview the update again.' : '');
-  async function inspect() {
-    setBusy(true); setError(''); setPreview(null);
-    try { setPreview(await api<WorktreeUpdatePreview>(token, 'projects/worktrees/update/preview', { body: { projectId: project.id, worktreeId: tree.id } })); }
-    catch (caught) { setError(caught instanceof Error ? caught.message : 'Update check failed.'); }
+  const blocked = disabled || held; const blockedReason = localReason(unknown, busy, ALIGN[mode].label.replace('…', ''));
+  const current = previewEpoch === viewEpoch && preview?.head === tree.head && preview?.branch === tree.branch && preview?.worktree.root === tree.path;
+  const reason = blockedReason || (preview && !current ? 'The view or worktree changed. Preview it again.' : '');
+  const cancel = () => { setPreview(null); setError(''); };
+  async function inspect(next: WorktreeUpdateMode) {
+    setMode(next); setBusy(true); setError(''); setPreview(null); setPreviewEpoch(viewEpoch);
+    try { setPreview(await api<WorktreeUpdatePreview>(token, 'projects/worktrees/update/preview', { body: { projectId: project.id, worktreeId: tree.id, mode: next } })); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : 'The check failed.'); }
     finally { setBusy(false); }
   }
-  async function update() {
+  async function align() {
     if (!preview || !current || busy || held || unknown || disabled) return;
     setBusy(true); setError('');
     try {
-      const result = await api<WorktreeUpdate>(token, 'projects/worktrees/update', { body: { projectId: project.id, worktreeId: tree.id, requestId: preview.requestId, consent: preview.consent, confirm: true } });
-      await onChanged(result.message); setPreview(null);
+      const result = await api<WorktreeUpdate>(token, 'projects/worktrees/update', { body: { projectId: project.id, worktreeId: tree.id, mode: preview.mode, requestId: preview.requestId,
+        consent: preview.consent, confirm: true } });
+      await onChanged(result.message); cancel();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Update response is unknown. Inspect its result; do not resend.');
-      if (!(caught instanceof HttpError) || caught.status >= 500) { setUnknown(true); setError('Update response is unknown. Inspect its result before doing anything else; do not resend.'); }
+      setError(caught instanceof Error ? caught.message : 'The response is unknown. Inspect its result; do not resend.');
+      if (!(caught instanceof HttpError) || caught.status >= 500) { setUnknown(true); setError(`The ${preview.mode} response is unknown. Inspect its result before doing anything else; do not resend.`); }
     } finally { setBusy(false); }
   }
   async function inspectUnknown() {
@@ -154,37 +185,47 @@ export function UpdateWorktree({ project, tree, token, disabled, noticeId, onCha
     try {
       const result = await api<WorktreeUpdate>(token, 'projects/worktrees/update/reconcile', { body: { requestId: preview.requestId } });
       await onChanged(result.message);
-      if (result.status === 'updated' || result.status === 'failed') { setUnknown(false); setPreview(null); }
+      if (result.status === 'updated' || result.status === 'failed') { setUnknown(false); cancel(); }
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Inspection failed. Nothing was retried.'); }
     finally { setBusy(false); }
   }
-  const target = preview ? refName(preview.targetRef) : 'main';
+  const target = preview ? refName(preview.targetRef) : 'main'; const lost = preview?.lost;
   return <div className="create-worktree">
-    {!preview && <button type="button" className="quiet" aria-label={`Update ${name} from main`} aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={blocked || !!blockedReason} onClick={() => void inspect()}>Update from main</button>}
+    <WorktreeMenuItem menu={menu}>{(['update', 'rebase', 'reset'] as const).map((option) =>
+      <button key={option} type="button" className={`quiet${option === 'reset' ? ' danger' : ''}`} aria-label={ALIGN[option].aria(name)} title={ALIGN[option].about}
+        aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={blocked || !!blockedReason} onClick={() => void inspect(option)}>{ALIGN[option].label.replace('…', '')}</button>)}</WorktreeMenuItem>
     {reason && <p className="fine" id={`${controlId}-reason`} role="status">{reason}</p>}
-    {preview && <div className="notice" role="region" aria-label={`Update ${name}`}>
-      <p>{preview.replay.length
-        ? <>Replay {preview.replay.length} commit{preview.replay.length === 1 ? '' : 's'} of <span className="mono">{preview.branch}</span> onto <span className="mono">{target}</span> at <span className="mono">{short(preview.targetHead)}</span>, without conflicts.</>
-        : <>Move <span className="mono">{preview.branch}</span> to <span className="mono">{target}</span> at <span className="mono">{short(preview.targetHead)}</span>.</>}{' '}
-        {preview.boundaryBy === 'ancestry' ? `${target} already contains every task commit.`
-          : preview.boundaryBy === 'squash' ? `${target} already contains the task commits through ${short(preview.boundary)} as a squash.`
-          : `Nothing on this branch is in ${target} yet, so every task commit is replayed.`}</p>
+    {preview && <div className="notice" role="region" aria-label={ALIGN[preview.mode].region(name)}>
+      <p><strong>{alignSummary(preview)}</strong></p>
+      <p>Equivalent to <span className="mono">{preview.equivalent}</span>. The app runs the steps listed below instead, which never overwrite untracked or ignored files.</p>
       {!!preview.replay.length && <ol className="fine">{preview.replay.slice(0, 20).map((step) => <li key={step.sha}><span className="mono">{step.sha.slice(0, 7)}</span> {step.subject}</li>)}</ol>}
       {preview.replay.length > 20 && <p className="fine">…and {preview.replay.length - 20} more.</p>}
-      <p>{preview.fastForward ? 'History is kept: the branch fast-forwards.' : <>This rewrites the branch; its current tip <span className="mono">{short(preview.head)}</span> is kept under <span className="mono">refs/altcli/preserved</span> and the journal keeps every handoff patch.</>}</p>
-      <p>The directory, ignored files such as dependencies and local configuration, and the agents stay. Agents here must be idle: tracked files change under them, and they need fresh instructions for the new baseline. Nothing is pushed.</p>
+      {lost && <>
+        <p>{lost.commits ? `${lost.commits} commit${lost.commits === 1 ? '' : 's'} not on ${target} leave the branch; ${lost.commits === 1 ? 'it stays' : 'they stay'} reachable under refs/altcli/preserved:` : `No commits leave the branch: ${target} already contains all of them.`}</p>
+        {!!lost.recent.length && <ol className="fine">{lost.recent.map((commit) => <li key={commit.sha}><span className="mono">{commit.sha.slice(0, 7)}</span> {commit.subject}</li>)}</ol>}
+        {lost.commits > lost.recent.length && <p className="fine">…and {lost.commits - lost.recent.length} more.</p>}
+        <p>{lost.changes ? <strong>{lost.changes} uncommitted change{lost.changes === 1 ? ' is' : 's are'} discarded and cannot be recovered:</strong> : 'There are no uncommitted changes to discard.'} Untracked and ignored files stay.</p>
+        {!!lost.paths.length && <p className="mono commands">{lost.paths.join('\n')}{lost.changes > lost.paths.length ? `\n…and ${lost.changes - lost.paths.length} more` : ''}</p>}
+      </>}
+      {!preview.fastForward ? <p>This rewrites the branch; its current tip <span className="mono">{short(preview.head)}</span> is kept under <span className="mono">refs/altcli/preserved</span> and the journal keeps every handoff patch.</p>
+        : preview.mode !== 'reset' && <p>History is kept: the branch fast-forwards.</p>}
+      <p>The directory, ignored files such as dependencies and local configuration, and the agents stay. Nothing is pushed.</p>
+      {preview.mode === 'reset'
+        ? <p><strong>Reset discards your uncommitted tracked work and replaces the branch contents with {target}.</strong> Running agents are not stopped and may write more changes afterwards. Confirm only if you accept this loss.</p>
+        : <p>Make sure nobody is actively editing in this branch directory, including agents. {preview.mode === 'update' ? 'Update' : 'Rebase'} changes files under them. Code conflicts need manual resolution; if a conflict is found, the app leaves the branch unchanged.</p>}
+      <p>Give agents fresh instructions for the new baseline afterwards.</p>
       <p className="mono commands">{preview.commands.join('\n')}</p>
-      {!current && <p>The worktree changed. Cancel and check again.</p>}
-      <button type="button" aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={blocked || !!reason} onClick={() => void update()}>Confirm update</button>
-      <button type="button" className="quiet" disabled={busy || unknown} onClick={() => setPreview(null)}>Cancel</button>
+      {!current && <p>The view or worktree changed. Cancel and check again.</p>}
+      <button type="button" aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={blocked || !!reason} onClick={() => void align()}>Confirm {preview.mode}</button>
+      <button type="button" className="quiet" disabled={busy || unknown} onClick={cancel}>Cancel</button>
     </div>}
-    {unknown && <button type="button" disabled={busy} onClick={() => void inspectUnknown()}>Inspect this update result</button>}
+    {unknown && <button type="button" disabled={busy} onClick={() => void inspectUnknown()}>Inspect this {mode} result</button>}
     {error && <p className="notice error" role="alert">{error}</p>}
   </div>;
 }
 
 /** Rename the task branch in place: files, the directory, agents and tmux session names are unchanged. */
-export function RenameBranch({ project, tree, token, disabled, noticeId, onChanged, viewEpoch }: ActionProps) {
+export function RenameBranch({ project, tree, token, disabled, noticeId, onChanged, viewEpoch, menu }: ActionProps) {
   const tilde = useTildify();
   const [editing, setEditing] = useState(false); const [newBranch, setNewBranch] = useState('');
   const [preview, setPreview] = useState<WorktreeRenamePreview | null>(null);
@@ -227,7 +268,7 @@ export function RenameBranch({ project, tree, token, disabled, noticeId, onChang
     finally { setBusy(false); }
   }
   return <div className="create-worktree">
-    {!editing && <button type="button" className="quiet" aria-label={`Rename branch ${name}`} aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={blocked || !!blockedReason} onClick={() => { setEditing(true); setNewBranch(tree.branch ?? ''); }}>Rename…</button>}
+    <WorktreeMenuItem menu={menu}><button type="button" className="quiet" aria-label={`Rename branch ${name}`} aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={blocked || !!blockedReason} onClick={() => { setEditing(true); if (!editing) setNewBranch(tree.branch ?? ''); }}>Rename branch</button></WorktreeMenuItem>
     {reason && <p className="fine" id={`${controlId}-reason`} role="status">{reason}</p>}
     {editing && <div className="notice">
       <label>New branch name<input aria-label="New branch name" value={newBranch} maxLength={150} disabled={busy || unknown} onChange={(event) => { setNewBranch(event.target.value); setPreview(null); setError(''); }} /></label>
@@ -237,6 +278,7 @@ export function RenameBranch({ project, tree, token, disabled, noticeId, onChang
     {preview && <div className="notice" role="region" aria-label={`Rename ${name}`}>
       <p>Rename <span className="mono">{preview.branch}</span> to <span className="mono">{preview.newBranch}</span> at <span className="mono">{short(preview.head)}</span>.</p>
       <p>The directory <span className="mono">{tilde(preview.worktree.root)}</span>, its files{preview.dirty ? ' (including your uncommitted changes, which stay exactly as they are)' : ''}, the agents and tmux session names stay the same.{preview.checkpoints ? ` ${preview.checkpoints} recorded squash batch${preview.checkpoints === 1 ? ' carries' : 'es carry'} over to the new name.` : ''} Nothing is pushed.</p>
+      <p>Make sure agents are not running Git commands in this branch directory. Running agents are not stopped and may still refer to the old branch name. Confirm if you accept this, then tell them the new name.</p>
       <p className="mono commands">{preview.commands.join('\n')}</p>
       {!current && <p>The worktree changed. Cancel and check again.</p>}
       <button type="button" aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={blocked || !!reason} onClick={() => void rename()}>Confirm rename</button>
@@ -248,7 +290,7 @@ export function RenameBranch({ project, tree, token, disabled, noticeId, onChang
 }
 
 /** Deletion always requires a fresh server preview and explicit confirmation. */
-export function RemoveWorktree({ project, tree, token, disabled, noticeId, onChanged }: ActionProps) {
+export function RemoveWorktree({ project, tree, token, disabled, noticeId, onChanged, menu }: ActionProps) {
   const tilde = useTildify();
   const [preview, setPreview] = useState<WorktreeRemovalPreview | null>(null);
   const [busy, setBusy] = useState(false); const [error, setError] = useState('');
@@ -284,7 +326,7 @@ export function RemoveWorktree({ project, tree, token, disabled, noticeId, onCha
     finally { setBusy(false); }
   }
   return <div className="create-worktree">
-    {!preview && <button type="button" className="quiet" aria-label={`Check removal of ${name}`} aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={disabled || held || !!reason} onClick={() => void inspect()}>Check removal</button>}
+    <WorktreeMenuItem menu={menu}><button type="button" className="quiet" aria-label={`Check removal of ${name}`} aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={disabled || held || !!reason} onClick={() => void inspect()}>Check removal</button></WorktreeMenuItem>
     {reason && <p className="fine" id={`${controlId}-reason`} role="status">{reason}</p>}
     {preview && <div className="notice" role="region" aria-label={`Remove ${name}`}>
       <p>{preview.integratedBy === 'squash' ? 'Squash integration verified' : 'Merged ancestry verified'} in <span className="mono">{refName(preview.targetRef)}</span> at <span className="mono">{short(preview.integratedCommit)}</span>.</p>
@@ -300,7 +342,7 @@ export function RemoveWorktree({ project, tree, token, disabled, noticeId, onCha
 }
 
 /** Forced deletion of the worktree and its branch without integration evidence: the branch name must be typed to confirm. */
-export function DiscardWorktree({ project, tree, token, disabled, noticeId, onChanged, viewEpoch }: ActionProps) {
+export function DiscardWorktree({ project, tree, token, disabled, noticeId, onChanged, viewEpoch, menu }: ActionProps) {
   const tilde = useTildify();
   const [preview, setPreview] = useState<WorktreeDiscardPreview | null>(null); const [typed, setTyped] = useState('');
   // The typed branch name is the confirmation: hiding the view clears it, while the preview stays for re-checking.
@@ -338,7 +380,7 @@ export function DiscardWorktree({ project, tree, token, disabled, noticeId, onCh
     finally { setBusy(false); }
   }
   return <div className="create-worktree">
-    {!preview && <button type="button" className="quiet danger" aria-label={`Discard ${name}`} aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={disabled || held || !!reason} onClick={() => void inspect()}>Discard…</button>}
+    <WorktreeMenuItem menu={menu}><button type="button" className="quiet danger" aria-label={`Discard ${name}`} aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={disabled || held || !!reason} onClick={() => void inspect()}>Discard</button></WorktreeMenuItem>
     {reason && <p className="fine" id={`${controlId}-reason`} role="status">{reason}</p>}
     {preview && <div className="notice error" role="region" aria-label={`Discard ${name}`}>
       <p><strong>Discard {preview.branch}?</strong> This deletes the directory <span className="mono">{tilde(preview.worktree.root)}</span>, including ignored files, and deletes the branch <span className="mono">{preview.branch}</span> at <span className="mono">{short(preview.head)}</span>. It does not check that anything was integrated.</p>
@@ -380,8 +422,8 @@ export function LifecycleResults({ project, token, onChanged }: { project: Proje
       <button type="button" disabled={busy || op.status === 'applying'} onClick={() => void send('projects/worktrees/integration/reconcile', { requestId: op.input.requestId })}>Inspect squash result</button>
     </div>)}
     {pending(project.updates).map((op) => <div className="notice" key={op.input.requestId}>
-      <strong>Worktree update {op.status}</strong><p>{tilde(op.message)}</p><p className="mono">{op.input.branch} → {refName(op.input.targetRef)} in {tilde(op.input.worktree.root)}</p>
-      <button type="button" disabled={busy || op.status === 'applying'} onClick={() => void send('projects/worktrees/update/reconcile', { requestId: op.input.requestId })}>Inspect update result</button>
+      <strong>Worktree {op.input.mode ?? 'update'} {op.status}</strong><p>{tilde(op.message)}</p><p className="mono">{op.input.branch} → {refName(op.input.targetRef)} in {tilde(op.input.worktree.root)}</p>
+      <button type="button" disabled={busy || op.status === 'applying'} onClick={() => void send('projects/worktrees/update/reconcile', { requestId: op.input.requestId })}>Inspect {op.input.mode ?? 'update'} result</button>
     </div>)}
     {pending(project.renames).map((op) => <div className="notice" key={op.input.requestId}>
       <strong>Branch rename {op.status}</strong><p>{tilde(op.message)}</p><p className="mono">{op.input.branch} → {op.input.newBranch} in {tilde(op.input.worktree.root)}</p>

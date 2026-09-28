@@ -30,6 +30,18 @@ async function openForm(page: Page, branch = 'feature/login') {
 }
 /** The console feedback carrying `text`. An operation's own busy line is also a status region, and both can be shown at once. */
 const notice = (page: Page, text: string) => page.getByRole('status').filter({ hasText: text });
+async function openWorktreeMenu(page: Page, label: 'Main' | 'Branch', branch: string) {
+  const toggle = page.getByRole('button', { name: `${label} actions for ${branch}`, exact: true });
+  if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
+  return page.getByRole('group', { name: `${label} actions for ${branch}`, exact: true });
+}
+async function worktreeAction(page: Page, name: string) {
+  const item = page.getByRole('button', { name, exact: true, includeHidden: true });
+  const toggle = item.locator('xpath=ancestor::div[contains(concat(" ", normalize-space(@class), " "), " worktree-menu ")]').locator(':scope > button');
+  if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
+  return item;
+}
+
 test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'wait' }); });
 
 test('worktrees fill one column, put the main checkout first and toggle independently without actions', async ({ page, request }, info) => {
@@ -86,12 +98,12 @@ test('each worktree keeps its buttons on one row, with reasons and opened forms 
   await page.getByRole('button', { name: 'Recheck', exact: true }).click();
   const cards = page.getByRole('list', { name: 'Available worktrees' }).locator(':scope > li');
   const card = (name: string) => cards.filter({ has: page.locator('summary', { hasText: `/home/fixture/tasks/${name}` }) });
-  const row = ['Open console', 'Launch agents…', 'Squash into main', 'Update from main', 'Rename…', 'Finish branch…', 'Check removal', 'Discard…'];
-  const rows = async (name: string) => card(name).locator('.worktree-controls button').evaluateAll((all) => all.map((b) => { const r = b.getBoundingClientRect(); return { middle: Math.round((r.top + r.bottom) / 2), bottom: r.bottom }; }));
+  const row = ['Open console', 'Launch agents…', 'Main ▾', 'Branch ▾'];
+  const rows = async (name: string) => card(name).locator('.worktree-controls button:visible').evaluateAll((all) => all.map((b) => { const r = b.getBoundingClientRect(); return { middle: Math.round((r.top + r.bottom) / 2), bottom: r.bottom }; }));
   const topOf = async (name: string, selector: string) => card(name).locator(selector).evaluateAll((all) => all.map((e) => e.getBoundingClientRect().top));
   for (const name of ['login', 'inspect']) {
     await expandWorktree(page, name);
-    await expect(card(name).locator('.worktree-controls button')).toHaveText(row);
+    await expect(card(name).locator('.worktree-controls button:visible')).toHaveText(row);
     const buttons = await rows(name), bottom = Math.max(...buttons.map((b) => b.bottom));
     // A phone may wrap the row, but never overflows it; the desktop card is wide enough for one row.
     if (info.project.name === 'desktop') expect(new Set(buttons.map((b) => b.middle)).size).toBe(1);
@@ -102,12 +114,42 @@ test('each worktree keeps its buttons on one row, with reasons and opened forms 
   await card('login').getByRole('button', { name: 'Launch agents…' }).click();
   const form = card('login').getByRole('region', { name: 'Launch agents in /home/fixture/tasks/login' }); await expect(form).toBeVisible();
   // The opened form follows Launch agents… in the markup but is laid out below the whole row.
-  const buttons = await card('login').locator('.worktree-controls button').evaluateAll((all, names) => all.filter((b) => names.includes(b.textContent ?? ''))
+  const buttons = await card('login').locator('.worktree-controls button:visible').evaluateAll((all, names) => all.filter((b) => names.includes(b.textContent ?? ''))
     .map((b) => { const r = b.getBoundingClientRect(); return { middle: Math.round((r.top + r.bottom) / 2), bottom: r.bottom }; }), row);
-  expect(buttons).toHaveLength(8);
+  expect(buttons).toHaveLength(4);
   if (info.project.name === 'desktop') expect(new Set(buttons.map((b) => b.middle)).size).toBe(1);
   expect((await form.boundingBox())!.y).toBeGreaterThanOrEqual(Math.max(...buttons.map((b) => b.bottom)));
   await page.screenshot({ path: info.outputPath('worktree-button-row.png'), fullPage: true });
+});
+
+test('worktree menus support hover, click and keyboard while keeping triggers and rename drafts visible', async ({ page, request }, info) => {
+  const inventory = await fixture(page, request); inventory.projects![0]!.worktrees.push(tree('/home/fixture/tasks/finished', 'feature/finished'));
+  await page.getByRole('button', { name: 'Recheck', exact: true }).click(); await expandWorktree(page, 'finished');
+  const main = page.getByRole('button', { name: 'Main actions for feature/finished', exact: true });
+  const branch = page.getByRole('button', { name: 'Branch actions for feature/finished', exact: true });
+  const mainItems = page.getByRole('group', { name: 'Main actions for feature/finished', exact: true });
+  const branchItems = page.getByRole('group', { name: 'Branch actions for feature/finished', exact: true });
+  const writes: string[] = []; page.on('request', r => { if (r.method() !== 'GET') writes.push(r.url()); });
+  if (info.project.name === 'desktop') {
+    await main.hover(); await expect(mainItems).toBeVisible();
+    await mainItems.getByRole('button', { name: 'Reset feature/finished to main', exact: true }).hover();
+    await expect(mainItems).toBeVisible();
+    await page.getByRole('heading', { name: 'Projects and agents' }).hover(); await expect(mainItems).toBeHidden();
+  }
+  await branch.click();
+  await expect(branchItems.getByRole('button')).toHaveText(['Rename branch', 'Finish branch', 'Check removal', 'Discard']);
+  await expect(mainItems).toBeHidden();
+  await page.screenshot({ path: info.outputPath('branch-menu.png'), fullPage: true });
+  await branchItems.getByRole('button', { name: 'Rename branch feature/finished', exact: true }).click();
+  const field = page.getByLabel('New branch name', { exact: true }); await field.fill('feature/next');
+  await expect(main).toBeVisible(); await expect(branch).toBeVisible(); await expect(branchItems).toBeHidden();
+  await main.focus(); await page.keyboard.press('ArrowDown');
+  await expect(mainItems.getByRole('button', { name: 'Squash feature/finished into main', exact: true })).toBeFocused();
+  await page.keyboard.press('ArrowDown'); await expect(mainItems.getByRole('button', { name: 'Update feature/finished from main', exact: true })).toBeFocused();
+  await page.keyboard.press('Escape'); await expect(mainItems).toBeHidden(); await expect(main).toBeFocused();
+  await branch.click(); await branchItems.getByRole('button', { name: 'Rename branch feature/finished', exact: true }).click();
+  await expect(field).toHaveValue('feature/next'); expect(writes).toEqual([]);
+  expect(await page.locator('body').evaluate(body => body.scrollWidth <= window.innerWidth)).toBe(true);
 });
 
 test('project navigation keeps linked, detached and empty worktrees visible without starting a task', async ({ page, request }, info) => {
@@ -116,7 +158,7 @@ test('project navigation keeps linked, detached and empty worktrees visible with
   await page.getByRole('button', { name: 'Recheck', exact: true }).click();
   await expect(page.getByRole('list', { name: 'Available projects' }).getByRole('listitem')).toHaveCount(1);
   await expandWorktree(page, 'inspect');
-  await expect(page.getByRole('button', { name: 'Check removal of inspect', exact: true })).toBeVisible();
+  await expect((await worktreeAction(page, 'Check removal of inspect'))).toBeVisible();
   await expect(page.getByRole('list', { name: 'Available worktrees' }).getByRole('listitem')).toHaveCount(3);
   await expect(page.locator('summary').filter({ hasText: '/home/fixture/.altcli/project/inspect' })).toContainText('detached HEAD');
   await page.screenshot({ path: info.outputPath('project-worktrees.png'), fullPage: true });
@@ -245,7 +287,7 @@ test('squash removal requires preview and confirmation, removes the card and ret
     return route.fulfill({ json: { input: route.request().postDataJSON(), status: 'removed', message: 'Worktree removed. Its branch, commits and run history are retained.', updatedAt: new Date().toISOString() } });
   });
   await page.getByRole('button', { name: 'Recheck', exact: true }).click(); await expandWorktree(page, 'finished');
-  await page.getByRole('button', { name: 'Check removal of feature/finished', exact: true }).click();
+  await (await worktreeAction(page, 'Check removal of feature/finished')).click();
   await expect(page.getByRole('region', { name: 'Remove feature/finished', exact: true })).toContainText('Squash integration verified');
   await expect(page.getByRole('region', { name: 'Remove feature/finished', exact: true })).toContainText('Any ignored files in this directory, including local environment files, dependencies and build output, will also be deleted.');
   expect(removals).toBe(0);
@@ -269,10 +311,10 @@ test('squash into main previews the exact operation and message, requires confir
     return route.fulfill({ json: { input: route.request().postDataJSON(), status: 'integrated', message: 'Squashed feature/finished into main as 0123456789ab. Use Check removal when you are done.', updatedAt: new Date().toISOString(), commit: '0123456789ab' + 'f'.repeat(28) } });
   });
   await page.getByRole('button', { name: 'Recheck', exact: true }).click(); await expandWorktree(page, 'finished');
-  // The lifecycle actions read left to right: squash, update, rename, finish branch, removal check, discard; the branch is not repeated in the visible labels.
+  // The persistent menus keep all lifecycle actions on the same compact row.
   const card = page.getByRole('list', { name: 'Available worktrees' }).getByRole('listitem').filter({ hasText: 'finished' });
-  await expect(card.locator('.worktree-controls').getByRole('button')).toHaveText(['Open console', 'Launch agents…', 'Squash into main', 'Update from main', 'Rename…', 'Finish branch…', 'Check removal', 'Discard…']);
-  await page.getByRole('button', { name: 'Squash feature/finished into main', exact: true }).click();
+  await expect(card.locator('.worktree-controls').getByRole('button')).toHaveText(['Open console', 'Launch agents…', 'Main ▾', 'Branch ▾']);
+  await (await worktreeAction(page, 'Squash feature/finished into main')).click();
   const region = page.getByRole('region', { name: 'Squash feature/finished', exact: true });
   await expect(region).toContainText('Squash 2 commits from feature/finished (bbbbbbb..aaaaaaa) into main');
   await expect(region).toContainText('git -C /demo/project diff --binary'); await expect(region).toContainText('uncommitted changes; they are not part of this squash');
@@ -286,31 +328,131 @@ test('squash into main previews the exact operation and message, requires confir
   await expect(notice(page, 'Squashed feature/finished into main')).toBeVisible();
   // The confirmation is compact: consent digest plus the edited message, never the (possibly large) preview echoed back.
   expect(posted).toEqual([{ projectId: project.id, worktreeId: target.id, through: shown.through, requestId: shown.requestId, consent: shown.consent, message: 'feat: finished\n\nSquash of feature/finished.\n', confirm: true }]);
-  await expect(page.getByRole('button', { name: 'Squash feature/finished into main', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Main actions for feature/finished', exact: true })).toBeVisible();
 });
-test('Update from main previews the replay and the kept old tip, and confirms only the previewed consent', async ({ page, request }, info) => {
+/** An Update, Rebase or Reset preview as the server sends it, for the task worktree `target`. */
+function alignPreview(project: { id: string }, target: ReturnType<typeof tree>, overrides: Record<string, unknown>) {
+  return { projectId: project.id, worktreeId: target.id, mode: 'update', requestId: crypto.randomUUID(), worktree: target.identity, branch: 'feature/finished', head: target.head,
+    targetRef: 'refs/heads/main', targetHead: 'b'.repeat(40), boundaryBy: 'squash', boundary: 'c'.repeat(40), replay: [{ sha: 'd'.repeat(40), subject: 'later task work', tree: 'e'.repeat(40) }],
+    tree: 'e'.repeat(40), fastForward: false, equivalent: 'git rebase --onto main cccccccccccc', lost: null, consent: 'f'.repeat(64),
+    commands: ['git -C /home/fixture/tasks/finished checkout --no-overwrite-ignore --no-recurse-submodules -B feature/finished <last replayed commit>'], ...overrides };
+}
+test('Main menu groups squash, update, rebase and reset; Update previews and confirms only the previewed consent', async ({ page, request }, info) => {
   const inventory = await fixture(page, request); const project = inventory.projects![0]!;
   const target = tree('/home/fixture/tasks/finished', 'feature/finished'); project.worktrees.push(target);
-  const shown = { projectId: project.id, worktreeId: target.id, requestId: crypto.randomUUID(), worktree: target.identity, branch: 'feature/finished', head: target.head,
-    targetRef: 'refs/heads/main', targetHead: 'b'.repeat(40), boundaryBy: 'squash', boundary: 'c'.repeat(40), replay: [{ sha: 'd'.repeat(40), subject: 'later task work', tree: 'e'.repeat(40) }],
-    tree: 'e'.repeat(40), fastForward: false, commands: ['git -C /home/fixture/tasks/finished checkout --no-overwrite-ignore --no-recurse-submodules -B feature/finished <last replayed commit>'], consent: 'f'.repeat(64) };
-  const posted: unknown[] = [];
-  await page.route('**/api/v1/projects/worktrees/update/preview', (route) => route.fulfill({ json: shown }));
+  const shown = alignPreview(project, target, {});
+  const previews: unknown[] = []; const posted: unknown[] = [];
+  await page.route('**/api/v1/projects/worktrees/update/preview', (route) => { previews.push(route.request().postDataJSON()); return route.fulfill({ json: shown }); });
   await page.route('**/api/v1/projects/worktrees/update', (route) => {
     posted.push(route.request().postDataJSON());
     return route.fulfill({ json: { input: { ...shown, recoveryRef: `refs/altcli/preserved/${shown.requestId}`, confirm: true }, status: 'updated', message: 'Updated feature/finished by replaying 1 commit onto main.', updatedAt: new Date().toISOString(), commit: '0'.repeat(40) } });
   });
   await page.getByRole('button', { name: 'Recheck', exact: true }).click(); await expandWorktree(page, 'finished');
-  await page.getByRole('button', { name: 'Update feature/finished from main', exact: true }).click();
+  await openWorktreeMenu(page, 'Main', 'feature/finished');
+  const ways = page.getByRole('group', { name: 'Main actions for feature/finished', exact: true });
+  await expect(ways.getByRole('button')).toHaveText(['Squash into main', 'Update from main', 'Rebase onto main', 'Reset to main']);
+  await expect(ways.getByRole('button', { name: 'Update feature/finished from main', exact: true })).toHaveAttribute('title', /skipping those already squashed/);
+  expect(previews).toEqual([]); // choosing is not previewing
+  await page.screenshot({ path: info.outputPath('align-worktree.png'), fullPage: true });
+  await ways.getByRole('button', { name: 'Update feature/finished from main', exact: true }).click();
   const region = page.getByRole('region', { name: 'Update feature/finished', exact: true });
-  await expect(region).toContainText('Replay 1 commit of feature/finished onto main at bbbbbbbbbbbb, without conflicts.');
-  await expect(region).toContainText('main already contains the task commits through cccccccccccc as a squash.');
+  await expect(region).toContainText('Replay the 1 commit made after the last squash (through cccccccccccc) onto main at bbbbbbbbbbbb, without conflicts.');
+  await expect(region).toContainText('Equivalent to git rebase --onto main cccccccccccc. The app runs the steps listed below instead');
   await expect(region).toContainText('later task work'); await expect(region).toContainText('kept under refs/altcli/preserved');
-  await expect(region).toContainText('Agents here must be idle'); expect(posted).toEqual([]);
+  await expect(region).toContainText('checkout --no-overwrite-ignore');
+  await expect(region).toContainText('Make sure nobody is actively editing in this branch directory, including agents.');
+  await expect(region).toContainText('Code conflicts need manual resolution'); expect(posted).toEqual([]);
   await page.screenshot({ path: info.outputPath('update-worktree.png'), fullPage: true });
   await region.getByRole('button', { name: 'Confirm update', exact: true }).click();
   await expect(notice(page, 'Updated feature/finished by replaying 1 commit onto main.')).toBeVisible();
-  expect(posted).toEqual([{ projectId: project.id, worktreeId: target.id, requestId: shown.requestId, consent: shown.consent, confirm: true }]);
+  expect(previews).toEqual([{ projectId: project.id, worktreeId: target.id, mode: 'update' }]);
+  expect(posted).toEqual([{ projectId: project.id, worktreeId: target.id, mode: 'update', requestId: shown.requestId, consent: shown.consent, confirm: true }]);
+});
+test('Rebase onto main previews every replayed commit as git rebase main and confirms its consent', async ({ page, request }) => {
+  const inventory = await fixture(page, request); const project = inventory.projects![0]!;
+  const target = tree('/home/fixture/tasks/finished', 'feature/finished'); project.worktrees.push(target);
+  const shown = alignPreview(project, target, { mode: 'rebase', boundaryBy: 'base', boundary: '9'.repeat(40), equivalent: 'git rebase main',
+    replay: [{ sha: '1'.repeat(40), subject: 'first', tree: '2'.repeat(40) }, { sha: '3'.repeat(40), subject: 'second', tree: '4'.repeat(40) }] });
+  const posted: unknown[] = [];
+  await page.route('**/api/v1/projects/worktrees/update/preview', (route) => route.fulfill({ json: shown }));
+  await page.route('**/api/v1/projects/worktrees/update', (route) => {
+    posted.push(route.request().postDataJSON());
+    return route.fulfill({ json: { input: { ...shown, recoveryRef: `refs/altcli/preserved/${shown.requestId}`, confirm: true }, status: 'updated', message: 'Rebased feature/finished by replaying 2 commits onto main.', updatedAt: new Date().toISOString(), commit: '0'.repeat(40) } });
+  });
+  await page.getByRole('button', { name: 'Recheck', exact: true }).click(); await expandWorktree(page, 'finished');
+  await openWorktreeMenu(page, 'Main', 'feature/finished');
+  await page.getByRole('button', { name: 'Rebase feature/finished onto main', exact: true }).click();
+  const region = page.getByRole('region', { name: 'Rebase feature/finished', exact: true });
+  await expect(region).toContainText('Replay all 2 commits since feature/finished left main onto main at bbbbbbbbbbbb, without conflicts.');
+  await expect(region).not.toContainText('same as Rebase onto main'); await expect(region).toContainText('Equivalent to git rebase main.');
+  await expect(region).toContainText('first'); await expect(region).toContainText('second');
+  await expect(region).toContainText('Make sure nobody is actively editing in this branch directory, including agents.');
+  await expect(region).toContainText('Code conflicts need manual resolution');
+  await region.getByRole('button', { name: 'Confirm rebase', exact: true }).click();
+  await expect(notice(page, 'Rebased feature/finished by replaying 2 commits onto main.')).toBeVisible();
+  expect(posted).toEqual([{ projectId: project.id, worktreeId: target.id, mode: 'rebase', requestId: shown.requestId, consent: shown.consent, confirm: true }]);
+});
+test('Reset to main warns about lost work and confirms with one button', async ({ page, request }, info) => {
+  const inventory = await fixture(page, request); const project = inventory.projects![0]!;
+  const target = tree('/home/fixture/tasks/finished', 'feature/finished'); project.worktrees.push(target);
+  const shown = alignPreview(project, target, { mode: 'reset', boundaryBy: 'reset', boundary: 'b'.repeat(40), replay: [], tree: '5'.repeat(40), equivalent: 'git reset --hard main',
+    lost: { commits: 2, recent: [{ sha: '6'.repeat(40), subject: 'second' }, { sha: '7'.repeat(40), subject: 'first' }], changes: 2, paths: ['app.txt', 'staged.txt'], fingerprint: '8'.repeat(64) },
+    commands: ['git -C /home/fixture/tasks/finished update-ref --stdin <<< "create refs/altcli/preserved/<request> ' + 'a'.repeat(40) + '"',
+      'git -C /home/fixture/tasks/finished reset --hard HEAD (discards the 2 uncommitted tracked changes; untracked and ignored files stay)',
+      'git -C /home/fixture/tasks/finished checkout --no-overwrite-ignore --no-recurse-submodules -B feature/finished ' + 'b'.repeat(40)] });
+  const posted: unknown[] = [];
+  await page.route('**/api/v1/projects/worktrees/update/preview', (route) => route.fulfill({ json: shown }));
+  await page.route('**/api/v1/projects/worktrees/update', (route) => {
+    posted.push(route.request().postDataJSON());
+    return route.fulfill({ json: { input: { ...shown, recoveryRef: `refs/altcli/preserved/${shown.requestId}`, confirm: true }, status: 'updated', message: 'Reset feature/finished to main at bbbbbbbbbbbb, discarding 2 uncommitted changes.', updatedAt: new Date().toISOString(), commit: 'b'.repeat(40) } });
+  });
+  await page.getByRole('button', { name: 'Recheck', exact: true }).click(); await expandWorktree(page, 'finished');
+  await openWorktreeMenu(page, 'Main', 'feature/finished');
+  await page.getByRole('button', { name: 'Reset feature/finished to main', exact: true }).click();
+  const region = page.getByRole('region', { name: 'Reset feature/finished', exact: true });
+  await expect(region).toContainText('Reset feature/finished to main at bbbbbbbbbbbb.'); await expect(region).toContainText('Equivalent to git reset --hard main.');
+  await expect(region).toContainText('2 commits not on main leave the branch; they stay reachable under refs/altcli/preserved');
+  await expect(region).toContainText('2 uncommitted changes are discarded and cannot be recovered'); await expect(region).toContainText('staged.txt');
+  await expect(region).toContainText('Untracked and ignored files stay.'); await expect(region).toContainText('reset --hard HEAD');
+  await expect(region).toContainText('Reset discards your uncommitted tracked work and replaces the branch contents with main.');
+  await expect(region).toContainText('Running agents are not stopped');
+  await expect(region.getByRole('textbox')).toHaveCount(0);
+  const confirm = region.getByRole('button', { name: 'Confirm reset', exact: true }); await expect(confirm).toBeEnabled(); expect(posted).toEqual([]);
+  await page.screenshot({ path: info.outputPath('reset-worktree.png'), fullPage: true });
+  await confirm.click();
+  await expect(notice(page, 'Reset feature/finished to main at bbbbbbbbbbbb, discarding 2 uncommitted changes.')).toBeVisible();
+  expect(posted).toEqual([{ projectId: project.id, worktreeId: target.id, mode: 'reset', requestId: shown.requestId, consent: shown.consent, confirm: true }]);
+});
+for (const mode of ['update', 'rebase', 'reset'] as const) test(`${mode} revokes confirmation on a view change but keeps a lost response inspectable`, async ({ page, request }) => {
+  const inventory = await fixture(page, request); const project = inventory.projects![0]!;
+  const target = tree('/home/fixture/tasks/finished', 'feature/finished'); project.worktrees.push(target);
+  const shown = alignPreview(project, target, { mode });
+  let posted = 0; const inspected: unknown[] = [];
+  await page.route('**/api/v1/projects/worktrees/update/preview', (route) => route.fulfill({ json: shown }));
+  await page.route('**/api/v1/projects/worktrees/update', (route) => { posted++; return route.abort(); });
+  await page.route('**/api/v1/projects/worktrees/update/reconcile', (route) => {
+    inspected.push(route.request().postDataJSON());
+    return route.fulfill({ json: { input: { ...shown, confirm: true }, status: 'updated', message: 'Alignment verified; no Git changes were made by inspection.', updatedAt: new Date().toISOString() } });
+  });
+  await page.getByRole('button', { name: 'Recheck', exact: true }).click(); await expandWorktree(page, 'finished');
+  const openPreview = async () => {
+    await openWorktreeMenu(page, 'Main', 'feature/finished');
+    await page.getByRole('button', { name: mode === 'update' ? 'Update feature/finished from main' : mode === 'rebase' ? 'Rebase feature/finished onto main' : 'Reset feature/finished to main', exact: true }).click();
+  };
+  const switchView = async () => {
+    const sections = page.getByRole('navigation', { name: 'Sections' });
+    await sections.getByRole('button', { name: 'Console', exact: true }).click(); await sections.getByRole('button', { name: 'Projects', exact: true }).click();
+  };
+  await openPreview();
+  const confirm = page.getByRole('button', { name: `Confirm ${mode}`, exact: true }); await expect(confirm).toBeEnabled();
+  await switchView(); await expect(confirm).toBeDisabled(); expect(posted).toBe(0);
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await openPreview(); await confirm.click();
+  const inspect = page.getByRole('button', { name: `Inspect this ${mode} result`, exact: true }); await expect(inspect).toBeVisible();
+  await switchView(); await expect(confirm).toBeDisabled(); await inspect.click();
+  await expect(notice(page, 'Alignment verified')).toBeVisible();
+  expect(inspected).toEqual([{ requestId: shown.requestId }]); expect(posted).toBe(1);
+  await expect(inspect).toHaveCount(0);
 });
 test('Rename previews the unchanged directory and uncommitted work, and editing the name revokes the preview', async ({ page, request }) => {
   const inventory = await fixture(page, request); const project = inventory.projects![0]!;
@@ -326,13 +468,15 @@ test('Rename previews the unchanged directory and uncommitted work, and editing 
     return route.fulfill({ json: { input: route.request().postDataJSON(), status: 'renamed', message: 'Renamed feature/finished to feature/next.', updatedAt: new Date().toISOString() } });
   });
   await page.getByRole('button', { name: 'Recheck', exact: true }).click(); await expandWorktree(page, 'finished');
-  await page.getByRole('button', { name: 'Rename branch feature/finished', exact: true }).click();
+  await (await worktreeAction(page, 'Rename branch feature/finished')).click();
   const field = page.getByLabel('New branch name', { exact: true }); await expect(field).toHaveValue('feature/finished');
   await expect(page.getByRole('button', { name: 'Preview rename', exact: true })).toBeDisabled(); // the same name renames nothing
   await field.fill('feature/draft'); await page.getByRole('button', { name: 'Preview rename', exact: true }).click();
   const region = page.getByRole('region', { name: 'Rename feature/finished', exact: true });
   await expect(region).toContainText('Rename feature/finished to feature/draft');
   await expect(region).toContainText('including your uncommitted changes'); await expect(region).toContainText('1 recorded squash batch carries over');
+  await expect(region).toContainText('Make sure agents are not running Git commands in this branch directory.');
+  await expect(region).toContainText('Running agents are not stopped and may still refer to the old branch name.');
   await field.fill('feature/next'); await expect(region).toHaveCount(0); expect(posted).toEqual([]); // editing the name revokes the preview
   await page.getByRole('button', { name: 'Preview rename', exact: true }).click();
   await page.getByRole('button', { name: 'Confirm rename', exact: true }).click();
@@ -353,7 +497,7 @@ test('a lost rename response stays inspectable after a view change, and is never
     return route.fulfill({ json: { input: { ...shown, confirm: true }, status: 'renamed', message: 'Rename to feature/next verified; no Git changes were made by inspection.', updatedAt: new Date().toISOString() } });
   });
   await page.getByRole('button', { name: 'Recheck', exact: true }).click(); await expandWorktree(page, 'finished');
-  await page.getByRole('button', { name: 'Rename branch feature/finished', exact: true }).click();
+  await (await worktreeAction(page, 'Rename branch feature/finished')).click();
   await page.getByLabel('New branch name', { exact: true }).fill('feature/next');
   await page.getByRole('button', { name: 'Preview rename', exact: true }).click();
   await page.getByRole('button', { name: 'Confirm rename', exact: true }).click();
@@ -366,7 +510,7 @@ test('a lost rename response stays inspectable after a view change, and is never
   await inspect.click();
   await expect(notice(page, 'Rename to feature/next verified')).toBeVisible();
   expect(inspected).toEqual([{ requestId: shown.requestId }]); expect(renames).toBe(1);
-  await expect(inspect).toHaveCount(0); await expect(page.getByRole('button', { name: 'Rename branch feature/finished', exact: true })).toBeEnabled();
+  await expect(inspect).toHaveCount(0); await expect((await worktreeAction(page, 'Rename branch feature/finished'))).toBeEnabled();
 });
 test('discard warns about the work that would be lost and requires the exact branch name', async ({ page, request }, info) => {
   const inventory = await fixture(page, request); const project = inventory.projects![0]!;
@@ -382,7 +526,7 @@ test('discard warns about the work that would be lost and requires the exact bra
   await page.getByRole('button', { name: 'Recheck', exact: true }).click(); await expandWorktree(page, 'finished');
   await page.getByRole('button', { name: 'Open finished', exact: true }).click();
   await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Projects', exact: true }).click();
-  await page.getByRole('button', { name: 'Discard feature/finished', exact: true }).click();
+  await (await worktreeAction(page, 'Discard feature/finished')).click();
   const region = page.getByRole('region', { name: 'Discard feature/finished', exact: true });
   await expect(region).toContainText('Lost: 3 commits not in main and 2 uncommitted changes');
   await expect(region).toContainText('does not check that anything was integrated');
@@ -410,8 +554,8 @@ test('deletion actions stay clickable while agents occupy a worktree: the hint n
   // Removal and discard share one occupant hint; it is shown once and describes both buttons.
   const hint = card.getByRole('status').filter({ hasText: 'still in this worktree' });
   await expect(hint).toHaveCount(1); await expect(hint).toContainText(/Codex, Claude( Code)? are still in this worktree; the server refuses removal/);
-  const check = page.getByRole('button', { name: 'Check removal of feature/busy', exact: true }); await expect(check).toBeEnabled();
-  const discard = page.getByRole('button', { name: 'Discard feature/busy', exact: true }); await expect(discard).toBeEnabled();
+  const check = (await worktreeAction(page, 'Check removal of feature/busy')); await expect(check).toBeEnabled();
+  const discard = (await worktreeAction(page, 'Discard feature/busy')); await expect(discard).toBeEnabled();
   await expect(check).toHaveAccessibleDescription(/are still in this worktree/); await expect(discard).toHaveAccessibleDescription(/are still in this worktree/);
   await check.click();
   await expect(page.getByRole('alert').filter({ hasText: 'tmux pane' })).toContainText('A tmux pane is still in this worktree. Move or close it yourself, then Recheck.');
@@ -422,11 +566,11 @@ test('removal rejection is shown and stale worktree preview disables confirmatio
   const target = tree('/home/fixture/tasks/finished', 'feature/finished'); project.worktrees.push(target);
   await page.route('**/api/v1/projects/worktrees/removal/preview', (route) => route.fulfill({ status: 409, json: { error: { code: 'NOT_INTEGRATED', message: 'Combined changes are not integrated.' } } }));
   await page.getByRole('button', { name: 'Recheck', exact: true }).click(); await expandWorktree(page, 'finished');
-  await page.getByRole('button', { name: 'Check removal of feature/finished', exact: true }).click();
+  await (await worktreeAction(page, 'Check removal of feature/finished')).click();
   await expect(page.getByRole('alert').filter({ hasText: 'Combined changes' })).toContainText('not integrated');
   await page.route('**/api/v1/projects/worktrees/removal/preview', (route) => route.fulfill({ json: { projectId: project.id, worktreeId: target.id,
     requestId: crypto.randomUUID(), worktree: target.identity, branch: target.branch, head: target.head, targetRef: 'refs/heads/main', targetHead: 'b'.repeat(40), integratedBy: 'ancestry', integratedCommit: target.head } }));
-  await page.getByRole('button', { name: 'Check removal of feature/finished', exact: true }).click();
+  await (await worktreeAction(page, 'Check removal of feature/finished')).click();
   target.head = 'c'.repeat(40); await page.getByRole('button', { name: 'Recheck', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Confirm removal', exact: true })).toBeDisabled();
 });
@@ -444,12 +588,12 @@ test('a lost removal response offers inspection and cannot resend or discard its
     return route.fulfill({ json: { input: { ...shown, confirm: true }, status: 'failed', message: 'The original worktree remains. Preview again.', updatedAt: new Date().toISOString() } });
   });
   await page.getByRole('button', { name: 'Recheck', exact: true }).click(); await expandWorktree(page, 'finished');
-  await page.getByRole('button', { name: 'Check removal of feature/finished', exact: true }).click();
+  await (await worktreeAction(page, 'Check removal of feature/finished')).click();
   await page.getByRole('button', { name: 'Confirm removal', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Confirm removal', exact: true })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Cancel', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: 'Inspect this removal response', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Check removal of feature/finished', exact: true })).toBeEnabled();
+  await expect((await worktreeAction(page, 'Check removal of feature/finished'))).toBeEnabled();
   expect(removals).toBe(1);
 });
 
@@ -509,11 +653,11 @@ test('idle source agents permit squash and leave deletion clickable with an occu
   const target = tree('/home/fixture/tasks/batches', 'feature/batches'); project.worktrees.push(target);
   inventory.workspaces.push({ ...inventory.workspaces[0]!, cwd: target.path, worktree: target.identity!, branch: target.branch });
   await page.getByRole('button', { name: 'Recheck', exact: true }).click(); await expandWorktree(page, 'batches');
-  const squash = page.getByRole('button', { name: 'Squash feature/batches into main', exact: true });
+  const squash = (await worktreeAction(page, 'Squash feature/batches into main'));
   await expect(squash).toBeEnabled();
-  const check = page.getByRole('button', { name: 'Check removal of feature/batches', exact: true }); await expect(check).toBeEnabled();
+  const check = (await worktreeAction(page, 'Check removal of feature/batches')); await expect(check).toBeEnabled();
   await expect(check).toHaveAccessibleDescription(/are still in this worktree; the server refuses removal while a pane is inside it/);
-  await expect(page.getByRole('button', { name: 'Discard feature/batches', exact: true })).toBeEnabled();
+  await expect((await worktreeAction(page, 'Discard feature/batches'))).toBeEnabled();
   // A blocker shared by several actions is shown once in the card and describes each affected button.
   const card = page.getByRole('list', { name: 'Available worktrees' }).getByRole('listitem').filter({ hasText: 'feature/batches' });
   const shownOnce = (text: string) => expect(card.getByRole('status').filter({ hasText: text })).toHaveCount(1);
@@ -535,7 +679,7 @@ test('idle source agents permit squash and leave deletion clickable with an occu
   await shownOnce('A worktree operation is applying');
   project.creations = []; target.branch = null;
   await page.getByRole('button', { name: 'Recheck', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Squash batches into main', exact: true })).toHaveAccessibleDescription('The task worktree has detached HEAD. Check out its task branch, then Recheck.');
+  await expect((await worktreeAction(page, 'Squash batches into main'))).toHaveAccessibleDescription('The task worktree has detached HEAD. Check out its task branch, then Recheck.');
 });
 test('changing the batch endpoint revokes its preview and confirms only the chosen range with an edited message', async ({ page, request }, info) => {
   const inventory = await fixture(page, request); const project = inventory.projects![0]!;
@@ -556,7 +700,7 @@ test('changing the batch endpoint revokes its preview and confirms only the chos
     return route.fulfill({ json: { input: { ...shown, confirm: true }, status: 'integrated', message: 'Batch integrated. Preview another batch for remaining commits.', updatedAt: new Date().toISOString(), commit: 'd'.repeat(40) } });
   });
   await page.getByRole('button', { name: 'Recheck', exact: true }).click(); await expandWorktree(page, 'batches');
-  await page.getByRole('button', { name: 'Squash feature/batches into main', exact: true }).click();
+  await (await worktreeAction(page, 'Squash feature/batches into main')).click();
   await expect(page.getByRole('button', { name: 'Confirm squash', exact: true })).toBeEnabled();
   await page.getByLabel('Squash through commit').fill(first);
   await expect(page.getByRole('button', { name: 'Confirm squash', exact: true })).toHaveCount(0); expect(confirms).toEqual([]);
@@ -590,7 +734,7 @@ test('batch advice sends exact revisions as a read-only instruction without conf
   await page.route('**/api/v1/instructions', (route) => { advice.push(route.request().postDataJSON()); return route.fulfill({ json: { status: 'delivered', error: null } }); });
   await page.route('**/api/v1/projects/worktrees/integration', (route) => { integrations++; return route.fulfill({ json: {} }); });
   await page.getByRole('button', { name: 'Recheck', exact: true }).click(); await expandWorktree(page, 'advice');
-  await page.getByRole('button', { name: 'Squash feature/advice into main', exact: true }).click();
+  await (await worktreeAction(page, 'Squash feature/advice into main')).click();
   await page.getByText('Ask an agent to suggest batches', { exact: true }).click();
   await page.getByRole('button', { name: 'Choose a settled agent' }).click();
   await page.getByRole('combobox', { name: 'Agent', exact: true }).selectOption(agentId);
@@ -710,7 +854,7 @@ test('Finish branch previews app sessions, needs the stop acknowledgement, close
   await page.route('**/api/v1/projects/worktrees/finish/continue', (route) => { bodies.continue!.push(route.request().postDataJSON());
     const op = record('done', 'Worktree removed. Its branch, commits and run history are retained.', 5); project.finishes = [op]; project.worktrees = project.worktrees.filter((w) => w.id !== target.id); return route.fulfill({ json: op }); });
   await page.getByRole('button', { name: 'Recheck', exact: true }).click(); await expandWorktree(page, 'finished');
-  await page.getByRole('button', { name: 'Finish feature/finished', exact: true }).click();
+  await (await worktreeAction(page, 'Finish feature/finished')).click();
   const panel = page.getByRole('region', { name: 'Finish feature/finished', exact: true });
   await expect(panel).toContainText('CX-feature-finished'); await expect(panel).toContainText('running npm 101');
   await expect(panel).toContainText('not closed: A window is shared with another session.'); await expect(panel).toContainText('zsh (mine:0.0)');
@@ -726,7 +870,8 @@ test('Finish branch previews app sessions, needs the stop acknowledgement, close
   const holding = page.getByRole('region', { name: 'Finishing feature/finished', exact: true });
   await expect(holding).toContainText('awaiting git');
   // While Finish branch owns the worktree, the separate end-of-task actions wait for it.
-  await expect(page.getByRole('button', { name: 'Check removal of feature/finished', exact: true })).toBeDisabled();
+  await expect((await worktreeAction(page, 'Check removal of feature/finished'))).toBeDisabled();
+  await page.keyboard.press('Escape');
   await holding.getByRole('button', { name: 'Continue: check removal', exact: true }).click();
   await holding.getByRole('region', { name: 'Confirm removal of feature/finished' }).getByRole('button', { name: 'Confirm removal', exact: true }).click();
   await expect.poll(() => bodies.continue).toEqual([{ requestId: shown.requestId, revision: 3, removal: { ...removal, confirm: true } }]);
