@@ -105,6 +105,8 @@ export interface PaneActionsProps {
   runMark: string;
   recheck: number; draftKey: string;
   refresh: () => Promise<void>; onRecheck: () => Promise<void>; onMessage: (message: string) => void; onUncertain: (id: string) => void;
+  /** An accepted start: the console shows the recipient's terminal. */
+  onSent: () => void;
   /** Control access's readiness slot: the one place this card's check is shown. Its state and key stay here. */
   readinessSlot: HTMLElement | null;
   onOpenAccess: () => void;
@@ -206,6 +208,7 @@ export function PaneActions(p: PaneActionsProps) {
           p.onMessage(`${record.status.toUpperCase()}: ${record.error ?? `${action === 'send' ? 'Standalone instruction' : action === 'send_stage_relay' ? 'Stage relay' : 'Implementation'} started. The server owns this run.`}`);
           // Clear only the inputs this action consumed.
           if (action === 'relay') { setContext(''); review.reset(); } else { setText(''); if (action === 'commit_relay') snapshot.reset(); if (action === 'commit_relay' || action === 'send_commit_relay') setNote(''); }
+          p.onSent();
         }
       } catch (error) {
         setStartError(error instanceof Error ? error.message : 'Start failed.');

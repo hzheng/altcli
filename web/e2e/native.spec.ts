@@ -1,6 +1,6 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import type { WorkflowState } from '../src/contracts/workflow';
-import { expandAgents, expandWorktree, openAccess, openCard, pane, readiness, showSurface } from './ui';
+import { backToControl, expandAgents, expandWorktree, openAccess, openCard, pane, readiness, showSurface } from './ui';
 const headers={Authorization:`Bearer ${'a'.repeat(64)}`};
 async function state(request:APIRequestContext):Promise<WorkflowState>{return (await request.get('/api/v1/state',{headers})).json();}
 async function post(request:APIRequestContext,path:string,data:unknown){const r=await request.post(`/api/v1/${path}`,{headers,data});expect(r.ok(),await r.text()).toBe(true);return r.json();}
@@ -95,7 +95,7 @@ test('Send & commit hands this browser keyboard to a different control recipient
   await send.click();
   await expect.poll(()=>starts.length).toBe(1);
   expect(starts[0]).toMatchObject({agentId:'claude',kind:'work',text:'Implement the checked keyboard handoff.',keyboardSettlement:{manualSessionId:expect.any(String),revision:expect.any(Number)}});
-  await expect(draft).toHaveValue('');
+  await backToControl(page);await expect(draft).toHaveValue('');
   await expect(badge(terminal,'Keyboard here')).toHaveCount(0);
   expect((await state(request)).manualSessions).toEqual([]);
 });
@@ -384,7 +384,7 @@ test('manual recovery stays visible without agents and needs only explicit ackno
   // Only the empty-agent display is simulated. The durable barrier and decision use the mock server API.
   await page.route('**/api/v1/state',async route=>{const response=await route.fetch(),body=await response.json();await route.fulfill({response,json:{...body,sessions:[]}});});
   await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
-  await expect(page.getByRole('button',{name:/^Control access · manual input unresolved/})).toBeVisible();
+  await expect(page.getByRole('button',{name:/^Control access · you · manual input unresolved/})).toBeVisible();
   // The note says what earlier manual input may have done; taking control is one confirmation, with no checkbox or typed note.
   const access=await openAccess(page);await expect(access.getByRole('list',{name:'What to notice'})).toContainText('may have run commands');
   await page.getByRole('navigation',{name:'Sections'}).getByRole('button',{name:'Console',exact:true}).click();

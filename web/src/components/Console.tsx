@@ -7,6 +7,7 @@ import type { ProjectWorktree } from '../contracts/projects';
 import { TERMINAL_LIMITS } from '../contracts/terminals';
 import { api, HttpError } from '../client/api';
 import { MemoryContext, useRemembered, type PageMemory } from '../client/memory';
+import { HomeContext, tildify } from '../client/home';
 import { nameOf, workspaceKey, Workspaces } from './Workspaces';
 import { RunPolicy } from './Implementation';
 import { PlanningProgress } from './PlanningProgress';
@@ -115,7 +116,7 @@ export function Console() {
   const [state, setState] = useState<WorkflowState | null>(null);
   const [discovery, setDiscovery] = useState<WorkspaceDiscovery | null>(null); const [discoveryError, setDiscoveryError] = useState('');
   const [tab, setTab] = useState<Tab | null>(null); const [workspace, setWorkspace] = useState<WorkspaceChoice | null>(null);
-  const [text, setText] = useState(''); const [ready, setReady] = useState(false);
+  const [ready, setReady] = useState(false);
   const [autoContinue, setAutoContinue] = useState(true); const [busy, setBusy] = useState(false); const [checking, setChecking] = useState(false);
   const [message, setMessage] = useState(''); const [error, setError] = useState(''); const [updated, setUpdated] = useState(0);
   const [clock, setClock] = useState(Date.now()); const [unknownRequest, setUnknownRequest] = useState<string | null>(null);
@@ -223,9 +224,10 @@ export function Console() {
   // Drafts, settings and the displayed pane are remembered per workspace and group, never carried into another workspace.
   const ws = card ? workspaceKey(card) : project ?? '';
   const scope = `${ws}\0${pair?.id ?? ''}`;
+  const [agentsOpen, setAgentsOpen] = useRemembered(`agents:${scope}`, false, memory);
+  const [stageDrafts, setStageDrafts] = useRemembered<Record<string, string>>(`stageDrafts:${scope}`, {}, memory);
   const implementationSettings = useRunSettings(memory, `run:${scope}`, git, members, 'implementation');
   const planSettings = useRunSettings(memory, `run:${scope}`, git, members, 'plan');
-  const [agentsOpen, setAgentsOpen] = useRemembered(`agents:${ws}`, false, memory);
   const [historyOpen, setHistoryOpen] = useRemembered(`history:${ws}`, false, memory);
   const [paneChoice, setPaneChoice] = useRemembered<string | null>(`pane:${ws}`, null, memory);
   const [latestOpen, setLatestOpen] = useRemembered(`latest:${ws}`, false, memory);
@@ -273,13 +275,22 @@ export function Console() {
   const newest = state?.runs.find((r) => r.repository === project);
   const runMark = JSON.stringify(newest ? [newest.id, newest.status] : null);
   const statuses = new Map(state ? projectSessions.map((s) => [s.id, statusOf(s, latestRun, state)] as const) : []);
-  const working = projectSessions.find((s) => ['working', 'sending'].includes(statuses.get(s.id)?.badge ?? ''))?.id ?? null;
+  const working = visible.filter((s) => ['working', 'sending'].includes(statuses.get(s.id)?.badge ?? '')).map((s) => s.id);
   const lastActive = [...projectSessions].sort((a, b) => (statuses.get(b.id)?.when ?? '').localeCompare(statuses.get(a.id)?.when ?? ''))[0]?.id ?? null;
-  // One selected agent is both the displayed pane (Focus, narrow layout) and the Control recipient. It starts on a working agent and
-  // is then held, so a later working agent never retargets Control; only a click, or that agent leaving the view, changes it.
-  const current = visible.find((s) => s.id === paneChoice) ?? visible.find((s) => s.id === working) ?? visible.find((s) => s.id === lastActive) ?? visible[0];
+  // One selected agent is both the displayed pane (Focus, narrow layout) and the active Control recipient. It starts on a working agent. In
+  // Parallel it is then held, so a later working agent never retargets Control; only a click, or that agent leaving the view, changes it.
+  const current = visible.find((s) => s.id === paneChoice) ?? visible.find((s) => s.id === working[0]) ?? visible.find((s) => s.id === lastActive) ?? visible[0];
   const displayed = current?.id;
   useEffect(() => { if (displayed && displayed !== paneChoice) setPaneChoice(displayed); }, [displayed, paneChoice, setPaneChoice]);
+  // In Focus the selection, and with it Control, follows the agent that starts working in this workspace; a click holds until the next
+  // change. View state only: it sends nothing, and the view switch revokes readiness.
+  const followed = useRef({ ws, working });
+  useEffect(() => {
+    const previous = followed.current; followed.current = { ws, working };
+    // Compare all visible workers: a busy peer must not hide a new start, and a completion is not a new start.
+    const started = working.find((id) => !previous.working.includes(id));
+    if (layout === 'focus' && previous.ws === ws && started) setPaneChoice(started);
+  }, [ws, working, layout, setPaneChoice]);
   const groupInstances = visible.map((s) => [s.id, state?.instances.find((i) => i.agentId === s.id)?.status]);
   const readinessKey = JSON.stringify([pair, card?.agents, current?.id, current?.registrationId, groupInstances, [...inputBlocks], git?.branch, git?.head]);
   useEffect(() => { setConsent(''); setReady(false); setResetFor(null); }, [readinessKey, project]);
@@ -337,15 +348,23 @@ export function Console() {
   const resetKey = JSON.stringify([project, readinessKey]);
   const resetBlocked = busy || stale || setupHeld || owned.length > 0 || !!transportHold || !!unknownRequest || !project || !!discoveryError || !!discovery?.error;
   const workspaceError = discoveryError || discovery?.error || '';
-  const select = (id: string) => { setPaneChoice(id); setReady(false); };
+  const select = (id: string) => { setPaneChoice(id); setConsent(''); setReady(false); };
   const openAccess = (target: HTMLElement | null = null) => { setControlDrawer(false); setAccessOpen(true); requestAnimationFrame(() => { const destination = target ?? accessPanel.current; destination?.focus(); destination?.scrollIntoView({ block: target ? 'nearest' : 'start' }); }); };
   const closeAccess = () => { setAccessOpen(false); requestAnimationFrame(() => accessEntry.current?.focus()); };
+  const openActionAccess = (id: string) => {
+    if (id !== displayed) select(id);
+    setControlDrawer(false); setAccessOpen(true);
+    requestAnimationFrame(() => { const target = accessPanel.current?.querySelector<HTMLInputElement>('.readiness-slot input, .stage-readiness input') ?? accessPanel.current;
+      target?.focus(); target?.scrollIntoView({ block: 'nearest' }); });
+  };
   /** Inspection only: shows an agent's terminal and leaves Control access open. Changing the view clears earlier confirmations; nothing is sent. */
   const showAgentTerminal = (id: string) => { if (tab !== 'console') showTab('console'); select(id); if (merged) setSurface('terminal');
     requestAnimationFrame(() => stage.current?.scrollIntoView({ block: 'nearest' })); };
   const showControlSurface = () => { if (tab !== 'console') showTab('console'); if (merged) setSurface('control'); requestAnimationFrame(() => controlPane.current?.scrollIntoView({ block: 'nearest' })); };
+  /** After Control's command is accepted: show the terminals, where the recipient now works. View state only; nothing is sent. */
+  const showActiveTerminal = () => { setControlDrawer(false); if (merged) setSurface('terminal'); requestAnimationFrame(() => stage.current?.scrollIntoView({ block: 'nearest' })); };
   /** Moves focus to the already visible action; a still-current confirmation is kept. */
-  const returnToAction = () => { controlPane.current?.focus(); controlPane.current?.scrollIntoView({ block: 'nearest' }); };
+  const returnToAction = () => { controlPane.current?.focus(); (controlPane.current?.querySelector('.control-agent.active') ?? controlPane.current)?.scrollIntoView({ block: 'nearest' }); };
   // A card's terminal is on screen in the Console; Focus and phone widths show only the selected one.
   const inView = (id: string) => tab === 'console' && showTerminals && (id === displayed || (layout === 'parallel' && !narrow));
   const keyboard = useKeyboardControls({ owner: keyboardOwner, affected: affectedRuns, disabled: !token || busy || stale || !state?.inputEnabled || !config?.terminalEnabled,
@@ -414,8 +433,9 @@ export function Console() {
     } catch (caught) { setMessage(caught instanceof Error ? caught.message : 'Workspace reset failed.'); }
     finally { await Promise.all([refresh(), recheck()]); submission.current = false; setBusy(false); }
   }
-  async function send(kind: 'relay' | 'instruction', handoff = false) {
-    if (blocked || !ready || !current || !pair || !git?.branch || submission.current) return;
+  async function send(agent: ManagedSession, kind: 'relay' | 'instruction', handoff = false) {
+    if (blocked || !ready || agent.id !== current?.id || !pair || !git?.branch || submission.current) return;
+    const text = stageDrafts[agent.id] ?? '';
     submission.current = true; setBusy(true); setReady(false);
     const requestId = crypto.randomUUID();
     try {
@@ -423,14 +443,14 @@ export function Console() {
       // The run is bound to the branch and commit on screen; the server refuses a start or delivery after either changes.
       // Plain Send keeps the standalone contract, including instructions that deliberately change HEAD.
       const record = await api<CommandRecord>(token, standalone ? 'instructions' : 'commands', { body: standalone ? {
-        requestId, agentId: current.id, groupId: pair.id, groupRevision: pair.revision, policy: 'peer',
+        requestId, agentId: agent.id, groupId: pair.id, groupRevision: pair.revision, policy: 'peer',
         registrations: Object.fromEntries(pair.members.map((id) => [id, state?.sessions.find((session) => session.id === id)?.registrationId ?? ''])),
         text: text.trim(), confirmReady: true,
-      } : { requestId, agentId: current.id, kind,
+      } : { requestId, agentId: agent.id, kind,
         ...(text.trim() ? { text: text.trim() } : {}), handoff, pairId: pair.id, turnLimit: limitValue,
         autoContinue: autoContinue && (kind === 'relay' || handoff), stage: { branch: git.branch, head: git.head }, confirmReady: true } });
       setMessage(`${record.status.toUpperCase()}: ${record.error ?? 'Terminal delivery recorded. The server owns this run until completion or human takeover.'}`);
-      if (record.status !== 'rejected') setText('');
+      if (record.status !== 'rejected') { setStageDrafts((drafts) => ({ ...drafts, [agent.id]: '' })); showActiveTerminal(); }
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : 'Command failed.');
       if (!(caught instanceof HttpError) || caught.status >= 500) setUnknownRequest(requestId);
@@ -510,7 +530,8 @@ export function Console() {
         <button className="primary">Open console</button>
       </form><p className="fine">{stayUnlocked ? 'This device stays unlocked until you press Lock (a Settings preference); the token is kept in this browser.' : 'The token stays in page memory.'} Locking or closing this page does not pause a server-owned run.</p>
     </section></main>;
-  const feedback = message && <p className="feedback" role="status">{message}</p>;
+  const home = config?.homeDir ?? ''; const tilde = (text: string) => tildify(text, home);
+  const feedback = message && <p className="feedback" role="status">{tilde(message)}</p>;
   // Separates the terminal stage from a group-wide command section below it; decorative, the section names itself.
   const commandDivider = <div className="command-divider" aria-hidden="true"><span>⌨️ Command</span></div>;
   // Connection to this host only; it says nothing about agent activity or readiness. The last update moves into the help text.
@@ -551,8 +572,8 @@ export function Console() {
   const locationOf = (s: ManagedSession) => card?.agents.find((a) => a.identity.paneId === s.identity.paneId && a.identity.socketPath === s.identity.socketPath
     && a.identity.serverPid === s.identity.serverPid && a.identity.serverStarted === s.identity.serverStarted)?.location;
   const common = { token, state: state!, git, workspaceError, agentsKey: JSON.stringify([card?.agents ?? null, [...inputBlocks]]), busy, submit: guarded, consent, setConsent, runMark,
-    recheck: recheckRevision, refresh, onRecheck: recheckAll, onMessage: setMessage, onUncertain: setUnknownRequest, readinessSlot };
-  return <MemoryContext.Provider value={memory}><main className="console-shell">
+    recheck: recheckRevision, refresh, onRecheck: recheckAll, onMessage: setMessage, onUncertain: setUnknownRequest, onSent: showActiveTerminal, readinessSlot };
+  return <MemoryContext.Provider value={memory}><HomeContext.Provider value={home}><main className="console-shell">
     <header className="topbar"><div className="wordmark"><span className="brand-mark">A</span> AltCLI</div>
       <nav className="section-tabs" aria-label="Sections">
         <button type="button" className={tab === 'console' ? 'selected' : ''} aria-pressed={tab === 'console'} onClick={() => showTab('console')}>Console</button>
@@ -567,14 +588,14 @@ export function Console() {
       : tab === 'settings' ? <div className="page-heading compact"><h1>Settings</h1>{headingStatus}</div>
       : tab === 'about' ? <div className="page-heading compact"><h1>About AltCLI</h1>{headingStatus}</div>
       : <div className="page-heading compact"><h1>Agent console</h1>{headingStatus}</div>}
-    {error && <div className="notice error" role="alert">{error} <button onClick={() => void refresh()}>Refresh</button></div>}
+    {error && <div className="notice error" role="alert">{tilde(error)} <button onClick={() => void refresh()}>Refresh</button></div>}
     {state && <>
       {/* The one Control access panel: workflow takeover, recovery and action readiness appear here once. Keyboard claims stay at their terminals. It sits outside the
           tab and surface guards, so recovery stays reachable on any tab and with no agents. Opening or closing it changes nothing. */}
       <section id="control-access" ref={accessPanel} tabIndex={-1} className="panel control-access" aria-label="Control access" hidden={!accessOpen}>
         <div className="section-heading"><h2>Control access</h2><button type="button" className="quiet" onClick={closeAccess}>Close</button></div>
-        <p className="fine access-scope">{project ? <>Checkout <span className="mono">{project}</span></> : 'No checkout selected'}{current ? <> · selected agent <strong>{current.label}</strong></> : ''}
-          {' · '}workflow {owned[0] ? `${owned[0].status} (controller)` : 'not driven by the controller'}
+        <p className="fine access-scope">{project ? <>Checkout <span className="mono" title={project}>{tilde(project)}</span></> : 'No checkout selected'}{current ? <> · selected agent <strong>{current.label}</strong></> : ''}
+          {' · '}workflow held by {owned[0] ? `system (${owned[0].status})` : 'you'}
           {' · '}keyboard {keyboardLabel}</p>
         {!!access.items.length && <><h3>Before you take control</h3>
         <ul className="access-items" aria-label="What to notice">{access.items.map((item) => <li key={item.id} className={item.attention ? 'attention' : undefined}>
@@ -591,7 +612,7 @@ export function Console() {
         {!!resetAgents.length && <div className="access-item" role="group" aria-label="Workspace reset">
           <div className="pane-buttons"><button type="button" className="quiet" disabled={busy || checking} onClick={recheckNow}>{checking ? 'Checking…' : 'Recheck agents'}</button>
             {resetFor !== resetKey && <button type="button" disabled={resetBlocked} onClick={() => setResetFor(resetKey)}>Reset workspace…</button>}</div>
-          {resetFor === resetKey && <><p>Reset saved names and group selection for every agent on <span className="mono">{project}</span>? Live agents will appear with their default names. Files, commits, running CLIs and command history are kept.</p>
+          {resetFor === resetKey && <><p>Reset saved names and group selection for every agent on <span className="mono" title={project}>{project && tilde(project)}</span>? Live agents will appear with their default names. Files, commits, running CLIs and command history are kept.</p>
             <div className="pane-buttons"><button type="button" disabled={resetBlocked} onClick={() => void resetWorkspace()}>Confirm workspace reset</button>
             <button type="button" disabled={busy} onClick={() => setResetFor(null)}>Keep configuration</button></div></>}</div>}
         {takeSteps.length ? <TakeControl key={JSON.stringify([takePlan, viewEpoch])} steps={takeSteps} disabled={busy} onConfirm={() => void takeControl(takePlan)}
@@ -637,7 +658,7 @@ export function Console() {
               <button type="button" className="quiet inline-link" onClick={showControlSurface}>{tab !== 'console' ? 'Go to Console' : 'Show Control'}</button></p>}
           {/* Each composer renders its own check here; its consent key and checked state stay with that composer. */}
           <div ref={setReadinessSlot} className="readiness-slot" hidden={!readinessHere} />
-          {showStage && <div hidden={!readinessHere}><label className="readiness"><input type="checkbox" aria-label="Ready to send" checked={ready} disabled={blocked} onChange={(e) => setReady(e.target.checked)} />
+          {showStage && <div className="stage-readiness" hidden={!readinessHere}><label className="readiness"><input type="checkbox" aria-label="Ready to send" checked={ready} disabled={blocked} onChange={(e) => setReady(e.target.checked)} />
             I checked that all participants are at empty prompts, have no background writers, use their standard Git index, and will remain under controller ownership for this run.</label>
             <p className="fine">Applies to the Stage relay actions for {current?.label}.</p></div>}
           {readinessHere && <button type="button" className="quiet" onClick={returnToAction}>Return to action</button>}
@@ -667,17 +688,17 @@ export function Console() {
             }}>
               {!selectedTree && <option value="" disabled>Choose worktree</option>}
               {/* The branch is shown to the right; the option names the checkout by its path only. */}
-              {worktreeOptions.map(tree => <option key={tree.id} value={tree.id}>{tree.main ? `Main checkout · ${tree.path}` : tree.path}</option>)}
+              {worktreeOptions.map(tree => <option key={tree.id} value={tree.id}>{tree.main ? `Main checkout · ${tilde(tree.path)}` : tilde(tree.path)}</option>)}
             </select></label>
           </div>
-          {project && <span className="mono muted" title={project}>{project}</span>}
+          {project && <span className="mono muted" title={project}>{tilde(project)}</span>}
         </div>
         {(card || selectedTree) && <span>Branch <span className="mono">{(card ?? selectedTree)?.branch ?? 'detached HEAD'}</span>{git && <span className="mono muted"> @ {git.head.slice(0, 7)} · {git.clean ? 'clean' : `${git.changeCount} uncommitted`}{git.integration ? ' · integration branch' : ''}</span>}</span>}
         <span>{pair ? <>Group <strong>{pair.name}</strong> <span className="muted">{pair.sessions.map((id) => sessions.find((s) => s.id === id)?.label ?? id).join(' ⇄ ')}</span></> : <span className="muted">No group in use</span>}</span>
         <span className="context-actions"><button type="button" className="quiet" disabled={busy || checking} onClick={recheckNow}>{checking ? 'Checking…' : 'Recheck'}</button>
           <button type="button" className="quiet" onClick={() => showTab('workspaces')}>Projects →</button></span>
       </div>
-      {(workspaceError || card?.gitError) && <p className="notice error" role="alert">{workspaceError || card?.gitError} Recheck before starting.</p>}
+      {(workspaceError || card?.gitError) && <p className="notice error" role="alert">{tilde(workspaceError || card?.gitError || '')} Recheck before starting.</p>}
       {setupHeld && <p className="notice">This worktree operation is applying or uncertain. Inspect and reconcile its result in Projects before starting work.</p>}
       {unknownRequest && <div className="notice error" role="alert">Request {unknownRequest} has an uncertain HTTP result. Inspect its server run and the terminal; do not resend it.
         Check the terminal, then take control in Control access to clear it.</div>}
@@ -692,10 +713,24 @@ export function Console() {
       {transportHold && !owned.length && <div className="notice">An older uncertain delivery holds this workspace. Inspect its terminals and any partially typed input before taking control in Control access. Nothing is replayed.</div>}
       {feedback}
       {!projectSessions.length && <section className="panel empty-console"><h2>No eligible agents here yet</h2>
-        <p className="muted">{missingTree ? <>This worktree is no longer available. Choose another worktree in {selectedProject.name}.</> : selectedProject?.error ?? selectedTree?.error ?? card?.agents.find((agent) => agent.reason && (agent.kind === 'codex' || agent.kind === 'claude'))?.reason ?? (project ? <>Start coding CLIs in <span className="mono">{project}</span>, then Recheck in Projects. Collaborators need the same directory. No registration is needed.</> : 'Choose a project and worktree with running coding agents. Nothing is sent until you explicitly start work.')}</p>
+        <p className="muted">{missingTree ? <>This worktree is no longer available. Choose another worktree in {selectedProject.name}.</> : selectedProject?.error ?? selectedTree?.error ?? card?.agents.find((agent) => agent.reason && (agent.kind === 'codex' || agent.kind === 'claude'))?.reason ?? (project ? <>Start coding CLIs in <span className="mono" title={project}>{tilde(project)}</span>, then Recheck in Projects. Collaborators need the same directory. No registration is needed.</> : 'Choose a project and worktree with running coding agents. Nothing is sent until you explicitly start work.')}</p>
         <button type="button" className="primary" onClick={() => showTab('workspaces')}>Open Projects</button></section>}
       {!!projectSessions.length && <>
-        <RunSettingsBar settings={settings} git={git} members={members} sessions={sessions} displayed={current?.id} disabled={busy || !!(phase === 'implementation' && !showStage ? implementationReason : sharedReason)} notice={settingsNotice} stage={showStage} onPhase={setPhase} />
+        <RunSettingsBar settings={settings} git={git} members={members} sessions={sessions} displayed={current?.id} disabled={busy || !!(phase === 'implementation' && !showStage ? implementationReason : sharedReason)} notice={settingsNotice} stage={showStage} agentsOpen={agentsOpen} onAgentsToggle={() => setAgentsOpen(!agentsOpen)} onPhase={setPhase} />
+        {/* The selected checkout's agents, the same checkout the Console shows. Each control exists once: status resets are confirmed in Control access. */}
+        <section id="checkout-agents" className="panel status" aria-labelledby="agents-heading" hidden={!agentsOpen}>
+          <div className="section-heading"><h2 id="agents-heading">Agents in this checkout</h2>
+            <span className="muted">{project ? <span className="mono" title={project}>{tilde(project)}</span> : 'No checkout selected'} · {projectSessions.length}</span></div>
+          {projectSessions.length ? <div className="table-scroll"><table><thead><tr><th>Agent</th><th>State</th><th>Detail</th><th>When</th></tr></thead>
+            <tbody>{projectSessions.map((s) => { const status = statuses.get(s.id)!;
+              const activity = state.activities?.find((a) => a.agentId === s.id);
+              return <tr key={s.id}><td>{s.label} <small className="mono muted">{s.agentType}</small></td>
+                <td><span className="state"><Icon badge={status.badge} />{status.badge}</span></td>
+                <td className="command-text">{status.detail}
+                  {activity?.state === 'unknown' && <div className="muted">Reset status in Control access.</div>}
+                </td><td className="mono muted">{status.when ? timeOf(status.when) : ''}</td></tr>; })}</tbody></table></div>
+            : <p className="muted">No eligible agents in this checkout yet. Coding CLIs running in its directory appear here after a Recheck.</p>}
+        </section>
         {/* Watch zone: a recessed stage of terminal captures. Commands sit under each capture or below the stage, never over it. */}
         {/* Outside Plan this is one frame: the switch shows the terminals or Control, and the hidden surface stays mounted. */}
         <div className={`workbench${merged ? ` merged ${surface}` : controlPlacement === 'side' ? ' side' : ''}`}>
@@ -709,9 +744,10 @@ export function Console() {
             {merged && <div className="segmented surface-switch" role="group" aria-label="Terminal or Control">
               <button type="button" className={surface === 'terminal' ? 'selected' : 'quiet'} aria-pressed={surface === 'terminal'} onClick={() => setSurface('terminal')}>Terminal</button>
               <button type="button" className={surface === 'control' ? 'selected' : 'quiet'} aria-pressed={surface === 'control'} onClick={() => setSurface('control')}>Control</button></div>}
-            {showTerminals && <div className="segmented" role="group" aria-label="Pane layout">
+            {/* Parallel/Focus applies to both surfaces: Focus shows one terminal and follows the working agent with Control too. */}
+            <div className="segmented" role="group" aria-label="Pane layout">
               <button className={layout === 'parallel' ? 'selected' : 'quiet'} aria-pressed={layout === 'parallel'} onClick={() => chooseLayout('parallel')}>Parallel</button>
-              <button className={layout === 'focus' ? 'selected' : 'quiet'} aria-pressed={layout === 'focus'} onClick={() => chooseLayout('focus')}>Focus</button></div>}
+              <button className={layout === 'focus' ? 'selected' : 'quiet'} aria-pressed={layout === 'focus'} onClick={() => chooseLayout('focus')}>Focus</button></div>
             {/* Plan only. Wide screens (CSS): where the one control pane sits. */}
             {!merged && <div className="segmented control-placement" role="group" aria-label="Control pane placement">
               <button className={controlPlacement === 'below' ? 'selected' : 'quiet'} aria-pressed={controlPlacement === 'below'} onClick={() => chooseControlPlacement('below')}>Control below</button>
@@ -752,8 +788,8 @@ export function Console() {
         </div>
         <section ref={controlPane} id="altcli-control" tabIndex={-1} className={`control-pane${controlDrawer && !merged ? ' drawer' : ''}`} aria-label="Control" hidden={!showControl}
           onKeyDown={(e) => { if (controlDrawer && !merged && e.key === 'Escape') { e.stopPropagation(); toggleDrawer(false); } }}>
-          {/* Names the recipient chosen by the Agent selector; Plan setup is the one control addressed to the whole group. */}
-          <div className="control-heading"><h2>Control{phase === 'plan' && !inputRun ? <span className="control-recipient"> · All agents</span> : current && <span className="control-recipient"> · {current.label}</span>}</h2>{controlDrawer && !merged && <button type="button" className="quiet drawer-close" onClick={() => toggleDrawer(false)}>Close drawer</button>}</div>
+          {/* Parallel shows every agent's controls; Focus shows the selected recipient. Plan setup addresses the whole group. */}
+          <div className="control-heading"><h2>Control{(phase === 'plan' && !inputRun) || layout === 'parallel' ? <span className="control-recipient"> · All agents</span> : current && <span className="control-recipient"> · {current.label}</span>}</h2>{controlDrawer && !merged && <button type="button" className="quiet drawer-close" onClick={() => toggleDrawer(false)}>Close drawer</button>}</div>
           <div className="control-body">
           {stageAvailable && phase === 'implementation' && !inputRun && <div className="relay-mode">
             <div className="segmented" role="group" aria-label="Relay mode">
@@ -764,27 +800,36 @@ export function Console() {
           {stageEligible && !stageAvailable && phase === 'implementation' && !inputRun && !!members.length && <p className="fine">{!state.legacyEnabled
             ? <>Stage relay is disabled on this host (<span className="mono">ALTCLI_ENABLE_LEGACY_RELAY=false</span>). Remove that line or set it to true, then restart the host.</>
             : <>Stage relay on <span className="mono">{git?.branch}</span> needs a two-member group. Select two agents in Projects.</>}</p>}
-          {current && inputRun && <InteractionComposer key={current.id} token={token} state={state} run={inputRun} agent={current} draftKey={`draft:${scope}:${current.id}`} disabled={busy || stale || setupHeld || manualHeld || !state.inputEnabled || !!identityBlockedReason || !!cardReason(current)} viewEpoch={viewEpoch} refresh={refresh} readinessSlot={readinessSlot} />}
-          {current && actionable && !inputRun && phase === 'implementation' && !showStage && <PaneActions key={current.id} {...common} group={pair} agent={current} settings={implementationSettings} blockedReason={implementationReason || cardReason(current)} keyboardHandoff={keyboardHandoff} viewEpoch={viewEpoch} draftKey={`draft:${scope}:${current.id}`} onOpenAccess={() => openAccess(readinessSlot?.querySelector('input'))} />}
         {phase === 'plan' && !inputRun && <>{commandDivider}<PlanSetup {...common} group={pair && members.length ? pair : undefined} settings={planSettings} displayed={current?.id}
           blockedReason={sharedReason || cardReason(current)} draftKey={`plan:${scope}`} /></>}
-        {showStage && commandDivider}
-        {showStage && <section className="composer command-zone" aria-label="Stage relay"><div className="section-heading"><h2>Stage relay: send to {current?.label}</h2><span className="badge">{owned.length ? 'EXECUTION OWNED' : 'MANUAL START'}</span></div>
-          {!state?.inputEnabled && <p>Read-only console: the host has disabled input.</p>}
-          <p className="fine">Reviews changes in this checkout; accepted changes are staged. Commit the finished fix yourself. The run stays on <span className="mono">{git?.branch}</span> at <span className="mono">{git?.head.slice(0, 7)}</span> and stops if either changes.</p>
-          <form onSubmit={(e) => { e.preventDefault(); void send('instruction'); }}>
-            <label className="sr-only" htmlFor="instruction">Instruction to {current?.label}</label>
-            <div className="command-line"><textarea id="instruction" autoComplete="off" rows={3} value={text} disabled={blocked} maxLength={1900} onChange={(e) => setText(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void send('instruction'); } }} placeholder="Instruction or optional review context. ⌘/Ctrl+Enter sends." />
-              <button className="primary" disabled={blocked || !ready || !text.trim()}>Send {current?.label}</button>
-              <button type="button" disabled={blocked || !ready || !text.trim()} onClick={() => void send('instruction', true)}>Send {current?.label} &amp; stage-relay to {state.sessions.find((session) => pair?.sessions.includes(session.id) && session.id !== current?.id)?.label} ↗</button>
-              <button type="button" disabled={blocked || !ready} onClick={() => void send('relay')}>Stage-relay review by {current?.label} ↗</button></div>
-            {!blocked && !ready && <p className="fine">Confirm readiness in Control access.</p>}
-            {!busy && (sharedReason || cardReason(current)) && <p className="fine" role="status">{sharedReason || cardReason(current)}</p>}
-          </form>
-          {pair && <label className="readiness auto"><input type="checkbox" aria-label="Auto-relay" checked={autoContinue} disabled={busy || owned.length > 0} onChange={(e) => { setAutoContinue(e.target.checked); try { localStorage.setItem(PREFERENCE, String(e.target.checked)); } catch { /* preference only */ } }} />
+        {(inputRun || (phase === 'implementation' && (showStage || actionable))) && <section aria-label={showStage ? 'Stage relay' : undefined}>
+          {showStage && <p className="fine stage-summary">Reviews changes in this checkout; accepted changes are staged. Commit the finished fix yourself. The run stays on <span className="mono">{git?.branch}</span> at <span className="mono">{git?.head.slice(0, 7)}</span> and stops if either changes.</p>}
+          <div className={`control-agents ${layout}`}>{visible.map((agent) => {
+            const active = agent.id === displayed, status = statuses.get(agent.id)!;
+            const stageBlocked = busy || !!sharedReason || !!cardReason(agent), stageReady = active && ready;
+            const text = stageDrafts[agent.id] ?? '';
+            const activate = () => { if (!active) select(agent.id); };
+            return <section key={agent.id} className={`control-agent${active ? ' active' : ''}`} hidden={layout === 'focus' && !active}
+              onFocusCapture={activate} onPointerDownCapture={activate}>
+              <div className="control-agent-heading"><button type="button" className="quiet" aria-label={`Select ${agent.label} controls`} aria-pressed={active} onClick={activate}><Icon badge={status.badge} />{agent.label}</button><span className="muted">{status.badge}</span></div>
+              {inputRun && <InteractionComposer token={token} state={state} run={inputRun} agent={agent} draftKey={`draft:${scope}:${agent.id}`} disabled={busy || stale || setupHeld || manualHeld || !state.inputEnabled || !!identityBlockedReason || !!cardReason(agent)} viewEpoch={viewEpoch} refresh={refresh} onSent={showActiveTerminal} readinessSlot={active ? readinessSlot : null} />}
+              {actionable && !inputRun && !showStage && <PaneActions {...common} group={pair} agent={agent} settings={implementationSettings} blockedReason={implementationReason || cardReason(agent)} keyboardHandoff={keyboardHandoff} viewEpoch={viewEpoch} draftKey={`draft:${scope}:${agent.id}`} consent={active ? consent : ''} readinessSlot={active ? readinessSlot : null} onOpenAccess={() => openActionAccess(agent.id)} />}
+              {showStage && <form className="pane-actions stage-actions" onSubmit={(e) => { e.preventDefault(); void send(agent, 'instruction'); }}>
+                <p className="zone-label">Stage relay · Send to {agent.label}</p>
+                <label className="sr-only" htmlFor={`instruction-${agent.id}`}>Instruction to {agent.label}</label>
+                <div className="command-line"><textarea id={`instruction-${agent.id}`} autoComplete="off" rows={3} value={text} disabled={stageBlocked} maxLength={1900} onChange={(e) => setStageDrafts((drafts) => ({ ...drafts, [agent.id]: e.target.value }))}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void send(agent, 'instruction'); } }} placeholder="Instruction or optional review context. ⌘/Ctrl+Enter sends." />
+                  <button className="primary" disabled={stageBlocked || !stageReady || !text.trim()}>Send {agent.label}</button>
+                  <button type="button" disabled={stageBlocked || !stageReady || !text.trim()} onClick={() => void send(agent, 'instruction', true)}>Send {agent.label} &amp; stage-relay to {state.sessions.find((session) => pair?.sessions.includes(session.id) && session.id !== agent.id)?.label} ↗</button>
+                  <button type="button" disabled={stageBlocked || !stageReady} onClick={() => void send(agent, 'relay')}>Stage-relay review by {agent.label} ↗</button></div>
+                {!stageBlocked && !stageReady && <p className="fine">Confirm readiness in Control access. <button type="button" className="quiet inline-link" onClick={() => openActionAccess(agent.id)}>Go to Control access</button></p>}
+                {!busy && (sharedReason || cardReason(agent)) && <p className="fine" role="status">{sharedReason || cardReason(agent)}</p>}
+              </form>}
+            </section>;
+          })}</div>
+          {showStage && pair && <label className="readiness auto"><input type="checkbox" aria-label="Auto-relay" checked={autoContinue} disabled={busy || owned.length > 0} onChange={(e) => { setAutoContinue(e.target.checked); try { localStorage.setItem(PREFERENCE, String(e.target.checked)); } catch { /* preference only */ } }} />
             Prefer automatic continuation for the next explicitly started run of group &quot;{pair.name}&quot;. Plain Send never relays; Send &amp; stage-relay requests one review even when this preference is off, and only if the worker changed the worktree.</label>}
-          {pair && <label className="readiness turn-limit">Maximum automatic turns per run
+          {showStage && pair && <label className="readiness turn-limit">Maximum automatic turns per run
             <input type="number" inputMode="numeric" aria-label="Maximum automatic turns" min={1} max={200} step={1} value={turnLimit} disabled={busy || owned.length > 0} aria-invalid={!limitValid}
               onChange={(e) => { setTurnLimit(e.target.value); try { localStorage.setItem(TURN_LIMIT, e.target.value); } catch { /* preference only */ } }} />
             <span className="muted">1–200, default {DEFAULT_TURN_LIMIT}; frozen into the run when it starts.</span></label>}
@@ -792,18 +837,6 @@ export function Console() {
           </div>
         </section>
         </div>
-        <details className="panel status" open={agentsOpen} onToggle={(e) => setAgentsOpen(e.currentTarget.open)}>
-          <summary><h2>Agents in this checkout</h2><span className="muted">{projectSessions.length}</span></summary>
-          <table><thead><tr><th>Agent</th><th>State</th><th>Detail</th><th>When</th></tr></thead>
-            <tbody>{projectSessions.map((s) => { const status = statuses.get(s.id)!;
-              const activity = state.activities?.find((a) => a.agentId === s.id);
-              return <tr key={s.id}><td>{s.label} <small className="mono muted">{s.agentType}</small></td>
-                <td><span className="state"><Icon badge={status.badge} />{status.badge}</span></td>
-                <td className="command-text">{status.detail}
-                  {/* Each control exists once: status resets are confirmed in Control access. */}
-                  {activity?.state === 'unknown' && !visible.some((v) => v.id === s.id) && <div className="muted">Reset status in Control access.</div>}
-                </td><td className="mono muted">{status.when ? timeOf(status.when) : ''}</td></tr>; })}</tbody></table>
-        </details>
         <details className="history" open={historyOpen} onToggle={(e) => setHistoryOpen(e.currentTarget.open)}><summary>Command history</summary>
           <div className="history-tools">
             <span className="muted">Commands on <span className="mono">{project ? nameOf(project) : 'this checkout'}</span></span>
@@ -858,7 +891,7 @@ export function Console() {
             ['Allowed origins', config.allowedOrigins.join(', '), 'ALTCLI_ALLOWED_ORIGINS', 'http://127.0.0.1:8787, http://localhost:8787'],
             ['Claude config', config.claudeConfigDir, 'CLAUDE_CONFIG_DIR', '~/.claude'],
             ['Codex home', config.codexHome, 'CODEX_HOME', '~/.codex'],
-          ] as [string, string, string, string][]).map(([name, value, variable, fallback]) => <tr key={name}><td>{name}</td><td className="mono command-text">{value}</td>
+          ] as [string, string, string, string][]).map(([name, value, variable, fallback]) => <tr key={name}><td>{name}</td><td className="mono command-text">{tilde(value)}</td>
             <td className="muted">{variable ? <><span className="mono">{variable}</span>{config.environment.includes(variable) ? ' (set)' : <> · default {fallback}</>}</> : `built in · ${fallback}`}</td></tr>)}
         </tbody></table></div>}
         {!config && !configError && <p className="muted">Reading the host configuration…</p>}
@@ -868,12 +901,12 @@ export function Console() {
       <section className="panel about" aria-label="How this works">
         <div className="section-heading"><h2>How this works</h2></div>
         <p>AltCLI is a host-resident console for coding agents running in tmux panes. You can start CLIs yourself or explicitly preview and confirm profile launches when the host enables that feature. The console coordinates their turns.</p>
-        <p>The Agent selector above the terminals chooses both the terminal shown and the Control pane's recipient; it starts on a working agent and then changes only when you choose another. Outside Plan, the <strong>Terminal / Control</strong> switch shows one or the other in the same frame. Plan setup addresses the whole group and keeps its own section. <strong>Control access</strong>, at the top of every page, is the one place to take control: keyboard release, manual-input recovery, the controller, other recovery and each action’s readiness check. The keyboard emoji beside it reports the server-wide owner; claim the keyboard at the terminal where you want to type. Send delivers an instruction; After send can add one handoff commit, or a commit and one review by the named peer. Current changes snapshots work as it stands, and Committed review asks this agent to review a committed range. Every action names its recipients and needs a fresh readiness confirmation.</p>
+        <p>The Agent selector above the terminals chooses both the terminal shown and the Control pane's recipient; it starts on a working agent. In <strong>Focus</strong> it then follows whichever agent starts working, for the terminal and Control alike; in <strong>Parallel</strong> all agent controls appear side by side on wide screens and stacked on phones, with separate drafts. Selecting a card activates its readiness check and clears the previous confirmation. Outside Plan, the <strong>Terminal / Control</strong> switch shows one or the other in the same frame, and an accepted command from Control switches back to the terminals. Plan setup addresses the whole group and keeps its own section. The worktree group's <strong>Agents</strong> toggle, beside its local <strong>Settings</strong> toggle, shows agent status. Local Settings remain available in Stage relay; they configure Plan and committed work. <strong>Control access</strong>, at the top of every page, is the one place to take control: keyboard release, manual-input recovery, the controller, other recovery and each action’s readiness check. The keyboard emoji beside it reports the server-wide owner; claim the keyboard at the terminal where you want to type. Send delivers an instruction; After send can add one handoff commit, or a commit and one review by the named peer. Current changes snapshots work as it stands, and Committed review asks this agent to review a committed range. Every action names its recipients and needs a fresh readiness confirmation.</p>
         <p>The server owns every run, validates and deduplicates correlated completions, and pauses on unknown background work. No effect in this page sends commands. A completed chain is not final task acceptance.</p>
         <p>Viewing another worktree never changes a running relay. Pause a run before manual terminal takeover. Locking this view or disconnecting your phone does not interrupt workers.</p>
         <p className="fine">Plan produces documents and an approval checkpoint; Implementation runs committed handoffs on a task branch. Integration branches are starting points only. The detailed design lives in the repository’s README, docs/WORKFLOWS.md and the ADRs.</p>
       </section>
     </div>
     </>}
-  </main></MemoryContext.Provider>;
+  </main></HomeContext.Provider></MemoryContext.Provider>;
 }

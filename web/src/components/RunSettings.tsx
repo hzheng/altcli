@@ -25,7 +25,6 @@ export function useRunSettings(memory: PageMemory, prefix: string, git: Workspac
   const [pauseOnObjection, setPauseOnObjection] = useRemembered(at('pauseOnObjection'), false, memory);
   const [requireApproval, setRequireApproval] = useRemembered(at('requireApproval'), true, memory);
   const [open, setOpen] = useRemembered(at('open'), false, memory);
-  const [advanced, setAdvanced] = useRemembered(at('advanced'), false, memory);
   const planning = phase === 'plan';
   const solo = members.length === 1;
   const selectedPolicy: CollaborationPolicy = solo ? 'solo' : policy;
@@ -52,7 +51,7 @@ export function useRunSettings(memory: PageMemory, prefix: string, git: Workspac
   const consent = [phase, selectedPolicy, workerId, planning ? actor : null, branchChoice, branchName, taskBase, automatic, requireApproval, limit, pauseOnObjection, logPath ?? null];
   return { phase, planning, policy, setPolicy, worker, setWorker, actor, setActor, choice, setChoice, branchName, setBranchName, baseline, setBaseline,
     trackLog, setTrackLog, log, setLog, automatic, setAutomatic, limit, setLimit, pauseOnObjection, setPauseOnObjection, requireApproval, setRequireApproval,
-    open, setOpen, advanced, setAdvanced, solo, selectedPolicy, workerId, logPath, branchChoice, needsBaseline, taskBase, limitValid, reviewTaskBase, branchReason, branch, consent };
+    open, setOpen, solo, selectedPolicy, workerId, logPath, branchChoice, needsBaseline, taskBase, limitValid, reviewTaskBase, branchReason, branch, consent };
 }
 export type RunSettings = ReturnType<typeof useRunSettings>;
 
@@ -60,7 +59,7 @@ const policyName = (policy: CollaborationPolicy) => policy === 'solo' ? 'Solo wo
 
 /** The compact summary of the next run's settings, with the phase switch and a collapsed editor. Who controls the checkout is shown by
  * the Control access entry instead. */
-export function RunSettingsBar({ settings, git, members, sessions, displayed, disabled, notice, stage = false, onPhase }: {
+export function RunSettingsBar({ settings, git, members, sessions, displayed, disabled, notice, stage = false, agentsOpen, onAgentsToggle, onPhase }: {
   settings: RunSettings; git?: WorkspaceGit; members: string[]; sessions: ManagedSession[];
   /** The displayed pane's agent, the default first implementer. */
   displayed?: string;
@@ -69,6 +68,8 @@ export function RunSettingsBar({ settings, git, members, sessions, displayed, di
   notice?: string;
   /** Control shows Stage relay: the next-run settings apply only to committed work on a task branch. */
   stage?: boolean;
+  agentsOpen: boolean;
+  onAgentsToggle: () => void;
   onPhase: (phase: Phase) => void;
 }) {
   const s = settings; const planning = s.planning;
@@ -93,9 +94,11 @@ export function RunSettingsBar({ settings, git, members, sessions, displayed, di
         <button type="button" className={!planning ? 'selected' : 'quiet'} aria-pressed={!planning} onClick={() => onPhase('implementation')}>Implementation</button></div>
       {stage ? <span className="summary-text">Stage relay: these settings apply only to committed work on a task branch.</span> : notice ? <span className="summary-text">{notice}</span> : <span className="summary-text" title={summary.join(' · ')}>{summary.join(' · ')}</span>}
       {!notice && !stage && warning && <span className="badge warning" title={warning}>{warning}</span>}
-      {!notice && !stage && <span className="row-toggles"><button type="button" className="quiet settings-toggle" aria-expanded={s.open} aria-controls={`${s.phase}-settings-editor`} onClick={() => s.setOpen(!s.open)}><span aria-hidden="true">{s.open ? '▾' : '▸'}</span> Settings</button></span>}
+      <span className="row-toggles">
+        <button type="button" className="quiet settings-toggle" aria-expanded={agentsOpen} aria-controls="checkout-agents" onClick={onAgentsToggle}><span aria-hidden="true">{agentsOpen ? '▾' : '▸'}</span> Agents</button>
+        <button type="button" className="quiet settings-toggle" disabled={!!notice} title={notice || undefined} aria-expanded={!notice && s.open} aria-controls={`${s.phase}-settings-editor`} onClick={() => s.setOpen(!s.open)}><span aria-hidden="true">{!notice && s.open ? '▾' : '▸'}</span> Settings</button></span>
     </div>
-    {!notice && !stage && <div className="settings-editor" id={`${s.phase}-settings-editor`} hidden={!s.open}>
+    {!notice && <div className="settings-editor" id={`${s.phase}-settings-editor`} hidden={!s.open}>
         {git?.integration && <p className="fine">{git.branch} is an integration branch: a starting point, not an implementation branch.</p>}
         <div className="register-grid">
           {planning && <p className="muted field-wide">Workspace group: {members.map(label).join(' ⇄ ')}. Every planner is required; the same group continues into Implementation.</p>}
@@ -111,7 +114,7 @@ export function RunSettingsBar({ settings, git, members, sessions, displayed, di
           {s.needsBaseline && <div className="field"><label htmlFor={`${s.phase}-task-baseline`}>Task baseline commit</label><input id={`${s.phase}-task-baseline`} value={s.taskBase} disabled={off} placeholder="Full commit ID where this task began" onChange={(e) => s.setBaseline(e.target.value)} />
             <small>{git?.taskBase ? 'Inferred from the nearest integration branch; confirm or correct it. It is recorded permanently for this task.' : 'Where this task began cannot be inferred unambiguously from the integration branches (diverged tips or criss-cross history). Enter the commit; it is recorded permanently for this task.'}</small></div>}
         </div>
-        <details className="agreement" open={s.advanced} onToggle={(e) => s.setAdvanced(e.currentTarget.open)}><summary>Collaboration settings</summary>
+        <section className="agreement" aria-labelledby={`${s.phase}-collaboration-settings`}><h3 id={`${s.phase}-collaboration-settings`}>Collaboration settings</h3>
           <label className="readiness"><input type="checkbox" checked={s.trackLog} disabled={off} onChange={(e) => s.setTrackLog(e.target.checked)} />Also track the journal in the repository</label>
           {s.trackLog ? <><label>Tracked relay log<input aria-label="Tracked relay log" value={s.log} disabled={off} onChange={(e) => s.setLog(e.target.value)} /></label>
             <p className="fine">A nonignored JSON-lines file mirroring every journal entry inside its handoff commit, so report-only turns also commit. The agent creates it in its first handoff commit; existing entries must use the same schema.</p></>
@@ -122,7 +125,7 @@ export function RunSettingsBar({ settings, git, members, sessions, displayed, di
           <p className="fine">{s.pauseOnObjection ? 'An objection waits for you; Next turn sends the findings to the author.' : 'An objection is sent straight back to the author as the next automatic turn, within the turn budget. A finding that needs a human decision still pauses.'}</p>
           {planning && <><label className="readiness"><input type="checkbox" checked={s.requireApproval} disabled={off} onChange={(e) => s.setRequireApproval(e.target.checked)} />Require my approval before implementation</label>
             <p className="fine">{s.requireApproval ? 'Agreement always waits for your approval.' : s.automatic ? 'You preauthorize Implementation after agreement, subject to branch consent and all safety checks.' : 'Approval is waived, but Implementation still waits for your explicit continuation.'}</p></>}</>}
-        </details>
+        </section>
       </div>}
   </section>;
 }

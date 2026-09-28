@@ -86,11 +86,12 @@ test('each worktree keeps its buttons on one row, with reasons and opened forms 
   await page.getByRole('button', { name: 'Recheck', exact: true }).click();
   const cards = page.getByRole('list', { name: 'Available worktrees' }).locator(':scope > li');
   const card = (name: string) => cards.filter({ has: page.locator('summary', { hasText: `/home/fixture/tasks/${name}` }) });
+  const row = ['Open console', 'Launch agents…', 'Squash into main', 'Update from main', 'Rename…', 'Finish branch…', 'Check removal', 'Discard…'];
   const rows = async (name: string) => card(name).locator('.worktree-controls button').evaluateAll((all) => all.map((b) => { const r = b.getBoundingClientRect(); return { middle: Math.round((r.top + r.bottom) / 2), bottom: r.bottom }; }));
   const topOf = async (name: string, selector: string) => card(name).locator(selector).evaluateAll((all) => all.map((e) => e.getBoundingClientRect().top));
   for (const name of ['login', 'inspect']) {
     await expandWorktree(page, name);
-    await expect(card(name).locator('.worktree-controls button')).toHaveText(['Open console', 'Squash into main', 'Update from main', 'Rename…', 'Finish branch…', 'Check removal', 'Discard…', 'Launch agents…']);
+    await expect(card(name).locator('.worktree-controls button')).toHaveText(row);
     const buttons = await rows(name), bottom = Math.max(...buttons.map((b) => b.bottom));
     // A phone may wrap the row, but never overflows it; the desktop card is wide enough for one row.
     if (info.project.name === 'desktop') expect(new Set(buttons.map((b) => b.middle)).size).toBe(1);
@@ -100,9 +101,12 @@ test('each worktree keeps its buttons on one row, with reasons and opened forms 
   await expect(card('inspect').locator('.worktree-controls .fine')).not.toHaveCount(0);
   await card('login').getByRole('button', { name: 'Launch agents…' }).click();
   const form = card('login').getByRole('region', { name: 'Launch agents in /home/fixture/tasks/login' }); await expect(form).toBeVisible();
-  const buttons = await rows('login');
-  if (info.project.name === 'desktop') expect(new Set(buttons.slice(0, 8).map((b) => b.middle)).size).toBe(1);
-  expect((await form.boundingBox())!.y).toBeGreaterThanOrEqual(Math.max(...buttons.slice(0, 8).map((b) => b.bottom)));
+  // The opened form follows Launch agents… in the markup but is laid out below the whole row.
+  const buttons = await card('login').locator('.worktree-controls button').evaluateAll((all, names) => all.filter((b) => names.includes(b.textContent ?? ''))
+    .map((b) => { const r = b.getBoundingClientRect(); return { middle: Math.round((r.top + r.bottom) / 2), bottom: r.bottom }; }), row);
+  expect(buttons).toHaveLength(8);
+  if (info.project.name === 'desktop') expect(new Set(buttons.map((b) => b.middle)).size).toBe(1);
+  expect((await form.boundingBox())!.y).toBeGreaterThanOrEqual(Math.max(...buttons.map((b) => b.bottom)));
   await page.screenshot({ path: info.outputPath('worktree-button-row.png'), fullPage: true });
 });
 
@@ -267,7 +271,7 @@ test('squash into main previews the exact operation and message, requires confir
   await page.getByRole('button', { name: 'Recheck', exact: true }).click(); await expandWorktree(page, 'finished');
   // The lifecycle actions read left to right: squash, update, rename, finish branch, removal check, discard; the branch is not repeated in the visible labels.
   const card = page.getByRole('list', { name: 'Available worktrees' }).getByRole('listitem').filter({ hasText: 'finished' });
-  await expect(card.locator('.worktree-controls').getByRole('button')).toHaveText(['Open console', 'Squash into main', 'Update from main', 'Rename…', 'Finish branch…', 'Check removal', 'Discard…', 'Launch agents…']);
+  await expect(card.locator('.worktree-controls').getByRole('button')).toHaveText(['Open console', 'Launch agents…', 'Squash into main', 'Update from main', 'Rename…', 'Finish branch…', 'Check removal', 'Discard…']);
   await page.getByRole('button', { name: 'Squash feature/finished into main', exact: true }).click();
   const region = page.getByRole('region', { name: 'Squash feature/finished', exact: true });
   await expect(region).toContainText('Squash 2 commits from feature/finished (bbbbbbb..aaaaaaa) into main');

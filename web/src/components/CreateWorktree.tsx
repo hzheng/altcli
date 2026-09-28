@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import type { Project, WorktreeCreation, WorktreePreview } from '../contracts/projects';
 import { api, HttpError } from '../client/api';
 import { useRemembered } from '../client/memory';
+import { useTildify } from '../client/home';
 
 /** Explicit setup only; no effects create worktrees, bind agents, or start runs. */
 export function CreateWorktree({ project, token, disabled, onChanged, onLaunch, viewEpoch = 0 }: {
@@ -10,6 +11,7 @@ export function CreateWorktree({ project, token, disabled, onChanged, onLaunch, 
   /** Increases whenever the view changes; hiding the form revokes its confirmation but keeps its inputs. */
   viewEpoch?: number; onLaunch?: (path: string) => void;
 }) {
+  const tilde = useTildify();
   const sources = project.worktrees.filter((w) => w.identity && w.head && !w.error);
   // Ordinary inputs are remembered per project in page memory; previews and confirmations are not.
   const [open, setOpen] = useRemembered(`create:${project.id}:open`, false); const [sourceId, setSourceId] = useRemembered(`create:${project.id}:source`, sources[0]?.id ?? '');
@@ -61,7 +63,7 @@ export function CreateWorktree({ project, token, disabled, onChanged, onLaunch, 
     {open && <form className="worktree-form" aria-label="Create task worktree" onSubmit={(event) => { event.preventDefault(); void inspect(); }}>
       <h3>Create task worktree</h3>
       <label>Starting checkout<select aria-label="Starting checkout" value={sourceId} disabled={blocked} onChange={(event) => { setSourceId(event.target.value); invalidate(); }}>
-        {sources.map((w) => <option key={w.id} value={w.id}>{w.branch ?? 'detached HEAD'} · {w.path}</option>)}
+        {sources.map((w) => <option key={w.id} value={w.id}>{w.branch ?? 'detached HEAD'} · {tilde(w.path)}</option>)}
       </select></label>
       <label>New task branch<input aria-label="New task branch" value={branch} maxLength={150} required disabled={blocked} placeholder="feature/login-fix" onChange={(event) => { setBranch(event.target.value); invalidate(); }} /></label>
       <p className="fine">Creates a clean linked worktree from a committed baseline. Staged, unstaged, untracked and ignored source files are not copied. Agents and environments are not moved or installed.</p>
@@ -74,7 +76,7 @@ export function CreateWorktree({ project, token, disabled, onChanged, onLaunch, 
       </div>}
     </form>}
     {unresolved.map((op) => <div className="notice" key={op.input.requestId}>
-      <strong>Worktree creation {op.status}</strong><p>{op.message}</p><p className="mono">{op.input.path}</p>
+      <strong>Worktree creation {op.status}</strong><p>{tilde(op.message)}</p><p className="mono">{tilde(op.input.path)}</p>
       <button type="button" disabled={busy || op.status === 'applying'} onClick={() => void reconcile(op.input.requestId)}>Inspect creation result</button>
     </div>)}
     {uncertain && !unresolved.some((op) => op.input.requestId === uncertain) && <div className="notice">Creation {uncertain} needs inspection.

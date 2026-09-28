@@ -69,5 +69,5 @@ export function resolveExecutable(binary: string, env: Record<string, string | u
 export function describeConfig(config: Config, env: Record<string, string | undefined> = process.env): HostConfig {
   return { mode: config.mode, terminalEnabled: config.terminalEnabled === true, launchEnabled: config.launchEnabled === true, inputEnabled: config.inputEnabled, legacyEnabled: config.legacyEnabled === true, dataDir: config.dataDir, worktreeDir: config.worktreeDir ?? join(homedir(), ".altcli"),
     tmuxBin: config.tmuxBin, tmuxPath: resolveExecutable(config.tmuxBin, env), tmuxSocket: config.tmuxSocket ?? null, integrationBranches: config.integrationBranches,
-    allowedOrigins: config.allowedOrigins, claudeConfigDir: config.claudeConfigDir, codexHome: config.codexHome, environment: SETTINGS.filter((name) => env[name] !== undefined) };
+    allowedOrigins: config.allowedOrigins, claudeConfigDir: config.claudeConfigDir, codexHome: config.codexHome, homeDir: homedir(), environment: SETTINGS.filter((name) => env[name] !== undefined) };
 }

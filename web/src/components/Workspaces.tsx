@@ -5,6 +5,7 @@ import type { Group } from '../contracts/implementation';
 import type { ManagedSession, RelayRun, Workspace, WorkspaceDiscovery, WorkspaceResetResult } from '../contracts/workflow';
 import type { ProjectWorktree } from '../contracts/projects';
 import { api } from '../client/api';
+import { useTildify } from '../client/home';
 import { LifecycleResults, WorktreeActions } from './RemoveWorktree';
 import { LaunchAgents } from './LaunchAgents';
 import { CreateWorktree } from './CreateWorktree';
@@ -33,6 +34,7 @@ export function Workspaces(props: Props) {
   const [launchRequest, setLaunchRequest] = useState<{treeId:string; nonce:number}|null>(null);
   const [directoryRoot, setDirectoryRoot] = useState<string | null>(null);
   const [expandedWorktrees, setExpandedWorktrees] = useState<Record<string, boolean>>({});
+  const tilde = useTildify();
   const workspaces = discovery?.workspaces ?? [];
   const projects = discovery?.projects ?? [];
   const project = projects.find((p) => p.id === projectId) ?? projects.find((p) => p.worktrees.some((w) => w.path === selectedRoot)) ?? projects[0];
@@ -43,24 +45,24 @@ export function Workspaces(props: Props) {
           <button type="button" className="quiet" disabled={checking} onClick={() => { setChecking(true); void onRecheck().finally(() => setChecking(false)); }}>Recheck</button></div></div>
       <p className="muted">Choose a project, then a worktree. Linked worktrees belong to the same local repository, even in different directories.</p>
       <AddProject token={props.token} onAdded={onRecheck} />
-      {discoveryError && <p className="notice error" role="alert">{discoveryError}</p>}
-      {discovery?.error && <p className="notice error" role="alert">{discovery.error}</p>}
+      {discoveryError && <p className="notice error" role="alert">{tilde(discoveryError)}</p>}
+      {discovery?.error && <p className="notice error" role="alert">{tilde(discovery.error)}</p>}
       {discovery && !projects.length && <p>No known Git project. Start a coding CLI in tmux inside a repository, then Recheck.</p>}
       <ul className="workspace-cards" aria-label="Available projects">{projects.map((p) => <li key={p.id} className={p.id === project?.id ? 'selected' : ''}>
         <button type="button" className="workspace-card" aria-pressed={p.id === project?.id} aria-label={`Project ${p.name}`} onClick={() => { setProjectId(p.id); setDirectoryRoot(null); }}>
           <div className="workspace-title"><strong>{p.name}</strong><span className="badge">{p.worktrees.length} WORKTREES</span></div>
-          <span className="mono cwd" title={p.commonDir}>{p.commonDir}</span>
-          <span className="muted">{p.error ?? `${workspaces.filter((w) => p.worktrees.some((tree) => tree.path === w.worktree.root)).reduce((n, w) => n + w.agents.filter((a) => a.eligible).length, 0)} eligible agents`}</span>
+          <span className="mono cwd" title={p.commonDir}>{tilde(p.commonDir)}</span>
+          <span className="muted">{p.error ? tilde(p.error) : `${workspaces.filter((w) => p.worktrees.some((tree) => tree.path === w.worktree.root)).reduce((n, w) => n + w.agents.filter((a) => a.eligible).length, 0)} eligible agents`}</span>
         </button></li>)}</ul>
       {!!discovery?.skipped.length && <details className="skipped"><summary>{discovery.skipped.reduce((n, s) => n + s.panes, 0)} pane(s) not in a discovered workspace</summary>
-        <ul>{discovery.skipped.map((s) => <li key={s.cwd}><span className="mono">{s.cwd}</span> · {s.panes} pane(s) · {s.reason}</li>)}</ul></details>}
+        <ul>{discovery.skipped.map((s) => <li key={s.cwd}><span className="mono" title={s.cwd}>{tilde(s.cwd)}</span> · {s.panes} pane(s) · {tilde(s.reason)}</li>)}</ul></details>}
     </section>
     {project && <section className="panel workspaces" aria-label={`Project worktrees ${project.name}`}>
       <div className="section-heading worktrees-heading"><div><p className="eyebrow">{project.name}</p><h2>Worktrees</h2></div>
       <CreateWorktree onLaunch={props.launchEnabled ? path => {const tree=project.worktrees.find(t=>t.path===path);if(tree){setDirectoryRoot(path);setExpandedWorktrees(previous=>({...previous,[tree.id]:true}));setLaunchRequest({treeId:tree.id,nonce:Date.now()});}} : undefined} key={project.id} project={project} token={props.token} disabled={props.disabled || !props.inputEnabled || !!discoveryError || !!project.error} onChanged={props.onChanged} viewEpoch={props.viewEpoch} />
       </div>
       <p className="muted">Each worktree has an independent execution lock. Only agents started in a worktree's root directory belong to it.</p>
-      {project.error && <p className="notice error" role="alert">{project.error}</p>}
+      {project.error && <p className="notice error" role="alert">{tilde(project.error)}</p>}
       <ul className="workspace-cards worktree-cards" aria-label="Available worktrees">{[...project.worktrees].sort((a, b) => Number(b.main) - Number(a.main)).map((tree) => {
         // Discovery offers only a worktree's root directory, so one tmux server yields at most one workspace per worktree.
         const workspace = workspaces.find((w) => w.worktree.root === tree.path); const agents = workspace?.agents ?? [];
@@ -82,16 +84,17 @@ export function Workspaces(props: Props) {
         }}>
           <summary className="workspace-card" aria-label={`Worktree ${nameOf(tree.path)}`}>
           <span className="workspace-title"><strong><span aria-hidden="true">{expanded ? '▾' : '▸'} </span>{tree.main ? 'Main checkout' : nameOf(tree.path)}</strong><span className="badge">{agents.filter((a) => a.eligible).length} AGENTS</span></span>
-          <span className="mono cwd" title={tree.path}>{tree.path}</span>
+          <span className="mono cwd" title={tree.path}>{tilde(tree.path)}</span>
           <span>Branch: <span className="mono">{tree.branch ?? 'detached HEAD'}</span></span>
-          <span className="muted">{tree.error ?? (run ? `${run.implementation ? 'Implementation' : run.planning ? 'Plan' : run.standalone ? 'Send' : 'Stage relay'} · ${run.status}` : agents.length ? agents.map((a) => a.label).join(', ') : 'No agents · start coding CLIs here, then Recheck')}</span>
+          <span className="muted">{tree.error ? tilde(tree.error) : (run ? `${run.implementation ? 'Implementation' : run.planning ? 'Plan' : run.standalone ? 'Send' : 'Stage relay'} · ${run.status}` : agents.length ? agents.map((a) => a.label).join(', ') : 'No agents · start coding CLIs here, then Recheck')}</span>
         </summary>{workspace && <WorkspaceDetail key={workspaceKey(workspace)} workspace={workspace} {...props} />}<div className="worktree-controls"><button type="button" className="quiet" aria-pressed={selected} aria-label={`Open ${nameOf(tree.path)}`} onClick={() => {
           setDirectoryRoot(tree.path);
           if (workspace) onSelectWorkspace(workspace); else onSelectWorktree(tree);
-        }}>Open console</button>{!tree.main && <WorktreeActions project={project} tree={tree} token={props.token}
+        }}>Open console</button>
+          <LaunchAgents requested={launchRequest?.treeId === tree.id ? launchRequest.nonce : 0} token={props.token} projectId={project.id} tree={tree} sessions={props.sessions} enabled={props.launchEnabled === true && props.inputEnabled} inputEnabled={props.inputEnabled} held={props.manualHeld === true} onChanged={props.onChanged} viewEpoch={props.viewEpoch} busy={props.disabled}/>
+          {!tree.main && <WorktreeActions project={project} tree={tree} token={props.token}
           disabled={!!squashReason} disabledReason={squashReason} deletionReason={hardReason} deletionHint={ownerReason || occupied}
-          onChanged={props.onChanged} viewEpoch={props.viewEpoch} />}
-          <LaunchAgents requested={launchRequest?.treeId === tree.id ? launchRequest.nonce : 0} token={props.token} projectId={project.id} tree={tree} sessions={props.sessions} enabled={props.launchEnabled === true && props.inputEnabled} inputEnabled={props.inputEnabled} held={props.manualHeld === true} onChanged={props.onChanged} viewEpoch={props.viewEpoch} busy={props.disabled}/></div></details></li>;
+          onChanged={props.onChanged} viewEpoch={props.viewEpoch} />}</div></details></li>;
       })}</ul>
       <LifecycleResults project={project} token={props.token} onChanged={props.onChanged} />
     </section>}

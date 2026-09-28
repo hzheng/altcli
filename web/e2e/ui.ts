@@ -1,4 +1,4 @@
-import type { Locator, Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
 /** Opens a disclosure by its summary text unless it is already open; a remembered open state must not be toggled closed. */
 export async function expand(scope: Page | Locator, summary: string | RegExp) {
   const toggle = scope.locator('summary').filter({ hasText: summary }).first();
@@ -39,6 +39,12 @@ export async function openCard(page: Page, name: string) {
 export async function showSurface(page: Page, surface: 'Terminal' | 'Control') {
   const button = page.getByRole('group', { name: 'Terminal or Control' }).getByRole('button', { name: surface, exact: true });
   if (await button.count() && await button.getAttribute('aria-pressed') !== 'true') await button.click();
+}
+/** An accepted command from Control shows the terminals again. Waits for that switch, then shows Control to inspect what the command left
+ * there. The switch is view state only and revokes readiness. */
+export async function backToControl(page: Page) {
+  await expect(page.getByRole('group', { name: 'Terminal or Control' }).getByRole('button', { name: 'Terminal', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await showSurface(page, 'Control');
 }
 /** Opens the one Control access panel unless it is already open. Opening it changes no run and no confirmation. */
 export async function openAccess(page: Page) {

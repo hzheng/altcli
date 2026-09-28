@@ -3402,3 +3402,93 @@ Observed on Node 24.12.0, macOS:
 
 Not run: `./scripts/check.sh --e2e` (full browser suite, deferred to pre-merge),
 `npm run test:native` and installed-host acceptance.
+
+## 2026-09-28 — console UI refinements: Agents tab, Focus follows work, system/you, ~ paths
+
+Eight UI requests, with three ambiguities settled by the user first (Focus as follow-mode, a
+system/you holder with a short detail, home shown as `~`):
+
+- **Parallel / Focus** is shown on both the Terminal and Control surfaces. In Focus the Agent
+  selection, and with it the Control recipient, follows the next agent that starts working in
+  the workspace; a click holds until the working agent changes again. Parallel keeps the
+  selection held. This is view state only: nothing is sent and readiness is revoked.
+- An accepted command from Control (Send and its follow-ups, Stage relay, Start Plan, run
+  input) switches the frame back to the terminals. A refused or failed request stays on Control.
+- **Agents in this checkout** moved from the Console to an **Agents** tab beside Settings.
+- **Collaboration settings** is a plain section inside the Settings editor, no longer a disclosure.
+- The **Control access** entry reads `system` or `you`, plus a short detail when one applies
+  (`system · paused`, `system · waiting for you`, `you · keyboard held elsewhere`,
+  `you · manual input unresolved …`). The panel scope line reads `workflow held by …`.
+- `HostConfig` gains `homeDir` (contract and `shared/openapi.yaml`). Displayed paths and
+  path-bearing messages show it as `~`; hover titles, inputs, accessible names and requests
+  keep full paths.
+- **Launch agents…** sits beside **Open console** on each worktree card.
+
+Observed on Node v24.12.0, macOS:
+
+- New unit tests for `tildify` and the revised `controlItems` summaries: 9 passed.
+- Playwright, desktop and iPhone: `e2e/layout.spec.ts` and `e2e/console.spec.ts` in full,
+  112 passed and 10 project-specific skips. The other touched specs
+  (`implementation`, `native`, `planning`, `projects`) ran in full: 233 passed, and 17 failures
+  covered 9 tests that expected Control to stay shown after a send, the old button order or the
+  moved empty-state copy. Those tests were updated, and a rerun of them passed 16 of 16.
+  (console.spec runs serially, so its first failure left 50 tests not run in that pass. They ran
+  in the full console rerun above.)
+  New cases cover Focus following and Parallel holding, the switch back to the terminals after an
+  accepted send but not a refused one, the Agents tab and `~` display with a simulated home.
+- `./scripts/check.sh` exit 0 with 32 hook/setup, 44 smoke, 461 workflow and 86 unit tests,
+  type checking and the production build.
+- `shared/openapi.yaml` parses with Ruby's YAML loader and `HostConfig.required` lists `homeDir`.
+
+Not run: `./scripts/check.sh --e2e` as one full pass (deferred to pre-merge),
+`npm run test:native` and installed-host acceptance. The running development backend was not
+restarted: it was delivering this turn. Until it restarts, it does not send `homeDir`, so paths
+show in full.
+
+Review follow-up, September 28: Focus compared only the first busy agent, so a second agent
+starting while that peer remained busy did not select its terminal or Control recipient.
+It now compares all visible workers and follows newly working agents; a completion alone
+does not override a manual selection. The README's opening description now matches Focus.
+
+Observed on Node v24.12.0, macOS:
+
+- An isolated Playwright reproduction failed against the incoming source: Claude became
+  working while Codex stayed working, but Claude remained unselected.
+- After the fix, the Focus/Parallel browser cases passed on desktop and iPhone: 8 passed,
+  2 viewport-specific skips. The regression also checks that a completion does not retarget
+  Control and that these view changes send no mutation requests.
+- `./scripts/check.sh` passed on the incoming source. `./scripts/check.sh --e2e` passed on
+  the final code: 32 hook/setup, 44 smoke, 461 workflow and 86 unit tests, type checking,
+  production build, and 348 browser cases passed with 10 viewport-specific skips.
+- OpenAPI parsed with Ruby's YAML loader; `HostConfig.required` includes `homeDir`.
+- Incoming and outgoing changes were screened for credentials; none were found.
+
+Browser checks used isolated mock hosts. Native installed-agent and physical-device
+acceptance were not run. The live backend was not restarted during this active relay.
+The 32 incoming files were staged before editing; this fix, its regression, README correction
+and validation record remain unstaged for the next reviewer. No commit was made.
+
+### September 28 follow-up: Parallel Control and local Agents/Settings
+
+Parallel now shows a separate control card for every selected agent, side by side on wide
+screens and stacked on phones. Focus shows one. Send, Stage relay and active-run input keep
+separate drafts; only the selected card supplies the readiness check. The worktree group row
+has Agents immediately left of local Settings, and Stage relay no longer hides Settings.
+The global Agents tab was removed.
+
+Observed on Node v24.12.0, macOS:
+
+- Before the fix, both new desktop Parallel tests failed because Claude's composer was absent.
+- Targeted browser checks for Parallel Send/Stage relay, active-run input selection, and local
+  Agents/Settings passed on desktop and iPhone: 8 passed. Screenshots were inspected.
+- `./scripts/check.sh` passed: 32 hook/setup, 44 smoke, 461 workflow and 86 unit tests,
+  type checking and production build.
+- `ALTCLI_E2E_PORT=12887 ./scripts/check.sh --e2e` completed the nonbrowser checks, then was
+  stopped at the user's request: 45 browser tests passed, 1 failed, 1 interrupted, 315 not run.
+  The failure exposed an empty Control body when no group members are selected. Its render
+  guard was corrected afterwards; that final correction has not been tested. Remaining
+  validation is deferred until after peer review as requested.
+- The changed code, documentation and test fixtures were screened for credentials; none found.
+
+Browser checks used isolated mock hosts. No installed-agent or physical-device acceptance
+was performed. No live backend restart, staging or commit was performed.

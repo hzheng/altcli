@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CheckoutObservation, DirectoryListing } from '../contracts/projects';
 import { api } from '../client/api';
+import { useTildify } from '../client/home';
 
 type Chosen = { path: string; checkout: CheckoutObservation };
 /** What deserves a second look before adding: the project's starting checkout is normally the main checkout on its default branch. */
@@ -16,7 +17,7 @@ function warningsOf(c: CheckoutObservation): string[] {
  * directory, repository or branch changed since; adding creates metadata only, never files, sessions or Git changes. */
 export function AddProject({ token, onAdded }: { token: string; onAdded: () => Promise<void> }) {
   const [directory, setDirectory] = useState(''), [chosen, setChosen] = useState<Chosen | null>(null), [browsing, setBrowsing] = useState(false);
-  const [checking, setChecking] = useState(false), [error, setError] = useState('');
+  const [checking, setChecking] = useState(false), [error, setError] = useState(''); const tilde = useTildify();
   const choice = useRef(0);
   useEffect(() => () => { choice.current++; }, [token]);
   async function inspect(path: string, version: number): Promise<Chosen | null> {
@@ -50,14 +51,14 @@ export function AddProject({ token, onAdded }: { token: string; onAdded: () => P
     {browsing && <DirectoryPicker token={token} start={directory.trim() || null} onCancel={() => setBrowsing(false)}
       onSelect={(listing) => { choice.current++; setChosen({ path: listing.path, checkout: listing.checkout! }); setDirectory(listing.checkout!.root); setBrowsing(false); setError(''); }} />}
     {c && <div className="notice" role="region" aria-label="Chosen checkout">
-      <p><strong>{c.kind === 'main' ? 'Main checkout' : 'Linked worktree'}</strong> <span className="mono">{c.root}</span></p>
+      <p><strong>{c.kind === 'main' ? 'Main checkout' : 'Linked worktree'}</strong> <span className="mono">{tilde(c.root)}</span></p>
       <p>Branch <span className="mono">{c.branch ?? 'detached HEAD'}</span> · default branch {c.defaultBranch ? <span className="mono">{c.defaultBranch}</span> : 'not recorded'}</p>
       {chosen.path !== c.root && <p className="fine">The chosen folder is inside this checkout; the checkout is what gets added.</p>}
       {warnings.map((w) => <p key={w} className="warning-text">{w}</p>)}
       {c.kind === 'linked' && (c.mainCheckout ? <button type="button" disabled={checking} onClick={() => void useMain(c.mainCheckout!)}>Use main checkout {c.mainCheckout} instead</button> : c.mainCheckoutNote && <p className="fine">{c.mainCheckoutNote}</p>)}
       {warnings.length > 0 && <p className="fine">Add project adds it anyway; nothing is switched or changed.</p>}
     </div>}
-    {error && <p role="alert">{error}</p>}
+    {error && <p role="alert">{tilde(error)}</p>}
   </form>;
 }
 
@@ -65,7 +66,7 @@ export function AddProject({ token, onAdded }: { token: string; onAdded: () => P
  * selected, and a later response never overwrites a newer navigation. */
 export function DirectoryPicker({ token, start, onSelect, onCancel }: { token: string; start: string | null; onSelect: (listing: DirectoryListing) => void; onCancel: () => void }) {
   const [listing, setListing] = useState<DirectoryListing | null>(null), [hidden, setHidden] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('');
-  const sequence = useRef(0);
+  const sequence = useRef(0); const tilde = useTildify();
   async function open(path: string | undefined, showHidden = hidden): Promise<boolean> {
     const n = ++sequence.current; setBusy(true); setError('');
     try { const next = await api<DirectoryListing>(token, 'directories', { body: { ...(path ? { path } : {}), hidden: showHidden } }); if (n === sequence.current) setListing(next); return true; }
@@ -81,13 +82,13 @@ export function DirectoryPicker({ token, start, onSelect, onCancel }: { token: s
       <nav className="breadcrumbs" aria-label="Current path"><button type="button" className="quiet" disabled={busy} onClick={() => void open('/')}>/</button>
         {crumbs.map((crumb) => <button type="button" key={crumb.path} className="quiet" disabled={busy} aria-current={crumb.path === listing?.path ? 'location' : undefined} onClick={() => void open(crumb.path)}>{crumb.name}</button>)}</nav></div>
     <label className="readiness"><input type="checkbox" checked={hidden} disabled={busy} onChange={(e) => { setHidden(e.target.checked); void open(listing?.path, e.target.checked); }} />Show hidden folders</label>
-    {listing && <p className="fine">{c ? <>{c.kind === 'main' ? 'Main checkout' : 'Linked worktree'} <span className="mono">{c.root}</span> · branch <span className="mono">{c.branch ?? 'detached HEAD'}</span> · default {c.defaultBranch ?? 'not recorded'}</>
+    {listing && <p className="fine">{c ? <>{c.kind === 'main' ? 'Main checkout' : 'Linked worktree'} <span className="mono">{tilde(c.root)}</span> · branch <span className="mono">{c.branch ?? 'detached HEAD'}</span> · default {c.defaultBranch ?? 'not recorded'}</>
       : listing.checkoutError ?? 'Not inside a Git checkout. Open the repository’s main checkout.'}</p>}
     <ul className="directory-list" aria-label="Folders">{listing?.entries.map((entry) => <li key={entry.name}><button type="button" className="quiet" disabled={busy} onClick={() => void open(entry.path)}>
-      <span aria-hidden="true">📁</span>{entry.name}{entry.linkedFrom && <span className="muted"> → {entry.path}</span>}{entry.gitCandidate && <span className="badge">Git candidate</span>}</button></li>)}</ul>
+      <span aria-hidden="true">📁</span>{entry.name}{entry.linkedFrom && <span className="muted"> → {tilde(entry.path)}</span>}{entry.gitCandidate && <span className="badge">Git candidate</span>}</button></li>)}</ul>
     {listing && !listing.entries.length && <p className="fine">No folders here.</p>}
     {listing?.truncated && <p className="fine">Only some folders are shown. Type a path in the field above to go elsewhere.</p>}
     <div className="row-tools"><button type="button" disabled={!c || busy} onClick={() => listing && onSelect(listing)}>Select this directory</button><button type="button" className="quiet" onClick={onCancel}>Cancel</button></div>
-    {error && <p role="alert">{error}</p>}
+    {error && <p role="alert">{tilde(error)}</p>}
   </div>;
 }

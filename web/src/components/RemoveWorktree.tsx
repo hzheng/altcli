@@ -2,6 +2,7 @@
 import { useEffect, useId, useState } from 'react';
 import type { Project, ProjectWorktree, WorktreeDiscard, WorktreeDiscardPreview, WorktreeIntegration, WorktreeIntegrationPreview, WorktreeRemoval, WorktreeRemovalPreview, WorktreeRename, WorktreeRenamePreview, WorktreeUpdate, WorktreeUpdatePreview } from '../contracts/projects';
 import { api, HttpError } from '../client/api';
+import { useTildify } from '../client/home';
 import { MAX_MESSAGE_JSON_BYTES, messageJsonBytes } from '../core/squash-message';
 import { SquashAdvice } from './SquashAdvice';
 import { FinishBranch } from './FinishBranch';
@@ -49,6 +50,7 @@ const describedBy = (...ids: (string | false | undefined)[]) => ids.filter(Boole
 
 /** One squash commit on the integration branch, made in the checkout that has it checked out. The task worktree is untouched. */
 export function IntegrateWorktree({ project, tree, token, disabled, noticeId, onChanged }: ActionProps) {
+  const tilde = useTildify();
   const [preview, setPreview] = useState<WorktreeIntegrationPreview | null>(null); const [message, setMessage] = useState('');
   const [choosing, setChoosing] = useState(false); const [through, setThrough] = useState('');
   const [commits, setCommits] = useState<WorktreeIntegrationPreview['commits']>([]); const controlId = useId();
@@ -103,11 +105,11 @@ export function IntegrateWorktree({ project, tree, token, disabled, noticeId, on
       {!preview && <button type="button" className="quiet" disabled={busy || unknown} onClick={cancel}>Cancel</button>}
     </div>}
     {preview && <div className="notice" role="region" aria-label={`Squash ${name}`}>
-      <p>Squash {preview.commitCount} commit{preview.commitCount === 1 ? '' : 's'} from <span className="mono">{preview.branch}</span> (<span className="mono">{preview.mergeBase.slice(0, 7)}..{preview.through.slice(0, 7)}</span>) into <span className="mono">{refName(preview.targetRef)}</span> at <span className="mono">{short(preview.targetHead)}</span>, in <span className="mono">{preview.target.root}</span>. Merged without conflicts; the new commit's tree will be <span className="mono">{short(preview.tree)}</span>.</p>
+      <p>Squash {preview.commitCount} commit{preview.commitCount === 1 ? '' : 's'} from <span className="mono">{preview.branch}</span> (<span className="mono">{preview.mergeBase.slice(0, 7)}..{preview.through.slice(0, 7)}</span>) into <span className="mono">{refName(preview.targetRef)}</span> at <span className="mono">{short(preview.targetHead)}</span>, in <span className="mono">{tilde(preview.target.root)}</span>. Merged without conflicts; the new commit's tree will be <span className="mono">{short(preview.tree)}</span>.</p>
       <p>{preview.previousCommit ? `Continues after squash ${short(preview.previousCommit)}. ` : ''}{preview.through !== preview.head ? 'Later task commits will remain for another batch.' : 'This batch reaches the current task HEAD.'}</p>
       <p className="mono commands">{preview.commands.join('\n')}</p>
       {preview.dirty && <p>The task worktree has uncommitted changes; they are not part of this squash.</p>}
-      <p>Agents in <span className="mono">{preview.target.root}</span> must be idle: the merge changes its files and index. The task branch and worktree stay as they are; use Check removal afterwards. This cannot be undone in the app.</p>
+      <p>Agents in <span className="mono">{tilde(preview.target.root)}</span> must be idle: the merge changes its files and index. The task branch and worktree stay as they are; use Check removal afterwards. This cannot be undone in the app.</p>
       <SquashAdvice key={preview.consent} token={token} preview={preview} disabled={blocked || !!reason || busy || unknown} />
       <label>Commit message<textarea aria-label="Squash commit message" value={message} disabled={busy || unknown} rows={6} onChange={(e) => setMessage(e.target.value)} /></label>
       <p className="fine" aria-live="polite">{messageBytes.toLocaleString()} of {MAX_MESSAGE_JSON_BYTES.toLocaleString()} bytes (JSON-encoded, as sent){messageBytes > MAX_MESSAGE_JSON_BYTES ? ' — shorten the message to confirm.' : ''}</p>
@@ -183,6 +185,7 @@ export function UpdateWorktree({ project, tree, token, disabled, noticeId, onCha
 
 /** Rename the task branch in place: files, the directory, agents and tmux session names are unchanged. */
 export function RenameBranch({ project, tree, token, disabled, noticeId, onChanged, viewEpoch }: ActionProps) {
+  const tilde = useTildify();
   const [editing, setEditing] = useState(false); const [newBranch, setNewBranch] = useState('');
   const [preview, setPreview] = useState<WorktreeRenamePreview | null>(null);
   // A preview is consent for what was on screen: hiding the view clears it; the typed name stays.
@@ -233,7 +236,7 @@ export function RenameBranch({ project, tree, token, disabled, noticeId, onChang
     </div>}
     {preview && <div className="notice" role="region" aria-label={`Rename ${name}`}>
       <p>Rename <span className="mono">{preview.branch}</span> to <span className="mono">{preview.newBranch}</span> at <span className="mono">{short(preview.head)}</span>.</p>
-      <p>The directory <span className="mono">{preview.worktree.root}</span>, its files{preview.dirty ? ' (including your uncommitted changes, which stay exactly as they are)' : ''}, the agents and tmux session names stay the same.{preview.checkpoints ? ` ${preview.checkpoints} recorded squash batch${preview.checkpoints === 1 ? ' carries' : 'es carry'} over to the new name.` : ''} Nothing is pushed.</p>
+      <p>The directory <span className="mono">{tilde(preview.worktree.root)}</span>, its files{preview.dirty ? ' (including your uncommitted changes, which stay exactly as they are)' : ''}, the agents and tmux session names stay the same.{preview.checkpoints ? ` ${preview.checkpoints} recorded squash batch${preview.checkpoints === 1 ? ' carries' : 'es carry'} over to the new name.` : ''} Nothing is pushed.</p>
       <p className="mono commands">{preview.commands.join('\n')}</p>
       {!current && <p>The worktree changed. Cancel and check again.</p>}
       <button type="button" aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={blocked || !!reason} onClick={() => void rename()}>Confirm rename</button>
@@ -246,6 +249,7 @@ export function RenameBranch({ project, tree, token, disabled, noticeId, onChang
 
 /** Deletion always requires a fresh server preview and explicit confirmation. */
 export function RemoveWorktree({ project, tree, token, disabled, noticeId, onChanged }: ActionProps) {
+  const tilde = useTildify();
   const [preview, setPreview] = useState<WorktreeRemovalPreview | null>(null);
   const [busy, setBusy] = useState(false); const [error, setError] = useState('');
   const [unknown, setUnknown] = useState(false); const controlId = useId();
@@ -284,7 +288,7 @@ export function RemoveWorktree({ project, tree, token, disabled, noticeId, onCha
     {reason && <p className="fine" id={`${controlId}-reason`} role="status">{reason}</p>}
     {preview && <div className="notice" role="region" aria-label={`Remove ${name}`}>
       <p>{preview.integratedBy === 'squash' ? 'Squash integration verified' : 'Merged ancestry verified'} in <span className="mono">{refName(preview.targetRef)}</span> at <span className="mono">{short(preview.integratedCommit)}</span>.</p>
-      <p>Remove directory <span className="mono">{preview.worktree.root}</span> at <span className="mono">{short(preview.head)}</span>? The branch, commits and run history will be kept. This cannot be undone in the app.</p>
+      <p>Remove directory <span className="mono">{tilde(preview.worktree.root)}</span> at <span className="mono">{short(preview.head)}</span>? The branch, commits and run history will be kept. This cannot be undone in the app.</p>
       <p>Any ignored files in this directory, including local environment files, dependencies and build output, will also be deleted. Save anything you want to keep before confirming.</p>
       {!current && <p>The worktree changed. Cancel and check again.</p>}
       <button type="button" disabled={disabled || busy || held || unknown || !current} onClick={() => void remove()}>Confirm removal</button>
@@ -297,6 +301,7 @@ export function RemoveWorktree({ project, tree, token, disabled, noticeId, onCha
 
 /** Forced deletion of the worktree and its branch without integration evidence: the branch name must be typed to confirm. */
 export function DiscardWorktree({ project, tree, token, disabled, noticeId, onChanged, viewEpoch }: ActionProps) {
+  const tilde = useTildify();
   const [preview, setPreview] = useState<WorktreeDiscardPreview | null>(null); const [typed, setTyped] = useState('');
   // The typed branch name is the confirmation: hiding the view clears it, while the preview stays for re-checking.
   useEffect(() => { setTyped(''); }, [viewEpoch]);
@@ -336,7 +341,7 @@ export function DiscardWorktree({ project, tree, token, disabled, noticeId, onCh
     {!preview && <button type="button" className="quiet danger" aria-label={`Discard ${name}`} aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={disabled || held || !!reason} onClick={() => void inspect()}>Discard…</button>}
     {reason && <p className="fine" id={`${controlId}-reason`} role="status">{reason}</p>}
     {preview && <div className="notice error" role="region" aria-label={`Discard ${name}`}>
-      <p><strong>Discard {preview.branch}?</strong> This deletes the directory <span className="mono">{preview.worktree.root}</span>, including ignored files, and deletes the branch <span className="mono">{preview.branch}</span> at <span className="mono">{short(preview.head)}</span>. It does not check that anything was integrated.</p>
+      <p><strong>Discard {preview.branch}?</strong> This deletes the directory <span className="mono">{tilde(preview.worktree.root)}</span>, including ignored files, and deletes the branch <span className="mono">{preview.branch}</span> at <span className="mono">{short(preview.head)}</span>. It does not check that anything was integrated.</p>
       <p>Lost: {preview.unmergedCommits} commit{preview.unmergedCommits === 1 ? '' : 's'} not in <span className="mono">{refName(preview.targetRef)}</span>{preview.dirty ? ` and ${preview.changeCount} uncommitted change${preview.changeCount === 1 ? '' : 's'}` : ''}. The handoff journal is archived first and run history is kept. This cannot be undone in the app.</p>
       <label>Type the branch name to confirm<input aria-label="Branch name to discard" value={typed} disabled={busy || unknown} placeholder={preview.branch} onChange={(e) => setTyped(e.target.value)} /></label>
       {!current && <p>The worktree changed. Cancel and check again.</p>}
@@ -351,6 +356,7 @@ export function DiscardWorktree({ project, tree, token, disabled, noticeId, onCh
 /** Applying or uncertain lifecycle operations stay visible with read-only inspection until they reach a recorded result. A discard whose
  * inspection found only the branch left, at the confirmed head, also offers the confirmed finish of that same consent. */
 export function LifecycleResults({ project, token, onChanged }: { project: Project; token: string; onChanged: (notice: string) => Promise<void> }) {
+  const tilde = useTildify();
   const [busy, setBusy] = useState(false); const [error, setError] = useState('');
   async function send(path: string, body: { requestId: string; confirm?: true }) {
     setBusy(true); setError('');
@@ -366,23 +372,23 @@ export function LifecycleResults({ project, token, onChanged }: { project: Proje
         tree={{ id: op.preview.worktreeId, path: op.preview.worktree.root, identity: op.preview.worktree, branch: op.preview.branch,
           head: op.preview.git.head, main: false, error: null }} />)}
     {pending(project.removals).map((op) => <div className="notice" key={op.input.requestId}>
-      <strong>Worktree removal {op.status}</strong><p>{op.message}</p><p className="mono">{op.input.worktree.root}</p>
+      <strong>Worktree removal {op.status}</strong><p>{tilde(op.message)}</p><p className="mono">{tilde(op.input.worktree.root)}</p>
       <button type="button" disabled={busy || op.status === 'applying'} onClick={() => void send('projects/worktrees/removal/reconcile', { requestId: op.input.requestId })}>Inspect removal result</button>
     </div>)}
     {pending(project.integrations).map((op) => <div className="notice" key={op.input.requestId}>
-      <strong>Squash integration {op.status}</strong><p>{op.message}</p><p className="mono">{op.input.branch} → {op.input.target.root}</p>
+      <strong>Squash integration {op.status}</strong><p>{tilde(op.message)}</p><p className="mono">{op.input.branch} → {tilde(op.input.target.root)}</p>
       <button type="button" disabled={busy || op.status === 'applying'} onClick={() => void send('projects/worktrees/integration/reconcile', { requestId: op.input.requestId })}>Inspect squash result</button>
     </div>)}
     {pending(project.updates).map((op) => <div className="notice" key={op.input.requestId}>
-      <strong>Worktree update {op.status}</strong><p>{op.message}</p><p className="mono">{op.input.branch} → {refName(op.input.targetRef)} in {op.input.worktree.root}</p>
+      <strong>Worktree update {op.status}</strong><p>{tilde(op.message)}</p><p className="mono">{op.input.branch} → {refName(op.input.targetRef)} in {tilde(op.input.worktree.root)}</p>
       <button type="button" disabled={busy || op.status === 'applying'} onClick={() => void send('projects/worktrees/update/reconcile', { requestId: op.input.requestId })}>Inspect update result</button>
     </div>)}
     {pending(project.renames).map((op) => <div className="notice" key={op.input.requestId}>
-      <strong>Branch rename {op.status}</strong><p>{op.message}</p><p className="mono">{op.input.branch} → {op.input.newBranch} in {op.input.worktree.root}</p>
+      <strong>Branch rename {op.status}</strong><p>{tilde(op.message)}</p><p className="mono">{op.input.branch} → {op.input.newBranch} in {tilde(op.input.worktree.root)}</p>
       <button type="button" disabled={busy || op.status === 'applying'} onClick={() => void send('projects/worktrees/rename/reconcile', { requestId: op.input.requestId })}>Inspect rename result</button>
     </div>)}
     {pending(project.discards).map((op) => <div className="notice" key={op.input.requestId}>
-      <strong>Worktree discard {op.status}</strong><p>{op.message}</p><p className="mono">{op.input.worktree.root}</p>
+      <strong>Worktree discard {op.status}</strong><p>{tilde(op.message)}</p><p className="mono">{tilde(op.input.worktree.root)}</p>
       <button type="button" disabled={busy || op.status === 'applying'} onClick={() => void send('projects/worktrees/discard/reconcile', { requestId: op.input.requestId })}>Inspect discard result</button>
       {op.status === 'uncertain' && op.branchRemains && <button type="button" className="danger" disabled={busy} onClick={() => void send('projects/worktrees/discard/finish', { requestId: op.input.requestId, confirm: true })}>Delete branch {op.input.branch} and finish discard</button>}
     </div>)}

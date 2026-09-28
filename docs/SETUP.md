@@ -225,8 +225,8 @@ so planning never writes into the checkout. Planners need write access there jus
 as they already do for their result files.
 
 Choose **1 · Plan**, enter the shared brief, and choose the implementation roles.
-The same workspace group participates in both phases. The collapsible **Collaboration
-settings** panel holds the optional tracked relay log, **Automatic collaboration**, the automatic turn budget,
+The same workspace group participates in both phases. The **Collaboration
+settings** section holds the optional tracked relay log, **Automatic collaboration**, the automatic turn budget,
 **Pause on a reviewer objection** (off by default) and **Require my approval before
 implementation**; these are independent controls, and approval is required by default.
 Branch consent can be supplied now or at the checkpoint. Planning never changes
@@ -285,8 +285,8 @@ required for this action; readiness and active-run gates still apply. Clean
 checkout review requires project changes in the selected range.
 Send and Commit name the worker whose card they sit in; Relay sits in the
 receiving peer's or designated reviewer's own card.
-The collapsible **Collaboration settings** panel, under **Settings** in the
-settings bar above the panes, holds the agreement for
+The **Collaboration settings** section, always shown when **Settings** in the
+settings bar above the panes is open, holds the agreement for
 subsequent turns: automatic collaboration, the turn budget, and whether a reviewer
 objection pauses for you (by default it is routed straight back to the author).
 It also offers **Also track the journal in the repository**: an explicit project
@@ -370,7 +370,7 @@ To launch agents from AltCLI:
    name and the adapter hint. Add literal arguments with **Add argument**, keep
    **Enabled** checked, and choose **Save profile**. The executable is a name found
    on PATH or an absolute path; there is no shell parsing, and saving runs nothing.
-3. In **Projects**, choose **Launch agents…** on the checkout's card (empty/new
+3. In **Projects**, choose **Launch agents…** beside **Open console** on the checkout's card (empty/new
    worktrees included; **Create task worktree** can open it for the new one).
    **Add agent** adds one profile selector for one session. Add another agent for
    each additional CLI (up to six); **Remove agent** removes that entry.

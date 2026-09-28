@@ -1,6 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import type { WorkflowState, HookEvent, WorkspaceDiscovery } from '../src/contracts/workflow';
-import { expandAgents, expandWorktree, editSettings, expand, openCard, openController, pane, readiness, openAccess, takeControl, showSurface } from './ui';
+import { expandAgents, expandWorktree, editSettings, expand, openCard, openController, pane, readiness, openAccess, takeControl, showSurface, backToControl } from './ui';
 const TOKEN = 'a'.repeat(64);
 const headers = { Authorization: `Bearer ${TOKEN}` };
 test.describe.configure({ mode: 'serial' });
@@ -167,7 +167,7 @@ test('an interrupted worker displays Interrupted, including durable execution ev
   await expect(row.locator('.state')).toHaveText('working');
   native = 'interrupted'; interrupted = true;
   await expect(row.locator('.state')).toHaveText('interrupted');
-  await expect(page.getByRole('button', { name: /^Control access · paused/ })).toBeVisible(); // the entry carries the state while the panel is closed
+  await expect(page.getByRole('button', { name: /^Control access · system · paused/ })).toBeVisible(); // the entry carries the state while the panel is closed
   await openController(page); await expect(page.getByRole('heading', { name: /^Controller paused/ })).toBeVisible();
   native = 'unknown'; // The persisted interrupted execution remains visible if native observations were lost.
   await expect(row).toContainText('No handoff was accepted');
@@ -218,7 +218,7 @@ test('readiness is explicit and a delivered command retains execution ownership'
   const relay = page.getByRole('button', { name: 'Stage-relay review by Codex ↗', exact: true }); await expect(relay).toBeDisabled();
   await ready.check(); await relay.click();
   await expect(page.locator('.feedback[role="status"]:visible')).toContainText('DELIVERED'); await openController(page); await expect(page.getByRole('region', { name: 'Who controls the agents' })).toBeVisible();
-  await expect(relay).toBeDisabled();
+  await backToControl(page); await expect(relay).toBeDisabled(); // Control keeps the action, now disabled
   const run = (await state(request)).runs.find((r) => r.status === 'running')!;
   await complete(request, run.currentCommandId, 'accept_without_improvement');
   await expect(page.getByRole('region', { name: 'Who controls the agents' })).toHaveCount(0);
@@ -474,7 +474,7 @@ test('takeover does not claim a still-running worker is idle and late completion
   await expect(row).toContainText('working');
   const before = await state(request); const execution = before.executions.find((e) => e.commandId === id)!;
   const session = before.sessions.find((s) => s.id === 'codex')!;
-  await openController(page); await expect(page.getByRole('button', { name: /^Control access · controller driving/ })).toBeVisible();
+  await openController(page); await expect(page.getByRole('button', { name: 'Control access · system', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Pause the controller', exact: true }).click();
   await expect(row).toContainText('working'); await expect(row).toContainText('paused but still holds');
   // A paused run offers only the takeover: one confirmation that lists what it does, with no checkboxes.
@@ -537,7 +537,7 @@ test('two browser pages cannot create two continuations from the same event', as
 });
 test('plain Send from Stage relay starts a standalone instruction even with Auto-relay selected', async ({ page, request }) => {
   await unlock(page); await page.getByLabel('Auto-relay', { exact: true }).check();
-  await page.getByLabel(/Instruction to/).fill('Commit the staged fix');
+  await page.getByLabel('Instruction to Codex', { exact: true }).fill('Commit the staged fix');
   await (await readiness(page, 'Ready to send')).check();
   await page.getByRole('button', { name: 'Send Codex', exact: true }).click();
   await expect(page.locator('.feedback[role="status"]:visible')).toContainText('DELIVERED');
@@ -550,7 +550,7 @@ test('plain Send from Stage relay starts a standalone instruction even with Auto
   expect(finished.commands.filter((command) => command.runId === run.id)).toHaveLength(1);
 });
 test('pause and takeover are distinct and uncertain transport is not retried', async ({ page }) => {
-  await unlock(page); await page.getByLabel(/Instruction to/).fill('mock:uncertain');
+  await unlock(page); await page.getByLabel('Instruction to Codex', { exact: true }).fill('mock:uncertain');
   await (await readiness(page, 'Ready to send')).check(); await page.getByRole('button', { name: 'Send Codex', exact: true }).click();
   await expect(page.locator('.feedback[role="status"]:visible')).toContainText('UNCERTAIN'); await openController(page); await expect(page.getByRole('heading', { name: /^Controller paused/ })).toBeVisible();
   // The card says which command it owns, so a paused run is recognisable without guessing.

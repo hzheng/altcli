@@ -19,6 +19,8 @@ export function PlanSetup(p: {
   blockedReason: string; busy: boolean; submit: (work: () => Promise<void>) => Promise<void>;
   consent: string; setConsent: (update: (current: string) => string) => void; runMark: string; recheck: number; draftKey: string;
   refresh: () => Promise<void>; onRecheck: () => Promise<void>; onMessage: (message: string) => void; onUncertain: (id: string) => void;
+  /** An accepted start: the console shows the terminals. */
+  onSent: () => void;
   /** Control access's readiness slot: the one place the Plan check is shown. Its state and key stay here. */
   readinessSlot: HTMLElement | null;
 }) {
@@ -59,7 +61,7 @@ export function PlanSetup(p: {
           implementation: { groupId: group.id, groupRevision: group.revision, registrations, agentId: target, policy: s.selectedPolicy,
             ...(s.selectedPolicy === 'worker_reviewer' ? { workerId: s.workerId } : {}), handoff: !s.solo, ...(s.logPath ? { logPath: s.logPath } : {}), branch: s.branchChoice ? s.branch() : null } } });
         if (record.status === 'rejected') setStartError(`REJECTED: ${record.error ?? 'The server refused this start.'}`);
-        else { p.onMessage(`${record.status.toUpperCase()}: ${record.error ?? 'Plan started. The server owns this run.'}`); setText(''); }
+        else { p.onMessage(`${record.status.toUpperCase()}: ${record.error ?? 'Plan started. The server owns this run.'}`); setText(''); p.onSent(); }
       } catch (error) {
         setStartError(error instanceof Error ? error.message : 'Phase start failed.');
         if (!(error instanceof HttpError) || error.status >= 500) p.onUncertain(requestId);

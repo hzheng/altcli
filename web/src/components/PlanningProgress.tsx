@@ -3,6 +3,7 @@ import { useState } from 'react';
 import type { RelayRun } from '../contracts/workflow';
 import type { WorkspaceGit } from '../contracts/implementation';
 import { api } from '../client/api';
+import { useTildify } from '../client/home';
 
 export function PlanningProgress({ token, run, disabled, refresh, onMessage, onStop, git, viewEpoch = 0 }: {
   token: string; run: RelayRun; disabled: boolean; refresh: () => Promise<void>; onMessage: (text: string) => void; onStop: () => void;
@@ -11,6 +12,7 @@ export function PlanningProgress({ token, run, disabled, refresh, onMessage, onS
   /** Increases whenever the view changes; a confirmation given in an earlier view never counts again. */
   viewEpoch?: number;
 }) {
+  const tilde = useTildify();
   const plan = run.planning!; const current = plan.current;
   const [confirmed, setConfirmed] = useState(''); const [busy, setBusy] = useState(false);
   const [changes, setChanges] = useState(''); const [planner, setPlanner] = useState(plan.required[0]!);
@@ -46,7 +48,7 @@ export function PlanningProgress({ token, run, disabled, refresh, onMessage, onS
     <ul>{plan.required.map((id) => <li key={id}>{label(id)} · {plan.drafts[id]!.status} · {current && plan.endorsements[id] === current.revision ? `endorses v${current.revision}` : 'no current endorsement'}{plan.drafts[id]!.briefRevision !== plan.briefRevision ? ' · initial draft belongs to an earlier brief' : ''}
       {plan.objections[id] && <p className="notice">{plan.objections[id]}</p>}</li>)}</ul>
     <details><summary>Captured initial drafts</summary><p className="fine">Do not share peer drafts with an unfinished planner. Independence is cooperative, not filesystem isolation.</p>
-      {plan.required.map((id) => <article key={id}><h4>{label(id)}</h4><p className="mono fine">{plan.drafts[id]!.path}</p><pre className="plan-document">{plan.drafts[id]!.document?.text ?? 'No finalized draft yet.'}</pre></article>)}</details>
+      {plan.required.map((id) => <article key={id}><h4>{label(id)}</h4><p className="mono fine">{tilde(plan.drafts[id]!.path)}</p><pre className="plan-document">{plan.drafts[id]!.document?.text ?? 'No finalized draft yet.'}</pre></article>)}</details>
     {current && <><h3>{agreed ? plan.required.length === 1 ? 'Plan ready (solo)' : 'Plan agreed' : 'Plan under review'} · v{current.revision}</h3>
       <p className="mono fine">SHA-256 {current.hash}</p><pre className="plan-document" aria-label="Captured shared plan">{current.text}</pre>
       <details><summary>Version-specific endorsement history</summary><ul>{plan.endorsementHistory.map((entry, i) => <li key={i}>{label(entry.agentId)} · plan v{entry.revision}, brief v{entry.briefRevision}{entry.revision === current.revision && entry.briefRevision === plan.briefRevision ? ' · current' : ' · historical'}</li>)}</ul></details></>}

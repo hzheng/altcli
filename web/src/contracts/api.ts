@@ -184,6 +184,8 @@ export interface HostConfig {
   allowedOrigins: string[];
   claudeConfigDir: string;
   codexHome: string;
+  /** The host user's home directory; the console shows paths under it with a leading ~. */
+  homeDir: string;
   /** The environment variables that were set when the host started; a setting not listed here uses its default. */
   environment: string[];
 }

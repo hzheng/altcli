@@ -4,7 +4,7 @@ import type { Group, ImplementationRun } from '../src/contracts/implementation';
 import type { PlanDecision, PlanStart } from '../src/contracts/planning';
 import type { RelayRun, WorkflowState } from '../src/contracts/workflow';
 import { newPlanning } from '../src/server/planning-state';
-import { expandWorktree, editSettings, expand, openController, readiness } from './ui';
+import { expandWorktree, editSettings, openController, readiness } from './ui';
 const headers = { Authorization: `Bearer ${'a'.repeat(64)}` };
 async function post(request: APIRequestContext, path: string, data: unknown) {
   const response = await request.post(`/api/v1/${path}`, { headers, data }); expect(response.ok()).toBe(true); return response.json();
@@ -37,7 +37,7 @@ test('Plan and Implementation are explicit readonly choices; Plan collects indep
   await page.getByRole('group', { name: 'Phase' }).getByRole('button', { name: 'Plan', exact: true }).click();
   await expect(page.getByLabel('After planning: implementation group')).toHaveCount(0);
   await page.getByLabel('Shared task brief').fill('Plan a scoped feature with verifiable acceptance checks.');
-  await editSettings(page); await expand(page, 'Collaboration settings'); // the settings panels are collapsed until opened
+  await editSettings(page); // the settings editor is collapsed until opened; Collaboration settings inside it is always shown
   await page.getByLabel('Automatic collaboration across both phases').uncheck();
   await expect(page.getByLabel('Require my approval before implementation')).toBeChecked();
   await expect(page.getByLabel('Pause on a reviewer objection')).not.toBeChecked();
@@ -62,7 +62,7 @@ test('Start Plan explains why it is disabled, including a confirmation cleared b
   await expect(reason).toHaveText(/Confirm Ready for planning in Control access\. Changing the brief, a setting or the checkout clears an earlier confirmation\./);
   await expect(start).toHaveAccessibleDescription(/Confirm Ready for planning/); await expect(start).toHaveAttribute('title', /Confirm Ready for planning.*Start document-only planning\./);
   await ready.check(); await expect(reason).toHaveCount(0); await expect(start).toBeEnabled(); await expect(start).toHaveAttribute('title', 'Start document-only planning.');
-  await editSettings(page); await expand(page, 'Collaboration settings'); await page.getByLabel('Maximum automatic turns across both phases').fill('0');
+  await editSettings(page); await page.getByLabel('Maximum automatic turns across both phases').fill('0');
   await expect(ready).not.toBeChecked(); await expect(reason).toHaveText('Set the maximum automatic turns to a whole number from 1 to 200.');
   await page.getByLabel('Maximum automatic turns across both phases').fill('20'); await ready.check(); await expect(reason).toHaveCount(0);
   await start.click(); await expect.poll(() => starts).toBe(1);
@@ -85,7 +85,7 @@ test('solo Plan can preauthorize automatic Implementation without creating a sec
   await page.route('**/api/v1/planning', async (route) => { start = route.request().postDataJSON(); await route.fulfill({ json: { status: 'delivered', error: null } }); });
   await openGroup(page, group); await page.getByRole('group', { name: 'Phase' }).getByRole('button', { name: 'Plan', exact: true }).click();
   await page.getByLabel('Shared task brief').fill('Plan first, then implement.');
-  await editSettings(page); await expand(page, 'Collaboration settings'); await page.getByLabel('Require my approval before implementation').uncheck();
+  await editSettings(page); await page.getByLabel('Require my approval before implementation').uncheck();
   await page.getByLabel('Pause on a reviewer objection').check();
   await page.getByLabel('Implementation branch', { exact: true }).selectOption('new'); await page.getByLabel('New branch name').fill('task/after-plan');
   await (await readiness(page, 'Ready for planning')).check(); await page.getByRole('button', { name: 'Start Plan', exact: true }).click();
@@ -108,7 +108,7 @@ async function checkpoint(page: Page, request: APIRequestContext, consent: 'upfr
   await page.route('**/api/v1/state', async (route) => { const response = await route.fetch(); const data = await response.json(); await route.fulfill({ json: { ...data, runs: [run], executions: [] } }); });
   await openGroup(page, group);
   // The checkpoint sits on the controller's card; its toggle announces that the controller is waiting for the human.
-  await expect(page.getByRole('button', { name: /^Control access · waiting for you/ })).toBeVisible(); await openController(page); return run;
+  await expect(page.getByRole('button', { name: /^Control access · system · waiting for you/ })).toBeVisible(); await openController(page); return run;
 }
 test('deferred checkpoint consent on an integration branch offers only a new task branch', async ({ page, request }) => {
   await checkpoint(page, request, 'deferred'); const decisions: PlanDecision[] = [];

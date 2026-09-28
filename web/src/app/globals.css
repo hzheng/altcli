@@ -28,11 +28,6 @@ small { display:block; font-size:11px; color:var(--muted); font-weight:400; }
 .small-tag { margin-left:8px; font-size:9px; letter-spacing:1px; color:var(--muted); padding-left:15px; border-left:1px solid var(--line); }
 .badge { color:var(--accent); background:#23342a; border:1px solid #3a5140; border-radius:5px; padding:3px 7px; font-size:10px; letter-spacing:.4px; white-space:nowrap; text-transform:uppercase; }
 .badge.warning { background:#393123; border-color:#61543e; color:#e7c793; }
-.status { margin-top:16px; padding:14px 0 0; }
-.status summary { display:flex; align-items:center; gap:14px; padding:0 16px; cursor:pointer; list-style:none; }
-.status summary h2 { display:inline; }
-.status summary::before { content:"▸ "; color:var(--accent); }
-.status[open] summary::before { content:"▾ "; }
 .status .state { display:inline-flex; align-items:center; gap:8px; text-transform:uppercase; font-size:10px; letter-spacing:.4px; }
 .state-icon { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:8px; vertical-align:middle; border:2px solid var(--muted); box-sizing:border-box; }
 .state-icon.idle { border-color:#3d4d53; background:#3d4d53; }
@@ -121,9 +116,9 @@ small { display:block; font-size:11px; color:var(--muted); font-weight:400; }
 .target-row > button { flex-shrink:0; margin-top:2px; }
 .agent-tabs button .state-icon { margin-right:0; }
 details.advanced { margin-top:14px; }
-details.advanced summary, details.history summary, details.agreement summary { cursor:pointer; color:var(--muted); font-size:12px; list-style:none; }
-details.advanced summary::before, details.history summary::before, details.agreement summary::before { content:"▸ "; color:var(--accent); }
-details[open].advanced summary::before, details[open].history summary::before, details[open].agreement summary::before { content:"▾ "; }
+details.advanced summary, details.history summary { cursor:pointer; color:var(--muted); font-size:12px; list-style:none; }
+details.advanced summary::before, details.history summary::before { content:"▸ "; color:var(--accent); }
+details[open].advanced summary::before, details[open].history summary::before { content:"▾ "; }
 details.advanced[open] summary { margin-bottom:12px; }
 .field small.warn { color:#e7c793; }
 .register-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px 16px; }
@@ -275,7 +270,8 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
 .settings-toggle { font-size:12px; color:var(--muted); font-weight:400; white-space:nowrap; }
 .settings-toggle span { color:var(--accent); }
 .settings-editor { margin-top:10px; padding-top:10px; border-top:1px dashed var(--line); }
-.settings-editor details.agreement { margin-top:12px; }
+.settings-editor .agreement { margin-top:12px; }
+.settings-editor .agreement h3 { margin:0 0 8px; font-size:12px; font-weight:650; color:var(--muted); }
 .pane-heading { flex-wrap:wrap; gap:4px 10px; }
 .pane-heading h2 { margin-right:auto; }
 .pane-status { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; padding:0 14px 7px; border-bottom:1px solid var(--line); font-size:11px; color:var(--muted); }
@@ -324,8 +320,6 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
 .latest-run p + p { margin-top:6px; }
 .latest-run details { margin-top:8px; }
 .reset-reason { flex-basis:100%; font-size:11px; color:#e7c793; }
-.status:not([open]) { padding-bottom:14px; }
-.status summary .muted { font-size:12px; }
 /* Watch zone: a recessed stage holds the terminal captures, set apart from the raised controller and settings cards above. */
 .terminal-stage { background:var(--stage-bg); border:1px solid #33454b; border-radius:14px; padding:10px; box-shadow:inset 0 1px 0 rgba(255,255,255,.03), inset 0 8px 18px rgba(0,0,0,.35); }
 .terminal-stage .target-row { align-items:center; flex-wrap:wrap; gap:8px 14px; margin-bottom:10px; }
@@ -391,6 +385,19 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
 .control-body > .relay-mode { display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; padding:10px 12px 0; }
 .control-body > .relay-mode .fine { margin:0; }
 .control-body > .fine { margin:0; padding:10px 12px; }
+.control-agents { display:grid; grid-template-columns:minmax(0, 1fr); gap:12px; padding:12px; align-items:start; }
+.control-agents.parallel { grid-template-columns:repeat(auto-fit, minmax(min(100%, 360px), 1fr)); }
+.control-agent { min-width:0; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+.control-agent.active { border-color:var(--accent); }
+.control-agent[hidden] { display:none; }
+.control-agent-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 12px; background:var(--panel); }
+.control-agent-heading button { padding:0; border:0; font-size:15px; }
+.control-agent-heading > span { font-size:11px; text-transform:uppercase; }
+.stage-actions .command-line { flex-wrap:wrap; }
+.stage-actions .command-line textarea { flex-basis:100%; width:100%; }
+.stage-actions .command-line button { flex:1 1 180px; }
+.stage-summary, .control-body .auto, .control-body .turn-limit { margin:0; padding:12px; }
+@media(max-width:760px) { .control-agents.parallel { grid-template-columns:minmax(0, 1fr); } }
 /* Outside Plan the stage and Control are one frame: the switch shows one surface and hides the other, which stays mounted. The scoped
    rule must win over .panes { display:grid } so hidden content also leaves the tab order and accessibility tree. */
 .workbench .panes[hidden], .workbench .control-pane[hidden] { display:none; }

@@ -8,15 +8,15 @@ describe('controlItems', () => {
   it('reports you with nothing to decide when nobody else holds the checkout', () => {
     expect(controlItems(base)).toEqual({ summary: 'you', attention: false, items: [] });
   });
-  it('names the controller state; only waiting and paused need a decision', () => {
-    expect(controlItems({ ...base, run: { status: 'running' } })).toMatchObject({ summary: 'controller driving', attention: false });
-    expect(controlItems({ ...base, run: { status: 'waiting' } })).toMatchObject({ summary: 'waiting for you', attention: true });
-    expect(controlItems({ ...base, run: { status: 'paused' } })).toMatchObject({ summary: 'paused', attention: true });
+  it('names the system as holder in every controller state; only waiting and paused need a decision', () => {
+    expect(controlItems({ ...base, run: { status: 'running' } })).toMatchObject({ summary: 'system', attention: false });
+    expect(controlItems({ ...base, run: { status: 'waiting' } })).toMatchObject({ summary: 'system · waiting for you', attention: true });
+    expect(controlItems({ ...base, run: { status: 'paused' } })).toMatchObject({ summary: 'system · paused', attention: true });
   });
   it('puts server-wide keyboard and manual holds first and names their affected scope', () => {
     const held = controlItems({ ...base, run: { status: 'paused' }, keyboard: { kind: 'other-browser', label: 'another browser' },
       manual: [{ live: true, runs: 1 }, { live: false, runs: 2 }], otherWorktrees: ['/demo/other'] });
-    expect(held.summary).toBe('manual input unresolved · 2 affected runs');
+    expect(held.summary).toBe('system · manual input unresolved · 2 affected runs');
     expect(held.items.map((item) => [item.id, item.scope])).toEqual([['keyboard', 'server'], ['manual', 'server'], ['scope', 'server'], ['workflow', 'checkout']]);
     expect(held.items.find((item) => item.id === 'scope')!.text).toContain('/demo/other');
     expect(held.items.find((item) => item.id === 'keyboard')).toMatchObject({ takeControl: false, text: expect.stringContaining('claim it with ⌨️ at a terminal') });
@@ -25,8 +25,8 @@ describe('controlItems', () => {
   });
   it('keeps this browser\'s own keyboard informational', () => {
     const mine = controlItems({ ...base, keyboard: { kind: 'this-browser', label: 'Codex' }, manual: [{ live: true, runs: 0 }] });
-    expect(mine).toMatchObject({ summary: 'keyboard: Codex (this browser)', attention: false });
-    expect(controlItems({ ...base, keyboard: { kind: 'unresolved', label: 'an unresolved manual-input record' }, manual: [{ live: false, runs: 0 }] }).summary).toBe('manual input unresolved');
+    expect(mine).toMatchObject({ summary: 'you · keyboard: Codex (this browser)', attention: false });
+    expect(controlItems({ ...base, keyboard: { kind: 'unresolved', label: 'an unresolved manual-input record' }, manual: [{ live: false, runs: 0 }] }).summary).toBe('you · manual input unresolved');
   });
   it('lists blockers that no confirmation resolves without offering one', () => {
     const blocked = controlItems({ ...base, stale: true, inputEnabled: false, setupHeld: true, inputBlocks: [{ label: 'Codex', reason: 'Tmux copy mode.' }],

@@ -364,12 +364,22 @@ In Projects, **Ask an agent to suggest batches** sends a standalone read-only ad
 
 ## Manual keyboard and launched sessions
 
-One **Agent** selector chooses both the terminal shown and the Control recipient;
-in Parallel, clicking a card's heading does the same. It starts on a working agent
-and is then held until you choose another, so a newly working agent never retargets
-Control. Selecting sends nothing and revokes readiness. Outside Plan, the **Terminal / Control**
-switch shows the terminals or Control in the same frame; switching also sends nothing and revokes
-readiness. Plan is the exception: Plan setup addresses the whole group, so the selector only
+The selected worktree group row has **Agents** immediately left of local **Settings**.
+Agents expands this checkout’s status table; Settings expands the phase’s branch and
+collaboration editor, including in Stage relay, where those settings apply to Plan and
+committed work. Global Settings holds console preferences and host configuration.
+
+One **Agent** selector chooses both the terminal shown and the active Control recipient;
+in Parallel, clicking a card's heading or focusing its controls does the same. It starts on a working agent. The
+**Parallel / Focus** switch applies to both surfaces: in Focus the selection, and with it the
+Control recipient, follows the next agent that starts working (a click holds until the working
+agent changes again); in Parallel it is held until you choose another. Parallel shows every
+agent's controls side by side on wide screens and stacked on phones, with separate drafts;
+Focus shows only the selected agent. Only the active card supplies the readiness check in
+Control access. Selecting sends nothing
+and revokes readiness. Outside Plan, the **Terminal / Control** switch shows the terminals or
+Control in the same frame; switching also sends nothing and revokes readiness, and a command
+that Control starts successfully switches the frame back to the terminals. Plan is the exception: Plan setup addresses the whole group, so the selector only
 changes the terminal shown, and it stays below the terminals, beside them on wide windows
 (**Control beside**) or in a bottom drawer on phones (**Open control drawer**). **Control access**
 lists what to notice before you take control and then asks once: **Take control…** ends this

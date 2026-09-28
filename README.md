@@ -19,11 +19,15 @@ use captured observation to avoid resizing workers. Release and reconciliation
 are explicit; held workflow checkpoints need their own review.
 
 One **Agent** selector above the terminals chooses both the terminal shown and the
-single Control pane's recipient, which keeps a draft per agent. It starts on a working
-agent and then changes only when you choose another. Outside Plan, a **Terminal / Control**
+active Control recipient. **Parallel** shows every agent's controls side by side on wide
+screens and stacked on phones, with separate drafts. **Focus** shows one agent and follows
+newly working agents; Parallel holds your selection. Selecting a card activates its readiness
+check in Control access and clears the previous confirmation. Outside Plan, a **Terminal / Control**
 switch shows the terminals or that Control pane in one frame (Terminal first); switching sends
 nothing and clears confirmations. Plan setup addresses the whole group and keeps its own section
-below the terminals. **Control access**, the one entry in the page heading's status row, gathers
+below the terminals. The worktree group row has **Agents** immediately left of its local
+**Settings** toggle; both stay available in Stage relay. Local Settings configure Plan and
+committed work; global Settings hold console preferences and host configuration. **Control access**, the one entry in the page heading's status row, gathers
 keyboard release, manual-input recovery, pause and takeover, other recovery and
 each action's readiness check. Implementation readiness hints offer **Go to Control access**
 to focus the checkbox; **Return to action** goes back to the composer. The ⌨️ status to its right reports the
@@ -289,21 +293,23 @@ Automatic collaboration governs later turns. Otherwise use Next turn at the
 normal waiting boundary without takeover. Roles and continuation policy can
 change there without resetting the budget. Fixed reviewers publish no project changes.
 The settings bar above the panes summarizes the next run and switches between Plan and
-Implementation; its collapsed **Collaboration settings** panel holds the optional tracked relay log,
+Implementation; its **Collaboration settings** section (always shown in the Settings editor) holds the optional tracked relay log,
 automatic collaboration, the turn budget and **Pause on a reviewer objection**; by default an objection goes
 straight back to the author as the next automatic turn. A result marked `needsHuman`
 pauses for scope or permission decisions. Restart and uncertain publication pause
 without replay. A completed chain still needs final task-level verification.
 
-The page has four tabs. **Console** holds the agent cards for the selected
+The page has five tabs. **Console** holds the agent cards for the selected
 checkout, and its **Command history** lists only that checkout's commands.
-**Projects** chooses the project, worktree and group. **Settings** shows the host's
+**Projects** chooses the project, worktree and group. **Agents** lists the selected
+checkout's agents with their state and detail. **Settings** shows the host's
 effective global configuration (tmux binary and where it resolves, data store, task
 worktree root, integration branches, adapter, input, allowed origins) with the
 environment variable behind each value; values are read when the host starts, so a
 change means editing `web/.env.local` or the shell and restarting. Settings also
 holds this page's console preferences, such as launch profiles and staying unlocked.
-**About** explains how the console works.
+**About** explains how the console works. Paths under the host user's home directory
+are shown with a leading `~`; hover a path for its full form.
 
 Switching between tabs, agents, Parallel and Focus, Plan and
 Implementation, or workspaces keeps drafts, choices, open sections and scroll
@@ -346,8 +352,9 @@ borrow each other's completion. Relay commands use the `relay:` prefix. The glob
 instruction rule must recognize that prefix as documented in [SKILLS](docs/SKILLS.md).
 The marker is bookkeeping, not a new task. The skill defines its Git staging contract.
 
-The **Control access · …** entry in the page heading's status row names who holds control: you,
-the controller (driving, waiting for you, paused) or a keyboard or manual-input hold. Open it to
+The **Control access · …** entry in the page heading's status row names who holds control, **system**
+(the controller's run, whether driving, paused or waiting for you) or **you**, followed by a short
+detail when one applies: `paused`, `waiting for you`, a keyboard hold or unresolved manual input. Open it to
 see what to notice first: an agent that may still be working, a request or delivery that may have
 reached a terminal, or earlier manual input that may have run commands. Then **Take control…**
 asks once, listing its steps: end this checkout's controller run, clear an uncertain-request

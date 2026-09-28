@@ -177,7 +177,11 @@ moved elsewhere while a keyboard grant was pending, the terminal does not take
 focus back; it reports **Keyboard ready for <name>** instead. With native terminals
 enabled, Settings also shows the server-wide keyboard scope and the terminal limits.
 
-The one Control pane is never a second composer:
+The worktree group row keeps **Agents** immediately left of local **Settings**, including
+in Stage relay. Agents expands the checkout status table; Settings edits the phase’s
+branch and collaboration choices. Global Settings holds preferences and host configuration.
+
+The shared Control frame keeps a separate composer for each agent:
 - **Terminal / Control:** outside Plan the terminals and Control share one frame, and the switch
   shows one of them (Terminal first, remembered per workspace until Lock). The run's actual phase
   decides, so an owned Plan run keeps the Plan layout. The hidden surface stays mounted: terminals
@@ -191,8 +195,12 @@ The one Control pane is never a second composer:
   drawer. Escape or **Close drawer** returns focus to the toggle.
 - **Agent selector:** the tabs above the terminals choose the terminal shown and the
   control recipient together (Plan setup addresses the whole group). In Parallel,
-  clicking a card's heading does the same. Selection starts on a working agent, is
-  then held, revokes readiness and sends nothing; it never selects the keyboard writer.
+  clicking a card's heading or focusing its controls does the same. Parallel shows all agent
+  controls, side by side on wide screens and stacked on phones; Focus shows one. Each keeps
+  its own draft, and only the active card supplies the readiness check in Control access.
+  Selection starts on a working agent. In Focus it
+  then follows the next agent that starts working; in Parallel it is held. Either way it
+  revokes readiness and sends nothing; it never selects the keyboard writer.
 - **Control access:** one nonmodal panel under the page heading, opened from its entry in the
   page heading's status row (entry, then the ⌨️ keyboard status, then connection status) on every tab
   and reachable with no agents. Implementation readiness hints also offer **Go to Control access**,

@@ -57,9 +57,12 @@ export function controlItems(input: ControlInput): ControlSummary {
   if (input.unknownAgents.length) add('process', 'checkout', false, false, `The host cannot confirm the CLI process for ${list(input.unknownAgents)}. Recheck.`);
   if (input.agentReason) add('agent', 'checkout', false, false, input.agentReason);
   const affected = unresolved.reduce((n, m) => n + m.runs, 0);
-  const summary = unresolved.length ? `manual input unresolved${affected ? ` · ${affected} affected run${affected === 1 ? '' : 's'}` : ''}`
+  // Who holds this checkout's workflow is one of two: the system (the controller's run, in any state) or you. A hold worth naming follows it.
+  const holder = status === 'running' || status === 'waiting' || status === 'paused' ? 'system' : 'you';
+  const detail = unresolved.length ? `manual input unresolved${affected ? ` · ${affected} affected run${affected === 1 ? '' : 's'}` : ''}`
     : k && k.kind !== 'this-browser' ? 'keyboard held elsewhere'
     : k ? `keyboard: ${k.label} (this browser)`
-    : status === 'paused' ? 'paused' : status === 'waiting' ? 'waiting for you' : status === 'running' ? 'controller driving' : 'you';
+    : status === 'paused' ? 'paused' : status === 'waiting' ? 'waiting for you' : '';
+  const summary = detail ? `${holder} · ${detail}` : holder;
   return { summary, attention: items.some((item) => item.attention), items };
 }

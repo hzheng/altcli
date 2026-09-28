@@ -6,9 +6,11 @@ import type { ManagedSession, RelayRun, WorkflowState } from '../contracts/workf
 import { api, HttpError } from '../client/api';
 import { useRemembered } from '../client/memory';
 
-export function InteractionComposer({ token, state, run, agent, draftKey, disabled, viewEpoch, refresh, readinessSlot }: {
+export function InteractionComposer({ token, state, run, agent, draftKey, disabled, viewEpoch, refresh, onSent, readinessSlot }: {
   token: string; state: WorkflowState; run: RelayRun; agent: ManagedSession; draftKey: string;
   disabled: boolean; viewEpoch: number; refresh: () => Promise<void>;
+  /** A delivered input: the console shows the agent's terminal. */
+  onSent: () => void;
   /** Control access's readiness slot: the one place the inspection check is shown. Its state stays here. */
   readinessSlot: HTMLElement | null;
 }) {
@@ -19,7 +21,7 @@ export function InteractionComposer({ token, state, run, agent, draftKey, disabl
   const reasonId = useId();
   const turn = state.executions.find((t) => t.commandId === run.currentCommandId);
   const revision = run.interaction?.revision ?? 0;
-  useEffect(() => { setPresent(false); setEscape(false); }, [run.currentCommandId, run.status, run.pauseRequested, turn?.status, agent.registrationId, revision, viewEpoch, disabled]);
+  useEffect(() => { setPresent(false); setEscape(false); }, [run.currentCommandId, run.status, run.pauseRequested, turn?.status, agent.registrationId, revision, viewEpoch, disabled, readinessSlot]);
   const pending = state.interactions?.some((r) => r.input.runId === run.id && ['recorded','sending','uncertain'].includes(r.status));
   const publication = run.implementation?.latestPublication?.entry;
   const humanObjection = publication?.commandId === run.currentCommandId && publication.decision === 'object' && publication.needsHuman;
@@ -32,7 +34,7 @@ export function InteractionComposer({ token, state, run, agent, draftKey, disabl
     : turn?.agentId !== agent.id ? 'Another agent owns this checkout. This draft has not been sent.'
     : run.status !== 'running' || run.pauseRequested || run.interaction?.fault || turn?.status !== 'delivered' ? 'Wait for the checkpoint or reconcile the paused controller.'
     : !turn.sessionId || !turn.sourceTurnId ? 'Waiting for the exact native start acknowledgment.' : '';
-  const off = !!reason || busy || !present;
+  const off = !!reason || busy || !present || !readinessSlot;
   async function send(purpose: InteractionInput['purpose'], key?: 'Enter' | 'Escape') {
     if (off || !turn?.sessionId || !turn.sourceTurnId) return;
     setBusy(true); setMessage(''); setPresent(false); setEscape(false);
@@ -41,7 +43,7 @@ export function InteractionComposer({ token, state, run, agent, draftKey, disabl
         sessionId: turn.sessionId, sourceTurnId: turn.sourceTurnId, expectedRevision: revision, purpose, confirmPresent: true,
         ...(purpose === 'key' ? { key, ...(key === 'Escape' ? { confirmInterrupt: true } : {}) } : { text: purpose === 'answer' ? answer : text }) } });
       setMessage(record.status === 'delivered' ? 'Delivered to terminal. The controller will wait for your input check after this turn.' : `${record.status}: ${record.error}`);
-      if (record.status === 'delivered') { if (purpose === 'detail') setText(''); if (purpose === 'answer') setAnswer(''); }
+      if (record.status === 'delivered') { if (purpose === 'detail') setText(''); if (purpose === 'answer') setAnswer(''); onSent(); }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Input response is unknown.');
       if (!(error instanceof HttpError) || error.status >= 500) setUnknown(true);

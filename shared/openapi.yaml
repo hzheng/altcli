@@ -2718,8 +2718,9 @@ components:
         allowedOrigins: {type: array, items: {type: string}}
         claudeConfigDir: {type: string}
         codexHome: {type: string}
+        homeDir: {type: string, description: The host user's home directory; the console shows paths under it with a leading ~.}
         environment: {type: array, items: {type: string}, description: The environment variables that were set when the host started; a setting not listed uses its default.}
-      required: [mode, inputEnabled, legacyEnabled, dataDir, worktreeDir, tmuxBin, tmuxPath, tmuxSocket, integrationBranches, allowedOrigins, claudeConfigDir, codexHome, environment]
+      required: [mode, inputEnabled, legacyEnabled, dataDir, worktreeDir, tmuxBin, tmuxPath, tmuxSocket, integrationBranches, allowedOrigins, claudeConfigDir, codexHome, homeDir, environment]
     HistoryExport:
       type: object
       properties:

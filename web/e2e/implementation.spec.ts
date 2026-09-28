@@ -1,7 +1,7 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import type { GitChange, Group, ImplementationStart, StandaloneStart } from '../src/contracts/implementation';
 import type { WorkflowState } from '../src/contracts/workflow';
-import { expandWorktree, editSettings, expand, handOff, openCard, openController, pane, readiness, openAccess, takeControl, showSurface } from './ui';
+import { expandWorktree, editSettings, expand, handOff, openCard, openController, pane, readiness, openAccess, takeControl, showSurface, backToControl } from './ui';
 const headers = { Authorization: `Bearer ${'a'.repeat(64)}` };
 async function post(request: APIRequestContext, path: string, data: unknown) {
   const response = await request.post(`/api/v1/${path}`, { headers, data }); expect(response.ok()).toBe(true); return response.json();
@@ -81,7 +81,7 @@ test('the baseline selector lists every candidate, defaults to the earliest, and
   expect(previews.at(-1)).toMatchObject({ base: 'd'.repeat(40) });
   await baseline.selectOption('c'.repeat(40)); await expect(line).toContainText('2 commits after cccccc'); await expect(line.locator('strong')).toHaveCount(0);
   expect(previews.at(-1)).toMatchObject({ base: 'c'.repeat(40) });
-  await editSettings(page); await expand(page, 'Collaboration settings'); await page.getByLabel('Pause on a reviewer objection').check();
+  await editSettings(page); await page.getByLabel('Pause on a reviewer objection').check();
   await expect(ready).not.toBeChecked(); // agreement changes need fresh readiness
   await ready.check();
   await page.screenshot({ path: info.outputPath('baseline-selector.png'), fullPage: true });
@@ -138,7 +138,7 @@ for (const dirty of [false, true]) test(`another baseline requires preview and c
   await expect((await openCard(page, 'Codex')).getByRole('button', {name:'Send Codex',exact:true})).toBeVisible();
   // A dirty checkout is snapshotted by Claude and relayed to Codex from Claude's card; a clean range is reviewed in Codex's own card.
   const scope = await openCard(page, dirty ? 'Claude' : 'Codex');
-  await expect(page.getByRole('region', {name:'Control',exact:true}).locator('.pane-actions')).toHaveCount(1);
+  await expect(page.getByRole('region', {name:'Control',exact:true}).locator('.pane-actions')).toHaveCount(2);
   if (dirty) await handOff(scope, 'commit_relay'); else await expand(scope, 'Committed review');
   const send = scope.getByRole('button', { name: dirty ? 'Commit current changes & relay Codex' : 'Relay Codex', exact: true }); const baseline = scope.getByLabel('Review baseline', { exact: true });
   const ready = (await readiness(page));
@@ -161,7 +161,7 @@ for (const dirty of [false, true]) test(`another baseline requires preview and c
   await page.screenshot({ path: info.outputPath('explicit-recent-range.png'), fullPage: true });
   await send.click(); await expect.poll(() => starts.length).toBe(1);
   expect(starts[0]).toMatchObject({ agentId: dirty ? 'claude' : 'codex', kind: dirty ? 'commit' : 'review', reviewBase: 'e'.repeat(40), pauseOnObjection: false, branch: { head: 'd'.repeat(40) } });
-  await expect(baseline).toHaveValue('b'.repeat(40)); // a delivered relay returns the selector to the earliest candidate
+  await backToControl(page); await expect(baseline).toHaveValue('b'.repeat(40)); // a delivered relay returns the selector to the earliest candidate
 });
 test('a log-only derived range has a disabled reason but recent commits can still be previewed', async ({ page, request }) => {
   const group = await post(request, 'groups', { name: 'Log only', members: ['codex','claude'] });
@@ -267,7 +267,7 @@ test('a tracked relay log is an explicit opt-in whose path is sent only when ena
   await openGroup(page, group);
   // A snapshot relay previews its range, so the log preference must reach that preview.
   const codex = await openCard(page, 'Codex'); await handOff(codex, 'commit_relay');
-  await editSettings(page); await expand(page, 'Collaboration settings');
+  await editSettings(page);
   await expect(page.getByLabel('Tracked relay log')).toHaveCount(0);
   await expect(page.getByText(/journal stays in AltCLI/)).toBeVisible();
   await page.getByLabel('Implementation branch').selectOption('new'); await page.getByLabel('New branch name').fill('task/tracked');
@@ -422,6 +422,7 @@ test('an existing task branch keeps its baseline: inferred values are confirmed,
   const commit = codex.getByRole('button', { name: 'Commit current changes Codex', exact: true }); const ready = (await readiness(page));
   await ready.check(); await commit.click();
   await expect.poll(() => payload).toMatchObject({ branch: { branch: 'task/existing', head: 'a'.repeat(40), taskBase: 'c'.repeat(40) } });
+  await backToControl(page);
   // When no baseline can be inferred, relay waits for a full commit ID even after readiness is confirmed.
   taskBase = null; await page.getByRole('button', { name: 'Recheck', exact: true }).click();
   await ready.check();
@@ -520,8 +521,8 @@ for (const phase of ['Plan', 'Implementation'] as const) test(`${phase} applies 
   await page.getByRole('group', { name: 'Phase' }).getByRole('button', { name: 'Implementation', exact: true }).click(); await showSurface(page, 'Control');
   await page.getByRole('group', { name: 'Relay mode' }).getByRole('button', { name: 'Stage relay', exact: true }).click();
   await expect((await readiness(page, 'Ready to send'))).toBeEnabled(); expect(starts).toBe(1);
-  // The Stage relay composer is a command section below the terminal stage, like Plan setup.
-  await expect(page.locator('.control-pane .command-divider + .composer.command-zone')).toHaveCount(1);
+  // Stage relay offers a separate composer for each agent in the shared Control frame.
+  await expect(page.getByRole('region', { name: 'Stage relay', exact: true }).locator('.stage-actions')).toHaveCount(2);
 });
 test('failed Git recheck blocks cached clean consent until a successful read and fresh confirmation', async ({ page, request }) => {
   const group = await post(request, 'groups', { name: 'Read failure', members: ['codex', 'claude'] }); let failure = false;
@@ -547,7 +548,6 @@ for (const automatic of [false, true]) test(`After send offers Stage relay on ma
   await openGroup(page, group);
   await editSettings(page); await page.getByLabel('Implementation branch').selectOption('new');
   await page.getByLabel('New branch name').fill('task/not-created-by-stage');
-  await expand(page, 'Collaboration settings');
   await page.getByLabel('Automatic collaboration after the initial review').setChecked(automatic);
   await page.getByLabel('Maximum automatic implementation turns').fill('7');
   const codex = await openCard(page, 'Codex'); const after = codex.getByLabel('After send');
@@ -603,7 +603,7 @@ test('After send follows the checked-out default branch and preserves Stage rela
   await editSettings(page); await page.getByLabel('Collaboration', { exact: true }).selectOption('worker_reviewer');
   await ready.check(); await expect(send).toBeDisabled(); await expect(codex.getByRole('status')).toContainText('Choose Peer relay in settings');
   await page.getByLabel('Collaboration', { exact: true }).selectOption('peer');
-  await expand(page, 'Collaboration settings'); await page.getByLabel('Maximum automatic implementation turns').fill('201');
+  await page.getByLabel('Maximum automatic implementation turns').fill('201');
   await ready.check(); await expect(send).toBeDisabled(); await expect(codex.getByRole('status')).toContainText('1 to 200');
   await page.getByLabel('Maximum automatic implementation turns').fill('7'); await expect(ready).not.toBeChecked();
   await ready.check(); expect(starts).toEqual([]); await send.click(); await expect.poll(() => starts.length).toBe(1);
@@ -683,15 +683,18 @@ test('an active plain Send may dirty the checkout without displaying a clean-che
   const codex = await openCard(page, 'Codex');
   await codex.getByLabel('Instruction for Codex').fill('Make the requested edits without committing.');
   await (await readiness(page)).check();
-  await codex.getByRole('button', { name: 'Send Codex', exact: true }).click();
+  await codex.getByRole('button', { name: 'Send Codex', exact: true }).click(); await backToControl(page);
   await openController(page); await expect(page.getByRole('button', { name: 'Take control…', exact: true })).toBeVisible();
   dirty = true; await page.getByRole('button', { name: 'Recheck', exact: true }).click();
   await expect(page.locator('.context-bar')).toContainText('· 1 uncommitted');
   await expect(page.getByRole('region', { name: 'Uncommitted changes', exact: true })).toHaveCount(0);
   // Owned work has a contextual draft; starting a second assignment or changing follow-up is unavailable.
   const update = page.getByRole('region', { name: 'Input for Codex', exact: true });
-  // Active-run input is a command section directly under its own capture.
-  await expect(page.getByRole('region', {name:'Control',exact:true}).locator('.pane-actions')).toHaveAttribute('aria-label', 'Input for Codex');
+  // Parallel keeps both drafts visible, but only the run's current agent can receive input.
+  await expect(page.getByRole('region', {name:'Control',exact:true}).locator('.pane-actions')).toHaveCount(2);
+  const other = page.getByRole('region', { name: 'Input for Claude', exact: true });
+  await expect(other).toBeVisible();
+  await expect(other.getByRole('button', { name: 'Send update to Claude' })).toBeDisabled();
   await expect(update.locator('.zone-label')).toHaveText('⌨️ Input to Codex · run in progress');
   await update.getByLabel('Add detail for Codex').fill('Keep this draft while native acknowledgment is pending.');
   await expect(update.getByRole('button', { name: 'Send update to Codex' })).toBeDisabled();
@@ -747,7 +750,7 @@ for (const policy of ['peer', 'worker_reviewer'] as const) test(`Relay adapts to
   await expect(author.getByText(new RegExp(`Relay ${peer}: 1 commit plus current changes after cccccc`))).toBeVisible();
   expect(previews.at(-1)).toMatchObject({base:'c'.repeat(40),commitPending:true});
   await expect(ready).not.toBeChecked();
-  await editSettings(page); await expand(page, 'Collaboration settings');
+  await editSettings(page);
   await page.getByLabel('Automatic collaboration after the initial review').uncheck();
   await ready.check(); await expect(relay).toBeEnabled();
   // A clean/dirty transition revokes snapshot consent before changing the action back to a committed-range review.
@@ -847,7 +850,7 @@ test('owned composer sends literal input only to the acknowledged holder and che
   const group = await post(request, 'groups', { name: 'Input controls', members: ['codex','claude'] });
   await openGroup(page, group); const initial = await openCard(page, 'Codex');
   await initial.getByLabel('Instruction for Codex').fill('Explain the current task.');
-  await (await readiness(page)).check(); await initial.getByRole('button', { name: 'Send Codex', exact: true }).click();
+  await (await readiness(page)).check(); await initial.getByRole('button', { name: 'Send Codex', exact: true }).click(); await backToControl(page);
   const update = page.getByRole('region', { name: 'Input for Codex', exact: true });
   await update.getByLabel('Add detail for Codex').fill('Explain empty input.');
   await expect(update.getByRole('button', { name: 'Send update to Codex' })).toBeDisabled();
@@ -859,10 +862,20 @@ test('owned composer sends literal input only to the acknowledged holder and che
   await post(request, 'events', { ...lifecycle, event: 'turn_started' });
   // The inspection check for literal input is shown once, in Control access.
   const inspected = (await openAccess(page)).getByRole('checkbox', { name: /I inspected Codex/ }); await expect(inspected).toBeEnabled({ timeout: 8000 });
-  await inspected.check(); await update.getByRole('button', { name: 'Send update to Codex' }).click();
+  await inspected.check();
+  const other = page.getByRole('region', { name: 'Input for Claude', exact: true });
+  await other.getByLabel('Add detail for Claude').fill('Keep this separate draft.');
+  await expect(inspected).toHaveCount(0);
+  await expect((await openAccess(page)).getByRole('checkbox', { name: /I inspected Claude/ })).toBeDisabled();
+  await expect(update.getByRole('button', { name: 'Send update to Codex' })).toBeDisabled();
+  await expect(other.getByRole('button', { name: 'Send update to Claude' })).toBeDisabled();
+  await update.getByLabel('Add detail for Codex').click();
+  await expect(inspected).not.toBeChecked();
+  await expect(other.getByLabel('Add detail for Claude')).toHaveValue('Keep this separate draft.');
+  await inspected.check(); await update.getByRole('button', { name: 'Send update to Codex' }).click(); await backToControl(page);
   await expect(update.getByLabel('Add detail for Codex')).toHaveValue('');
   await expand(update, 'Terminal controls'); await update.getByLabel('Literal answer for Codex').fill('1');
-  await inspected.check(); await update.getByRole('button', { name: 'Send answer', exact: true }).click();
+  await inspected.check(); await update.getByRole('button', { name: 'Send answer', exact: true }).click(); await backToControl(page);
   await expect(update.getByLabel('Literal answer for Codex')).toHaveValue('');
   await inspected.check(); await update.getByRole('button', { name: 'Esc…', exact: true }).click();
   await expect(update.getByRole('button', { name: 'Send Escape', exact: true })).toBeVisible();

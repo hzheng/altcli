@@ -4,6 +4,7 @@ import { FINISH_HOLDING } from '../contracts/projects';
 import type { FinishOutcome, FinishPreview, Project, ProjectWorktree, TaskFinish, WorktreeDiscardPreview, WorktreeRemovalPreview } from '../contracts/projects';
 import type { WorkspaceDiscovery } from '../contracts/workflow';
 import { api, HttpError } from '../client/api';
+import { useTildify } from '../client/home';
 import { StatusIcon } from './Hint';
 
 const short = (sha: string | null) => sha ? sha.slice(0, 12) : 'unknown';
@@ -26,7 +27,7 @@ export function FinishBranch({ project, tree, token, disabled, noticeId, onChang
   const [preview, setPreview] = useState<FinishPreview | null>(null), [outcome, setOutcome] = useState<FinishOutcome>('close'), [stopActive, setStopActive] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [lost, setLost] = useState<string | null>(null), [note, setNote] = useState(''), [inspected, setInspected] = useState(false);
   const [gitPreview, setGitPreview] = useState<WorktreeRemovalPreview | WorktreeDiscardPreview | null>(null), [typed, setTyped] = useState('');
-  const controlId = useId(); const name = tree.branch ?? tree.path;
+  const controlId = useId(); const name = tree.branch ?? tree.path; const tilde = useTildify();
   // Confirmations attest to what was on screen; a view change revokes them (previews stay for re-checking).
   useEffect(() => { setStopActive(false); setTyped(''); setInspected(false); }, [viewEpoch]);
   const op = (project.finishes ?? []).filter((f) => f.preview.worktreeId === tree.id).at(-1);
@@ -76,7 +77,7 @@ export function FinishBranch({ project, tree, token, disabled, noticeId, onChang
   return <div className="create-worktree finish-branch">
     {!preview && !holding && <button type="button" className="quiet" aria-label={`Finish ${name}`} aria-describedby={disabled ? noticeId : undefined} disabled={disabled || busy || !!lost} onClick={() => void check()}>Finish branch…</button>}
     {preview && <div className="notice" role="region" aria-label={`Finish ${name}`}>
-      <p><strong>Finish {preview.branch}</strong>: close the tmux sessions AltCLI launched for <span className="mono">{preview.worktree.root}</span>. Sessions you opened yourself are never closed.</p>
+      <p><strong>Finish {preview.branch}</strong>: close the tmux sessions AltCLI launched for <span className="mono">{tilde(preview.worktree.root)}</span>. Sessions you opened yourself are never closed.</p>
       {preview.sessions.length ? <ul className="finish-sessions" aria-label="App-launched sessions">{preview.sessions.map((s) => <li key={s.sessionId}>
         <strong>{s.sessionName}</strong> <span className="muted">{s.sessionId}{s.clients ? ` · ${s.clients} attached` : ''}</span>{!s.closable && <span className="warning-text"> · not closed: {s.reason}</span>}
         <ul>{s.panes.map((p) => { const tasks = p.processes.filter((q) => q.pid !== p.root?.pid && !q.infrastructure);
@@ -111,11 +112,11 @@ export function FinishBranch({ project, tree, token, disabled, noticeId, onChang
       {holding.status === 'awaiting_git' && !gitPreview && <div className="pane-buttons"><button type="button" disabled={busy} onClick={() => void previewGit()}>Continue: check {kind === 'discard' ? 'discard' : 'removal'}</button>
         <button type="button" className="quiet" disabled={busy} onClick={() => void reconcile('abandon')}>Stop here (keep the worktree)</button></div>}
       {holding.status === 'awaiting_git' && gitPreview && (kind === 'discard' ? <div className="notice error" role="region" aria-label={`Confirm discard of ${name}`}>
-        <p>Delete <span className="mono">{gitPreview.worktree.root}</span>, including ignored files, and the branch <span className="mono">{gitPreview.branch}</span> at <span className="mono">{short(gitPreview.head)}</span>. Lost: {(gitPreview as WorktreeDiscardPreview).unmergedCommits} commit{(gitPreview as WorktreeDiscardPreview).unmergedCommits === 1 ? '' : 's'} not in <span className="mono">{refName(gitPreview.targetRef)}</span>{(gitPreview as WorktreeDiscardPreview).dirty ? ` and ${(gitPreview as WorktreeDiscardPreview).changeCount} uncommitted changes` : ''}. The journal is archived first. This cannot be undone in the app.</p>
+        <p>Delete <span className="mono">{tilde(gitPreview.worktree.root)}</span>, including ignored files, and the branch <span className="mono">{gitPreview.branch}</span> at <span className="mono">{short(gitPreview.head)}</span>. Lost: {(gitPreview as WorktreeDiscardPreview).unmergedCommits} commit{(gitPreview as WorktreeDiscardPreview).unmergedCommits === 1 ? '' : 's'} not in <span className="mono">{refName(gitPreview.targetRef)}</span>{(gitPreview as WorktreeDiscardPreview).dirty ? ` and ${(gitPreview as WorktreeDiscardPreview).changeCount} uncommitted changes` : ''}. The journal is archived first. This cannot be undone in the app.</p>
         <label>Type the branch name to confirm<input aria-label="Branch name to discard" value={typed} disabled={busy} placeholder={gitPreview.branch} onChange={(e) => setTyped(e.target.value)} /></label>
         <button type="button" disabled={busy || typed !== gitPreview.branch} onClick={() => void continueGit()}>Confirm discard</button><button type="button" className="quiet" disabled={busy} onClick={() => setGitPreview(null)}>Cancel</button></div>
         : <div className="notice" role="region" aria-label={`Confirm removal of ${name}`}>
-        <p>{(gitPreview as WorktreeRemovalPreview).integratedBy === 'squash' ? 'Squash integration verified' : 'Merged ancestry verified'} in <span className="mono">{refName(gitPreview.targetRef)}</span>. Remove <span className="mono">{gitPreview.worktree.root}</span>, including ignored files; the branch, commits and run history are kept.</p>
+        <p>{(gitPreview as WorktreeRemovalPreview).integratedBy === 'squash' ? 'Squash integration verified' : 'Merged ancestry verified'} in <span className="mono">{refName(gitPreview.targetRef)}</span>. Remove <span className="mono">{tilde(gitPreview.worktree.root)}</span>, including ignored files; the branch, commits and run history are kept.</p>
         <button type="button" disabled={busy} onClick={() => void continueGit()}>Confirm removal</button><button type="button" className="quiet" disabled={busy} onClick={() => setGitPreview(null)}>Cancel</button></div>)}
     </div>}
     {lost && <button type="button" disabled={busy} onClick={() => void inspectLost()}>Inspect the Finish branch record</button>}
