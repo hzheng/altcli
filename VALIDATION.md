@@ -3276,3 +3276,46 @@ that assertion fail. Observed passing: `scripts/launch-cleanup.test.ts` (20),
 `scripts/native-launch.test.ts` (6), type checking, and the desktop/iPhone launch
 status and cleanup browser cases (10). Not run: `./scripts/check.sh`, the full
 browser suite and installed-agent acceptance.
+
+## 2026-09-27 — Stage relay in After send on main/default
+
+On main or the recorded default branch, After send now offers only Nothing and
+Stage relay. Stage uses the existing branch/HEAD-bound instruction-plus-handoff
+contract, retains peer and native-keyboard gates, and does not create a branch or
+commit. A saved commit choice cannot remain selected after switching to an
+eligible branch. Task-branch commit actions retain their existing behavior.
+
+Observed on Node 24.12.0:
+- The new main-menu regression failed against the original UI, then passed with
+  the fix. Request tests verify the Stage payload and exclude committed settings.
+- `ALTCLI_DIST_DIR=.next-e2e-altcli-stage-check ./scripts/check.sh` passed:
+  skill links, 32 hook/setup, 44 smoke, 446 workflow and 84 unit tests, type checks
+  and the production build.
+- `ALTCLI_DIST_DIR=.next-e2e-altcli-stage-check ./scripts/check.sh --e2e` repeated
+  those non-browser checks successfully. Its full browser run had 334 passed,
+  10 skipped and two failures: a broad Send-button selector matched the renamed
+  Send options tab on desktop and iPhone. It now selects Send Codex exactly;
+  `npm run e2e -- e2e/native.spec.ts --grep 'a copy-mode peer stays visible'`
+  passed both cases. No product-code change followed the full run.
+- Desktop/iPhone coverage includes main and recorded-default menus, stale commit
+  selection, manual/automatic continuation, dirty input, disabled Stage relay,
+  peer policy, turn limits, solo refusal and the native-keyboard barrier. Both
+  rendered Stage screens were inspected.
+
+Browser and terminal cases used the mock host; workflow checks retain their
+existing real temporary Git/SQLite versus simulated-worker boundaries. No real
+agent relay, private-tmux acceptance or physical-device test was run. The isolated
+build directory preserved the running production bundle; its generated tsconfig
+includes were removed afterward. The live backend and user agents were not
+restarted or interrupted, and nothing was staged or committed. The final diff and
+this record were screened for secrets; none were found or withheld.
+
+Review follow-up: a saved Stage relay choice now also falls back to Nothing on a
+task branch, so the menu there lists only Nothing, Commit and Commit & relay, and
+Committed review is not hidden by the stale choice. The extended default-branch
+browser case failed before the fix and passed after it. Observed: type checking,
+`src/core/pane-actions.test.ts` (6) and the full `implementation`, `layout` and
+`native` browser specs on desktop and iPhone (202 passed, 10 skipped). One earlier
+iPhone run of the new default-branch case failed once with Playwright's `Route is
+already handled!` in its `/api/v1/state` interception; it then passed three
+repeats on each viewport. The full suite and `./scripts/check.sh` were not rerun.

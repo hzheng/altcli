@@ -122,12 +122,15 @@ export function PaneActions(p: PaneActionsProps) {
   const dirty = git?.clean === false; const clean = git?.clean === true;
   const [text, setText] = useRemembered(`${p.draftKey}:text`, '');
   const [afterChoice, setAfter] = useRemembered<AfterSend>(`${p.draftKey}:after`, 'nothing');
-  const after: AfterSend = afterChoice === 'commit_relay' && !pair ? 'nothing' : afterChoice;
+  const stageBranch = git?.stageRelay?.eligible === true;
+  // After send follows the checked-out branch: main/default offers only Stage relay, a task branch only the committed follow-ups.
+  const after: AfterSend = (stageBranch ? afterChoice === 'commit' || afterChoice === 'commit_relay' : afterChoice === 'stage_relay') || (afterChoice === 'commit_relay' && !pair) ? 'nothing' : afterChoice;
+  const staging = after === 'stage_relay';
   const [note, setNote] = useRemembered(`${p.draftKey}:note`, '');
   const [context, setContext] = useRemembered(`${p.draftKey}:context`, '');
   const [reviewOpen, setReviewOpen] = useRemembered(`${p.draftKey}:reviewOpen`, false);
   // An empty instruction with a commit follow-up hands off the current changes as they stand instead of doing new work.
-  const handoffOnly = !text.trim() && after !== 'nothing' && dirty;
+  const handoffOnly = !text.trim() && (after === 'commit' || after === 'commit_relay') && dirty;
   // A refused start is shown in the card that sent it, cleared by the next attempt or Recheck.
   const [startError, setStartError] = useState('');
   useEffect(() => { setStartError(''); }, [p.recheck]);
@@ -136,11 +139,11 @@ export function PaneActions(p: PaneActionsProps) {
   const snapshot = useReviewRange({ token: p.token, group, git, logPath: s.logPath, recipient: peerId, reviewTaskBase: s.reviewTaskBase, commitPending: true,
     enabled: canSend && pair && dirty && after === 'commit_relay', recheck: p.recheck, memoryKey: `${p.draftKey}:snapshot`, onPreview: revoke });
   const review = useReviewRange({ token: p.token, group, git, logPath: s.logPath, recipient: agent.id, reviewTaskBase: s.reviewTaskBase, commitPending: false,
-    enabled: canReview && clean, recheck: p.recheck, memoryKey: `${p.draftKey}:review`, onPreview: revoke });
+    enabled: canReview && clean && !staging, recheck: p.recheck, memoryKey: `${p.draftKey}:review`, onPreview: revoke });
   const registrations = Object.fromEntries(members.map((id) => [id, p.state.sessions.find((session) => session.id === id)?.registrationId ?? '']));
   const instances = members.map((id) => p.state.instances.find((instance) => instance.agentId === id)?.status);
   const stateKey = JSON.stringify(['pane', agent.id, agent.registrationId, group.id, group.revision, registrations, instances, p.agentsKey, git ?? null, p.workspaceError,
-    s.consent, after, handoffOnly, snapshot.consent, review.consent, p.runMark, p.recheck]);
+    s.consent, after, p.state.legacyEnabled, handoffOnly, snapshot.consent, review.consent, p.runMark, p.recheck]);
   const manual = p.keyboardHandoff?.manual;
   const key = JSON.stringify([stateKey, manual ? [manual.id, manual.connectionId, manual.generation, manual.revision, text, note, context] : null]);
   // A release changes keyboard state itself; everything else the click authorized must stay exact while it waits.
@@ -154,13 +157,22 @@ export function PaneActions(p: PaneActionsProps) {
   const consented = useRef(key);
   useEffect(() => { if (consented.current !== key) { const previous = consented.current; consented.current = key; p.setConsent((current) => current === previous ? '' : current); } }, [key]);
   const ready = p.consent === key;
-  const common = p.blockedReason || (p.busy ? 'Wait for the current request to finish.' : '') || (p.workspaceError || !git ? 'Recheck the workspace Git state before starting.' : '');
+  const common = p.blockedReason || (staging && p.state.manualSessions?.length ? 'Manual terminal input holds dispatch across this server. Release and reconcile it in Control access first.' : '')
+    || (p.busy ? 'Wait for the current request to finish.' : '') || (p.workspaceError || !git ? 'Recheck the workspace Git state before starting.' : '');
   const branchLabel = s.branchChoice === 'new' ? `new branch ${s.branchName.trim() || '…'}` : s.branchChoice === 'stay' ? git?.branch ?? 'this branch' : 'the chosen branch';
   function reasonFor(action: PaneAction): string {
     if (common) return common;
-    const sending = action === 'send' || action === 'send_commit' || action === 'send_commit_relay';
-    if (sending && !text.trim()) return action === 'send' ? `Enter an instruction for ${name}.` : `Enter an instruction for ${name}; there are no uncommitted changes to hand off.`;
-    if (action !== 'send' && s.branchReason) return s.branchReason;
+    const stage = action === 'send_stage_relay';
+    const sending = action === 'send' || stage || action === 'send_commit' || action === 'send_commit_relay';
+    if (sending && !text.trim()) return action === 'send' || stage ? `Enter an instruction for ${name}.` : `Enter an instruction for ${name}; there are no uncommitted changes to hand off.`;
+    if (stage) {
+      if (!p.state.legacyEnabled) return 'Stage relay is disabled on this host (ALTCLI_ENABLE_LEGACY_RELAY=false).';
+      if (!pair) return 'Stage relay needs a two-member group. Select two agents in Projects.';
+      if (!git?.stageRelay?.eligible || !git.branch) return git?.stageRelay?.reason || 'Stage relay needs main or the recorded default branch.';
+      if (s.selectedPolicy !== 'peer') return 'Stage relay uses peer review. Choose Peer relay in settings.';
+      if (!s.limitValid) return 'Set the maximum automatic turns to a whole number from 1 to 200.';
+    }
+    if (action !== 'send' && !stage && s.branchReason) return s.branchReason;
     if ((action === 'commit' || action === 'commit_relay') && git!.clean) return 'No uncommitted changes. ';
     if (action === 'relay' && !git!.clean) return 'Commit or separate the current changes first.';
     if (action === 'commit_relay') { if (snapshot.hint) return snapshot.hint; }
@@ -182,7 +194,7 @@ export function PaneActions(p: PaneActionsProps) {
       let dispatched = false;
       try {
         let body = request.body;
-        if (p.keyboardHandoff) {
+        if (p.keyboardHandoff && request.path !== 'commands') {
           const keyboardSettlement = await p.keyboardHandoff.release(requestId);
           if (!mounted.current || intentRef.current.revision !== intentRevision) throw Error('Keyboard released, but the draft, target or displayed state changed. Inspect and confirm readiness again; nothing was sent.');
           body = { ...body, keyboardSettlement };
@@ -191,7 +203,7 @@ export function PaneActions(p: PaneActionsProps) {
         const record = await api<CommandRecord>(p.token, request.path, { body });
         if (record.status === 'rejected') setStartError(`REJECTED: ${record.error ?? 'The server refused this start.'}`);
         else {
-          p.onMessage(`${record.status.toUpperCase()}: ${record.error ?? `${action === 'send' ? 'Standalone instruction' : 'Implementation'} started. The server owns this run.`}`);
+          p.onMessage(`${record.status.toUpperCase()}: ${record.error ?? `${action === 'send' ? 'Standalone instruction' : action === 'send_stage_relay' ? 'Stage relay' : 'Implementation'} started. The server owns this run.`}`);
           // Clear only the inputs this action consumed.
           if (action === 'relay') { setContext(''); review.reset(); } else { setText(''); if (action === 'commit_relay') snapshot.reset(); if (action === 'commit_relay' || action === 'send_commit_relay') setNote(''); }
         }
@@ -205,18 +217,21 @@ export function PaneActions(p: PaneActionsProps) {
   const sendChoice: PaneAction = handoffOnly ? after === 'commit_relay' ? 'commit_relay' : 'commit' : sendAction(after); const sendReason = reasonFor(sendChoice);
   const showSendBlocker = !!text.trim() && !!sendReason;
   const sendLabel = handoffOnly ? after === 'commit_relay' ? `Commit current changes & relay ${peerName}` : `Commit current changes ${name}`
-    : after === 'commit' ? `Send & commit ${name}` : after === 'commit_relay' ? `Send & commit ${name} → relay ${peerName}` : `Send ${name}`;
+    : staging ? `Send ${name} & stage-relay to ${peerName}` : after === 'commit' ? `Send & commit ${name}` : after === 'commit_relay' ? `Send & commit ${name} → relay ${peerName}` : `Send ${name}`;
+  const stageHelp = `${name} carries out this instruction on ${git?.branch} at ${git?.head.slice(0, 7)}, then ${peerName} reviews the uncommitted changes if the worktree changed. In Stage relay, accepted changes are staged; commit the finished fix separately. Only automatic continuation and the turn limit apply from Collaboration settings; Stage relay keeps its existing objection handling. ${s.automatic ? 'Later review turns continue automatically' : 'Later review turns wait for Next turn'}, within ${s.limit} automatic turns.`;
   const noChange = `If ${name} changes nothing, it reports without ${s.logPath ? 'a project change (the tracked journal line is still committed)' : 'a commit'} and nothing is relayed.`;
   const sendHelp = handoffOnly ? after === 'commit_relay'
       ? `${name} snapshots all staged, unstaged and nonignored untracked changes as they stand, then the controller relays the selected baseline through the new commit to ${peerName} after validating publication and completion. No pending requests are implemented. One local handoff commit with Git hooks disabled; project checks still run.`
       : `Commit current changes ${name}: snapshot all staged, unstaged and nonignored untracked changes as they stand. No new implementation or automatic relay. One local handoff commit with Git hooks disabled; project checks still run.`
     : after === 'nothing' ? `Send one instruction to ${name}. No automatic commit, branch change, or relay; committing requires an explicit instruction.`
+    : staging ? stageHelp
     : `${name} carries out this instruction, then publishes one handoff commit on ${branchLabel}${dirty ? ', including the current uncommitted changes' : ''}${after === 'commit_relay' ? `; the controller then relays that commit to ${peerName} for review after validating publication and completion. ${peerName} reviews only what ${name} commits for this instruction` : ' and stops'}. ${noChange}`;
   const authorization = handoffOnly ? `${name} commits the ${git!.changeCount} uncommitted ${git!.changeCount === 1 ? 'path' : 'paths'} as they stand on ${branchLabel}, without new work${after === 'commit_relay' ? `; ${peerName} then reviews the selected baseline through that snapshot` : ', then stops'}.`
     : after === 'nothing' ? `${name} carries out this instruction only. No commit, branch change or relay.`
+    : staging ? stageHelp
     : `${name} carries out this instruction and publishes the result on ${branchLabel}${dirty ? `, including the ${git!.changeCount} uncommitted ${git!.changeCount === 1 ? 'path' : 'paths'} already present` : ''}, then ${after === 'commit_relay' ? `${peerName} reviews only what ${name} commits (after ${git?.head.slice(0, 7)})` : 'stops'}. Changed project content is committed.`;
   const relevant = after === 'nothing' ? [s.selectedPolicy === 'worker_reviewer' ? `worker ${name}` : s.selectedPolicy === 'solo' ? 'solo' : 'peer relay']
-    : [branchLabel, s.selectedPolicy === 'worker_reviewer' ? 'worker + reviewer' : s.selectedPolicy === 'solo' ? 'solo' : 'peer relay', `${s.limit} turns`];
+    : staging ? [git?.branch, 'Stage relay', `${s.limit} turns`] : [branchLabel, s.selectedPolicy === 'worker_reviewer' ? 'worker + reviewer' : s.selectedPolicy === 'solo' ? 'solo' : 'peer relay', `${s.limit} turns`];
   const relayHelp = `Relay ${name}: review every commit after the chosen baseline through the displayed HEAD. The earliest baseline is everything new to ${name}; the latest is the last commit only. ${fixedRoles ? 'The reviewer reports without changing project content.' : 'The peer may improve accepted code.'}`;
   const title = (reason: string, help: string) => `${reason ? `${reason} ` : ''}${help}`;
   const openSettings = () => { s.setOpen(true); document.getElementById('run-settings')?.scrollIntoView({ block: 'nearest' }); };
@@ -225,7 +240,7 @@ export function PaneActions(p: PaneActionsProps) {
   // Rendered once, in Control access; the consent key and checked state remain this card's own.
   const readiness = <div className="access-check" role="group" aria-label={`Readiness for ${name}`}>
     <label className="readiness"><input type="checkbox" aria-label="Ready for implementation" checked={ready} disabled={inputOff} onChange={(e) => p.setConsent(() => e.target.checked ? key : '')} />
-      <span><strong>Ready for implementation</strong>. {p.keyboardHandoff ? `All panes on this host are settled: empty prompts, no background writers. This action releases the ${p.keyboardHandoff.label} keyboard, verifies settlement, then sends to ${name}.` : 'All agents in this checkout are settled: empty prompts, no background writers.'} {canSend && <span className="muted">({relevant.join(' · ')})</span>}</span></label>
+      <span><strong>Ready for implementation</strong>. {p.keyboardHandoff && !staging ? `All panes on this host are settled: empty prompts, no background writers. This action releases the ${p.keyboardHandoff.label} keyboard, verifies settlement, then sends to ${name}.` : 'All agents in this checkout are settled: empty prompts, no background writers.'} {canSend && <span className="muted">({relevant.join(' · ')})</span>}</span></label>
     <p className="fine">{canSend ? <><strong>{sendLabel}</strong>: {authorization}</> : relayHelp}</p>
   </div>;
   return <section className="pane-actions" aria-label={`Actions for ${name}`}>
@@ -233,10 +248,11 @@ export function PaneActions(p: PaneActionsProps) {
     <p className="zone-label"><span aria-hidden="true">⌨️</span> Command · {canSend ? `Send to ${name}` : `${name} reviews`}</p>
     {canSend && <>
       <label className="sr-only" htmlFor={`${ids}-text`}>Instruction for {name}</label>
-      <textarea id={`${ids}-text`} rows={2} value={text} maxLength={1900} placeholder={dirty && after !== 'nothing' ? `Instruction for ${name} — leave empty to hand off the ${git!.changeCount} uncommitted ${git!.changeCount === 1 ? 'path' : 'paths'} as they stand` : `Instruction for ${name}`} onChange={(e) => setText(e.target.value)} />
+      <textarea id={`${ids}-text`} rows={2} value={text} maxLength={1900} placeholder={dirty && (after === 'commit' || after === 'commit_relay') ? `Instruction for ${name} — leave empty to hand off the ${git!.changeCount} uncommitted ${git!.changeCount === 1 ? 'path' : 'paths'} as they stand` : `Instruction for ${name}`} onChange={(e) => setText(e.target.value)} />
       <div className="after-send"><label htmlFor={`${ids}-after`}>After send</label>
         <select id={`${ids}-after`} value={after} disabled={p.busy} onChange={(e) => setAfter(e.target.value as AfterSend)}>
-          <option value="nothing">Nothing</option><option value="commit">Commit</option>{pair && <option value="commit_relay">Commit &amp; relay</option>}</select>
+          <option value="nothing">Nothing</option>{stageBranch && <option value="stage_relay">Stage relay</option>}
+          {!stageBranch && <><option value="commit">Commit</option>{pair && <option value="commit_relay">Commit &amp; relay</option>}</>}</select>
         <small>Runs after {name} finishes this instruction, not after delivery.</small></div>
       {after === 'commit_relay' && pair && <>
         <label className="sr-only" htmlFor={`${ids}-note`}>Relay note for {peerName}</label>
@@ -255,7 +271,7 @@ export function PaneActions(p: PaneActionsProps) {
       {/* A settings gap is fixed in the shared settings, so the reason opens them. */}
       {sendReason && sendReason === s.branchReason && <button type="button" className="quiet inline-link" onClick={openSettings}>Settings</button>}</p>}
     {startError && <p className="notice error" role="alert">{startError}</p>}
-    {canReview && clean && <details className="pane-disclosure" open={reviewOpen} onToggle={(e) => setReviewOpen(e.currentTarget.open)}>
+    {canReview && clean && !staging && <details className="pane-disclosure" open={reviewOpen} onToggle={(e) => setReviewOpen(e.currentTarget.open)}>
       <summary>Committed review</summary>
       <p className="fine">{name} reviews every commit after the selected baseline through {git!.head.slice(0, 7)} on {git!.branch ?? 'detached HEAD'}; the range is not filtered by author.</p>
       <label htmlFor={`${ids}-context`}>Review context for {name} (optional)</label>
@@ -264,7 +280,7 @@ export function PaneActions(p: PaneActionsProps) {
       <RangePicker range={review} recipientName={name} snapshot={false} disabled={inputOff} inputDisabled={inputOff} />
     </details>}
     <details className="pane-disclosure authorizes"><summary>What each action authorizes</summary>
-      <p className="fine">Readiness means every selected and unselected agent sharing this checkout is settled: prompts are empty and no background writers remain. Send authorizes only its instruction; with a Commit follow-up it also authorizes one handoff commit on the displayed branch choice, and with Commit &amp; relay one review of that commit by the named peer, who also receives the relay note. With the instruction empty, Commit current changes authorizes one snapshot of all staged, unstaged and nonignored untracked changes as they stand, without completing pending requests; with a relay it also authorizes review from the selected baseline through that snapshot. Relay authorizes review of the displayed range and scoped handoff commits. A completed chain is not final task acceptance.</p>
+      <p className="fine">Readiness means every selected and unselected agent sharing this checkout is settled: prompts are empty and no background writers remain. Send authorizes only its instruction; Stage relay adds a peer review of uncommitted changes on main/default, with accepted changes staged and the final commit left to you. With a Commit follow-up it also authorizes one handoff commit on the displayed branch choice, and with Commit &amp; relay one review of that commit by the named peer, who also receives the relay note. With the instruction empty, Commit current changes authorizes one snapshot of all staged, unstaged and nonignored untracked changes as they stand, without completing pending requests; with a relay it also authorizes review from the selected baseline through that snapshot. Relay authorizes review of the displayed range and scoped handoff commits. A completed chain is not final task acceptance.</p>
     </details>
   </section>;
 }

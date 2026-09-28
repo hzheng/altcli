@@ -215,14 +215,15 @@ async function openGroup(page: Page, group: Group) {
   await expandWorktree(page, group.repository.split('/').pop()!); await page.getByRole('button', { name: `Open ${group.cwd!.split('/').pop()}`, exact: true }).click();
   await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Console', exact: true }).click();
 }
-async function snapshotAvailable(page: Page) {
+async function snapshotAvailable(page: Page, task = true) {
   await page.route('**/api/v1/workspaces', async (route) => {
     const response = await route.fetch(); const data = await response.json();
-    for (const workspace of data.workspaces) Object.assign(workspace.git, { clean: false, changes: [{ status: 'MM', path: 'app.ts', originalPath: null }], changeCount: 1 });
+    for (const workspace of data.workspaces) Object.assign(workspace.git, { ...(task ? { branch: 'task/current', integration: false, stageRelay: { eligible: false, reason: 'A task branch uses committed handoffs.' }, taskBase: 'b'.repeat(40) } : {}),
+      clean: false, changes: [{ status: 'MM', path: 'app.ts', originalPath: null }], changeCount: 1 });
     await route.fulfill({ json: data });
   });
 }
-test('main starts Control on Stage relay; committed implementation takes explicit branch consent and carries fixed roles', async ({ page, request }, testInfo) => {
+test('committed implementation on a task branch takes explicit branch consent and carries fixed roles', async ({ page, request }, testInfo) => {
   await snapshotAvailable(page);
   const group = await post(request, 'groups', { name: 'Implementation', members: ['codex','claude'] });
   const starts: ImplementationStart[] = [];
@@ -232,11 +233,9 @@ test('main starts Control on Stage relay; committed implementation takes explici
     await route.fulfill({ json: { id: input.requestId, status: 'delivered', error: null } });
   });
   await openGroup(page, group);
-  // Stage relay needs no preference: on main it is Control's default, and committed work is one explicit switch away.
+  // Committed actions stay on task branches; Stage relay is unavailable here.
   await showSurface(page, 'Control'); const modes = page.getByRole('group', { name: 'Relay mode' });
-  await expect(modes.getByRole('button', { name: 'Stage relay', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByRole('region', { name: 'Stage relay', exact: true })).toBeVisible(); await expect(page.getByLabel('Staging fallback', { exact: true })).toHaveCount(0);
-  await expect(page.getByRole('region', { name: 'Implementation settings' })).toContainText('Stage relay: these settings apply only to committed work on a task branch.');
+  await expect(modes).toHaveCount(0); await expect(page.getByLabel('Staging fallback', { exact: true })).toHaveCount(0);
   const codex = await openCard(page, 'Codex'); await handOff(codex, 'commit');
   await expect(codex.getByRole('button', { name: 'Commit current changes Codex', exact: true })).toBeDisabled();
   await editSettings(page);
@@ -250,7 +249,7 @@ test('main starts Control on Stage relay; committed implementation takes explici
   await claude.getByRole('button', { name: 'Commit current changes Claude', exact: true }).click();
   await expect.poll(() => starts.length).toBe(1);
   expect(starts[0]).toMatchObject({ groupId: group.id, agentId: 'claude', policy: 'worker_reviewer', workerId: 'claude', kind: 'commit', handoff: false, autoContinue: false,
-    branch: { branch: 'main', head: 'a'.repeat(40), newBranch: 'task/browser-fixture' }, confirmReady: true });
+    branch: { branch: 'task/current', head: 'a'.repeat(40), newBranch: 'task/browser-fixture' }, confirmReady: true });
   expect(starts[0]).not.toHaveProperty('text'); // a hand-off as it stands carries no instruction
   expect(starts[0]).not.toHaveProperty('logPath'); // the journal stays in AltCLI unless the project opts into a tracked mirror
   await expect((await readiness(page))).not.toBeChecked();
@@ -329,7 +328,7 @@ for (const policy of ['peer', 'worker_reviewer'] as const) test(`${policy} relay
   expect(starts[0]).toMatchObject({ kind: 'review', agentId: 'claude', policy, reviewBase: 'b'.repeat(40), branch: { head: 'a'.repeat(40) } });
 });
 test('an integration branch is a starting point only: no continue option, and the task-branch path is explained', async ({ page, request }) => {
-  await snapshotAvailable(page);
+  await snapshotAvailable(page, false);
   const group = await post(request, 'groups', { name: 'On main', members: ['codex', 'claude'] }); let payload: ImplementationStart | null = null;
   await page.route('**/api/v1/implementation', async (route) => { payload = route.request().postDataJSON(); await route.fulfill({ json: { status: 'delivered', error: null } }); });
   await openGroup(page, group); await editSettings(page);
@@ -337,12 +336,12 @@ test('an integration branch is a starting point only: no continue option, and th
   await expect(picker).toHaveValue(''); await expect(picker.locator('option[value="stay"]')).toHaveCount(0);
   await expect(page.getByRole('region', { name: 'Implementation settings' })).toContainText('main is an integration branch');
   await expect(page.getByRole('region', { name: 'Implementation settings' })).toContainText('separate squash merge or pull request');
-  const codex = await openCard(page, 'Codex'); await handOff(codex, 'commit');
-  await expect(codex.getByRole('button', { name: 'Commit current changes Codex', exact: true })).toBeDisabled();
+  const codex = await openCard(page, 'Codex');
+  await expect(codex.getByLabel('After send').locator('option')).toHaveText(['Nothing', 'Stage relay']);
   await picker.selectOption('new'); await page.getByLabel('New branch name').fill('task/from-main');
-  await (await readiness(page)).check(); await codex.getByRole('button', { name: 'Commit current changes Codex', exact: true }).click();
-  await expect.poll(() => payload).toMatchObject({ branch: { branch: 'main', head: 'a'.repeat(40), newBranch: 'task/from-main' } });
-  expect((payload as unknown as ImplementationStart).branch.taskBase).toBeUndefined();
+  // Preparing a branch choice does not change which branch is actually checked out.
+  await expect(codex.getByLabel('After send').locator('option')).toHaveText(['Nothing', 'Stage relay']);
+  await expect(codex.getByRole('button', { name: /Commit current changes/ })).toHaveCount(0); expect(payload).toBeNull();
 });
 test('reconciliation discovers the restarted peer for the next Commit without a workspace reset', async ({ page, request }, info) => {
   await snapshotAvailable(page);
@@ -452,10 +451,11 @@ for (const phase of ['Plan', 'Implementation'] as const) test(`${phase} applies 
     { status: '??', path: 'new <script>.txt', originalPath: null },
     { status: 'R ', path: 'new name.ts', originalPath: 'old name.ts' },
   ];
-  let dirty = false; let starts = 0;
+  let dirty = false; let starts = 0; let task = phase === 'Implementation';
   await page.route('**/api/v1/workspaces', async (route) => {
     const response = await route.fetch(); const data = await response.json();
-    for (const workspace of data.workspaces) Object.assign(workspace.git, { clean: !dirty, changes: dirty ? changes : [], changeCount: dirty ? changes.length : 0 });
+    for (const workspace of data.workspaces) Object.assign(workspace.git, { ...(task ? { branch: 'task/current', integration: false, stageRelay: { eligible: false, reason: 'A task branch uses committed handoffs.' }, taskBase: 'b'.repeat(40) } : {}),
+      clean: !dirty, changes: dirty ? changes : [], changeCount: dirty ? changes.length : 0 });
     await route.fulfill({ json: data });
   });
   await page.route('**/api/v1/implementation', async (route) => { starts++; await route.fulfill({ json: { status: 'delivered', error: null } }); });
@@ -516,6 +516,7 @@ for (const phase of ['Plan', 'Implementation'] as const) test(`${phase} applies 
   dirty = true; await page.getByRole('button', { name: 'Recheck', exact: true }).click();
   if (phase === 'Plan') await expect(warning).toBeVisible(); else await expect(warning).toHaveCount(0);
   // On main, Implementation's Control offers Stage relay directly: no Settings detour.
+  task = false; await page.getByRole('button', { name: 'Recheck', exact: true }).click();
   await page.getByRole('group', { name: 'Phase' }).getByRole('button', { name: 'Implementation', exact: true }).click(); await showSurface(page, 'Control');
   await page.getByRole('group', { name: 'Relay mode' }).getByRole('button', { name: 'Stage relay', exact: true }).click();
   await expect((await readiness(page, 'Ready to send'))).toBeEnabled(); expect(starts).toBe(1);
@@ -537,12 +538,99 @@ test('failed Git recheck blocks cached clean consent until a successful read and
   await expect(ready).toBeEnabled(); await expect(ready).not.toBeChecked(); await expect(codex.getByRole('button', { name: 'Send Codex', exact: true })).toBeDisabled();
 });
 
+for (const automatic of [false, true]) test(`After send offers Stage relay on main without committing, automatic=${automatic}`, async ({ page, request }, info) => {
+  const group = await post(request, 'groups', { name: 'Stage after send', members: ['codex', 'claude'] });
+  await snapshotAvailable(page, false);
+  const starts: Record<string, unknown>[] = []; let committed = 0;
+  await page.route('**/api/v1/commands', async route => { starts.push(route.request().postDataJSON()); await route.continue(); });
+  await page.route('**/api/v1/implementation', async route => { committed++; await route.abort(); });
+  await openGroup(page, group);
+  await editSettings(page); await page.getByLabel('Implementation branch').selectOption('new');
+  await page.getByLabel('New branch name').fill('task/not-created-by-stage');
+  await expand(page, 'Collaboration settings');
+  await page.getByLabel('Automatic collaboration after the initial review').setChecked(automatic);
+  await page.getByLabel('Maximum automatic implementation turns').fill('7');
+  const codex = await openCard(page, 'Codex'); const after = codex.getByLabel('After send');
+  await expect(after.locator('option')).toHaveText(['Nothing', 'Stage relay']);
+  const ready = await readiness(page); await ready.check();
+  await after.selectOption('stage_relay'); await expect(ready).not.toBeChecked();
+  const send = codex.getByRole('button', { name: 'Send Codex & stage-relay to Claude', exact: true });
+  // Even a dirty checkout needs an instruction; the Stage follow-up must never become a commit snapshot.
+  await ready.check(); await expect(send).toBeDisabled();
+  await expect(codex.getByRole('button', { name: /Commit current changes/ })).toHaveCount(0);
+  await codex.getByLabel('Instruction for Codex').fill('Fix the main checkout without committing.');
+  await expect(send).toBeEnabled();
+  await expect(send).toHaveAttribute('title', /accepted changes are staged/);
+  await expect(codex).toContainText('main at aaaaaaa');
+  expect(starts).toEqual([]); await page.screenshot({ path: info.outputPath('stage-after-send.png'), fullPage: true });
+  await send.click(); await expect.poll(() => starts.length).toBe(1);
+  expect(starts[0]).toMatchObject({ agentId: 'codex', pairId: group.id, kind: 'instruction', text: 'Fix the main checkout without committing.',
+    handoff: true, autoContinue: automatic, turnLimit: 7, stage: { branch: 'main', head: 'a'.repeat(40) }, confirmReady: true });
+  expect(starts[0]).not.toHaveProperty('branch'); expect(starts[0]).not.toHaveProperty('keyboardSettlement'); expect(committed).toBe(0);
+  const state: WorkflowState = await (await request.get('/api/v1/state', { headers })).json();
+  const run = state.runs.find(r => r.id === starts[0]!.requestId)!;
+  expect(run.stage).toEqual({ branch: 'main', head: 'a'.repeat(40) }); expect(run.implementation).toBeUndefined(); expect(run.standalone).toBeUndefined();
+});
+
+test('After send follows the checked-out default branch and preserves Stage relay gates', async ({ page, request }) => {
+  const group = await post(request, 'groups', { name: 'Default branch', members: ['codex', 'claude'] });
+  let branch = 'task/current', enabled = true; const starts: Record<string, unknown>[] = [];
+  await page.route('**/api/v1/workspaces', async route => {
+    const response = await route.fetch(), data = await response.json();
+    for (const workspace of data.workspaces) {
+      workspace.branch = branch;
+      Object.assign(workspace.git, { branch, head: 'c'.repeat(40), primary: 'develop', integration: branch === 'develop',
+        taskBase: 'b'.repeat(40), stageRelay: { eligible: branch === 'develop', reason: branch === 'develop' ? null : 'Use committed handoffs on a task branch.' } });
+    }
+    for (const project of data.projects ?? []) for (const tree of project.worktrees) if (tree.path === '/demo/project') tree.branch = branch;
+    await route.fulfill({ json: data });
+  });
+  await page.route('**/api/v1/state', async route => { const response = await route.fetch(); const data = await response.json(); await route.fulfill({ json: { ...data, legacyEnabled: enabled } }); });
+  await page.route('**/api/v1/commands', async route => { starts.push(route.request().postDataJSON()); await route.fulfill({ json: { status: 'delivered', error: null } }); });
+  await openGroup(page, group); const codex = await openCard(page, 'Codex'); const after = codex.getByLabel('After send');
+  await expect(after.locator('option')).toHaveText(['Nothing', 'Commit', 'Commit & relay']);
+  await codex.getByLabel('Instruction for Codex').fill('Make the requested change.');
+  await after.selectOption('commit_relay'); const ready = await readiness(page); await ready.check();
+  branch = 'develop'; await page.getByRole('button', { name: 'Recheck', exact: true }).click();
+  await expect(page.locator('.context-bar')).toContainText('Branch develop');
+  await openCard(page, 'Codex');
+  await expect(after.locator('option')).toHaveText(['Nothing', 'Stage relay']); await expect(after).toHaveValue('nothing'); await expect(ready).not.toBeChecked();
+  await after.selectOption('stage_relay'); const send = codex.getByRole('button', { name: 'Send Codex & stage-relay to Claude', exact: true });
+  await ready.check(); await expect(send).toBeEnabled();
+  enabled = false; await page.getByRole('button', { name: 'Recheck', exact: true }).click();
+  await expect(send).toBeDisabled(); await expect(codex.getByRole('status')).toContainText('Stage relay is disabled on this host');
+  enabled = true; await page.getByRole('button', { name: 'Recheck', exact: true }).click(); await expect(ready).not.toBeChecked();
+  await editSettings(page); await page.getByLabel('Collaboration', { exact: true }).selectOption('worker_reviewer');
+  await ready.check(); await expect(send).toBeDisabled(); await expect(codex.getByRole('status')).toContainText('Choose Peer relay in settings');
+  await page.getByLabel('Collaboration', { exact: true }).selectOption('peer');
+  await expand(page, 'Collaboration settings'); await page.getByLabel('Maximum automatic implementation turns').fill('201');
+  await ready.check(); await expect(send).toBeDisabled(); await expect(codex.getByRole('status')).toContainText('1 to 200');
+  await page.getByLabel('Maximum automatic implementation turns').fill('7'); await expect(ready).not.toBeChecked();
+  await ready.check(); expect(starts).toEqual([]); await send.click(); await expect.poll(() => starts.length).toBe(1);
+  expect(starts[0]).toMatchObject({ kind: 'instruction', handoff: true, stage: { branch: 'develop', head: 'c'.repeat(40) }, turnLimit: 7 });
+  // Leaving the default branch drops a saved Stage choice, as reaching it drops a commit choice, and committed review returns.
+  branch = 'task/current'; await page.getByRole('button', { name: 'Recheck', exact: true }).click();
+  await expect(page.locator('.context-bar')).toContainText('Branch task/current'); await openCard(page, 'Codex');
+  await expect(after.locator('option')).toHaveText(['Nothing', 'Commit', 'Commit & relay']); await expect(after).toHaveValue('nothing');
+  await expect(codex.getByText('Committed review', { exact: true })).toBeVisible();
+});
+
+test('Stage relay after Send requires two selected agents on main', async ({ page, request }) => {
+  const group = await post(request, 'groups', { name: 'One agent on main', members: ['codex'] });
+  await openGroup(page, group); const codex = await openCard(page, 'Codex');
+  await expect(codex.getByLabel('After send').locator('option')).toHaveText(['Nothing', 'Stage relay']);
+  await codex.getByLabel('After send').selectOption('stage_relay'); await codex.getByLabel('Instruction for Codex').fill('Do not start a solo stage relay.');
+  await (await readiness(page)).check(); await expect(codex.getByRole('button', { name: /stage-relay/ })).toBeDisabled();
+  await expect(codex.getByRole('status')).toContainText('Stage relay needs a two-member group');
+});
+
 test('plain Send ignores branch setup and automation; every action explains its commit behavior', async ({ page, request }) => {
   const group = await post(request, 'groups', { name: 'Button help', members: ['codex','claude'] });
   const sent: StandaloneStart[] = []; let commits = 0; let dirty = false;
   await page.route('**/api/v1/workspaces', async (route) => {
     const response = await route.fetch(); const data = await response.json();
-    for (const workspace of data.workspaces) Object.assign(workspace.git, { clean: !dirty, changes: dirty ? [{ status: 'MM', path: 'app.ts', originalPath: null }] : [], changeCount: dirty ? 1 : 0 });
+    for (const workspace of data.workspaces) Object.assign(workspace.git, { branch: 'task/current', integration: false, stageRelay: { eligible: false, reason: 'A task branch uses committed handoffs.' }, taskBase: 'b'.repeat(40),
+      clean: !dirty, changes: dirty ? [{ status: 'MM', path: 'app.ts', originalPath: null }] : [], changeCount: dirty ? 1 : 0 });
     await route.fulfill({ json: data });
   });
   await page.route('**/api/v1/instructions', async (route) => { sent.push(route.request().postDataJSON()); await route.fulfill({ json: { status: 'delivered', error: null } }); });

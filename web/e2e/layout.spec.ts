@@ -226,7 +226,7 @@ test('one control pane keeps per-target drafts; After send maps to a plain Send,
   await expect.poll(() => starts.length).toBe(3);
   expect(starts[2]).toMatchObject({ agentId: 'claude', workerId: 'claude', policy: 'worker_reviewer', kind: 'work', handoff: true, autoContinue: false });
 });
-test('on an integration branch Send & commit waits for a task branch while plain Send does not', async ({ page, request }) => {
+test('on main After send offers only Nothing and Stage relay, even with a new branch prepared', async ({ page, request }) => {
   const group = await post(request, 'groups', { name: 'From main', members: ['codex','claude'] });
   const starts: ImplementationStart[] = []; let sent = 0;
   await page.route('**/api/v1/implementation', async (route) => { starts.push(route.request().postDataJSON()); await route.fulfill({ json: { status: 'delivered', error: null } }); });
@@ -234,25 +234,22 @@ test('on an integration branch Send & commit waits for a task branch while plain
   await openGroup(page, group);
   const codex = await openCard(page, 'Codex'); const ready = (await readiness(page));
   await codex.getByLabel('Instruction for Codex').fill('Start the task.');
-  await codex.getByLabel('After send').selectOption('commit');
-  await ready.check();
-  const commit = codex.getByRole('button', { name: 'Send & commit Codex', exact: true });
-  await expect(commit).toBeDisabled(); await expect(codex.getByRole('status')).toContainText('Send & commit Codex is disabled. Choose the implementation branch in settings.');
-  await expect(page.getByRole('region', { name: 'Implementation settings' })).toContainText('Choose the implementation branch in settings.');
+  const after = codex.getByLabel('After send');
+  await expect(after.locator('option')).toHaveText(['Nothing', 'Stage relay']);
+  await after.selectOption('stage_relay'); await ready.check();
+  await expect(codex.getByRole('button', { name: 'Send Codex & stage-relay to Claude', exact: true })).toBeEnabled();
   // The Settings toggle stays where it is when the editor opens below the summary row.
   const toggle = page.getByRole('region', { name: 'Implementation settings' }).getByRole('button', { name: 'Settings', exact: true });
   const place = () => toggle.evaluate((element) => { const box = element.getBoundingClientRect(); return [Math.round(box.left + window.scrollX), Math.round(box.top + window.scrollY)]; });
   const before = await place(); await toggle.click(); await expect(toggle).toHaveAttribute('aria-expanded', 'true');
   expect(await place()).toEqual(before); await toggle.click(); await expect(toggle).toHaveAttribute('aria-expanded', 'false');
-  await codex.getByLabel('After send').selectOption('nothing'); await expect(ready).not.toBeChecked();
+  await after.selectOption('nothing'); await expect(ready).not.toBeChecked();
   await ready.check(); await expect(codex.getByRole('button', { name: 'Send Codex', exact: true })).toBeEnabled();
-  await codex.getByLabel('After send').selectOption('commit');
-  // The reason names a settings gap, so the card links straight to the settings editor.
-  await codex.getByRole('button', { name: 'Settings', exact: true }).click();
+  await toggle.click();
   await page.getByLabel('Implementation branch').selectOption('new'); await page.getByLabel('New branch name').fill('task/from-send');
-  await ready.check(); await commit.click();
-  await expect.poll(() => starts.length).toBe(1);
-  expect(starts[0]).toMatchObject({ kind: 'work', handoff: false, branch: { branch: 'main', head: 'a'.repeat(40), newBranch: 'task/from-send' } }); expect(sent).toBe(0);
+  await expect(after.locator('option')).toHaveText(['Nothing', 'Stage relay']);
+  await ready.check(); await codex.getByRole('button', { name: 'Send Codex', exact: true }).click();
+  await expect.poll(() => sent).toBe(1); expect(starts).toEqual([]);
 });
 test('readiness is one slot, revoked by After send, view switches and runs, and old values never revive it', async ({ page, request }) => {
   const group = await post(request, 'groups', { name: 'One slot', members: ['codex','claude'] });
@@ -324,7 +321,7 @@ test('Lock forgets drafts and settings within the same document and revokes term
   await editSettings(page); await page.getByLabel('Implementation branch').selectOption('new'); await page.getByLabel('New branch name').fill('task/locked-away');
   await expand(page, 'Collaboration settings'); await page.getByLabel('Pause on a reviewer objection').check();
   const codex = await openCard(page, 'Codex');
-  await codex.getByLabel('Instruction for Codex').fill('Secret draft'); await codex.getByLabel('After send').selectOption('commit');
+  await codex.getByLabel('Instruction for Codex').fill('Secret draft'); await codex.getByLabel('After send').selectOption('stage_relay');
   await page.getByRole('button', { name: 'Lock', exact: true }).click();
   // Unlock in the same document, without navigating or reloading: hooks that stay mounted must not keep the old values.
   await page.getByLabel('Host access token').fill('a'.repeat(64)); await page.getByRole('button', { name: 'Open console' }).click();
@@ -496,9 +493,9 @@ test('Plan setup sits below the terminal stage, behind a command divider', async
 test('the settings row wraps inside its panel at intermediate widths, with the Settings toggle reachable', async ({ page, request }, info) => {
   test.skip(info.project.name !== 'desktop', 'Intermediate widths are resized from the desktop project.');
   const group = await post(request, 'groups', { name: 'Narrow desktop', members: ['codex','claude'] });
-  // On the integration branch with no implementation branch chosen, the row also carries its warning badge once Commit relay is chosen.
+  // On the integration branch with no implementation branch chosen, the row also carries its warning badge once Send options is chosen.
   await openGroup(page, group); await showSurface(page, 'Control');
-  await page.getByRole('group', { name: 'Relay mode' }).getByRole('button', { name: 'Commit relay', exact: true }).click();
+  await page.getByRole('group', { name: 'Relay mode' }).getByRole('button', { name: 'Send options', exact: true }).click();
   const settings = page.getByRole('region', { name: 'Implementation settings' });
   await expect(settings).toContainText('Choose the implementation branch in settings.');
   for (const width of [1100, 900, 800, 761]) {

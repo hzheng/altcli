@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import { paneRequest, sendAction, type PaneAction, type PaneRequestInput } from "./pane-actions";
+import { parseStart } from "./workflow-validation";
 const base: PaneRequestInput = { action: "send", requestId: "11111111-1111-4111-8111-111111111111", groupId: "g", groupRevision: 3, registrations: { codex: "r1", claude: "r2" },
   agentId: "codex", policy: "peer", text: " Do the task. ", branch: { branch: "task/x", head: "a".repeat(40) }, automatic: true, turnLimit: 20, pauseOnObjection: true, reviewBase: "b".repeat(40) };
 const request = (action: PaneAction, more: Partial<PaneRequestInput> = {}) => paneRequest({ ...base, action, ...more });
@@ -10,6 +11,14 @@ test("After send maps to plain Send, work without relay, and work with relay", (
   expect(send).toEqual({ path: "instructions", body: { requestId: base.requestId, groupId: "g", groupRevision: 3, registrations: base.registrations, agentId: "codex", text: "Do the task.", policy: "peer", confirmReady: true } });
   expect(request("send_commit")).toMatchObject({ path: "implementation", body: { kind: "work", text: "Do the task.", handoff: false, autoContinue: false, agentId: "codex", branch: base.branch } });
   expect(request("send_commit_relay")).toMatchObject({ path: "implementation", body: { kind: "work", handoff: true, autoContinue: true, pauseOnObjection: true } });
+});
+test("Stage relay uses the existing branch-bound staging contract without committed-work fields", () => {
+  expect(sendAction("stage_relay")).toBe("send_stage_relay");
+  const stage = request("send_stage_relay", { branch: { branch: "main", head: base.branch.head, newBranch: "task/unused" }, logPath: "log.jsonl", reviewNote: "unused" });
+  expect(stage).toEqual({ path: "commands", body: { requestId: base.requestId, agentId: "codex", pairId: "g", kind: "instruction", text: "Do the task.", handoff: true,
+    stage: { branch: "main", head: base.branch.head }, autoContinue: true, turnLimit: 20, confirmReady: true } });
+  expect(parseStart(stage.body)).toEqual(stage.body);
+  expect(request("send_stage_relay", { automatic: false }).body).toMatchObject({ handoff: true, autoContinue: false });
 });
 test("new work never carries a review baseline; snapshot relay and review do", () => {
   for (const action of ["send_commit", "send_commit_relay"] as const) expect(request(action).body).not.toHaveProperty("reviewBase");

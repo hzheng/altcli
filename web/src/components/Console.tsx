@@ -757,9 +757,9 @@ export function Console() {
           {stageAvailable && phase === 'implementation' && !inputRun && <div className="relay-mode">
             <div className="segmented" role="group" aria-label="Relay mode">
               <button type="button" className={relayMode === 'stage' ? 'selected' : 'quiet'} aria-pressed={relayMode === 'stage'} onClick={() => setRelayMode('stage')}>Stage relay</button>
-              <button type="button" className={relayMode === 'commit' ? 'selected' : 'quiet'} aria-pressed={relayMode === 'commit'} onClick={() => setRelayMode('commit')}>Commit relay</button></div>
+              <button type="button" className={relayMode === 'commit' ? 'selected' : 'quiet'} aria-pressed={relayMode === 'commit'} onClick={() => setRelayMode('commit')}>Send options</button></div>
             <p className="fine">{relayMode === 'stage' ? <>Uncommitted review on <span className="mono">{git?.branch}</span>: accepted changes are staged and nothing is committed for you.</>
-              : 'Committed handoffs need a task branch: create one here in Settings, or a task worktree in Projects.'}</p></div>}
+              : 'Send one instruction, optionally followed by Stage relay. Open a task branch for committed handoffs.'}</p></div>}
           {stageEligible && !stageAvailable && phase === 'implementation' && !inputRun && !!members.length && <p className="fine">{!state.legacyEnabled
             ? <>Stage relay is disabled on this host (<span className="mono">ALTCLI_ENABLE_LEGACY_RELAY=false</span>). Remove that line or set it to true, then restart the host.</>
             : <>Stage relay on <span className="mono">{git?.branch}</span> needs a two-member group. Select two agents in Projects.</>}</p>}

@@ -15,10 +15,10 @@ export async function expandAgents(page: Page, name: string) {
   const card = page.getByRole('list', { name: 'Available worktrees' }).getByRole('listitem').filter({ has: page.getByLabel(`Worktree ${name}`, { exact: true }) });
   await expand(card, 'Agents & group');
 }
-/** On main or the default branch Implementation's Control starts on Stage relay; chooses Commit relay, whose committed actions and
- * next-run settings the helpers below address. Elsewhere, and in Plan, there is no Relay mode and nothing changes. */
+/** On main or the default branch Implementation's Control starts on Stage relay; chooses Send options, whose branch-specific actions
+ * and next-run settings the helpers below address. Elsewhere, and in Plan, there is no Relay mode and nothing changes. */
 async function commitRelay(page: Page) {
-  const commit = page.getByRole('group', { name: 'Relay mode', includeHidden: true }).getByRole('button', { name: 'Commit relay', exact: true, includeHidden: true });
+  const commit = page.getByRole('group', { name: 'Relay mode', includeHidden: true }).getByRole('button', { name: 'Send options', exact: true, includeHidden: true });
   if (!await commit.count() || await commit.getAttribute('aria-pressed') === 'true') return;
   await showSurface(page, 'Control'); await commit.click();
 }
@@ -29,7 +29,7 @@ export async function editSettings(page: Page) {
   if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
 }
 /** Selects an agent, whom the single Control pane then addresses, and outside Plan switches the frame to Control. On main or the
- * default branch, where Control starts on Stage relay, it chooses Commit relay so the agent's committed actions are shown. This revokes readiness. */
+ * default branch, where Control starts on Stage relay, it chooses Send options so the agent's actions are shown. This revokes readiness. */
 export async function openCard(page: Page, name: string) {
   await page.getByRole('navigation', { name: 'Agent' }).getByRole('button', { name, exact: true }).click();
   await showSurface(page, 'Control'); await commitRelay(page);

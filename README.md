@@ -253,12 +253,16 @@ The console shows one card per agent pane, with that agent's action group direct
 under its terminal output: every control's first delivery goes to the agent above
 it, and every label names its recipients. **Send [agent]** delivers one standalone
 instruction without an automatic commit, branch change, or relay. Its **After send**
-choice adds a follow-up once the agent finishes that instruction: **Commit** turns it
+choice follows the checked-out branch. On `main` or the recorded default, it offers
+only **Nothing** and **Stage relay**: the latter sends the instruction, then requests
+peer review of the uncommitted changes, with accepted work staged and the final
+commit left to you. It requires two agents and Peer relay, and uses the automatic
+continuation and turn limit in Collaboration settings. On task branches, **Commit** turns it
 into **Send & commit [agent]** (the agent implements the instruction and publishes one
 handoff commit, including the current uncommitted changes, then stops) and **Commit &
 relay** into **Send & commit [agent] → relay [peer]** (the peer then reviews exactly
 that commit). A turn that changes nothing publishes a report and relays nothing.
-With a relay follow-up, a second box, **Relay note for [peer]**, carries the human's
+With a committed relay follow-up, a second box, **Relay note for [peer]**, carries the human's
 note to the reviewer with its assignment. Leave the instruction empty on a dirty
 checkout and the same button hands off the current changes as they stand instead of
 doing new work: **Commit current changes [agent]** publishes one snapshot and stops,
@@ -310,8 +314,9 @@ anywhere; confirm it again for what is on screen.
 
 Open a checkout that has `main` or the recorded default branch checked out, with a
 two-agent selection. In Implementation, Control's **Relay mode** starts on **Stage
-relay**; choose **Commit relay** to create a task branch here instead. Inspect both
-participants before confirming readiness. The transport retains its recorded instance
+relay**. **Send options** also offers **After send → Stage relay**;
+its menu keeps Commit and Commit & relay hidden until a task branch is checked out.
+Inspect both participants before confirming readiness. The transport retains its recorded instance
 bindings. A directory containing two repositories is not one worktree; the backend
 checks the actual root and index. The run is bound to the branch and commit shown
 when it starts: if either changes, the next delivery or completion pauses it with

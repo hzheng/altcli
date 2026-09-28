@@ -192,6 +192,11 @@ test('another browser keyboard still blocks Send & commit',async({page})=>{
   await prepareKeyboardSend(page);
   const other=await page.context().newPage();
   try {
+    await other.route('**/api/v1/workspaces',async route=>{
+      const response=await route.fetch(),body=await response.json();
+      for(const workspace of body.workspaces)Object.assign(workspace.git,{branch:'task/current',integration:false,stageRelay:{eligible:false,reason:'A task branch uses committed handoffs.'},taskBase:workspace.git.head});
+      await route.fulfill({response,json:body});
+    });
     await other.goto('/');await other.getByLabel('Host access token').fill('a'.repeat(64));await other.getByRole('button',{name:'Open console'}).click();
     await openCard(other,'Codex');const control=other.getByRole('region',{name:'Control',exact:true});
     await control.getByLabel('Instruction for Codex').fill('Do not take another browser keyboard.');
@@ -201,6 +206,19 @@ test('another browser keyboard still blocks Send & commit',async({page})=>{
     await expect((await readiness(other))).toBeDisabled();
     await expect(control).toContainText('Release and reconcile it in Control access first');
   } finally {await other.close();}
+});
+test('Stage relay after Send keeps the native keyboard barrier and requires explicit release',async({page,request})=>{
+  const terminal=await openKeyboard(page);
+  const codex=await openCard(page,'Codex');
+  await codex.getByLabel('Instruction for Codex').fill('Stage the reviewed changes on main.');
+  await codex.getByLabel('After send').selectOption('stage_relay');
+  const send=codex.getByRole('button',{name:'Send Codex & stage-relay to Claude',exact:true});
+  await expect(send).toBeDisabled();
+  await expect(codex.getByRole('status')).toContainText('Release and reconcile it in Control access first');
+  const ready=await readiness(page);await expect(ready).toBeDisabled();
+  await expect((await openAccess(page)).getByRole('group',{name:'Readiness for Codex'})).not.toContainText('This action releases');
+  await showSurface(page,'Terminal');await expect(badge(terminal,'Keyboard here')).toBeVisible();
+  expect((await state(request)).manualSessions?.[0]?.live).toBe(true);
 });
 test('copy mode keeps the native terminal mounted and its keyboard generation intact',async({page,request})=>{
   const card=await openKeyboard(page);
@@ -233,7 +251,7 @@ test('a copy-mode peer stays visible and blocks automated input without discardi
   });
   const control=page.getByRole('region',{name:'Control',exact:true});
   await expect(control).toContainText('Tmux copy mode');
-  await expect(control.getByRole('button',{name:/^Send /}).first()).toBeDisabled();
+  await expect(control.getByRole('button',{name:'Send Codex',exact:true})).toBeDisabled();
   // Selecting the peer shows its terminal and addresses it; returning to Codex restores Codex's draft.
   await page.getByRole('navigation',{name:'Agent'}).getByRole('button',{name:'Claude',exact:true}).click();
   await showSurface(page,'Terminal');await expect(page.getByRole('region',{name:'Claude terminal',exact:true})).toBeVisible();

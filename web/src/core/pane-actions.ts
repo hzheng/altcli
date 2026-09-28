@@ -1,10 +1,11 @@
 import type { BranchConsent, CollaborationPolicy, ImplementationStart, StandaloneStart } from "../contracts/implementation.ts";
+import type { StartInput } from "../contracts/workflow.ts";
 
 /** One click in an agent card. The card names the action explicitly instead of inferring it from kind and handoff. */
-export type PaneAction = "send" | "send_commit" | "send_commit_relay" | "commit" | "commit_relay" | "relay";
+export type PaneAction = "send" | "send_stage_relay" | "send_commit" | "send_commit_relay" | "commit" | "commit_relay" | "relay";
 /** What happens after the card's agent finishes a sent instruction. */
-export type AfterSend = "nothing" | "commit" | "commit_relay";
-export const sendAction = (after: AfterSend): PaneAction => after === "commit" ? "send_commit" : after === "commit_relay" ? "send_commit_relay" : "send";
+export type AfterSend = "nothing" | "stage_relay" | "commit" | "commit_relay";
+export const sendAction = (after: AfterSend): PaneAction => after === "stage_relay" ? "send_stage_relay" : after === "commit" ? "send_commit" : after === "commit_relay" ? "send_commit_relay" : "send";
 
 export interface PaneRequestInput {
   action: PaneAction;
@@ -28,14 +29,17 @@ export interface PaneRequestInput {
   /** Only snapshot relay and existing-commit review carry a baseline; new work never does. */
   reviewBase?: string;
 }
-export type PaneRequest = { path: "instructions"; body: StandaloneStart } | { path: "implementation"; body: ImplementationStart };
+export type PaneRequest = { path: "instructions"; body: StandaloneStart } | { path: "commands"; body: StartInput } | { path: "implementation"; body: ImplementationStart };
 
-/** The single initial request for a card action. Send without a follow-up stays a standalone instruction; every other action is a
- * committed implementation start whose later turns the server schedules. */
+/** The single initial request for a card action. Plain Send, Stage relay and committed work keep their own contracts;
+ * the server schedules any later turns. */
 export function paneRequest(input: PaneRequestInput): PaneRequest {
   const { action, requestId, groupId, groupRevision, registrations, agentId, policy } = input;
   const text = input.text.trim(); const worker = policy === "worker_reviewer" ? { workerId: input.workerId! } : {};
   if (action === "send") return { path: "instructions", body: { requestId, groupId, groupRevision, registrations, agentId, text, policy, ...worker, confirmReady: true } };
+  if (action === "send_stage_relay") return { path: "commands", body: { requestId, agentId, pairId: groupId, kind: "instruction", text, handoff: true,
+    stage: { branch: input.branch.branch!, head: input.branch.head }, autoContinue: input.automatic, turnLimit: input.turnLimit,
+    confirmReady: true } };
   const kind = action === "send_commit" || action === "send_commit_relay" ? "work" : action === "relay" ? "review" : "commit";
   const handoff = action === "send_commit_relay" || action === "commit_relay" || action === "relay";
   const solo = policy === "solo";

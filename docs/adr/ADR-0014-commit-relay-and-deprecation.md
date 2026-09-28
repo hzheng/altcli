@@ -25,13 +25,22 @@ branch**. Commit relay remains the workflow for task branches.
 | Binding | The run records that branch and commit. The server rereads them before **every** delivery (the first turn, relay continuations, objection corrections) and at each completion, before it schedules a successor or releases ownership. Any change pauses the run and keeps ownership. Nothing is sent, and the run never switches workflows. |
 | Older runs | A staging run without a binding predates this change. It records its correlated completion but never dispatches another turn; it is held for inspection and takeover. Upgrading requires a restart, which already pauses active runs. |
 | Host setting | `ALTCLI_ENABLE_LEGACY_RELAY` keeps its name; absent now means enabled. An explicit `false`, which older templates wrote, keeps new starts off, and the Console and Host configuration name the variable. A request ID that already exists returns its recorded result. |
-| Console | On an eligible checkout with a two-member group, Implementation's Control offers **Relay mode: Stage relay** (the default) or **Commit relay** (create a task branch here, or a task worktree in Projects). The Settings preference is gone. Actions are named **Send [agent] & stage-relay to [peer]** and **Stage-relay review by [agent]**; the exact copy remains open. |
+| Console | On an eligible checkout with a two-member group, Implementation's Control offers **Relay mode: Stage relay** (the default) or **Send options** with branch-specific After send choices. Committed handoffs need a task branch. The Settings preference is gone. Actions are named **Send [agent] & stage-relay to [peer]** and **Stage-relay review by [agent]**; the exact copy remains open. |
 | Final commit | Always a separate human action, or an explicit plain Send instruction. The controller never commits, and a finished chain is not permission to publish. Squash into a checkout owned by a Stage relay run is refused, as for any owned checkout. |
 
 The frozen protocol is untouched: the `review-handoff` skill, its four `RELAY-OUTCOME` values,
 the Send & relay digest gate, the objection-to-author path, the ADR-0011 run gates, the turn budget and
 continuation semantics. Branch scoping, the binding and the labels wrap that protocol without changing
 it. Solo, fixed-role, N-agent, review-range, remote and PR features stay out of it.
+
+September 27 UI follow-up: **After send** on `main` or the recorded default offers
+only **Nothing** and **Stage relay**. Commit and Commit & relay appear on task
+branches; a proposed branch choice does not change the current checkout's menu.
+Stage relay uses the same instruction-plus-handoff start and branch/HEAD binding
+as the separate staging composer. It requires two peers, uses the displayed
+automatic-continuation preference and turn limit, and keeps the existing objection
+handling. Committed branch setup, journal and review-range settings do not apply.
+It cannot use the committed workflow's automatic native-keyboard handoff.
 
 ### Contextual pane actions (September 21, 2026)
 
