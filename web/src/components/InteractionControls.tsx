@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Checkpoint, InteractionInput, InteractionRecord } from '../contracts/interactions';
 import type { ManagedSession, RelayRun, WorkflowState } from '../contracts/workflow';
@@ -16,12 +16,19 @@ export function InteractionComposer({ token, state, run, agent, draftKey, disabl
   const [answer, setAnswer] = useRemembered(`${draftKey}:answer`, '');
   const [present, setPresent] = useState(false); const [escape, setEscape] = useState(false);
   const [busy, setBusy] = useState(false); const [message, setMessage] = useState(''); const [unknown, setUnknown] = useState(false);
+  const reasonId = useId();
   const turn = state.executions.find((t) => t.commandId === run.currentCommandId);
   const revision = run.interaction?.revision ?? 0;
   useEffect(() => { setPresent(false); setEscape(false); }, [run.currentCommandId, run.status, run.pauseRequested, turn?.status, agent.registrationId, revision, viewEpoch, disabled]);
   const pending = state.interactions?.some((r) => r.input.runId === run.id && ['recorded','sending','uncertain'].includes(r.status));
+  const publication = run.implementation?.latestPublication?.entry;
+  const humanObjection = publication?.commandId === run.currentCommandId && publication.decision === 'object' && publication.needsHuman;
   const reason = disabled ? 'The terminal is not currently available for input.' : unknown ? 'The response is unknown. Inspect input history before doing anything else.'
     : pending ? 'An input delivery is pending or uncertain. Inspect it before sending again.'
+    : run.status === 'paused' ? humanObjection
+      ? 'This run paused after an objection requiring human direction. Inspect the terminals, then use Take control in Control access to end this run and send a new instruction.'
+      : 'The controller is paused; the agent may still be working. Review the checkpoint in Control access, or inspect the terminals and use Take control to send a new instruction.'
+    : run.status === 'waiting' ? 'This run is waiting at a checkpoint. Review it in Control access before continuing, or use Take control to send a new instruction.'
     : turn?.agentId !== agent.id ? 'Another agent owns this checkout. This draft has not been sent.'
     : run.status !== 'running' || run.pauseRequested || run.interaction?.fault || turn?.status !== 'delivered' ? 'Wait for the checkpoint or reconcile the paused controller.'
     : !turn.sessionId || !turn.sourceTurnId ? 'Waiting for the exact native start acknowledgment.' : '';
@@ -41,11 +48,12 @@ export function InteractionComposer({ token, state, run, agent, draftKey, disabl
     } finally { setBusy(false); await refresh(); }
   }
   return <section className="pane-actions" aria-label={`Input for ${agent.label}`}>
-    <p className="zone-label"><span aria-hidden="true">⌨️</span> Input to {agent.label} · run in progress</p>
+    <p className="zone-label"><span aria-hidden="true">⌨️</span> Input to {agent.label} · {run.status === 'paused' ? 'controller paused' : run.status === 'waiting' ? 'waiting at checkpoint' : 'run in progress'}{turn?.status === 'finished' && ' · turn finished'}</p>
     <label>Add detail to this task<textarea aria-label={`Add detail for ${agent.label}`} rows={2} value={text} maxLength={1900} onChange={(e) => setText(e.target.value)} /></label>
-    <p className="fine">After the current task: {run.implementation ? turn?.input.handoff ? 'publish the assigned result, then review with the peer' : 'publish the assigned result, then stop' : run.planning ? 'continue the configured planning workflow' : 'stop after the instruction'}. This update does not change that choice.</p>
+    {turn?.status !== 'finished' && <p className="fine">After the current task: {run.implementation ? turn?.input.handoff ? 'publish the assigned result, then review with the peer' : 'publish the assigned result, then stop' : run.planning ? 'continue the configured planning workflow' : 'stop after the instruction'}. This update does not change that choice.</p>}
     {readinessSlot && createPortal(<div className="access-check" role="group" aria-label={`Input check for ${agent.label}`}>
-      <label className="readiness"><input type="checkbox" checked={present} disabled={!!reason || busy} onChange={(e) => setPresent(e.target.checked)} /> I inspected {agent.label}’s terminal and intend this input.</label>
+      <label className="readiness"><input type="checkbox" checked={present} disabled={!!reason || busy} aria-describedby={reason ? reasonId : undefined} onChange={(e) => setPresent(e.target.checked)} /> I inspected {agent.label}’s terminal and intend this input.</label>
+      {reason && <p id={reasonId} className="fine" role="status">{reason}</p>}
       <p className="fine">Applies to <strong>Send update</strong>, answers and keys for {agent.label} in this run.</p>
     </div>, readinessSlot)}
     <button type="button" disabled={off || !text.trim()} onClick={() => void send('detail')}>Send update to {agent.label}</button>

@@ -32,7 +32,7 @@ async function openGroup(page: Page, group: Group) {
 async function taskBranch(page: Page, changes = 0) {
   await page.route('**/api/v1/workspaces', async (route) => {
     const response = await route.fetch(); const data = await response.json();
-    for (const workspace of data.workspaces) Object.assign(workspace.git, { branch: 'task/current', integration: false, taskBase: 'b'.repeat(40), clean: !changes,
+    for (const workspace of data.workspaces) Object.assign(workspace.git, { branch: 'task/current', integration: false, stageRelay: { eligible: false, reason: 'A task branch uses committed handoffs.' }, taskBase: 'b'.repeat(40), clean: !changes,
       changes: Array.from({ length: changes }, (_, i) => ({ status: ' M', path: `src/file${i}.ts`, originalPath: null })), changeCount: changes });
     await route.fulfill({ json: data });
   });
@@ -276,7 +276,7 @@ test('readiness is one slot, revoked by After send, view switches and runs, and 
   await ready.check();
   // A run started elsewhere (another card or client) revokes it too, even after that run is released.
   const id = crypto.randomUUID();
-  await post(request, 'commands', { requestId: id, agentId: 'codex', kind: 'instruction', text: 'Elsewhere', confirmReady: true });
+  await post(request, 'commands', { requestId: id, agentId: 'codex', kind: 'instruction', text: 'Elsewhere', confirmReady: true, pairId: group.id, stage: { branch: 'main', head: 'a'.repeat(40) } });
   await expect(ready).not.toBeChecked({ timeout: 10000 }); await expect(ready).toBeDisabled();
   await post(request, 'runs', { runId: id, action: 'takeover', confirmReady: true });
   await expect(ready).toBeEnabled({ timeout: 10000 }); await expect(ready).not.toBeChecked();
@@ -357,16 +357,16 @@ test('Settings shows the effective host configuration and the console preference
   await expect(row('Data store')).toContainText(/altcli-e2e-\d+-\d+\/mock/); await expect(row('Data store')).toContainText('ALTCLI_DATA_DIR (set)');
   await expect(row('tmux binary')).toContainText('ALTCLI_TMUX_BIN · default tmux from PATH');
   await expect(row('Integration branches')).toContainText(`main, master + each project's default branch`);
-  await expect(row('Deprecated staging relay')).toContainText('allowed');
+  await expect(row('Stage relay')).toContainText('enabled on main and each project\'s default branch'); await expect(row('Stage relay')).toContainText('ALTCLI_ENABLE_LEGACY_RELAY (set)');
   await expect(host).not.toContainText('a'.repeat(64)); // the token never reaches the page
   await subtabs.getByRole('button', { name: 'Console preferences', exact: true }).click();
   const preferences = page.getByRole('region', { name: 'Console preferences' });
-  await expect(preferences.getByLabel('Staging fallback', { exact: true })).toBeEnabled();
+  await expect(preferences.getByLabel('Staging fallback', { exact: true })).toHaveCount(0); // Stage relay is offered in Control on main, not as a preference
   await sections.getByRole('button', { name: 'About', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'About AltCLI', exact: true })).toBeVisible();
   await expect(page.getByRole('region', { name: 'How this works' })).toContainText('No effect in this page sends commands');
   await sections.getByRole('button', { name: 'Console', exact: true }).click(); await showSurface(page, 'Control');
-  await expect(page.getByRole('region', { name: 'Actions for Codex' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Stage relay', exact: true })).toBeVisible(); // main's default Control action
 });
 test('Stay unlocked is an explicit preference: reopening skips the token, Lock forgets it, a refused token is dropped', async ({ page, request }) => {
   const group = await post(request, 'groups', { name: 'Stay unlocked', members: ['codex','claude'] });
@@ -496,8 +496,9 @@ test('Plan setup sits below the terminal stage, behind a command divider', async
 test('the settings row wraps inside its panel at intermediate widths, with the Settings toggle reachable', async ({ page, request }, info) => {
   test.skip(info.project.name !== 'desktop', 'Intermediate widths are resized from the desktop project.');
   const group = await post(request, 'groups', { name: 'Narrow desktop', members: ['codex','claude'] });
-  // On the integration branch with no implementation branch chosen, the row also carries its warning badge.
-  await openGroup(page, group);
+  // On the integration branch with no implementation branch chosen, the row also carries its warning badge once Commit relay is chosen.
+  await openGroup(page, group); await showSurface(page, 'Control');
+  await page.getByRole('group', { name: 'Relay mode' }).getByRole('button', { name: 'Commit relay', exact: true }).click();
   const settings = page.getByRole('region', { name: 'Implementation settings' });
   await expect(settings).toContainText('Choose the implementation branch in settings.');
   for (const width of [1100, 900, 800, 761]) {

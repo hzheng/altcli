@@ -1,7 +1,7 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import type { GitChange, Group, ImplementationStart, StandaloneStart } from '../src/contracts/implementation';
 import type { WorkflowState } from '../src/contracts/workflow';
-import { expandWorktree, editSettings, expand, handOff, openCard, openController, pane, readiness, openAccess, takeControl } from './ui';
+import { expandWorktree, editSettings, expand, handOff, openCard, openController, pane, readiness, openAccess, takeControl, showSurface } from './ui';
 const headers = { Authorization: `Bearer ${'a'.repeat(64)}` };
 async function post(request: APIRequestContext, path: string, data: unknown) {
   const response = await request.post(`/api/v1/${path}`, { headers, data }); expect(response.ok()).toBe(true); return response.json();
@@ -21,7 +21,7 @@ test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'wait' })
 test('blocked handoff details require fresh inspection and an explicit recheck click', async ({ page, request }) => {
   const group = await post(request, 'groups', { name: 'Blocked handoff', members: ['codex', 'claude'] });
   const id = crypto.randomUUID(); let revision = crypto.randomUUID(); const actions: unknown[] = [];
-  await post(request, 'commands', { requestId: id, agentId: 'codex', kind: 'instruction', text: 'Prior task', confirmReady: true });
+  await post(request, 'commands', { requestId: id, agentId: 'codex', kind: 'instruction', text: 'Prior task', confirmReady: true, pairId: group.id, stage: { branch: 'main', head: 'a'.repeat(40) } });
   await post(request, 'runs', { runId: id, action: 'pause' });
   // UI fixture only: real Git/lifecycle/recovery and concurrent decisions are exercised by server tests.
   await page.route('**/api/v1/state', async route => {
@@ -51,7 +51,7 @@ test('the baseline selector lists every candidate, defaults to the earliest, and
   const starts: ImplementationStart[] = [];
   await page.route('**/api/v1/workspaces', async (route) => {
     const response = await route.fetch(); const data = await response.json();
-    for (const workspace of data.workspaces) Object.assign(workspace.git, { branch: 'task/current', integration: false, taskBase: 'b'.repeat(40) });
+    for (const workspace of data.workspaces) Object.assign(workspace.git, { branch: 'task/current', integration: false, stageRelay: { eligible: false, reason: 'A task branch uses committed handoffs.' }, taskBase: 'b'.repeat(40) });
     await route.fulfill({ json: data });
   });
   const previews: { base?: string }[] = [];
@@ -92,7 +92,7 @@ test('cancelling a preset preview by choosing Another commit leaves the typed pr
   const group = await post(request, 'groups', { name: 'Cancelled preview', members: ['codex','claude'] });
   await page.route('**/api/v1/workspaces', async (route) => {
     const response = await route.fetch(); const data = await response.json();
-    for (const workspace of data.workspaces) Object.assign(workspace.git, { branch: 'task/current', integration: false, taskBase: 'b'.repeat(40) });
+    for (const workspace of data.workspaces) Object.assign(workspace.git, { branch: 'task/current', integration: false, stageRelay: { eligible: false, reason: 'A task branch uses committed handoffs.' }, taskBase: 'b'.repeat(40) });
     await route.fulfill({ json: data });
   });
   let delayed = 0;
@@ -125,7 +125,7 @@ for (const dirty of [false, true]) test(`another baseline requires preview and c
   await page.route('**/api/v1/workspaces', async (route) => {
     const response = await route.fetch(); const data = await response.json();
     for (const workspace of data.workspaces) Object.assign(workspace.git, { head, clean: !dirty, changes: dirty ? [{ status: 'MM', path: 'app.ts', originalPath: null }] : [], changeCount: dirty ? 1 : 0,
-      branch: 'task/current', integration: false, taskBase: 'b'.repeat(40) });
+      branch: 'task/current', integration: false, stageRelay: { eligible: false, reason: 'A task branch uses committed handoffs.' }, taskBase: 'b'.repeat(40) });
     await route.fulfill({ json: data });
   });
   await page.route('**/api/v1/implementation/preview', async (route) => {
@@ -182,7 +182,7 @@ for (const dirty of [false, true]) test(`a refused derived range still relays a 
   const starts: ImplementationStart[] = [];
   await page.route('**/api/v1/workspaces', async (route) => {
     const response = await route.fetch(); const data = await response.json();
-    for (const workspace of data.workspaces) Object.assign(workspace.git, { branch: 'task/current', integration: false, taskBase: 'b'.repeat(40), clean: !dirty,
+    for (const workspace of data.workspaces) Object.assign(workspace.git, { branch: 'task/current', integration: false, stageRelay: { eligible: false, reason: 'A task branch uses committed handoffs.' }, taskBase: 'b'.repeat(40), clean: !dirty,
       changes: dirty ? [{ status: 'MM', path: 'app.ts', originalPath: null }] : [], changeCount: dirty ? 1 : 0 });
     await route.fulfill({ json: data });
   });
@@ -222,7 +222,7 @@ async function snapshotAvailable(page: Page) {
     await route.fulfill({ json: data });
   });
 }
-test('committed implementation is default and explicit branch consent carries fixed roles', async ({ page, request }, testInfo) => {
+test('main starts Control on Stage relay; committed implementation takes explicit branch consent and carries fixed roles', async ({ page, request }, testInfo) => {
   await snapshotAvailable(page);
   const group = await post(request, 'groups', { name: 'Implementation', members: ['codex','claude'] });
   const starts: ImplementationStart[] = [];
@@ -232,10 +232,11 @@ test('committed implementation is default and explicit branch consent carries fi
     await route.fulfill({ json: { id: input.requestId, status: 'delivered', error: null } });
   });
   await openGroup(page, group);
-  const sections = page.getByRole('navigation', { name: 'Sections' });
-  await sections.getByRole('button', { name: 'Settings', exact: true }).click(); await expect(page.getByLabel('Staging fallback', { exact: true })).not.toBeChecked();
-  await sections.getByRole('button', { name: 'Console', exact: true }).click();
-  await expect(page.getByRole('region', { name: 'Implementation settings' })).toBeVisible();
+  // Stage relay needs no preference: on main it is Control's default, and committed work is one explicit switch away.
+  await showSurface(page, 'Control'); const modes = page.getByRole('group', { name: 'Relay mode' });
+  await expect(modes.getByRole('button', { name: 'Stage relay', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('region', { name: 'Stage relay', exact: true })).toBeVisible(); await expect(page.getByLabel('Staging fallback', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Implementation settings' })).toContainText('Stage relay: these settings apply only to committed work on a task branch.');
   const codex = await openCard(page, 'Codex'); await handOff(codex, 'commit');
   await expect(codex.getByRole('button', { name: 'Commit current changes Codex', exact: true })).toBeDisabled();
   await editSettings(page);
@@ -304,7 +305,7 @@ for (const policy of ['peer', 'worker_reviewer'] as const) test(`${policy} relay
   const starts: ImplementationStart[] = [];
   await page.route('**/api/v1/workspaces', async (route) => {
     const response = await route.fetch(); const data = await response.json();
-    for (const workspace of data.workspaces) Object.assign(workspace.git, { branch: 'task/current', integration: false, taskBase: 'b'.repeat(40) });
+    for (const workspace of data.workspaces) Object.assign(workspace.git, { branch: 'task/current', integration: false, stageRelay: { eligible: false, reason: 'A task branch uses committed handoffs.' }, taskBase: 'b'.repeat(40) });
     await route.fulfill({ json: data });
   });
   await page.route('**/api/v1/implementation', async (route) => { starts.push(route.request().postDataJSON()); await route.fulfill({ json: { status: 'delivered', error: null } }); });
@@ -322,7 +323,7 @@ for (const policy of ['peer', 'worker_reviewer'] as const) test(`${policy} relay
   expect(previews.filter((preview) => preview.recipient === 'claude').at(-1)!.base).toBeUndefined();
   if (policy === 'worker_reviewer') expect(previews.slice(afterPolicy).some((preview) => preview.recipient === 'codex')).toBe(false); // the fixed worker never reviews
   const review = claude.getByRole('button', { name: 'Relay Claude', exact: true });
-  await expect(review).toBeDisabled(); await expect(review).toHaveAttribute('title', /Control access at the top right, check “Ready for implementation”/);
+  await expect(review).toBeDisabled(); await expect(review).toHaveAttribute('title', /Check “Ready for implementation” in Control access/);
   await (await readiness(page)).check(); await review.click();
   await expect.poll(() => starts.length).toBe(1);
   expect(starts[0]).toMatchObject({ kind: 'review', agentId: 'claude', policy, reviewBase: 'b'.repeat(40), branch: { head: 'a'.repeat(40) } });
@@ -347,7 +348,7 @@ test('reconciliation discovers the restarted peer for the next Commit without a 
   await snapshotAvailable(page);
   const group = await post(request, 'groups', { name: 'Recovery', members: ['codex', 'claude'] });
   const runId = crypto.randomUUID();
-  await post(request, 'commands', { requestId: runId, agentId: 'codex', kind: 'instruction', text: 'Prior task', confirmReady: true });
+  await post(request, 'commands', { requestId: runId, agentId: 'codex', kind: 'instruction', text: 'Prior task', confirmReady: true, pairId: group.id, stage: { branch: 'main', head: 'a'.repeat(40) } });
   const starts: ImplementationStart[] = []; const resets: unknown[] = []; const renewed = crypto.randomUUID();
   // Discovery evidence is simulated; pause and takeover use the real API/store. Server tests cover actual rebinding.
   await page.route('**/api/v1/state', async (route) => {
@@ -412,7 +413,7 @@ test('an existing task branch keeps its baseline: inferred values are confirmed,
   const group = await post(request, 'groups', { name: 'Existing task', members: ['codex', 'claude'] }); let payload: ImplementationStart | null = null;
   let taskBase: string | null = 'c'.repeat(40);
   await page.route('**/api/v1/workspaces', async (route) => { const response = await route.fetch(); const data = await response.json();
-    for (const workspace of data.workspaces) if (workspace.cwd === '/demo/project') workspace.git = { ...workspace.git, branch: 'task/existing', integration: false, taskBase, clean: false, changes: [{ status: 'MM', path: 'app.ts', originalPath: null }], changeCount: 1 };
+    for (const workspace of data.workspaces) if (workspace.cwd === '/demo/project') workspace.git = { ...workspace.git, branch: 'task/existing', integration: false, stageRelay: { eligible: false, reason: 'A task branch uses committed handoffs.' }, taskBase, clean: false, changes: [{ status: 'MM', path: 'app.ts', originalPath: null }], changeCount: 1 };
     await route.fulfill({ json: data }); });
   await page.route('**/api/v1/implementation', async (route) => { payload = route.request().postDataJSON(); await route.fulfill({ json: { status: 'delivered', error: null } }); });
   await openGroup(page, group); await editSettings(page);
@@ -482,7 +483,7 @@ for (const phase of ['Plan', 'Implementation'] as const) test(`${phase} applies 
     await expect(files).toContainText('new <script>.txt'); await expect(files).toContainText('old name.ts → new name.ts');
     await expect(warning.locator('script')).toHaveCount(0);
     await expect(warning).toContainText('Creating a branch alone does not make the checkout clean');
-    await expect(warning).toContainText('choose a Review baseline and use Relay'); await expect(warning).toContainText('Staging fallback');
+    await expect(warning).toContainText('choose a Review baseline and use Relay'); await expect(warning).toContainText('use Stage relay in Implementation');
   } else await expect(warning).toHaveCount(0);
   await expect(page.getByRole('group', { name: 'Phase' }).getByRole('button', { name: 'Plan', exact: true })).toBeEnabled();
   await expect(page.getByRole('group', { name: 'Phase' }).getByRole('button', { name: 'Implementation', exact: true })).toBeEnabled();
@@ -514,11 +515,11 @@ for (const phase of ['Plan', 'Implementation'] as const) test(`${phase} applies 
   await ready.check(); await start.click(); await expect.poll(() => starts).toBe(1);
   dirty = true; await page.getByRole('button', { name: 'Recheck', exact: true }).click();
   if (phase === 'Plan') await expect(warning).toBeVisible(); else await expect(warning).toHaveCount(0);
-  const sections = page.getByRole('navigation', { name: 'Sections' });
-  await sections.getByRole('button', { name: 'Settings', exact: true }).click(); await page.getByLabel('Staging fallback', { exact: true }).check();
-  await sections.getByRole('button', { name: 'Console', exact: true }).click();
+  // On main, Implementation's Control offers Stage relay directly: no Settings detour.
+  await page.getByRole('group', { name: 'Phase' }).getByRole('button', { name: 'Implementation', exact: true }).click(); await showSurface(page, 'Control');
+  await page.getByRole('group', { name: 'Relay mode' }).getByRole('button', { name: 'Stage relay', exact: true }).click();
   await expect((await readiness(page, 'Ready to send'))).toBeEnabled(); expect(starts).toBe(1);
-  // The legacy composer is a command section below the terminal stage, like Plan setup.
+  // The Stage relay composer is a command section below the terminal stage, like Plan setup.
   await expect(page.locator('.control-pane .command-divider + .composer.command-zone')).toHaveCount(1);
 });
 test('failed Git recheck blocks cached clean consent until a successful read and fresh confirmation', async ({ page, request }) => {
@@ -617,7 +618,7 @@ for (const policy of ['peer', 'worker_reviewer'] as const) test(`Relay adapts to
   let dirty = false; const starts: ImplementationStart[] = []; const previews: {base?: string; commitPending: boolean}[] = [];
   await page.route('**/api/v1/workspaces', async (route) => {
     const response = await route.fetch(); const data = await response.json();
-    for (const workspace of data.workspaces) Object.assign(workspace.git, { branch: 'task/current', integration: false, taskBase: 'b'.repeat(40), clean: !dirty,
+    for (const workspace of data.workspaces) Object.assign(workspace.git, { branch: 'task/current', integration: false, stageRelay: { eligible: false, reason: 'A task branch uses committed handoffs.' }, taskBase: 'b'.repeat(40), clean: !dirty,
       changes: dirty ? [{ status: 'MM', path: 'app.ts', originalPath: null }] : [], changeCount: dirty ? 1 : 0 });
     await route.fulfill({ json: data });
   });
@@ -679,7 +680,7 @@ for (const policy of ['peer', 'worker_reviewer'] as const) test(`dirty Commit sn
   const starts: ImplementationStart[] = [];
   await page.route('**/api/v1/workspaces', async (route) => {
     const response = await route.fetch(); const data = await response.json();
-    for (const workspace of data.workspaces) Object.assign(workspace.git, { branch: 'task/current', integration: false, taskBase: workspace.git.head,
+    for (const workspace of data.workspaces) Object.assign(workspace.git, { branch: 'task/current', integration: false, stageRelay: { eligible: false, reason: 'A task branch uses committed handoffs.' }, taskBase: workspace.git.head,
       clean: false, changes: [{ status: 'MM', path: 'src/work.ts', originalPath: null }], changeCount: 1 });
     await route.fulfill({ json: data });
   });
@@ -700,6 +701,58 @@ for (const policy of ['peer', 'worker_reviewer'] as const) test(`dirty Commit sn
   await send.click(); await expect.poll(() => starts.length).toBe(1);
   expect(starts[0]!.text).toBeUndefined();
   expect(starts[0]).toMatchObject({ kind: 'commit', handoff: false, autoContinue: false, policy, branch: { branch: 'task/current' } });
+});
+
+test('a finished human objection explains disabled input beside its check and requires deliberate takeover', async ({ page, request }, info) => {
+  const group: Group = await post(request, 'groups', { name: 'Human objection', members: ['codex','claude'] });
+  const state: WorkflowState = await (await request.get('/api/v1/state', { headers })).json();
+  const id = crypto.randomUUID();
+  await post(request, 'instructions', { requestId: id, groupId: group.id, groupRevision: group.revision,
+    registrations: Object.fromEntries(state.sessions.filter(s => group.members.includes(s.id)).map(s => [s.id, s.registrationId])),
+    agentId: 'claude', text: 'Inspect the proposal.', policy: 'peer', confirmReady: true });
+  await post(request, 'runs', { runId: id, action: 'pause' });
+  const head = 'a'.repeat(40);
+  const proposal: ImplementationStart = { requestId: id, groupId: group.id, groupRevision: group.revision,
+    registrations: Object.fromEntries(state.sessions.filter(s => group.members.includes(s.id)).map(s => [s.id, s.registrationId!])),
+    agentId: 'claude', kind: 'work', text: 'Inspect the proposal.', handoff: false, policy: 'peer', autoContinue: false, turnLimit: 20,
+    branch: { branch: 'main', head, newBranch: 'task/objection' }, confirmReady: true };
+  // Simulated publication/display state; real result correlation remains covered by workflow tests.
+  await page.route('**/api/v1/state', async route => {
+    const response = await route.fetch(); const data: WorkflowState = await response.json(); const run = data.runs.find(r => r.id === id)!;
+    if (run.status === 'paused') {
+      const turn = data.executions.find(t => t.commandId === run.currentCommandId)!;
+      turn.status = 'finished'; run.reason = 'Human direction required: choose the supported filter policy.';
+      run.implementation = { group, phase: 'implementation', handoff: 'commit', policy: 'peer', workerId: null, revision: 1,
+        cwd: run.repository, worktree: { root: run.repository, gitDir: `${run.repository}/.git`, indexPath: `${run.repository}/.git/index` },
+        branch: 'task/objection', consent: proposal.branch, setup: 'ready', logPath: null, request: proposal, turn: 2,
+        taskBaseSha: head, acceptedSha: head, candidateSha: head, candidateAuthor: 'codex', expectedParentSha: head, findings: 'Choose the supported filter policy.', next: null,
+        latestPublication: { sha: head, projectChanged: false, entry: { schema: 1, phase: 'implementation', runId: id, commandId: run.currentCommandId,
+          turn: 2, policyRevision: 1, action: 'review', agentId: 'claude', registrationId: proposal.registrations.claude!, parent: head, base: head, reviewBase: head, reviewHead: head,
+          model: 'fixture', decision: 'object', reason: 'Choose the supported filter policy.', needsHuman: true, summary: 'Needs a decision.', checks: [] } } };
+    }
+    await route.fulfill({ json: data });
+  });
+  const writes: string[] = []; page.on('request', request => { if (request.method() === 'POST') writes.push(new URL(request.url()).pathname); });
+  await openGroup(page, group); await openCard(page, 'Claude'); const access = await openAccess(page);
+  const update = page.getByRole('region', { name: 'Input for Claude', exact: true });
+  await update.getByLabel('Add detail for Claude').fill('Use normal Git status behavior.');
+  const check = access.getByRole('group', { name: 'Input check for Claude' });
+  await expect(check.getByRole('checkbox')).toBeDisabled();
+  await expect(check).toContainText('This run paused after an objection requiring human direction.');
+  await expect(check).toContainText('Take control');
+  await expect(update.locator('.zone-label')).toContainText('controller paused · turn finished');
+  await expect(update).not.toContainText('After the current task:');
+  await expect(update.getByRole('button', { name: 'Send update to Claude' })).toBeDisabled();
+  await showSurface(page, 'Terminal'); await showSurface(page, 'Control');
+  await expect(check.getByRole('checkbox')).toBeDisabled(); expect(writes).toEqual([]);
+  await page.screenshot({ path: info.outputPath('objection-input-disabled.png'), fullPage: true });
+  await access.getByRole('button', { name: 'Take control…', exact: true }).click();
+  expect(writes).toEqual([]);
+  await access.getByRole('button', { name: 'Take control now', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Control access · you', exact: true })).toBeVisible();
+  await expect(update).toHaveCount(0);
+  expect(writes).toEqual(['/api/v1/runs']);
+  await expect(await openCard(page, 'Claude')).toBeVisible();
 });
 
 test('owned composer sends literal input only to the acknowledged holder and checkpoints final release', async ({ page, request }, info) => {

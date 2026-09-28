@@ -53,11 +53,15 @@ exact-version endorsements, and a separate human approval checkpoint. The [ADR i
 and [workflow guide](docs/WORKFLOWS.md) describe the broader design; source support
 does not imply installed-host acceptance.
 
-Owned modern assignments expose **Add detail to this task** and literal terminal controls. Input holds the whole run until its original result validates and you review the checkpoint. A separately saved waiting checkpoint can be restored after exactly observed external work settles; restoration sends nothing. Projects can request read-only squash-batch advice, with a fresh human preview and confirmation for every integration. See [ADR-0019](docs/adr/ADR-0019-terminal-input-and-checkpoints.md) and the installed-provider limits in [VALIDATION](VALIDATION.md).
+Owned modern assignments expose **Add detail to this task** and literal terminal controls. Input holds the whole run until its original result validates and you review the checkpoint. A disabled input check explains its blocker beside the checkbox in Control access. After a human-directed objection, inspect the terminals and use **Take control…** to end the paused run before sending a new instruction; opening the panel or changing views does not release ownership. A separately saved waiting checkpoint can be restored after exactly observed external work settles; restoration sends nothing. Projects can request read-only squash-batch advice, with a fresh human preview and confirmation for every integration. See [ADR-0019](docs/adr/ADR-0019-terminal-input-and-checkpoints.md) and the installed-provider limits in [VALIDATION](VALIDATION.md).
 
-The supervised staging fallback is off by default. Set
-`ALTCLI_ENABLE_LEGACY_RELAY=true` and restart the backend to expose the supervised
-fallback. Its staging contract remains unchanged.
+**Stage relay** reviews uncommitted quick fixes on `main` or the recorded default
+branch. There, Implementation's Control offers it by default for a two-member
+group; committed handoffs stay on task branches. A host whose `web/.env.local`
+still says `ALTCLI_ENABLE_LEGACY_RELAY=false` (older templates wrote this) keeps it
+off until that line is removed or set to `true` and the backend is restarted. Its
+staging contract is unchanged. Reusing a task worktree after integration (update
+from main, branch rename, directory move) is accepted design, not yet implemented.
 
 Use [ROADMAP](ROADMAP.md#migration-and-implementation-sequence) for rollout, [OPEN-DECISIONS](docs/OPEN-DECISIONS.md) for unresolved choices, and [DESIGN-MIGRATION](docs/DESIGN-MIGRATION.md) to locate the content formerly held in the standalone collaboration draft. The draft is no longer a required document.
 
@@ -202,7 +206,12 @@ follows completion; each linked task worktree instead offers three confirmed
 end-of-task actions in Projects. Squash can run in successive batches: choose
 **Squash through commit**, preview the range, edit its message, and confirm. Leave
 the SHA empty for all remaining commits. Later batches resume after the last
-recorded endpoint; idle agent panes are allowed, and disabled squash actions
+recorded endpoint; agents in both checkouts need settled native turns and clear process evidence,
+including unselected agents and subdirectory panes. Unknown evidence or surviving background work
+blocks squash even when an agent displays Idle. Shell panes are allowed when the root shell is in the
+foreground and no task processes remain. Ordinary Git status and worktree operations retain configured
+filter behavior (including LFS); squash still refuses selected filters and external merge drivers.
+Disabled squash actions
 explain their blocker. **Squash into main** previews one squash commit of the task
 branch through a chosen SHA into local main/default (the exact staging and
 `git commit` in the checkout that has that branch checked out, the commits
@@ -283,7 +292,7 @@ effective global configuration (tmux binary and where it resolves, data store, t
 worktree root, integration branches, adapter, input, allowed origins) with the
 environment variable behind each value; values are read when the host starts, so a
 change means editing `web/.env.local` or the shell and restarting. Settings also
-holds this page's console preferences, such as the deprecated staging fallback.
+holds this page's console preferences, such as launch profiles and staying unlocked.
 **About** explains how the console works.
 
 Switching between tabs, agents, Parallel and Focus, Plan and
@@ -293,22 +302,27 @@ Readiness is one confirmation for the whole page and never survives such a switc
 a changed checkout or setting, Recheck, a start, or a run starting or ending
 anywhere; confirm it again for what is on screen.
 
-## Using the staging fallback
+## Using Stage relay on main
 
-Use a saved two-agent selection and inspect both participants before confirming
-readiness. The deprecated transport retains its recorded instance bindings.
-A directory containing two repositories is not one worktree; the backend checks
-the actual root and index.
+Open a checkout that has `main` or the recorded default branch checked out, with a
+two-agent selection. In Implementation, Control's **Relay mode** starts on **Stage
+relay**; choose **Commit relay** to create a task branch here instead. Inspect both
+participants before confirming readiness. The transport retains its recorded instance
+bindings. A directory containing two repositories is not one worktree; the backend
+checks the actual root and index. The run is bound to the branch and commit shown
+when it starts: if either changes, the next delivery or completion pauses it with
+ownership retained, and nothing is sent. Staged and unstaged work is reviewed as
+the skill defines. Nothing is committed for you; commit the finished fix yourself.
 
-**Send** addresses one agent and never relays. **Send & relay** requests one review
+**Send** addresses one agent and never relays. **Send & stage-relay** requests one review
 when the instruction finishes, even with the continuation preference off, provided
 the worker actually changed the worktree: the server takes a read-only Git digest
 (HEAD, index, unstaged content, untracked files) just before delivery and again at
 the correlated completion. An unchanged digest, for example when the worker asked
 for more information or declined, ends the run without a review so you can answer
 it with a plain Send; an unreadable digest pauses. Partial edits followed by a
-question still relay, since the reviewer has something to look at. **Relay**
-starts a review, with optional context. The preference only determines whether a
+question still relay, since the reviewer has something to look at. **Stage-relay
+review** starts a review, with optional context. The preference only determines whether a
 new explicitly started run continues after `accept_and_improve` and whether an
 actionable `strong_objection` is sent back to the author as a correction instruction
 before returning changed work to review; it is not an armed run by itself. An

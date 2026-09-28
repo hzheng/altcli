@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { beforeEach, afterEach, test } from 'node:test';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync, existsSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync, existsSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -10,11 +10,16 @@ import { Store } from '../src/server/store.ts';
 import { loadConfig, type Config } from '../src/server/config.ts';
 import { resolveWorktree } from '../src/server/worktree.ts';
 import { WorkflowStore } from '../src/server/workflow-store.ts';
-import { mockSessions } from '../src/server/adapters/mock.ts';
+import { MockAdapter, mockPanes, mockSessions } from '../src/server/adapters/mock.ts';
+import { Controller } from '../src/server/controller.ts';
+import { ControlPlane } from '../src/server/control-plane.ts';
+import { assertClean, branchState } from '../src/server/commit-handoff.ts';
+import { processesForPane } from '../src/server/processes.ts';
+import type { ListedPane } from '../src/server/adapters/terminal.ts';
 import { parseDiscard, parseIntegrate, parseWorktreeCreate, parseWorktreePreview } from '../src/core/project-validation.ts';
 import { jsonBody } from '../src/server/http.ts';
 import { MAX_MESSAGE_JSON_BYTES, messageJsonBytes } from '../src/core/squash-message.ts';
-import type { ManagedSession, Workspace } from '../src/contracts/workflow.ts';
+import type { HookEvent, ManagedSession, Workspace } from '../src/contracts/workflow.ts';
 import type { WorktreeCreateInput, WorktreeIntegrationPreview } from '../src/contracts/projects.ts';
 
 // Real Git / SQLite, isolated task-worktree root. No installed agents, actual home or live controller is used.
@@ -383,6 +388,267 @@ async function taskFixture() {
 const noGuard = async () => {};
 /** The compact confirmation the browser sends: consent digest plus the (possibly edited) message, never the preview itself. */
 const confirmSquash = (preview: WorktreeIntegrationPreview, message = preview.message) => ({ projectId: preview.projectId, worktreeId: preview.worktreeId, through: preview.through, requestId: preview.requestId, consent: preview.consent, message, confirm: true as const });
+test('filtered repositories retain status, clean-entry checks, creation and uncertain-creation recovery', async () => {
+  // An isolated passthrough filter exercises the same selected-filter path as LFS, without an installed binary or network.
+  git(root, 'config', 'filter.fixture.clean', 'cat'); git(root, 'config', 'filter.fixture.smudge', 'cat');
+  git(root, 'config', 'filter.fixture.required', 'true');
+  writeFileSync(join(root, '.gitattributes'), 'app.txt filter=fixture\n'); git(root, 'add', '.'); git(root, 'commit', '-qm', 'filtered file');
+  const head = git(root, 'rev-parse', 'HEAD');
+  assert.equal((await branchState(root)).clean, true); await assertClean(root, 'main', head);
+  const request = await input(); const result = await catalog.create(request);
+  assert.equal(result.status, 'ready', result.message); assert.equal(catalog.projectHeld(request.projectId), false);
+  await assertClean(request.path, request.branch, head);
+  // A record left uncertain by the previous implementation is recoverable once normal status works again.
+  store.saveWorktreeCreation({ ...result, status: 'uncertain', message: 'Earlier verification failed' });
+  assert.equal((await catalog.reconcile(request.requestId)).status, 'ready');
+  assert.equal(catalog.projectHeld(request.projectId), false);
+  const project = (await catalog.discover([await workspace(root)], []))[0]!;
+  const target = { projectId: project.id, worktreeId: project.worktrees.find(w => w.path === request.path)!.id };
+  await catalog.previewRemoval(target); await catalog.previewDiscard(target);
+  writeFileSync(join(request.path, 'app.txt'), 'changed\n');
+  assert.equal((await branchState(request.path)).clean, false);
+  await assert.rejects(assertClean(request.path, request.branch, head), /must be clean/);
+});
+/** Real-mode Git and SQLite through the public control plane, with explicitly simulated pane and lifecycle evidence. */
+async function squashPlane() {
+  const adapter = new MockAdapter(); const panes: ListedPane[] = [{ ...mockPanes()[0]!, cwd: root }];
+  adapter.listPanes = async () => panes.map(p => ({ ...p }));
+  adapter.inspect = async id => { const pane = panes.find(p => p.identity.paneId === id); if (!pane) throw new Error('pane gone'); return { ...pane }; };
+  adapter.foreground = async () => '100';
+  adapter.processes = async session => [{ pid: '100', command: session.agentType }];
+  const plane = new ControlPlane(new Controller(config, store, adapter));
+  let sequence = 0;
+  const started = async (pane = panes[0]!) => {
+    const event: HookEvent = { source: pane.command === 'codex' ? 'codex' : 'claude', event: 'turn_started', identity: pane.identity,
+      paneId: pane.identity.paneId, socketPath: pane.identity.socketPath, cliPid: '100', sessionId: 'fixture', sourceTurnId: randomUUID(),
+      startedAt: new Date(Date.now() + ++sequence).toISOString(), prompt: 'fixture external task' };
+    await plane.recordEvent(event); return event;
+  };
+  const settle = async (pane = panes[0]!, backgroundState: HookEvent['backgroundState'] = 'unknown') => {
+    const event = await started(pane); await plane.recordEvent({ ...event, event: 'turn_complete', settled: true, backgroundState });
+  };
+  await settle(); return { plane, adapter, panes, started, settle };
+}
+for (const mode of ['idle', 'background', 'foreground', 'unknown', 'interpreter'] as const)
+test(`squash checks ${mode} shell process evidence`, async () => {
+  const { target, request } = await taskFixture(); const { plane, adapter, panes } = await squashPlane();
+  const shell = { ...mockPanes()[2]!, cwd: request.path, command: mode === 'interpreter' ? 'node' : 'zsh' }; panes.push(shell);
+  adapter.foreground = async session => session.identity.paneId !== shell.identity.paneId ? '100' : mode === 'unknown' ? null : mode === 'foreground' ? '200' : shell.identity.panePid;
+  adapter.processes = async session => session.identity.paneId !== shell.identity.paneId ? [{ pid: '100', command: 'codex' }]
+    : mode === 'background' ? [{ pid: '200', command: 'sleep' }] : [];
+  if (mode !== 'idle') { await assert.rejects(plane.previewIntegration(target), { code: 'INTEGRATION_WRITERS' }); return; }
+  const result = await plane.integrateWorktree(confirmSquash(await plane.previewIntegration(target)));
+  assert.equal(result.status, 'integrated', result.message);
+});
+test('squash accepts Claude sleep prevention but still refuses a task under that helper', async () => {
+  const { target } = await taskFixture(); const { plane, adapter, panes, settle } = await squashPlane();
+  panes[0]!.command = '2.1.283'; await settle(panes[0], 'clear');
+  const rows = [
+    { pid: '10', ppid: '1', tty: 'fixture', command: 'zsh' },
+    { pid: '100', ppid: '10', tty: 'fixture', command: '/fixture/claude' },
+    { pid: '200', ppid: '100', tty: 'fixture', command: '/usr/bin/caffeinate', args: 'caffeinate -i -t 300' },
+  ];
+  adapter.processes = async () => processesForPane(rows, '10');
+  const preview = await plane.previewIntegration(target);
+  rows.push({ pid: '201', ppid: '200', tty: 'fixture', command: 'node' });
+  await assert.rejects(plane.previewIntegration(target), { code: 'INTEGRATION_WRITERS' }); rows.pop();
+  assert.equal((await plane.integrateWorktree(confirmSquash(preview))).status, 'integrated');
+});
+test('activity after read-only squash verification does not retain a completed operation', async () => {
+  const { target } = await taskFixture(); const { plane, started, settle } = await squashPlane();
+  const preview = await plane.previewIntegration(target);
+  plane.projects['integratedExactly'] = async () => null;
+  assert.equal((await plane.integrateWorktree(confirmSquash(preview))).status, 'uncertain');
+  await started(); assert.equal((await plane.reconcileIntegration(preview.requestId)).status, 'uncertain');
+  await settle();
+  const verify = plane.projects['integratedEventually'].bind(plane.projects);
+  plane.projects['integratedEventually'] = async (...args) => { const commit = await verify(...args); await started(); return commit; };
+  const result = await plane.reconcileIntegration(preview.requestId);
+  assert.equal(result.status, 'integrated', result.message); assert.equal(plane.projects.projectHeld(target.projectId), false);
+});
+for (const entry of ['discovery', 'preview', 'confirmation'] as const) for (const filter of ['clean', 'process'] as const)
+test(`public squash ${entry} preserves normal ${filter} status filters but refuses filtered integration`, async () => {
+  const { target } = await taskFixture();
+  writeFileSync(join(root, '.gitattributes'), 'app.txt filter=fixture\n'); git(root, 'add', '.'); git(root, 'commit', '-qm', 'attributes');
+  const { plane } = await squashPlane(); const preview = await plane.previewIntegration(target);
+  git(root, 'config', `filter.fixture.${filter}`, `echo ran > ../filter-ran; ${filter === 'process' ? 'exit 1' : 'cat'}`);
+  const changed = new Date(Date.now() - 60000); utimesSync(join(root, 'app.txt'), changed, changed);
+  const head = git(root, 'rev-parse', 'HEAD'); const index = readFileSync((await resolveWorktree(root))!.indexPath);
+  if (entry === 'discovery') {
+    const discovery = await plane.workspaces();
+    if (filter === 'clean') assert.equal(discovery.workspaces[0]!.gitError, undefined);
+    else assert.match(discovery.workspaces[0]!.gitError!, /Git inspection failed/); // the sentinel process intentionally does not implement Git's filter protocol
+  } else await assert.rejects(entry === 'preview' ? plane.previewIntegration(target) : plane.integrateWorktree(confirmSquash(preview)), { code: 'INTEGRATION_CONFIG' });
+  assert.equal(existsSync(join(directory, 'filter-ran')), true, 'ordinary discovery uses normal Git status semantics');
+  assert.equal(git(root, 'rev-parse', 'HEAD'), head); assert.deepEqual(readFileSync((await resolveWorktree(root))!.indexPath), index);
+  assert.equal(store.worktreeIntegrations().length, 0);
+});
+for (const evidence of ['working', 'unknown', 'acknowledged', 'background', 'writer', 'unavailable', 'shell', 'subdirectory', 'replacement', 'restart', 'inventory', 'racing activity', 'new pane'] as const)
+test(`squash confirmation refuses ${evidence} writer evidence without changing Git`, async () => {
+  const { target, request } = await taskFixture(); const { plane, adapter, panes, started, settle } = await squashPlane();
+  const preview = await plane.previewIntegration(target); const index = readFileSync((await resolveWorktree(root))!.indexPath);
+  let confirming = plane;
+  if (evidence === 'working') await started();
+  if (evidence === 'unknown' || evidence === 'acknowledged') {
+    const session = (await plane.state()).sessions[0]!;
+    const fresh = new ControlPlane(new Controller(config, store, adapter)); confirming = fresh;
+    if (evidence === 'acknowledged') {
+      const current = (await fresh.state()).sessions.find(s => s.identity.paneId === session.identity.paneId)!;
+      await fresh.resetActivity({ agentId: current.id, registrationId: current.registrationId, expectedUpdatedAt: null, confirmReady: true });
+    }
+  }
+  if (evidence === 'background') await settle(panes[0], 'active');
+  if (evidence === 'writer') adapter.processes = async () => [{ pid: '200', command: 'node writer.js' }];
+  if (evidence === 'unavailable') adapter.processes = async () => { throw new Error('process evidence unavailable'); };
+  if (evidence === 'shell') panes.push({ ...mockPanes()[2]!, cwd: request.path });
+  if (evidence === 'subdirectory') { const cwd = join(request.path, 'nested'); mkdirSync(cwd); panes.push({ ...mockPanes()[1]!, cwd }); }
+  if (evidence === 'replacement') adapter.foreground = async () => '101';
+  if (evidence === 'restart') confirming = new ControlPlane(new Controller(config, store, adapter));
+  if (evidence === 'inventory') adapter.listPanes = async () => { throw new Error('inventory unavailable'); };
+  if (evidence === 'racing activity') adapter.processes = async () => { await started(); return [{ pid: '100', command: 'codex' }]; };
+  if (evidence === 'new pane') adapter.processes = async () => { panes.push({ ...mockPanes()[2]!, cwd: request.path }); return [{ pid: '100', command: 'codex' }]; };
+  const result = await confirming.integrateWorktree(confirmSquash(preview));
+  assert.equal(result.status, 'failed', result.message); assert.match(result.message, /writer|activity|process|pane/i);
+  assert.equal(git(root, 'rev-parse', 'HEAD'), preview.targetHead); assert.deepEqual(readFileSync((await resolveWorktree(root))!.indexPath), index);
+});
+test('squash refuses initialized submodule filters after ordinary discovery', async () => {
+  const { target } = await taskFixture(); const dependency = join(directory, 'dependency'); mkdirSync(dependency);
+  git(dependency, 'init', '-b', 'main'); writeFileSync(join(dependency, 'file.txt'), 'dependency\n');
+  writeFileSync(join(dependency, '.gitattributes'), 'file.txt filter=fixture\n'); git(dependency, 'add', '.'); git(dependency, 'commit', '-qm', 'dependency');
+  git(root, '-c', 'protocol.file.allow=always', 'submodule', 'add', dependency, 'dependency'); git(root, 'commit', '-qam', 'submodule');
+  const checkout = join(root, 'dependency');
+  git(checkout, 'config', 'filter.fixture.clean', 'echo ran > ../../submodule-filter-ran; cat');
+  const changed = new Date(Date.now() - 60000); utimesSync(join(checkout, 'file.txt'), changed, changed);
+  const { plane } = await squashPlane();
+  await assert.rejects(plane.previewIntegration(target), { code: 'INTEGRATION_CONFIG' });
+  assert.equal(existsSync(join(directory, 'submodule-filter-ran')), true);
+  unlinkSync(join(directory, 'submodule-filter-ran'));
+  await assert.rejects(plane.projects.previewIntegration(target), { code: 'INTEGRATION_CONFIG' });
+  assert.equal(existsSync(join(directory, 'submodule-filter-ran')), false, 'squash-specific status is preflighted');
+});
+test('squash refuses an external filesystem monitor after ordinary discovery', async () => {
+  const { target } = await taskFixture(); const hook = join(directory, 'monitor.sh');
+  writeFileSync(hook, '#!/bin/sh\necho ran > ../monitor-ran\nprintf "token\\0"\n'); chmodSync(hook, 0o700);
+  git(root, 'config', 'core.fsmonitor', hook); git(root, 'config', 'core.fsmonitorHookVersion', '2');
+  const { plane } = await squashPlane();
+  await assert.rejects(plane.previewIntegration(target), { code: 'INTEGRATION_CONFIG' });
+  assert.equal(existsSync(join(directory, 'monitor-ran')), true);
+  unlinkSync(join(directory, 'monitor-ran'));
+  await assert.rejects(plane.projects.previewIntegration(target), { code: 'INTEGRATION_CONFIG' });
+  assert.equal(existsSync(join(directory, 'monitor-ran')), false, 'squash-specific status is preflighted');
+});
+test('squash allows settled agents in both checkouts, including subdirectories and copy mode, and duplicate confirmations never mutate twice', async () => {
+  const { target, request } = await taskFixture(); const { plane, adapter, panes, settle } = await squashPlane();
+  const cwd = join(request.path, 'nested'); mkdirSync(cwd);
+  panes.push({ ...mockPanes()[1]!, cwd, inMode: true }); await settle(panes[1], 'clear');
+  let scans = 0;
+  adapter.processes = async session => { scans++; return [{ pid: '100', command: session.agentType }, ...(session.agentType === 'codex' ? [{ pid: '200', command: 'codex-code-mode-host' }] : [])]; };
+  const preview = await plane.previewIntegration(target); const input = confirmSquash(preview);
+  const result = await plane.integrateWorktree(input); assert.equal(result.status, 'integrated', result.message); assert.ok(scans >= 8);
+  const head = git(root, 'rev-parse', 'HEAD');
+  assert.deepEqual(await plane.integrateWorktree(input), result); assert.equal(git(root, 'rev-parse', 'HEAD'), head);
+});
+for (const step of ['staging', 'commit'] as const) test(`a writer appearing immediately before ${step} blocks squash and preserves the appropriate owner`, async () => {
+  const { target } = await taskFixture(); const { plane, adapter } = await squashPlane();
+  const preview = await plane.previewIntegration(target); const input = confirmSquash(preview);
+  let scans = 0;
+  adapter.processes = async () => [{ pid: '100', command: 'codex' }, ...(++scans >= (step === 'staging' ? 2 : 3) ? [{ pid: '200', command: 'node writer.js' }] : [])];
+  const result = await plane.integrateWorktree(input);
+  assert.equal(result.status, step === 'staging' ? 'failed' : 'uncertain', result.message);
+  assert.equal(git(root, 'rev-parse', 'HEAD'), preview.targetHead);
+  assert.equal(!!git(root, 'diff', '--cached', '--name-only'), step === 'commit');
+  assert.equal(plane.projects.projectHeld(target.projectId), step !== 'staging');
+  const restarted = new ControlPlane(new Controller(config, store, adapter));
+  assert.deepEqual(await restarted.integrateWorktree(input), result);
+  assert.equal(restarted.projects.projectHeld(target.projectId), step !== 'staging');
+});
+for (const step of ['staging', 'verification'] as const) test(`native activity during ${step} ${step === 'staging' ? 'blocks mutation' : 'does not undo a verified squash'}`, async () => {
+  const { target } = await taskFixture(); const { plane, settle } = await squashPlane();
+  const preview = await plane.previewIntegration(target);
+  if (step === 'staging') {
+    const inspect = plane.projects.previewIntegration.bind(plane.projects); let checks = 0;
+    plane.projects.previewIntegration = async input => { const result = await inspect(input); if (++checks === 2) await settle(); return result; };
+  } else {
+    const verify = plane.projects['integratedExactly'].bind(plane.projects);
+    plane.projects['integratedExactly'] = async input => { const result = await verify(input); await settle(); return result; };
+  }
+  const result = await plane.integrateWorktree(confirmSquash(preview));
+  assert.equal(result.status, step === 'staging' ? 'failed' : 'integrated', result.message);
+  assert.equal(git(root, 'rev-parse', 'HEAD') === preview.targetHead, step === 'staging');
+  assert.equal(plane.projects.projectHeld(target.projectId), false);
+});
+for (const kind of ['attribute', 'default', 'clean', 'smudge', 'process'] as const) test(`squash preview refuses configured ${kind} commands before they can run`, async () => {
+  const { request, target } = await taskFixture();
+  const merge = kind === 'attribute' || kind === 'default';
+  writeFileSync(join(root, 'app.txt'), 'main changed too\n');
+  if (kind !== 'default') writeFileSync(join(root, '.gitattributes'), `app.txt ${merge ? 'merge' : 'filter'}=fixture\n`);
+  git(root, 'add', '.'); git(root, 'commit', '-m', 'diverge main');
+  const command = merge ? 'echo ran > ../driver-ran; cp %B %A' : `echo ran > ../driver-ran; ${kind === 'process' ? 'exit 1' : 'cat'}`;
+  if (kind === 'attribute') {
+    // Includes are part of effective config, including a driver selected through attributes.
+    const included = join(directory, 'drivers.config');
+    writeFileSync(included, `[merge "fixture"]\n\tdriver = ${command}\n`);
+    git(root, 'config', 'include.path', included);
+  } else if (kind === 'default') {
+    // A target-only worktree config and merge.default need no merge attribute at all.
+    git(root, 'config', 'extensions.worktreeConfig', 'true');
+    git(root, 'config', '--worktree', 'merge.fixture.driver', command);
+    git(root, 'config', '--worktree', 'merge.default', 'fixture');
+  } else {
+    git(root, 'config', `filter.fixture.${kind}`, command);
+    git(root, 'config', 'merge.renormalize', 'true');
+  }
+  const head = git(root, 'rev-parse', 'HEAD'); const taskHead = git(request.path, 'rev-parse', 'HEAD');
+  const index = readFileSync((await resolveWorktree(root))!.indexPath);
+  let failure: unknown;
+  try { await catalog.previewIntegration(target); } catch (error) { failure = error; }
+  assert.equal(existsSync(join(directory, 'driver-ran')), false, 'preview executed a configured command');
+  assert.equal((failure as { code?: string })?.code, 'INTEGRATION_CONFIG');
+  assert.equal(git(root, 'rev-parse', 'HEAD'), head); assert.equal(git(request.path, 'rev-parse', 'HEAD'), taskHead);
+  assert.deepEqual(readFileSync((await resolveWorktree(root))!.indexPath), index);
+  assert.equal(readFileSync(join(root, 'app.txt'), 'utf8'), 'main changed too\n');
+  assert.equal(store.worktreeIntegrations().length, 0);
+});
+test('squash preview allows unused filter definitions but refuses a filter present only in a merge input tree', async () => {
+  const { request, target } = await taskFixture();
+  git(root, 'config', 'filter.fixture.clean', 'echo ran > ../driver-ran; cat');
+  assert.ok((await catalog.previewIntegration(target)).tree);
+  assert.equal(existsSync(join(directory, 'driver-ran')), false);
+  // A nested attribute macro in the selected task commit still matters after it is removed from the dirty checkout.
+  mkdirSync(join(request.path, 'nested'));
+  writeFileSync(join(request.path, '.gitattributes'), '[attr]converted filter=fixture\n');
+  writeFileSync(join(request.path, 'nested', '.gitattributes'), '*.txt converted\n');
+  writeFileSync(join(request.path, 'nested', 'file.txt'), 'task content\n');
+  // Configure the command after committing, so fixture setup never invokes it.
+  git(root, 'config', '--unset', 'filter.fixture.clean');
+  git(request.path, 'add', '.'); git(request.path, 'commit', '-m', 'filtered task file');
+  git(request.path, 'rm', '.gitattributes', 'nested/.gitattributes');
+  git(root, 'config', 'filter.fixture.clean', 'echo ran > ../driver-ran; cat');
+  git(root, 'config', 'merge.renormalize', 'true');
+  await assert.rejects(catalog.previewIntegration(target), { code: 'INTEGRATION_CONFIG' });
+  assert.equal(existsSync(join(directory, 'driver-ran')), false);
+  assert.equal(existsSync(join(dirname(request.path), 'driver-ran')), false);
+});
+test('squash preview inspects the attributes of a large checkout instead of failing on a fixed output buffer', async () => {
+  const { target } = await taskFixture();
+  // More than 2 MiB of tracked path names, which ls-files, ls-tree and check-attr each print in full.
+  const deep = join(root, 'd'.repeat(200), 'e'.repeat(200), 'f'.repeat(200));
+  mkdirSync(deep, { recursive: true });
+  for (let i = 0; i < 3000; i++) writeFileSync(join(deep, `${String(i).padStart(4, '0')}-${'g'.repeat(150)}.txt`), `${i}\n`);
+  git(root, 'add', '.'); git(root, 'commit', '-q', '-m', 'many long paths');
+  git(root, 'config', 'filter.unused.clean', 'cat'); // an unused definition, as a global Git LFS install adds
+  assert.ok((await catalog.previewIntegration(target)).tree);
+});
+test('squash confirmation rechecks drivers added after preview without creating an operation', async () => {
+  const { target } = await taskFixture();
+  const preview = await catalog.previewIntegration(target);
+  git(root, 'config', 'merge.fixture.driver', 'echo ran > ../driver-ran; cp %B %A');
+  git(root, 'config', 'merge.default', 'fixture');
+  await assert.rejects(catalog.integrate(confirmSquash(preview), noGuard), { code: 'INTEGRATION_CONFIG' });
+  assert.equal(existsSync(join(directory, 'driver-ran')), false);
+  assert.equal(store.worktreeIntegrations().length, 0);
+  assert.equal(git(root, 'rev-parse', 'HEAD'), preview.targetHead);
+});
 test('squash integration previews the exact merge result, commits once on the main checkout with normal hooks, and is idempotent', async () => {
   const { request, target } = await taskFixture(); const mainHead = git(root, 'rev-parse', 'HEAD'); const base = mainHead;
   const preview = await catalog.previewIntegration(target);
@@ -397,7 +663,7 @@ test('squash integration previews the exact merge result, commits once on the ma
   assert.match(preview.consent, /^[0-9a-f]{64}$/); assert.equal((await catalog.previewIntegration(target)).consent, preview.consent); // consent is stable for an unchanged operation
   const confirmed = confirmSquash(preview, 'feat: finished\n\nSquash of feature/finished.\n');
   const result = await catalog.integrate(confirmed, async (t, s) => { guards++; assert.equal(t.root, root); assert.equal(s.root, request.path); });
-  assert.equal(result.status, 'integrated', result.message); assert.equal(guards, 2);
+  assert.equal(result.status, 'integrated', result.message); assert.equal(guards, 3);
   assert.deepEqual({ ...result.input, requestId: preview.requestId, message: preview.message }, { ...preview, confirm: true }); // the record is the re-derived preview with the confirmed message
   const commit = git(root, 'rev-parse', 'HEAD'); assert.equal(result.commit, commit); assert.match(result.message, /use Check removal/);
   assert.equal(git(root, 'rev-parse', 'HEAD^'), mainHead); assert.equal(git(root, 'rev-parse', 'HEAD^{tree}'), preview.tree);
@@ -442,9 +708,9 @@ test('a rejecting repository hook leaves the squash uncertain; inspection releas
   assert.equal(result.status, 'uncertain'); assert.match(result.message, /rejecting hook/);
   assert.equal(git(root, 'rev-parse', 'HEAD'), mainHead); assert.notEqual(git(root, 'status', '--porcelain'), ''); // the staged squash is left for the human
   assert.throws(() => catalog.assertWorktreeReady(root), /squash integration/);
-  assert.equal((await catalog.reconcileIntegration(preview.requestId)).status, 'uncertain');
+  assert.equal((await catalog.reconcileIntegration(preview.requestId, noGuard)).status, 'uncertain');
   git(root, 'reset', '-q', '--hard', mainHead);
-  assert.equal((await catalog.reconcileIntegration(preview.requestId)).status, 'failed');
+  assert.equal((await catalog.reconcileIntegration(preview.requestId, noGuard)).status, 'failed');
   git(root, 'config', '--unset', 'core.hooksPath');
   const retry = await catalog.integrate(confirmSquash(await catalog.previewIntegration(target)), noGuard);
   assert.equal(retry.status, 'integrated', retry.message);
@@ -456,12 +722,12 @@ test('restart or a failed verification keeps a squash uncertain; read-only inspe
   catalog = new ProjectCatalog(store, config);
   assert.equal(store.worktreeIntegrations()[0]!.status, 'uncertain');
   await assert.rejects(catalog.create(await input('another')), /owns this project/);
-  assert.equal((await catalog.reconcileIntegration(interrupted.requestId)).status, 'failed');
+  assert.equal((await catalog.reconcileIntegration(interrupted.requestId, noGuard)).status, 'failed');
   const preview = await catalog.previewIntegration(target);
   const verify = catalog['integratedExactly'].bind(catalog); catalog['integratedExactly'] = async () => null;
   assert.equal((await catalog.integrate(confirmSquash(preview), noGuard)).status, 'uncertain');
   catalog['integratedExactly'] = verify;
-  const reconciled = await catalog.reconcileIntegration(preview.requestId);
+  const reconciled = await catalog.reconcileIntegration(preview.requestId, noGuard);
   assert.equal(reconciled.status, 'integrated'); assert.equal(reconciled.commit, git(root, 'rev-parse', 'HEAD'));
   assert.equal(git(root, 'rev-parse', 'HEAD^'), preview.targetHead);
   assert.equal((await catalog.discover([], []))[0]!.integrations!.length, 2); assert.equal(projectId, (await catalog.discover([], []))[0]!.id);
@@ -569,14 +835,9 @@ test('discard inspection describes a changed worktree, a stale Git entry and an 
   assert.equal(settled.status, 'discarded'); assert.match(settled.message, /Discard verified/);
 });
 test('integration and discard recheck run ownership at the HTTP control boundary; discard also requires no pane in the checkout', async () => {
-  const { Controller } = await import('../src/server/controller.ts');
-  const { ControlPlane } = await import('../src/server/control-plane.ts');
-  const { MockAdapter } = await import('../src/server/adapters/mock.ts');
   const { request, target } = await taskFixture();
-  const adapter = new MockAdapter(); const list = adapter.listPanes.bind(adapter);
-  adapter.listPanes = async () => (await list()).map((pane) => ({ ...pane, cwd: root }));
-  const plane = new ControlPlane(new Controller(config, store, adapter));
-  assert.equal((await plane.previewIntegration(target)).target.root, root); // panes in the integration checkout are allowed; ownership is what blocks
+  const { plane, adapter, panes } = await squashPlane();
+  assert.equal((await plane.previewIntegration(target)).target.root, root); // settled panes with current process evidence are allowed
   const member = { ...mockSessions()[0]!, repository: root, cwd: root, worktree: await resolveWorktree(root), registrationId: randomUUID() } as ManagedSession;
   const run = plane.workflow.start({ requestId: randomUUID(), agentId: member.id, kind: 'instruction', text: 'fixture', confirmReady: true }, [member], null);
   await assert.rejects(plane.previewIntegration(target), /owns the integration checkout/);
@@ -587,7 +848,7 @@ test('integration and discard recheck run ownership at the HTTP control boundary
   const blocked = await plane.integrateWorktree(confirmSquash(preview)); assert.equal(blocked.status, 'failed'); assert.match(blocked.message, /owns the task worktree/);
   await assert.rejects(plane.previewDiscard(target), /run or unresolved delivery/);
   plane.workflow.takeover(owning.runId);
-  adapter.listPanes = async () => (await list()).map((pane) => ({ ...pane, cwd: request.path }));
+  panes[0] = { ...panes[0]!, cwd: request.path };
   await assert.rejects(plane.previewDiscard(target), /tmux pane/);
   adapter.listPanes = async () => [];
   const integrated = await plane.integrateWorktree(confirmSquash(await plane.previewIntegration(target))); assert.equal(integrated.status, 'integrated', integrated.message);
@@ -781,7 +1042,7 @@ test('a rejecting hook keeps a partial batch uncertain until the exact staged re
   assert.throws(() => catalog.assertWorktreeReady(root), /squash integration/);
   git(root, 'commit', '-m', 'manually completed first batch');
   store.close(); store = new Store(config.dataDir); catalog = new ProjectCatalog(store, config);
-  assert.equal((await catalog.reconcileIntegration(preview.requestId)).status, 'integrated');
+  assert.equal((await catalog.reconcileIntegration(preview.requestId, noGuard)).status, 'integrated');
   const next = await catalog.previewIntegration(target); assert.equal(next.mergeBase, first); assert.equal(next.commitCount, 1);
 });
 test('staging a batch preserves ignored target files that obstruct its changes', async () => {
@@ -817,9 +1078,9 @@ test('inspection settles an uncertain squash from the branch history: a buried e
   // The human sees the commit landed and keeps working on main; inspection must still find the commit under the later work.
   writeFileSync(join(root, 'later.txt'), 'later main work\n'); git(root, 'add', '.'); git(root, 'commit', '-m', 'later main work');
   writeFileSync(join(root, 'scratch-in-progress.txt'), 'not yet\n'); git(root, 'add', '.'); // dirty: nothing is settled yet
-  assert.equal((await catalog.reconcileIntegration(preview.requestId)).status, 'uncertain');
+  assert.equal((await catalog.reconcileIntegration(preview.requestId, noGuard)).status, 'uncertain');
   git(root, 'reset', '-q', '--hard', 'HEAD');
-  const settled = await catalog.reconcileIntegration(preview.requestId);
+  const settled = await catalog.reconcileIntegration(preview.requestId, noGuard);
   assert.equal(settled.status, 'integrated'); assert.equal(settled.commit, squash); assert.match(settled.message, /moved on since/);
   const next = await catalog.previewIntegration(target); assert.equal(next.previousCommit, squash); assert.equal(next.mergeBase, preview.through); // the batch boundary is usable
   // A second attempt goes uncertain and the human resolves it another way: reset and integrate the rest by hand as two commits.
@@ -827,10 +1088,10 @@ test('inspection settles an uncertain squash from the branch history: a buried e
   store.saveWorktreeIntegration({ input: interrupted, status: 'applying', message: 'interrupted', updatedAt: new Date().toISOString(), commit: null });
   catalog = new ProjectCatalog(store, config); assert.throws(() => catalog.assertWorktreeReady(root), /squash integration/);
   writeFileSync(join(root, 'by-hand.txt'), 'integrated some other way\n'); git(root, 'add', '.'); git(root, 'commit', '-m', 'hand-made part one'); git(root, 'commit', '--allow-empty', '-m', 'hand-made part two');
-  const released = await catalog.reconcileIntegration(interrupted.requestId);
+  const released = await catalog.reconcileIntegration(interrupted.requestId, noGuard);
   assert.equal(released.status, 'failed'); assert.match(released.message, new RegExp(`main moved from ${next.targetHead.slice(0, 12)} to ${git(root, 'rev-parse', 'HEAD').slice(0, 12)} without the previewed squash commit`)); assert.equal(released.commit, null);
   catalog.assertWorktreeReady(root); await catalog.create(await input('another')); // the hold is gone
-  assert.equal((await catalog.reconcileIntegration(interrupted.requestId)).status, 'failed'); // settled records are not re-inspected
+  assert.equal((await catalog.reconcileIntegration(interrupted.requestId, noGuard)).status, 'failed'); // settled records are not re-inspected
   // Removal and the next batch judge the current history on their own evidence; the failed record is not a checkpoint, the verified first batch still is.
   await assert.rejects(catalog.previewRemoval(target), /not an ancestor/);
   const resumed = await catalog.previewIntegration(target); assert.equal(resumed.previousCommit, squash); assert.equal(resumed.mergeBase, preview.through);

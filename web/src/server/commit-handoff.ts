@@ -3,7 +3,7 @@ import { lstat, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { AppError } from '../core/errors.ts';
-import type { BranchState, GitChange, HandoffArchive, HandoffEntry, HandoffIdentity, ImplementationRun, ImplementationTurn, Publication, ReviewPreview, ReviewPreviewInput, WorkspaceGit } from '../contracts/implementation.ts';
+import type { BranchState, GitChange, HandoffArchive, HandoffEntry, HandoffIdentity, ImplementationRun, ImplementationTurn, Publication, ReviewPreview, ReviewPreviewInput, StageRelayEligibility, WorkspaceGit } from '../contracts/implementation.ts';
 import { readBounded } from './bounded-read.ts';
 import { gitEnvironment, worktreeFingerprint } from './worktree.ts';
 
@@ -37,6 +37,7 @@ export async function defaultBranch(root: string): Promise<string | null> {
   return (await gitRead(root, ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], true)).trim().replace(/^origin\//, '') || null;
 }
 export async function branchState(root: string): Promise<BranchState> {
+  // Ordinary status follows the repository's configured filters/monitor, like Git itself. Squash preflights separately.
   const [branch, head, status, primary, hidden] = await Promise.all([
     gitRead(root, ['symbolic-ref', '--quiet', '--short', 'HEAD'], true),
     gitRead(root, ['rev-parse', '--verify', 'HEAD^{commit}']),
@@ -70,8 +71,27 @@ export async function assertWorktreeInput(root: string, branch: string | null, h
   if (await worktreeFingerprint(root) !== fingerprint) fail('The unfinished work changed after the handoff started. Inspect the checkout before continuing.');
   return state;
 }
-/** Names that are starting points, never implementation branches: the detected default branch plus the host's configured list. */
-export const integrationNames = (primary: string | null, configured: string[]): string[] => [...new Set([...(primary ? [primary] : []), ...configured])];
+/** Names that are starting points, never implementation branches: the detected default branch, literal main (a Stage relay branch
+ * even when the host's list omits it) and the host's configured list. */
+export const integrationNames = (primary: string | null, configured: string[]): string[] => [...new Set([...(primary ? [primary] : []), 'main', ...configured])];
+/** The checked-out branch, HEAD and locally recorded default, without the status scan: all Stage relay binds and rechecks. */
+export async function checkoutHead(root: string): Promise<Pick<BranchState, 'branch' | 'head' | 'primary'>> {
+  const [branch, head, primary] = await Promise.all([
+    gitRead(root, ['symbolic-ref', '--quiet', '--short', 'HEAD'], true),
+    gitRead(root, ['rev-parse', '--verify', 'HEAD^{commit}']),
+    defaultBranch(root),
+  ]);
+  return { branch: branch.trim() || null, head: head.trim(), primary };
+}
+/** Stage relay (uncommitted review) runs only on local main or the recorded default branch. Other integration branches allow
+ * neither relay contract, task branches use committed handoffs, and detached HEAD has no branch to bind. */
+export function stageRelayEligibility(branch: string | null, primary: string | null, configured: string[]): StageRelayEligibility {
+  if (!branch) return { eligible: false, reason: 'Detached HEAD: Stage relay needs main or the default branch checked out.' };
+  if (branch === 'main' || branch === primary) return { eligible: true, reason: null };
+  return { eligible: false, reason: integrationNames(primary, configured).includes(branch)
+    ? `${branch} is an integration branch but not main or the recorded default: neither Stage relay nor committed handoffs run on it.`
+    : `${branch} is a task branch: Stage relay runs only on main or the recorded default branch. Use committed handoffs here.` };
+}
 /** False for a commit that does not exist here, so a mistyped user-supplied baseline is refused rather than reported as a Git failure. */
 export async function isAncestor(root: string, ancestor: string, descendant: string): Promise<boolean> {
   if (!(await gitRead(root, ['rev-parse', '--verify', '--quiet', `${ancestor}^{commit}`], true)).trim()) return false;

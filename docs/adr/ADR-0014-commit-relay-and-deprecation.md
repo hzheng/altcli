@@ -6,6 +6,33 @@ Status: Accepted design direction; implementation and host acceptance pending.
 Items explicitly labeled working specification, recommendation, or open choice retain that status.
 This documentation-only change does not enable the described features.
 
+### Branch-scoped Stage relay (September 27, 2026)
+
+The human approved this through the Plan run of September 27, 2026 (items P-1 to P-5 and P-16 of its
+frozen plan). It supersedes the positioning below, the *Labeled in the UI* and *Removal criteria* rows of
+the deprecation contract, and the opt-in rule of the September 19 local implementation update. The
+*Frozen behavior* and *No new capabilities* rows still apply. Implemented locally; installed-host
+acceptance is pending.
+
+The uncommitted relay is now **Stage relay**, the supported quick-fix workflow on the **main/default
+branch**. Commit relay remains the workflow for task branches.
+
+| Question | Decision |
+| --- | --- |
+| Where it runs | The checked-out branch must be literal local `main` or the default branch recorded locally in `origin/HEAD`, read without fetching. With no recorded default, only `main` qualifies; `master` and other names are never inferred. Other configured integration branches allow neither relay contract. Detached HEAD, an unborn branch or an unreadable checkout blocks it. Eligibility comes from the branch, never from a folder name or whether the checkout is the primary one. |
+| Committed work | Unchanged and task-branch-only. `main` is always an integration name, even when `ALTCLI_INTEGRATION_BRANCHES` omits it, so committed starts, Plan transitions and new branch names are refused there as well as on the default and configured branches. |
+| Start | A new start needs the two-member workspace group (new pairless starts are refused; use plain Send) and `stage: { branch, head }` naming the checkout shown. The server reads the branch and HEAD itself and refuses a mismatch. Staged, unstaged and untracked work is allowed: the skill's baseline rules decide what is reviewed. |
+| Binding | The run records that branch and commit. The server rereads them before **every** delivery (the first turn, relay continuations, objection corrections) and at each completion, before it schedules a successor or releases ownership. Any change pauses the run and keeps ownership. Nothing is sent, and the run never switches workflows. |
+| Older runs | A staging run without a binding predates this change. It records its correlated completion but never dispatches another turn; it is held for inspection and takeover. Upgrading requires a restart, which already pauses active runs. |
+| Host setting | `ALTCLI_ENABLE_LEGACY_RELAY` keeps its name; absent now means enabled. An explicit `false`, which older templates wrote, keeps new starts off, and the Console and Host configuration name the variable. A request ID that already exists returns its recorded result. |
+| Console | On an eligible checkout with a two-member group, Implementation's Control offers **Relay mode: Stage relay** (the default) or **Commit relay** (create a task branch here, or a task worktree in Projects). The Settings preference is gone. Actions are named **Send [agent] & stage-relay to [peer]** and **Stage-relay review by [agent]**; the exact copy remains open. |
+| Final commit | Always a separate human action, or an explicit plain Send instruction. The controller never commits, and a finished chain is not permission to publish. Squash into a checkout owned by a Stage relay run is refused, as for any owned checkout. |
+
+The frozen protocol is untouched: the `review-handoff` skill, its four `RELAY-OUTCOME` values,
+the Send & relay digest gate, the objection-to-author path, the ADR-0011 run gates, the turn budget and
+continuation semantics. Branch scoping, the binding and the labels wrap that protocol without changing
+it. Solo, fixed-role, N-agent, review-range, remote and PR features stay out of it.
+
 ### Contextual pane actions (September 21, 2026)
 
 The console places one action group under each agent pane; every control's first
@@ -96,8 +123,9 @@ escalation encoding: it pauses automation and retains ownership; an acceptance
 cannot also require a blocking human decision. Project changes are derived from
 Git, excluding only the reserved tracked log when one is kept. Any supplied legacy outcome must agree.
 
-New staging starts are disabled unless the host opts in with
-`ALTCLI_ENABLE_LEGACY_RELAY=true`. Existing staging runs, hooks, and the legacy
+New staging starts were disabled unless the host opted in with
+`ALTCLI_ENABLE_LEGACY_RELAY=true`. Since the September 27, 2026 update ([Branch-scoped Stage relay](#branch-scoped-stage-relay-september-27-2026)),
+an absent value means enabled, and starts are limited to main/default. Existing staging runs, hooks, and the legacy
 skill retain their protocol. No automatic migration adopts their uncommitted work.
 
 **Plain Send clarification (September 19, 2026).** Plain Send is outside the
@@ -144,6 +172,8 @@ These are the existing skill's rules, not the commit-mode rules (source note in 
 
 #### Positioning
 
+*Superseded on September 27, 2026 by [Branch-scoped Stage relay](#branch-scoped-stage-relay-september-27-2026). The mode is now the supported quick-fix workflow on main/default, and the "no new capabilities" freeze still applies. The original positioning follows as provenance.*
+
 This mode is **deprecated**. It remains a local, supervised option for unfinished work that the user does not yet want to publish as a committed checkpoint, and the migration fallback while commit relay proves itself on real hosts. It is not a second product direction, and it is not chosen by change size: the useful distinction is whether the user wants a persistent handoff checkpoint. New history, multi-host, and role-based capabilities go to commit relay only. Keep the skill contracts separate: "never stage your own improvement" and "commit your outgoing improvement with a log entry" must never be competing instructions for one turn.
 
 #### Deprecation contract
@@ -166,7 +196,7 @@ Planning is not this fallback: ignored plan-file refinement is a phase-specific 
 
 **In commit-based Implementation, one completed turn publishes one result and at most one handoff commit** containing the project changes permitted by the assigned action and decision. A report-only turn is meaningful work: acceptance without edits and objection with findings are recorded in the journal without a commit (September 20, 2026 update; originally the appended log entry made every turn a commit, which remains the behavior under the tracked-log preference).
 
-A task contains many turns and commits on one recorded implementation branch, normally a dedicated task branch, and at most one PR for the whole task. A user may explicitly continue on main/the configured primary branch instead; the same lineage and ownership checks still apply, and no automatic merge is implied. "Every completed turn" does not mean every tool action or partial attempt; an interrupted execution must not fabricate an acceptance to produce a commit. **First-release lineage rule:** each handoff is exactly one direct, single-parent commit on the expected task-branch tip. Do not create unreported intermediate commits on that active branch during the turn. Arbitrary new commits are not publications. The supplied text permitted local checkpoints while also requiring the handoff commit's parent to equal the turn's original parent; these cannot both hold when checkpoints advance the same branch. Multi-commit turns need a separate starting-base-to-final-head contract and remain deferred. No controller reset or history rewriting is introduced to hide extra commits.
+A task contains many turns and commits on one recorded implementation branch, normally a dedicated task branch, and at most one PR for the whole task. Integration branches, including `main` and the recorded default, are never committed implementation branches ([ADR-0013](ADR-0013-confirmed-branch-setup.md); this sentence was reconciled on September 27, 2026, replacing an older option to continue on the primary branch). Uncommitted quick fixes there use Stage relay. "Every completed turn" does not mean every tool action or partial attempt; an interrupted execution must not fabricate an acceptance to produce a commit. **First-release lineage rule:** each handoff is exactly one direct, single-parent commit on the expected task-branch tip. Do not create unreported intermediate commits on that active branch during the turn. Arbitrary new commits are not publications. The supplied text permitted local checkpoints while also requiring the handoff commit's parent to equal the turn's original parent; these cannot both hold when checkpoints advance the same branch. Multi-commit turns need a separate starting-base-to-final-head contract and remain deferred. No controller reset or history rewriting is introduced to hide extra commits.
 
 A helper may validate and publish the result under the agent's authorized context. The agent following the commit-relay skill stages and commits its own handoff; the controller validates that publication read-only. Whichever component commits must preserve unrelated user work. The controller does not stage or commit on the agent's behalf or prepare the tracked log by silently editing source files. Task-worktree creation is separately confirmed setup under ADR-0013, never a turn-publication side effect.
 

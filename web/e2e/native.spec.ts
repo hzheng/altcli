@@ -69,7 +69,7 @@ test('keyboard status only reports ownership and each terminal claims locally',a
 async function prepareKeyboardSend(page:Page,recipient='Codex') {
   await page.route('**/api/v1/workspaces',async route=>{
     const response=await route.fetch(),body=await response.json();
-    for(const workspace of body.workspaces)Object.assign(workspace.git,{branch:'task/current',integration:false,taskBase:workspace.git.head});
+    for(const workspace of body.workspaces)Object.assign(workspace.git,{branch:'task/current',integration:false,stageRelay:{eligible:false,reason:'A task branch uses committed handoffs.'},taskBase:workspace.git.head});
     await route.fulfill({response,json:body});
   });
   const terminal=await openKeyboard(page);

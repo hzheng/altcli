@@ -13,7 +13,7 @@ This register preserves unresolved choices and explicitly proposed defaults from
 | Peer objection automation | Decided September 20, 2026: commit-mode peer relay routes an actionable objection to the author automatically, like worker/reviewer, unless the run's `pauseOnObjection` agreement holds it for Next turn ([Peer relay behavior](adr/ADR-0015-collaboration-policies-and-solo.md#peer-relay-behavior)). |
 | Worker disagreement and no-op output | Local log-only work ends the chain without advancing acceptance and retains findings. `needsHuman: true` explicitly pauses for human direction; acceptance cannot set it. Never self-acceptance. |
 | Manual next-turn API and state | Plan and Implementation use `waiting` and POST `/api/v1/runs` with `continue`, `expectedCommandId`, and readiness confirmation for assigned successors. Plan approval/changes use a separate exact-version decision endpoint. The deprecated mode remains frozen. |
-| Dirty working-directory support | Deferred for commit relay because same-file ownership cannot be reconstructed safely after publication. The deprecated mode retains its existing baseline rules; re-planning after unfinished code still needs an explicit policy. |
+| Dirty working-directory support | Deferred for commit relay because same-file ownership cannot be reconstructed safely after publication. Stage relay (formerly the deprecated mode) retains its existing baseline rules on main/default; re-planning after unfinished code still needs an explicit policy. |
 | Multi-commit turns and merge commits | One handoff commit per turn first; broader support needs lineage rules. |
 | Publication uncertainty and restart reconciliation | Never replay blindly; detailed recovery states to implement. |
 | Participant replacement mid-task | Explicit reconciliation, not a pane-ID hot swap. |
@@ -67,6 +67,22 @@ None of this reopens the central choice: lightweight planning documents kept out
 | Solo self-review | Plain solo work is in scope. A separately requested, clearly labeled self-review is optional; no autonomous self-revision loop or fake independent approval is selected. |
 | N-agent release gate | Keep N-capable assignments/endorsements now; the user-facing planning cap is lifted only with explicit acceptance. Gemini adapter eligibility is independent of group size. |
 | External writers | Detect known conflicting runs and expose unselected same-worktree agents. Exact external activity evidence remains adapter/host-specific; do not claim OS isolation. |
+
+### Stage relay and reusable task worktrees (September 27, 2026)
+
+Human-approved plan decisions recorded in [ADR-0014](adr/ADR-0014-commit-relay-and-deprecation.md#branch-scoped-stage-relay-september-27-2026), [ADR-0013](adr/ADR-0013-confirmed-branch-setup.md#reusable-task-worktrees-update-rename-and-move) and D51–D52.
+
+| Topic | Current position |
+| --- | --- |
+| Stage relay branches | Decided and implemented locally: literal `main` and the recorded default; with no recorded default only `main`; other integration branches allow neither relay contract. |
+| Legacy flag | Decided and implemented: `ALTCLI_ENABLE_LEGACY_RELAY` keeps its name, absent means enabled, explicit false disables with a visible notice. Renaming the variable remains a possible later cleanup. |
+| Pre-upgrade staging runs | Decided and implemented: completion recorded, no further dispatch, held for takeover. |
+| Pairless staging starts | Decided and implemented: refused for new starts; plain Send covers single instructions. |
+| Stage relay copy | Working labels **Stage relay**, **Commit relay**, **Send … & stage-relay to …**, **Stage-relay review by …**; exact copy open. |
+| Final commit after Stage relay | Human action or explicit plain Send instruction; a dedicated confirmed "commit staged fix" UI is open. Plan-to-Stage-relay is not planned. |
+| Worktree reuse | Accepted direction (update from main, branch rename, directory move), **not implemented**. Before implementing, resolve the objections recorded with the plan approval: settled-writer evidence must be current process/background evidence, not Ready/Idle activity; replay must preflight effective Git configuration and attributes before every merge calculation (the existing squash preview now refuses external merge drivers and selected content filters); a failed recovery-ref creation stays uncertain until absence is proven; dirty-state policy is per operation with pinned content for rename/move. |
+| Squash with content filters | Squash preview still refuses every configured merge driver and any configured content filter selected by effective attributes, so LFS repositories cannot squash from the app. The September 27 review correction restores normal configured Git status behavior for discovery, clean-entry/publication checks and worktree lifecycle operations; these do not refuse LFS repositories. The public squash endpoint refreshes that ordinary discovery too. Only squash-specific status/merge reads preflight selected filters, initialized submodules and external filesystem-monitor hooks. Supporting filtered squash itself remains open; ordinary status is not a command-free sandbox. |
+| Worktree reuse details | Open: recovery-ref deletion and restore UI; app-supervised conflict resolution instead of refusal; external-squash boundary selection; dropping redundant commits; signed-commit replay; LFS/filter support; a metadata-only "new task" segment without Git change; combined stop/move/relaunch; provider conversation resume; carrying display names to relaunched agents; primary-checkout operations; remote rename or push. |
 
 ### Terminal input follow-ups
 

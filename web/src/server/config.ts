@@ -13,8 +13,9 @@ export interface Config {
   dataDir: string;
   tmuxBin: string;
   tmuxSocket?: string;
+  /** Stage relay (uncommitted review on main/default). ALTCLI_ENABLE_LEGACY_RELAY keeps its name; absent means enabled. */
   legacyEnabled?: boolean;
-  /** Branch names that are creation bases, never implementation branches; the detected default branch is always added. */
+  /** Branch names that are creation bases, never implementation branches; the detected default branch and main are always added. */
   integrationBranches: string[];
   /** Host-local task checkouts, separate from controller metadata. Tests use an isolated root. */
   worktreeDir?: string;
@@ -45,7 +46,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     if (url.origin !== origin || !["https:", "http:"].includes(url.protocol)) throw new AppError("CONFIG", "Allowed origins must be exact HTTP(S) origins without paths or wildcards.", 503);
     if (url.protocol !== "https:" && !["127.0.0.1", "localhost"].includes(url.hostname)) throw new AppError("CONFIG", "Non-loopback origins must use HTTPS.", 503);
   }
-  const legacy = env.ALTCLI_ENABLE_LEGACY_RELAY ?? 'false';
+  // An explicit false (older templates wrote one) keeps Stage relay off; the Console names this variable instead of hiding the action.
+  const legacy = env.ALTCLI_ENABLE_LEGACY_RELAY ?? 'true';
   if (!['true', 'false'].includes(legacy)) throw new AppError('CONFIG', 'ALTCLI_ENABLE_LEGACY_RELAY must be true or false.', 503);
   const integrationBranches = (env.ALTCLI_INTEGRATION_BRANCHES ?? 'main,master').split(',').map((s) => s.trim()).filter(Boolean);
   if (integrationBranches.some((name) => !/^[A-Za-z0-9][A-Za-z0-9/_.-]{0,150}$/.test(name))) throw new AppError('CONFIG', 'ALTCLI_INTEGRATION_BRANCHES must be a comma-separated list of branch names.', 503);

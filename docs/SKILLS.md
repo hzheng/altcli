@@ -20,8 +20,8 @@ to that tracked file inside the handoff commit, so every turn commits. `needsHum
 explicitly stops automatic remediation for out-of-scope questions. See the skill
 for limits.
 
-The `review-handoff` skill below is used only by the staging fallback, enabled with
-`ALTCLI_ENABLE_LEGACY_RELAY=true`.
+The `review-handoff` skill below is used only by Stage relay, which runs on `main` or
+the recorded default branch (unless the host sets `ALTCLI_ENABLE_LEGACY_RELAY=false`).
 
 `skills/review-handoff/SKILL.md` defines that flow's baseline, staging rules and
 final `RELAY-OUTCOME` line. Its contract remains unchanged.

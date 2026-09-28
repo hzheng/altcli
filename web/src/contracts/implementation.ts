@@ -32,13 +32,16 @@ export interface BranchState {
   changes: GitChange[];
   changeCount: number;
 }
+/** Whether the checked-out branch runs Stage relay (uncommitted review): only local main or the recorded default branch. */
+export interface StageRelayEligibility { eligible: boolean; reason: string | null }
 /** The workspace branch reading plus the host's integration-branch policy applied to it. */
 export interface WorkspaceGit extends BranchState {
-  /** The checked-out branch is the default or a configured integration branch: a creation base, never an implementation branch. */
+  /** The checked-out branch is the default, main or a configured integration branch: a creation base, never an implementation branch. */
   integration: boolean;
   /** Where task work on this branch begins: the head itself when no commit lies beyond an integration tip, the merge base when
    * one is unambiguous, null when the user must confirm it. Null on an integration branch. */
   taskBase: string | null;
+  stageRelay: StageRelayEligibility;
 }
 export interface BranchConsent {
   branch: string | null;

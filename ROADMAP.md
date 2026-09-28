@@ -6,6 +6,16 @@ launching are implemented; setup enables their host flags (absent means off); se
 are deferred by the owner's September 24 direction. Installed-host and physical
 device acceptance remain open.
 
+**Stage relay and worktree reuse (September 27, 2026).** The uncommitted relay now runs as
+branch-scoped Stage relay on `main` or the recorded default. The server enforces eligibility,
+binds the run to the branch and commit rechecked before each delivery and completion, and holds
+pre-upgrade runs. `main` is always an integration name, and Control's Relay mode replaces the
+Settings preference (ADR-0014, D51). Reusing linked task worktrees (update from main, fully
+integrated first and suffix replay later; branch rename; directory move) is accepted design
+sequenced after it, each increment with its own acceptance gate. Its open objections must be
+resolved first (ADR-0013, D52, OPEN-DECISIONS). Installed-host acceptance of Stage relay
+remains open.
+
 The completion follow-up removes `stop_hook_active` from background-task
 classification and retains exact Claude turn bindings until acknowledged clear
 completion. Ordered Stop observations preserve deduplication and reject stale

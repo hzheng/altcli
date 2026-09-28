@@ -13,9 +13,9 @@ import { WorkflowStore, wireText } from './workflow-store.ts';
 import { currentBranch, resolveWorktree, sameWorktree, worktreeFingerprint } from './worktree.ts';
 import { assertExternalDataDir } from './paths.ts';
 import { isCodexHelper } from './processes.ts';
-import { discoverWorkspaces } from './workspaces.ts';
-import type { CommitAssignment, Group, GroupInput, GroupSelection, ImplementationRun, ImplementationStart, PolicyChange, PublicationResult, ReviewPreviewInput, StandaloneStart } from '../contracts/implementation.ts';
-import { archiveCommit, assertClean, assertLogPath, assertWorktreeInput, branchState, gitRead, createConsentedBranch, integrationNames, isAncestor, previewCommittedRange, readPublication, taskBaseline, validateExistingLog, validateNewBranch, validateReviewRange } from './commit-handoff.ts';
+import { discoverWorkspaces, mockCheckout } from './workspaces.ts';
+import type { BranchState, CommitAssignment, Group, GroupInput, GroupSelection, ImplementationRun, ImplementationStart, PolicyChange, PublicationResult, ReviewPreviewInput, StandaloneStart } from '../contracts/implementation.ts';
+import { archiveCommit, assertClean, assertLogPath, assertWorktreeInput, branchState, checkoutHead, gitRead, createConsentedBranch, integrationNames, isAncestor, previewCommittedRange, readPublication, taskBaseline, stageRelayEligibility, validateExistingLog, validateNewBranch, validateReviewRange } from './commit-handoff.ts';
 import { classifyAgent } from '../core/workspaces.ts';
 import { sessionNamesOf } from '../core/session-names.ts';
 import { listDirectory } from './directories.ts';
@@ -312,19 +312,64 @@ export class ControlPlane {
   private async removeWorktreeAdmitted(input: WorktreeRemoveInput) {
     await this.workspaces(); return this.projects.remove(input, (worktree) => this.removalGuard(worktree), (worktree) => this.archiveJournal(worktree.root));
   }
-  /** The squash commit changes the integration checkout's files and index, so neither checkout may be owned by a run or an unresolved delivery. */
-  private integrationGuard(target: NonNullable<ManagedSession['worktree']>, source: NonNullable<ManagedSession['worktree']>): void {
-    if (this.workflow.owner(target.indexPath) || this.store.activeFor(target.root)) throw new AppError('WORKTREE_BUSY', 'A run or unresolved delivery owns the integration checkout. Inspect and take over before squashing into it.', 409);
-    if (this.workflow.owner(source.indexPath) || this.store.activeFor(source.root)) throw new AppError('WORKTREE_BUSY', 'A run or unresolved delivery owns the task worktree. Let it finish or take over before squashing its branch.', 409);
+  /** Squash shares the checkout with every pane, including unselected agents and subdirectories. Native idle/ready is
+   * only turn evidence: fresh process evidence must also exclude surviving writers before each Git mutation. */
+  private async integrationGuard(target: NonNullable<ManagedSession['worktree']>, source: NonNullable<ManagedSession['worktree']>, revision: number): Promise<void> {
+    const ownership = () => {
+      if (this.workflow.owner(target.indexPath) || this.store.activeFor(target.root)) throw new AppError('WORKTREE_BUSY', 'A run or unresolved delivery owns the integration checkout. Inspect and take over before squashing into it.', 409);
+      if (this.workflow.owner(source.indexPath) || this.store.activeFor(source.root)) throw new AppError('WORKTREE_BUSY', 'A run or unresolved delivery owns the task worktree. Let it finish or take over before squashing its branch.', 409);
+    };
+    ownership();
+    const unknown = (detail = 'Current activity or process evidence is unavailable or changed.') => new AppError('INTEGRATION_WRITERS', `Squash requires settled agents and clear process evidence in both checkouts. ${detail} Inspect the panes and stop background work, then Recheck.`, 409);
+    const inventory = async () => {
+      const result = [];
+      for (const pane of await this.adapter.listPanes()) {
+        const cwd = await realpath(pane.cwd).catch(() => pane.cwd);
+        const tree = [target, source].find(w => cwd === w.root || cwd.startsWith(`${w.root}/`));
+        if (tree) result.push({ pane, cwd, tree });
+      }
+      return result.sort((a, b) => JSON.stringify(a.pane.identity).localeCompare(JSON.stringify(b.pane.identity)));
+    };
+    try {
+      if (this.nativeObservations || revision !== this.nativeRevision) throw unknown();
+      const panes = await inventory();
+      for (const { pane, cwd, tree } of panes) {
+        const agent = classifyAgent({ ...pane, inMode: false, synchronized: false }, []);
+        const shell = /^(sh|bash|zsh|fish|dash|ksh|tcsh|csh)$/.test(pane.command);
+        if (pane.dead || (!shell && (!agent.eligible || (agent.kind !== 'codex' && agent.kind !== 'claude')))) throw unknown(`Pane ${pane.identity.paneId} (${pane.command}) is not a supported agent or shell.`);
+        const session: ManagedSession = { id: pane.identity.paneId, label: agent.label, agentType: agent.kind === 'codex' || agent.kind === 'claude' ? agent.kind : 'other', identity: pane.identity,
+          expectedCommand: pane.command, repository: tree.root, cwd, worktree: tree, registrationId: '', relayPrompt: '', registeredAt: '' };
+        session.cliPid = await this.adapter.foreground(session);
+        if (!session.cliPid || !sameWorktree(await resolveWorktree(cwd), tree)) throw unknown();
+        if (shell ? session.cliPid !== pane.identity.panePid : !this.activity.settledForGit(session)) throw unknown(`Pane ${pane.identity.paneId} (${pane.command}) has no settled foreground activity evidence.`);
+        const processes = await this.adapter.processes(session);
+        if (session.cliPid !== pane.identity.panePid && !processes.some(p => p.pid === session.cliPid)) throw unknown();
+        const writer = processes.find(p => p.pid !== session.cliPid && !(session.agentType === 'codex' && isCodexHelper(p.command)));
+        if (writer) throw unknown(`Pane ${pane.identity.paneId} has process ${writer.pid} (${writer.command}) still running.`);
+        const current = await this.adapter.inspect(pane.identity.paneId);
+        if (!isDeepStrictEqual(current.identity, pane.identity) || current.dead || current.command !== pane.command
+          || await realpath(current.cwd) !== cwd || await this.adapter.foreground(session) !== session.cliPid) throw unknown();
+      }
+      const scope = (rows: typeof panes) => rows.map(({ pane, cwd }) => [pane.identity, cwd, pane.command, pane.dead]);
+      if (!isDeepStrictEqual(scope(await inventory()), scope(panes)) || this.nativeObservations || revision !== this.nativeRevision) throw unknown();
+    } catch (error) { if (error instanceof AppError && error.code === 'INTEGRATION_WRITERS') throw error; throw unknown(); }
+    ownership();
   }
   async previewIntegration(input: WorktreeIntegrationInput) {
+    const revision = this.nativeRevision;
     await this.workspaces();
     const preview = await this.projects.previewIntegration(input);
-    this.integrationGuard(preview.target, preview.worktree); return preview;
+    await this.integrationGuard(preview.target, preview.worktree, revision); return preview;
   }
   async integrateWorktree(input: WorktreeIntegrateRequest) { return this.authority.automated(() => this.integrateWorktreeAdmitted(input)); }
   private async integrateWorktreeAdmitted(input: WorktreeIntegrateRequest) {
-    await this.workspaces(); return this.projects.integrate(input, async (target, source) => this.integrationGuard(target, source));
+    // One revision spans the entire operation: even a turn that starts and finishes between checks invalidates it.
+    const revision = this.nativeRevision;
+    await this.workspaces(); return this.projects.integrate(input, async (target, source) => this.integrationGuard(target, source, revision));
+  }
+  async reconcileIntegration(requestId: string) {
+    const revision = this.nativeRevision;
+    return this.projects.reconcileIntegration(requestId, (target, source) => this.integrationGuard(target, source, revision));
   }
   async previewDiscard(input: WorktreeDiscardInput) {
     await this.workspaces();
@@ -600,27 +645,53 @@ export class ControlPlane {
   }
   async submit(input: StartInput): Promise<CommandRecord> { return this.authority.automated(() => this.submitAdmitted(input)); }
   private async submitAdmitted(input: StartInput): Promise<CommandRecord> {
-    if (!this.config.legacyEnabled && !this.workflow.execution(input.requestId)) throw new AppError('LEGACY_DISABLED', 'The deprecated staging relay is disabled. Start a committed implementation run, or explicitly enable ALTCLI_ENABLE_LEGACY_RELAY on the host for supervised fallback.', 409);
+    // An existing request returns its recorded result even if the host has since disabled Stage relay.
+    const fresh = !this.workflow.execution(input.requestId);
+    if (fresh && !this.config.legacyEnabled) throw new AppError('STAGE_RELAY_DISABLED', 'Stage relay is disabled on this host (ALTCLI_ENABLE_LEGACY_RELAY=false). Remove that line or set it to true and restart the host to use Stage relay on main or the default branch.', 409);
     if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'Input is disabled by the host.', 403);
     const session = this.store.sessions().find((s) => s.id === input.agentId) as ManagedSession | undefined;
     if (!session?.registrationId) throw new AppError('REGISTRATION_REQUIRED', 'Register or re-register this worker before issuing commands.', 409);
     this.projects.assertWorktreeReady(session.repository);
     const workspaceGroup = input.pairId ? this.workspaceGroups(await this.workspaces()).find((group) => group.id === input.pairId) : undefined;
-    if (workspaceGroup && workspaceGroup.members.length !== 2) throw new AppError('INVALID_PAIR', 'Staging fallback requires exactly two selected agents.', 409);
+    if (workspaceGroup && workspaceGroup.members.length !== 2) throw new AppError('INVALID_PAIR', 'Stage relay requires exactly two selected agents.', 409);
     const pair = input.pairId ? (workspaceGroup ? { ...workspaceGroup, sessions: workspaceGroup.members } : this.store.pairs().find((p) => p.id === input.pairId)) : undefined;
     if (input.pairId && (!pair || !pair.sessions.includes(input.agentId))) throw new AppError('INVALID_PAIR', 'The chosen pair does not contain this target.', 409);
+    if (fresh && !pair) throw new AppError('PAIR_REQUIRED', 'Stage relay needs the two-member workspace group. Use Send for a single instruction.', 409);
     if ((input.autoContinue || input.handoff) && !pair) throw new AppError('PAIR_REQUIRED', 'Select an explicit pair to arm automatic handoffs.', 409);
     const participants = pair ? pair.sessions.map((id) => this.store.sessions().find((s) => s.id === id) as ManagedSession) : [session];
     if (participants.some((s) => !s?.registrationId)) throw new AppError('REGISTRATION_REQUIRED', 'Re-register the pair participants.', 409);
     if (this.config.mode === 'tmux' && participants.some((s) => !s.cliPid)) throw new AppError('REGISTRATION_REQUIRED', 'Re-register every participant so its current CLI process can be pinned.', 409);
     if (pair && !sameWorktree(participants[0]!.worktree, participants[1]!.worktree)) throw new AppError('DIFFERENT_WORKTREE', 'Pair participants must share a verified worktree and index.', 409);
     if (this.store.get(input.requestId) && !this.workflow.execution(input.requestId)) throw new AppError('ID_CONFLICT', 'This request ID belongs to an older transport command.', 409);
+    if (fresh) await this.assertStageStart(input, participants[0]!.worktree?.root ?? session.repository);
     if (input.autoContinue || input.handoff) for (const participant of participants) wireText({ ...input, kind: 'relay', text: undefined }, participant);
     const turn = this.workflow.start(input, participants, pair?.id ?? null);
     await this.pump(turn.runId);
     const record = this.store.get(turn.commandId);
     if (!record) throw new AppError('RUN_PAUSED', 'The run is paused before delivery. Nothing was replayed.', 409);
     return record;
+  }
+  /** A new Stage relay start: main or the recorded default only, confirmed on the exact branch and commit the server reads now. */
+  private async assertStageStart(input: StartInput, root: string): Promise<void> {
+    const checkout = await this.stageCheckout(root);
+    const eligibility = stageRelayEligibility(checkout.branch, checkout.primary, this.config.integrationBranches);
+    if (!eligibility.eligible) throw new AppError(checkout.branch ? 'STAGE_BRANCH' : 'STAGE_BRANCH_DETACHED', eligibility.reason!, 409);
+    if (!input.stage) throw new AppError('STAGE_BRANCH_REQUIRED', 'Confirm the displayed branch and commit before starting Stage relay.', 409);
+    if (checkout.branch !== input.stage.branch || checkout.head !== input.stage.head) throw new AppError('BRANCH_CHANGED', 'The checked-out branch or commit changed. Recheck before starting Stage relay.', 409);
+  }
+  /** Branch and HEAD for Stage relay. Simulated /demo checkouts match discovery; every other path is read with Git. */
+  private async stageCheckout(root: string) { return (this.config.mode === 'mock' && mockCheckout(root)) || checkoutHead(root); }
+  /** Before every Stage relay delivery. A staging run without a binding predates branch-scoped Stage relay and dispatches nothing more. */
+  private async assertStageBinding(run: RelayRun): Promise<void> {
+    if (!run.stage) throw new AppError('STAGE_UNBOUND', 'This staging run predates branch-scoped Stage relay. Nothing more is dispatched; inspect the agents and take over.', 409);
+    const checkout = await this.stageCheckout(run.repository);
+    if (checkout.branch !== run.stage.branch || checkout.head !== run.stage.head) throw new AppError('BRANCH_CHANGED', `Stage relay is bound to ${run.stage.branch} at ${run.stage.head.slice(0, 12)}, but the checkout is now on ${checkout.branch ?? 'detached HEAD'} at ${checkout.head.slice(0, 12)}. Nothing was sent; inspect the checkout and take over.`, 409);
+  }
+  /** The checkout at a Stage relay completion, so the store schedules and releases nothing when it moved during the turn. Null when unreadable. */
+  private async stageObservation(turn: Execution): Promise<Pick<BranchState, 'branch' | 'head'> | null> {
+    const run = this.workflow.run(turn.runId);
+    if (!run?.stage) return null;
+    try { const { branch, head } = await this.stageCheckout(run.repository); return { branch, head }; } catch { return null; }
   }
   async submitStandalone(input: StandaloneStart): Promise<CommandRecord> { return this.authority.automated(() => this.submitStandaloneAdmitted(input)); }
   private async submitStandaloneAdmitted(input: StandaloneStart): Promise<CommandRecord> {
@@ -831,7 +902,8 @@ export class ControlPlane {
     for (const pending of this.workflow.pendingEvents(turn.commandId)) {
       const delivered = this.workflow.execution(turn.commandId)!;
       const evidence = pending.event === 'turn_complete' && pending.backgroundState === 'unknown' ? await this.evidence(delivered, pending.reporterPid) : null;
-      const receipt = this.workflow.receive(pending, evidence, pending.event === 'turn_complete' ? await this.worktreeDigest(delivered) : null, await this.publication(delivered, pending), await this.planCapture(delivered, pending));
+      const receipt = this.workflow.receive(pending, evidence, pending.event === 'turn_complete' ? await this.worktreeDigest(delivered) : null, await this.publication(delivered, pending), await this.planCapture(delivered, pending),
+        pending.event === 'turn_complete' ? await this.stageObservation(delivered) : null);
       this.deferClaudeHook(delivered, pending, receipt);
     }
     await this.captureCheckpoint(runId);
@@ -844,6 +916,7 @@ export class ControlPlane {
     let baseline: ProcessRecord[] | null = null; let worktree: string | null = null;
     try {
       const record = await this.transport.submit(turn.input, { wireText: turn.wireText, beforeSend: async () => {
+        if (!run.implementation && !run.planning && !run.standalone) await this.assertStageBinding(run);
         if (run.standalone) await this.validateMembers(run.participants);
         if (run.implementation && turn.implementation) {
           await this.validateMembers(run.participants, run.implementation.cwd, false, 'observe');
@@ -977,7 +1050,8 @@ export class ControlPlane {
     const turn = input.commandId ? this.workflow.execution(input.commandId) : undefined;
     const evidence = turn && input.event === 'turn_complete' && input.backgroundState === 'unknown' ? await this.evidence(turn, input.reporterPid) : null;
     const worktree = turn && input.event === 'turn_complete' ? await this.worktreeDigest(turn) : null;
-    const receipt = this.workflow.receive(input, evidence, worktree, turn ? await this.publication(turn, input) : null, turn ? await this.planCapture(turn, input) : null);
+    const receipt = this.workflow.receive(input, evidence, worktree, turn ? await this.publication(turn, input) : null, turn ? await this.planCapture(turn, input) : null,
+      turn && input.event === 'turn_complete' ? await this.stageObservation(turn) : null);
     if (turn) this.deferClaudeHook(turn, input, receipt);
     if (turn) { await this.captureCheckpoint(turn.runId); await this.pump(turn.runId); }
     return receipt;

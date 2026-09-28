@@ -94,8 +94,11 @@ remain intact. The next explicit Plan/Implementation/Send action validates the
 displayed generation and binds it; viewing or reconciliation alone never writes
 the replacement or replays a command. Concurrent registration changes invalidate
 the candidate. Owned runs retain their frozen instances, and uncertain processes
-or changed pane/directory identities require inspection. The deprecated staging
-transport retains its existing registration contract.
+or changed pane/directory identities require inspection. The staging
+transport retains its existing registration contract. (September 27, 2026: staging
+runs are now branch-scoped Stage relay, bound to the branch and commit they started on and
+rechecked before each delivery and completion; see ADR-0014. The ownership and lifecycle
+rules here are unchanged.)
 
 Display activity is independent of execution ownership. Native hooks attach the
 foreground CLI pid and start timestamp to their exact session/turn binding and

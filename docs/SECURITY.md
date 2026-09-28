@@ -84,6 +84,11 @@ prompts, findings and archived patches in plaintext, so store exports with the
 same care. The optional tracked relay log is a distinct protocol artifact defined
 by ADR-0014, not permission to commit runtime data. The original review skill remains responsible for staging;
 the staging controller issues no Git mutations and does not independently prove its outcome.
+Since September 27, 2026 that flow runs as Stage relay only on `main` or the recorded default
+branch. Each run is bound to the branch and commit confirmed at start and rechecked read-only
+before every delivery and at each completion; a change pauses the run with ownership retained.
+The accepted but unimplemented worktree-reuse operations (ADR-0013) would add controller Git writes,
+including create-only `refs/altcli/preserved/*` recovery refs; none exists yet.
 
 ---
 
@@ -132,6 +137,14 @@ classification of the listed directory to token holders. It reads no file conten
 nothing; adding still re-inspects the path and refuses a changed checkout, repository or branch.
 These checks do not prevent a malicious same-user path race or configured Git
 filters from running during an ordinary checkout; use trusted repository settings.
+Ordinary status inspection, including workspace discovery and lifecycle verification, uses the repository's
+configured filters and filesystem monitors. Use trusted repository settings; the public squash endpoint's
+discovery refresh also has those semantics. Squash's own status and merge reads preflight selected filters,
+external monitors and merge drivers, including initialized submodules. Its execution requires current native
+and process evidence for agents in both checkouts. Shell panes need a foreground root shell and no task
+processes; only argument-checked bounded sleep prevention is excluded alongside known CLI infrastructure.
+Display acknowledgements do not establish writer clearance. Checks precede mutations; later activity does
+not invalidate an already verified squash commit. These observations provide no OS isolation from external writers.
 
 ### Validate implementation publication, not just its existence
 

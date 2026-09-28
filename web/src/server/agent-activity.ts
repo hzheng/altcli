@@ -15,6 +15,7 @@ interface Observation {
   finished: boolean;
   humanConfirmed?: true;
   completionSequence?: number;
+  backgroundState?: HookEvent['backgroundState'];
 }
 /** A fresh completion can recover its exact native start after a backend restart. Never scan history. */
 export async function hasCurrentNativeBinding(input: HookEvent, directory = join(homedir(), '.local', 'share', 'altcli', 'hook-turns')): Promise<boolean> {
@@ -48,6 +49,13 @@ export class AgentActivityTracker {
     const observation = session.cliPid ? this.observations.get(this.key(session, session.cliPid)) : undefined;
     return { agentId: session.id, state: observation?.state ?? 'unknown', updatedAt: observation?.updatedAt ?? null,
       detail: observation?.detail ?? 'No current lifecycle evidence. Inspect the terminal; missing evidence does not mean idle.' };
+  }
+  /** Native evidence for a Git mutation, never a display acknowledgement. The caller must also inspect all live pane
+   * processes: Codex cannot report in-process background state, whereas Claude must explicitly report clear. */
+  settledForGit(session: ManagedSession): boolean {
+    const observed = session.cliPid ? this.observations.get(this.key(session, session.cliPid)) : undefined;
+    return !!observed && !observed.humanConfirmed && ['idle', 'ready'].includes(observed.state)
+      && (session.agentType === 'codex' ? observed.backgroundState !== 'active' : observed.backgroundState === 'clear');
   }
   /** Caller verifies the current registration/process and absence of execution ownership. */
   confirmReady(session: ManagedSession, expectedUpdatedAt: string | null): AgentActivity {
@@ -106,6 +114,7 @@ export class AgentActivityTracker {
     if (input.completionSequence !== undefined && input.completionSequence <= (completion.completionSequence ?? 0)) return;
     if (this.observations.get(key) !== prior) return;
     completion.finished = true; completion.updatedAt = new Date().toISOString();
+    completion.backgroundState = input.backgroundState;
     if (input.event === 'turn_interrupted') {
       completion.state = 'interrupted';
       completion.detail = 'The CLI reported this turn was interrupted. Work may be unfinished; background processes and relay ownership require separate reconciliation.';

@@ -1,13 +1,23 @@
 import { AppError } from './errors.ts';
 import { object, parseCommand, parseEvent, requestId, agentId } from './validation.ts';
-import type { ActivityReset, HookEvent, RunAction, StartInput, WorkspaceReset } from '../contracts/workflow.ts';
+import type { ActivityReset, HookEvent, RunAction, StageBinding, StartInput, WorkspaceReset } from '../contracts/workflow.ts';
+import { sha } from './implementation-validation.ts';
 
 export function parseStart(value: unknown): StartInput {
-  const { pairId, autoContinue, turnLimit, ...command } = object(value);
+  const { pairId, autoContinue, turnLimit, stage, ...command } = object(value);
   if (autoContinue !== undefined && typeof autoContinue !== 'boolean') throw new AppError('INVALID_BODY', 'autoContinue must be a boolean.');
   if (turnLimit !== undefined && (!Number.isInteger(turnLimit) || (turnLimit as number) < 1 || (turnLimit as number) > 200)) throw new AppError('INVALID_BODY', 'turnLimit must be an integer from 1 to 200.');
   return { ...parseCommand(command), ...(pairId !== undefined ? { pairId: agentId(pairId) } : {}),
-    ...(autoContinue !== undefined ? { autoContinue } : {}), ...(turnLimit !== undefined ? { turnLimit: turnLimit as number } : {}) };
+    ...(autoContinue !== undefined ? { autoContinue } : {}), ...(turnLimit !== undefined ? { turnLimit: turnLimit as number } : {}),
+    ...(stage !== undefined ? { stage: parseStage(stage) } : {}) };
+}
+/** The branch and full commit a Stage relay start was confirmed on. */
+function parseStage(value: unknown): StageBinding {
+  const stage = object(value);
+  if (Object.keys(stage).sort().join(',') !== 'branch,head' || typeof stage.branch !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9/_.-]{0,150}$/.test(stage.branch)) {
+    throw new AppError('INVALID_BODY', 'stage must name the displayed branch and its full commit.');
+  }
+  return { branch: stage.branch, head: sha(stage.head) };
 }
 export function parseHook(value: unknown): HookEvent {
   const { commandId, sourceTurnId, identity, backgroundState, backgroundSummary, completionSequence, reporterPid, cliPid, startedAt, event, ...rest } = object(value);

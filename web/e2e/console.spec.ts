@@ -7,22 +7,29 @@ test.describe.configure({ mode: 'serial' });
 async function state(request: APIRequestContext): Promise<WorkflowState> {
   const response = await request.get('/api/v1/state', { headers }); expect(response.ok()).toBe(true); return response.json();
 }
-async function post(request: APIRequestContext, path: string, data: unknown) {
-  const response = await request.post(`/api/v1/${path}`, { headers, data }); expect(response.ok()).toBe(true); return response.json();
+/** The simulated main checkout's branch and commit, which every Stage relay start confirms. */
+const MAIN = { branch: 'main', head: 'a'.repeat(40) };
+async function post(request: APIRequestContext, path: string, data: object) {
+  // Stage relay runs as the main checkout's two-member group unless a test names another pair.
+  const body = path === 'commands' ? { stage: MAIN, ...data, pairId: (data as { pairId?: string }).pairId ?? (await state(request)).groups.find((g) => g.cwd === '/demo/project')!.id } : data;
+  const response = await request.post(`/api/v1/${path}`, { headers, data: body }); expect(response.ok()).toBe(true); return response.json();
+}
+/** Plain Send on an agent's current group: the only way to start work on a task branch such as /demo/other without branch setup. */
+async function instruct(request: APIRequestContext, agentId: string, text: string, requestId: string = crypto.randomUUID()) {
+  const current = await state(request); const group = current.groups.find((g) => g.members.includes(agentId))!;
+  return post(request, 'instructions', { requestId, groupId: group.id, groupRevision: group.revision, agentId, policy: group.members.length === 1 ? 'solo' : 'peer', text, confirmReady: true,
+    registrations: Object.fromEntries(group.members.map((id) => [id, current.sessions.find((s) => s.id === id)!.registrationId])) });
 }
 async function unlock(page: Page, token = TOKEN, useFallback = true) {
   await page.goto('/'); await page.getByLabel('Host access token').fill(token); await page.getByRole('button', { name: 'Open console' }).click();
-  // This suite preserves the frozen staging behavior under explicit host opt-in.
+  // This suite preserves the frozen staging behavior, now offered as Stage relay on the simulated main checkout.
   if (token === TOKEN) {
     await expect(page.getByRole('heading', { name: /Agent console|Projects and agents/, exact: true })).toBeVisible();
     // The heading renders before the first state response selects a view.
     await expect(page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { pressed: true })).toHaveCount(1);
-    const fallback = page.getByLabel('Staging fallback', { exact: true });
     if (useFallback && await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Console', exact: true }).getAttribute('aria-pressed') === 'true') {
-      // The deprecated fallback is a console preference under Settings. Workspace discovery can arrive after the initial state selects Console.
-      await openTab(page, 'Settings'); await expect(fallback).toBeVisible(); await expect(fallback).toBeEnabled(); await fallback.check(); await openTab(page, 'Console');
-      // The staging composer lives in Control, which shares the frame with the terminals outside Plan.
-      await showSurface(page, 'Control');
+      // Stage relay is Control's default on main, which shares the frame with the terminals outside Plan. Discovery can arrive after the first state.
+      await showSurface(page, 'Control'); await expect(page.getByRole('region', { name: 'Stage relay', exact: true })).toBeVisible();
     }
   }
 }
@@ -208,7 +215,7 @@ test('Unknown offers an explicit status reset beside the warning, preserving the
 test('readiness is explicit and a delivered command retains execution ownership', async ({ page, request }) => {
   await unlock(page); await expect(page.getByText('MOCK MODE', { exact: true })).toBeVisible();
   const ready = (await readiness(page, 'Ready to send')); await expect(ready).not.toBeChecked();
-  const relay = page.getByRole('button', { name: 'Relay Codex ↗', exact: true }); await expect(relay).toBeDisabled();
+  const relay = page.getByRole('button', { name: 'Stage-relay review by Codex ↗', exact: true }); await expect(relay).toBeDisabled();
   await ready.check(); await relay.click();
   await expect(page.locator('.feedback[role="status"]:visible')).toContainText('DELIVERED'); await openController(page); await expect(page.getByRole('region', { name: 'Who controls the agents' })).toBeVisible();
   await expect(relay).toBeDisabled();
@@ -219,7 +226,7 @@ test('readiness is explicit and a delivered command retains execution ownership'
 });
 test('history export downloads this worktree\'s runs and journal as JSON through the authorized API', async ({ page, request }) => {
   await unlock(page);
-  await (await readiness(page, 'Ready to send')).check(); await page.getByRole('button', { name: 'Relay Codex ↗', exact: true }).click();
+  await (await readiness(page, 'Ready to send')).check(); await page.getByRole('button', { name: 'Stage-relay review by Codex ↗', exact: true }).click();
   await openController(page); await expect(page.getByRole('region', { name: 'Who controls the agents' })).toBeVisible();
   const run = (await state(request)).runs.find((r) => r.status === 'running')!;
   await complete(request, run.currentCommandId, 'accept_without_improvement');
@@ -329,7 +336,7 @@ test('command history shows only this checkout\'s commands and orders by time', 
   await post(request, 'commands', { requestId: '22222222-2222-4222-8222-222222222222', agentId: 'claude', kind: 'instruction', text: 'paired second', confirmReady: true, pairId: main.id });
   // A command on another checkout never appears in this one's history.
   await post(request, 'sessions', { paneId: '%3', label: 'Other Codex' });
-  await post(request, 'commands', { requestId: '66666666-6666-4666-8666-666666666666', agentId: 'other-codex', kind: 'instruction', text: 'elsewhere', confirmReady: true });
+  await instruct(request, 'other-codex', 'elsewhere', '66666666-6666-4666-8666-666666666666');
   await unlock(page); await expand(page, 'Command history');
   await expect(page.getByLabel('History pair filter')).toHaveCount(0);
   // History persists across tests, so assert relative order of these two rows rather than absolute counts.
@@ -494,7 +501,7 @@ test('an automatic workspace group creates a persistent run without browser sche
   await expect(page.getByLabel('Workspace group members')).toHaveText('Codex ⇄ Claude Code');
   await openTab(page, 'Console');
   await page.getByLabel('Auto-relay', { exact: true }).check(); await (await readiness(page, 'Ready to send')).check();
-  await page.getByRole('button', { name: 'Relay Codex ↗', exact: true }).click(); await expect(page.locator('.feedback[role="status"]:visible')).toContainText('DELIVERED');
+  await page.getByRole('button', { name: 'Stage-relay review by Codex ↗', exact: true }).click(); await expect(page.locator('.feedback[role="status"]:visible')).toContainText('DELIVERED');
   const run = (await state(request)).runs.find((r) => r.status === 'running')!;
   expect(run.pairId).toBe(group.id);
   await page.getByRole('button', { name: 'Lock', exact: true }).click();
@@ -527,6 +534,20 @@ test('two browser pages cannot create two continuations from the same event', as
     const run = (await state(request)).runs.find((r) => r.id === record.id)!;
     expect(run.automaticTurns).toBe(1); expect((await state(request)).executions.filter((e) => e.runId === run.id)).toHaveLength(1);
   } finally { await second.close(); }
+});
+test('plain Send from Stage relay starts a standalone instruction even with Auto-relay selected', async ({ page, request }) => {
+  await unlock(page); await page.getByLabel('Auto-relay', { exact: true }).check();
+  await page.getByLabel(/Instruction to/).fill('Commit the staged fix');
+  await (await readiness(page, 'Ready to send')).check();
+  await page.getByRole('button', { name: 'Send Codex', exact: true }).click();
+  await expect(page.locator('.feedback[role="status"]:visible')).toContainText('DELIVERED');
+  const current = await state(request); const run = current.runs.find((r) => r.status === 'running')!;
+  expect(run.standalone).toMatchObject({ agentId: 'codex', text: 'Commit the staged fix', policy: 'peer' });
+  expect(run.stage).toBeUndefined(); expect(run.autoContinue).toBe(false);
+  await complete(request, run.currentCommandId);
+  const finished = await state(request);
+  expect(finished.runs.find((r) => r.id === run.id)!.status).toBe('completed');
+  expect(finished.commands.filter((command) => command.runId === run.id)).toHaveLength(1);
 });
 test('pause and takeover are distinct and uncertain transport is not retried', async ({ page }) => {
   await unlock(page); await page.getByLabel(/Instruction to/).fill('mock:uncertain');
@@ -565,7 +586,7 @@ test('a rejected completion does not label the active pane with an older accepte
 });
 test('unknown Claude background status pauses instead of treating a response as idle', async ({ page, request }) => {
   await unlock(page); await page.getByRole('navigation', { name: 'Agent' }).getByRole('button', { name: /Claude Code/ }).click();
-  await (await readiness(page, 'Ready to send')).check(); await page.getByRole('button', { name: 'Relay Claude Code ↗', exact: true }).click();
+  await (await readiness(page, 'Ready to send')).check(); await page.getByRole('button', { name: 'Stage-relay review by Claude Code ↗', exact: true }).click();
   await expect(page.locator('.feedback[role="status"]:visible')).toContainText('DELIVERED');
   const current = await state(request); const run = current.runs.find((r) => r.status === 'running')!;
   const session = current.sessions.find((s) => s.id === 'claude')!;
@@ -580,7 +601,7 @@ test('unknown Claude background status pauses instead of treating a response as 
 test('a finished run of forgotten agents leaves the Status headline but stays in Command history', async ({ page, request }) => {
   // Pin the project checkout first so the console does not silently follow the first discovered session after the reset.
   await unlock(page); await openTab(page, 'Projects'); await editWorkspace(page, 'project'); await openTab(page, 'Console');
-  await (await readiness(page, 'Ready to send')).check(); await page.getByRole('button', { name: 'Relay Codex ↗', exact: true }).click();
+  await (await readiness(page, 'Ready to send')).check(); await page.getByRole('button', { name: 'Stage-relay review by Codex ↗', exact: true }).click();
   const run = (await state(request)).runs.find((r) => r.status === 'running')!;
   await complete(request, run.currentCommandId, 'accept_without_improvement');
   // A finished command is not the console's centre: it sits inside Control access, collapsed until opened.

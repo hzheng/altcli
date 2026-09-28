@@ -20,17 +20,23 @@ import type { HookEvent, ManagedSession, StartInput } from '../src/contracts/wor
 
 let directory: string; let store: Store; let adapter: MockAdapter; let plane: ControlPlane;
 let sent: { agent: string; text: string }[];
+/** The discovered two-member group of the simulated main checkout, where Stage relay runs. */
+let projectGroup: string;
+const MAIN = { branch: 'main', head: 'a'.repeat(40) };
 /** Simulated worktree digest; a test that models an agent editing files changes it between delivery and completion. */
 let worktree: () => Promise<string>;
-beforeEach(() => {
+beforeEach(async () => {
   directory = mkdtempSync(join(tmpdir(), 'altcli-workflow-'));
   store = new Store(directory); for (const session of mockSessions()) store.saveSession(session);
   adapter = new MockAdapter(); sent = []; worktree = async () => 'unchanged';
   adapter.send = async (session, text) => { sent.push({ agent: session.id, text }); };
   plane = new ControlPlane(new Controller(loadConfig({ ALTCLI_ADAPTER: 'mock', ALTCLI_ENABLE_LEGACY_RELAY: 'true', ALTCLI_TOKEN: 'a'.repeat(64), ALTCLI_DATA_DIR: directory }), store, adapter), () => worktree());
+  projectGroup = (await plane.state()).groups.find((group) => group.cwd === '/demo/project')!.id;
 });
 afterEach(() => { store.close(); rmSync(directory, { recursive: true, force: true }); });
-const start = (more: Partial<StartInput> = {}): StartInput => ({ requestId: randomUUID(), agentId: 'codex', kind: 'relay', confirmReady: true, ...more });
+/** A Stage relay start on the main checkout's current group: a saved pair replaces the discovered default group. */
+const start = (more: Partial<StartInput> = {}): StartInput => ({ requestId: randomUUID(), agentId: 'codex', kind: 'relay', confirmReady: true,
+  pairId: store.groups().find((group) => group.repository === '/demo/project')?.id ?? projectGroup, stage: MAIN, ...more });
 function pair() { return plane.createPair({ name: 'Main', sessions: ['codex', 'claude'] }); }
 function event(commandId: string, more: Partial<HookEvent> = {}): HookEvent {
   const turn = plane.workflow.execution(commandId)!; const run = plane.workflow.run(turn.runId)!;
@@ -378,7 +384,7 @@ test('a CLI that exited or restarted in its pane is reported and refused deliver
 });
 test('a real-mode registration without a pinned CLI pid must be renewed', async () => {
   plane.transport.config.mode = 'tmux';
-  await assert.rejects(plane.submit(start()), /current CLI process can be pinned/);
+  await assert.rejects(plane.submit(start({ pairId: pair().id })), /current CLI process can be pinned/);
   assert.equal(sent.length, 0);
 });
 test('an auxiliary Codex turn that quotes the command is ignored; the exact completion still advances', async () => {
@@ -419,11 +425,13 @@ for (const agentId of ['codex', 'claude']) test(`${agentId} native start with le
 test('history commands carry the run and pair they belonged to, including server continuations', async () => {
   const paired = start({ pairId: pair().id, autoContinue: true }); await plane.submit(paired); await complete(paired.requestId);
   const run = plane.workflow.run(paired.requestId)!; stopped(run.id);
-  const single = start(); await plane.submit(single);
+  // Stage relay always runs as the pair: a pairless start is refused rather than recorded without one.
+  await assert.rejects(plane.submit(start({ pairId: undefined })), /two-member workspace group/);
+  const later = start(); await plane.submit(later);
   const commands = (await plane.state()).commands;
   assert.deepEqual(commands.filter((c) => c.runId === run.id).map((c) => [c.agentId, c.pairId]), [['claude', 'main'], ['codex', 'main']]);
-  assert.deepEqual(commands.find((c) => c.id === single.requestId)!.pairId, null);
-  assert.equal(commands.find((c) => c.id === single.requestId)!.runId, single.requestId);
+  assert.deepEqual(commands.find((c) => c.id === later.requestId)!.pairId, 'main');
+  assert.equal(commands.find((c) => c.id === later.requestId)!.runId, later.requestId);
 });
 test('contradictory duplicate payload pauses, rather than scheduling twice', async () => {
   const command = start({ pairId: pair().id, autoContinue: true }); await plane.submit(command);
@@ -476,9 +484,12 @@ test('restart pauses durable runs and never replays a delivery', async () => {
 test('active execution survives more than thirty commands in another project', async () => {
   const long = start(); await plane.submit(long);
   await plane.register({ paneId: '%3', label: 'Other Codex' });
+  // The other project is on a task branch, so its commands are plain Sends; Stage relay runs only on main/default.
   for (let i = 0; i < 35; i++) {
-    const command = start({ agentId: 'other-codex', kind: 'instruction', text: `task ${i}` });
-    await plane.submit(command); await complete(command.requestId, { outcome: undefined });
+    const group = (await plane.state()).groups.find((candidate) => candidate.cwd === '/demo/other')!; const requestId = randomUUID();
+    await plane.submitStandalone({ requestId, groupId: group.id, groupRevision: group.revision, agentId: 'other-codex', policy: 'solo', text: `task ${i}`, confirmReady: true,
+      registrations: { 'other-codex': (store.sessions().find((session) => session.id === 'other-codex') as ManagedSession).registrationId } });
+    await complete(requestId, { outcome: undefined });
   }
   const state = await plane.state(); assert.equal(state.commands.some((c) => c.id === long.requestId), false);
   assert.ok(state.executions.some((e) => e.commandId === long.requestId));
@@ -651,6 +662,14 @@ test('an uncertain delivery holds a workspace against reset until it is acknowle
   const command = start({ kind: 'instruction', text: 'mock:uncertain' }); await plane.submit(command);
   assert.throws(() => plane.resetWorkspace({ repository: '/demo/project', confirmReady: true }), /uncertain delivery|A run owns/);
   assert.equal(store.sessions().length, 2);
+});
+test('a Stage relay start names the displayed branch and its full commit, nothing else', () => {
+  const base = { requestId: randomUUID(), agentId: 'codex', kind: 'relay', confirmReady: true, pairId: 'main' };
+  assert.deepEqual(parseStart({ ...base, stage: MAIN }).stage, MAIN);
+  assert.throws(() => parseStart({ ...base, stage: { ...MAIN, head: 'abc' } }), /full Git object ID/);
+  assert.throws(() => parseStart({ ...base, stage: { ...MAIN, extra: true } }), /stage must name/);
+  assert.throws(() => parseStart({ ...base, stage: { branch: '-main', head: MAIN.head } }), /stage must name/);
+  assert.equal(parseStart(base).stage, undefined); // the server refuses a new start without it
 });
 test('workspace reset input requires an absolute path and explicit confirmation', () => {
   assert.deepEqual(parseWorkspaceReset({ repository: '/demo/project', confirmReady: true }), { repository: '/demo/project', confirmReady: true });

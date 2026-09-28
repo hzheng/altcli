@@ -21,8 +21,10 @@ export interface InstanceState { agentId: string; status: 'current' | 'replaced'
 export interface AgentActivity { agentId: string; state: 'ready' | 'working' | 'idle' | 'interrupted' | 'unknown'; updatedAt: string | null; detail: string }
 /** Explicit human recovery of missing display evidence; never releases execution ownership. */
 export interface ActivityReset { agentId: string; registrationId: string; expectedUpdatedAt: string | null; confirmReady: true }
-/** `turnLimit` is the run's maximum number of automatic turns, frozen at start; the server default is 20. */
-export interface StartInput extends CommandInput { pairId?: string; autoContinue?: boolean; turnLimit?: number; pauseOnObjection?: boolean }
+/** The branch and commit a Stage relay start was confirmed on. The run is bound to them and stops, never switches, when they change. */
+export interface StageBinding { branch: string; head: string }
+/** `turnLimit` is the run's maximum number of automatic turns, frozen at start; the server default is 20. `stage` is required for a new Stage relay start. */
+export interface StartInput extends CommandInput { pairId?: string; autoContinue?: boolean; turnLimit?: number; pauseOnObjection?: boolean; stage?: StageBinding }
 export type RunStatus = 'running' | 'waiting' | 'paused' | 'completed' | 'stopped';
 /** Bounded registry diagnostics; arbitrary task text never enters this contract. */
 export interface BackgroundSummary {
@@ -59,6 +61,8 @@ export interface RelayRun {
   implementation?: ImplementationRun;
   planning?: PlanningRun;
   standalone?: StandaloneStart;
+  /** Stage relay binding. A staging run without it predates branch-scoped Stage relay and never dispatches another turn. */
+  stage?: StageBinding;
   interaction?: InteractionHold;
   /** Restoring a checkpoint never automatically starts a successor or a phase. */
   restoredCheckpoint?: boolean;

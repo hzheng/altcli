@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: AltCLI host API
   version: 0.1.0
-  description: Host-resident tmux console with explicit Plan and Implementation phases, captured plans kept in the app data directory, committed handoffs recorded in an app-owned journal, and an opt-in deprecated staging relay.
+  description: Host-resident tmux console with explicit Plan and Implementation phases, captured plans kept in the app data directory, committed handoffs recorded in an app-owned journal, and branch-scoped Stage relay (uncommitted review) on main or the default branch.
     Native iOS remains deferred. This contract and the JSON-only TypeScript types are maintained together.
 servers:
 - url: http://127.0.0.1:8787
@@ -194,8 +194,10 @@ paths:
   /api/v1/commands:
     post:
       operationId: submitCommand
-      summary: Start an opt-in deprecated staging run
-      description: New starts require ALTCLI_ENABLE_LEGACY_RELAY=true. Preserves the frozen staging protocol.
+      summary: Start a Stage relay run
+      description: Uncommitted review under the frozen staging protocol, only on local main or the recorded default branch. A new start needs
+        the two-member workspace group (pairId) and the displayed branch and commit (stage); ALTCLI_ENABLE_LEGACY_RELAY=false refuses it.
+        The run is bound to that branch and commit and pauses, keeping ownership, if either changes before a delivery or during a turn.
         Workflow ownership survives transport delivery until completion or explicit takeover. Uncertain commands are never replayed.
       requestBody:
         required: true
@@ -665,8 +667,8 @@ paths:
   /api/v1/projects/worktrees/integration/preview:
     post:
       operationId: previewWorktreeIntegration
-      summary: Read-only preview of one squash commit into the integration branch
-      description: Requires a linked task worktree on a named non-integration branch, a clean checkout that has the integration branch (main, else the recorded default) checked out with a committer identity, an unambiguous merge base, and a conflict-free `git merge-tree` result that changes the target tree. Neither checkout is modified. Uncommitted task-worktree changes are reported, not squashed. Run or delivery ownership of either checkout refuses the preview. Optional through selects an inclusive task-branch commit; omitted means HEAD. Applicable prior batches supply the next baseline; retired checkpoints and checkpoints outside the current source or target history are ignored.
+      summary: Preview one squash commit without changing refs, index or checkout
+      description: Requires a linked task worktree on a named non-integration branch, a clean checkout that has the integration branch (main, else the recorded default) checked out with a committer identity, an unambiguous merge base, and a conflict-free `git merge-tree` result that changes the target tree. Neither checkout is modified. Uncommitted task-worktree changes are reported, not squashed. Run or delivery ownership of either checkout refuses the preview. Agent panes in both checkouts, including subdirectories, need current settled native activity and clear process evidence; unknown evidence, background writers and unsupported processes refuse it. Shell panes require the root shell in the foreground and no task processes. Ordinary discovery uses configured Git status semantics, including filters and monitors. Squash-specific status/merge inspection refuses selected content filters (including initialized submodules), external filesystem-monitor hooks and configured merge drivers. Preview may create unreachable Git objects. Optional through selects an inclusive task-branch commit; omitted means HEAD. Applicable prior batches supply the next baseline; retired checkpoints and checkpoints outside the current source or target history are ignored.
       requestBody:
         required: true
         content:
@@ -683,7 +685,7 @@ paths:
     post:
       operationId: integrateWorktree
       summary: Confirmed squash integration
-      description: The compact confirmation repeats the preview's consent digest and the (edited) message; the server re-derives the preview and refuses a changed digest. The message budget (8 KiB JSON-encoded) plus bounded identifiers keeps every accepted request within the 16 KiB body limit, and the generated default already fits it. It then revalidates ownership and stages the exact previewed merged tree via a streamed binary diff and `git apply --index --binary`, then runs `git commit -m <message>` in the integration checkout under the repository's normal hook policy. Exactly one new single-parent commit whose tree equals the previewed merge tree is verified; anything else is uncertain and never retried. The task branch and worktree are unchanged.
+      description: The compact confirmation repeats the preview's consent digest and the (edited) message; the server re-derives the preview and refuses a changed digest. The message budget (8 KiB JSON-encoded) plus bounded identifiers keeps every accepted request within the 16 KiB body limit, and the generated default already fits it. It then revalidates ownership and writer evidence and stages the exact previewed merged tree via a streamed binary diff and `git apply --index --binary`, then runs `git commit -m <message>` in the integration checkout under the repository's normal hook policy. Writer evidence is rechecked before staging and before committing; a failed check after Git starts retains uncertain ownership. Later activity does not invalidate an already verified squash result. Exactly one new single-parent commit whose tree equals the previewed merge tree is verified; anything else is uncertain and never retried. The task branch and worktree are unchanged.
       requestBody:
         required: true
         content:
@@ -712,7 +714,7 @@ paths:
                 requestId: {type: string, format: uuid}
       responses:
         '200':
-          description: Read-only inspection. A dirty integration checkout keeps the operation uncertain (the staged squash may still be pending). A clean checkout settles it — the previewed commit anywhere on the branch's first-parent chain since the pinned tip completes it, an unchanged tip or a tip that moved on without that commit releases the hold as failed; nothing is retried
+          description: Read-only inspection. Missing or active writer evidence at entry in either checkout retains ownership. After the previewed historical commit is verified, later activity does not undo completion; releasing an attempt without that commit still rechecks writer evidence. A dirty integration checkout keeps the operation uncertain (the staged squash may still be pending). A clean checkout settles it — the previewed commit anywhere on the branch's first-parent chain since the pinned tip completes it, an unchanged tip or a tip that moved on without that commit releases the hold as failed; nothing is retried
           content:
             application/json:
               schema: {$ref: '#/components/schemas/WorktreeIntegration'}
@@ -2015,7 +2017,7 @@ components:
             $ref: '#/components/schemas/Group'
         legacyEnabled:
           type: boolean
-          description: Host opt-in for new deprecated staging runs; false by default. Existing runs retain their protocol.
+          description: Whether new Stage relay runs may start (ALTCLI_ENABLE_LEGACY_RELAY; absent means true). Existing runs retain their protocol.
         runs:
           type: array
           items:
@@ -2144,6 +2146,8 @@ components:
             type: string
           pairId:
             $ref: '#/components/schemas/AgentId'
+          stage:
+            $ref: '#/components/schemas/StageBinding'
           autoContinue:
             type: boolean
           turnLimit:
@@ -2178,6 +2182,8 @@ components:
             type: string
           pairId:
             $ref: '#/components/schemas/AgentId'
+          stage:
+            $ref: '#/components/schemas/StageBinding'
           autoContinue:
             type: boolean
           turnLimit:
@@ -2205,6 +2211,14 @@ components:
         additionalProperties: false
       description: A unique client UUID v4 is required. Same ID and payload returns the stored result without redelivery.
         Reuse with a different payload conflicts. Never retry automatically after an uncertain response.
+    StageBinding:
+      type: object
+      description: The branch and full commit a Stage relay start was confirmed on. Required for a new start; the run is bound to it.
+      properties:
+        branch: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9/_.-]{0,150}$'}
+        head: {$ref: '#/components/schemas/GitSha'}
+      required: [branch, head]
+      additionalProperties: false
     GitSha:
       type: "string"
       pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
@@ -2228,7 +2242,7 @@ components:
       required: ["branch","head","primary","clean","changes","changeCount"]
       additionalProperties: false
     WorkspaceGit:
-      description: The workspace branch reading plus the host's integration-branch policy. The default branch (origin/HEAD) and ALTCLI_INTEGRATION_BRANCHES are starting points, never implementation branches.
+      description: The workspace branch reading plus the host's integration-branch policy. The default branch (origin/HEAD), main and ALTCLI_INTEGRATION_BRANCHES are starting points, never implementation branches.
       type: object
       properties:
         branch: {type: [string, 'null']}
@@ -2241,7 +2255,15 @@ components:
         taskBase:
           oneOf: [{$ref: '#/components/schemas/GitSha'}, {type: 'null'}]
           description: Where task work on this branch begins. The head when no commit lies beyond an integration tip, the single nearest merge base when known, null when the user must confirm it or the branch is an integration branch.
-      required: [branch, head, primary, clean, changes, changeCount, integration, taskBase]
+        stageRelay:
+          type: object
+          description: Whether the checked-out branch runs Stage relay; only local main or the recorded default branch does.
+          properties:
+            eligible: {type: boolean}
+            reason: {type: [string, 'null'], description: Why Stage relay is unavailable on this branch; null when eligible.}
+          required: [eligible, reason]
+          additionalProperties: false
+      required: [branch, head, primary, clean, changes, changeCount, integration, taskBase, stageRelay]
       additionalProperties: false
     BranchConsent:
       description: Staying on an existing task branch keeps its permanent task baseline; a new branch begins at head. An integration branch is refused as the implementation branch, and taskBase cannot accompany newBranch.
@@ -2462,7 +2484,7 @@ components:
         terminalEnabled: {type: boolean}
         launchEnabled: {type: boolean}
         inputEnabled: {type: boolean}
-        legacyEnabled: {type: boolean, description: Whether the deprecated staging relay may be shown as a console preference.}
+        legacyEnabled: {type: boolean, description: 'Whether Stage relay may start on main or the default branch (ALTCLI_ENABLE_LEGACY_RELAY; absent means true).'}
         dataDir: {type: string, description: Controller data (SQLite store, journal, plans, assignments); the adapter mode is appended to the configured base.}
         worktreeDir: {type: string, description: Where task worktrees are created by default.}
         tmuxBin: {type: string}
@@ -2575,6 +2597,7 @@ components:
         implementation: {"$ref":"#/components/schemas/ImplementationRun"}
         planning: {"$ref":"#/components/schemas/PlanningRun"}
         standalone: {"$ref":"#/components/schemas/StandaloneStart"}
+        stage: {"$ref":"#/components/schemas/StageBinding","description":"Stage relay binding. A staging run without it predates branch-scoped Stage relay and dispatches nothing more."}
       required: ["id","repository","lockKey","pairId","participants","autoContinue","pauseRequested","status","reason","currentCommandId","automaticTurns","turnLimit","createdAt","updatedAt"]
       additionalProperties: false
     Execution:

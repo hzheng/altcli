@@ -19,7 +19,7 @@ import { assertIdentity } from '../src/core/policy.ts';
 import type { SessionRegistration } from '../src/contracts/api.ts';
 import { codexCompletion, codexStartState } from '../../hooks/protocol.mjs';
 import type { Group, HandoffEntry, ImplementationStart } from '../src/contracts/implementation.ts';
-import type { HookEvent, ManagedSession } from '../src/contracts/workflow.ts';
+import type { HookEvent, ManagedSession, StartInput } from '../src/contracts/workflow.ts';
 
 // Real Git and SQLite in disposable directories; terminal delivery and lifecycle evidence are simulated.
 let directory: string; let root: string; let store: Store; let adapter: MockAdapter; let plane: ControlPlane;
@@ -372,7 +372,11 @@ test('configured and detected integration branches are refused beyond the litera
   const configured = new ControlPlane(new Controller(loadConfig({ ALTCLI_ADAPTER: 'mock', ALTCLI_TOKEN: 'a'.repeat(64), ALTCLI_DATA_DIR: join(directory, 'metadata'), ALTCLI_INTEGRATION_BRANCHES: 'develop, release/1.0' }), store, adapter));
   await assert.rejects(configured.submitImplementation(request()), /release\/1.0 is an integration branch/);
   git('switch', 'develop'); await assert.rejects(configured.submitImplementation(request()), /develop is an integration branch/);
-  git('switch', 'task/fixture'); assert.equal((await configured.submitImplementation(request())).status, 'delivered');
+  // main runs Stage relay, so committed work is refused there even when the configured list omits it.
+  git('switch', 'main'); await assert.rejects(configured.submitImplementation(request()), /main is an integration branch/);
+  const named = request(); named.branch.newBranch = 'main'; git('switch', 'task/fixture');
+  await assert.rejects(configured.submitImplementation({ ...named, branch: { ...named.branch, branch: 'task/fixture', head: git('rev-parse', 'HEAD') } }), /main is an integration branch name/);
+  assert.equal((await configured.submitImplementation(request())).status, 'delivered');
   // A remote default branch counts even when it is not configured: origin/HEAD is read locally, without fetching.
   git('update-ref', 'refs/remotes/origin/trunk', 'HEAD'); git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk');
   const policy = async () => { const state = await branchState(root); return { primary: state.primary, ...await taskBaseline(root, state, plane.config.integrationBranches) }; };
@@ -511,11 +515,67 @@ test('group validation rejects aliases, oversized rosters, moved cwd and mismatc
   const inspect = adapter.inspect.bind(adapter); adapter.inspect = async (id) => ({ ...await inspect(id), cwd: id === '%1' ? `${root}/subdir` : root });
   await assert.rejects(plane.submitImplementation(request()), /group changed.*canonical current directory/);
 });
-test('legacy starts are softly disabled while existing protocol remains opt-in', async () => {
-  await assert.rejects(plane.submit({ requestId: randomUUID(), agentId: 'codex', kind: 'relay', confirmReady: true }), /deprecated staging relay is disabled/);
+/** A Stage relay start by the group on the checked-out branch, confirming the displayed branch and commit. */
+function stageStart(more: Partial<StartInput> = {}): StartInput {
+  return { requestId: randomUUID(), agentId: 'codex', kind: 'relay', confirmReady: true, pairId: group.id,
+    stage: { branch: git('branch', '--show-current'), head: git('rev-parse', 'HEAD') }, ...more };
+}
+test('Stage relay is enabled unless the host explicitly sets false; an existing request still returns its record', async () => {
+  assert.equal(loadConfig({ ALTCLI_TOKEN: 'a'.repeat(64) }).legacyEnabled, true);
+  assert.equal(loadConfig({ ALTCLI_TOKEN: 'a'.repeat(64), ALTCLI_ENABLE_LEGACY_RELAY: 'false' }).legacyEnabled, false);
+  assert.equal((await plane.state()).legacyEnabled, true);
+  git('switch', 'main'); const input = stageStart(); const record = await plane.submit(input);
+  plane.config.legacyEnabled = false;
+  await assert.rejects(plane.submit(stageStart({ agentId: 'claude' })), /Stage relay is disabled on this host \(ALTCLI_ENABLE_LEGACY_RELAY=false\)/);
+  assert.equal((await plane.submit(input)).id, record.id); assert.equal(sent.length, 1);
   assert.equal((await plane.state()).legacyEnabled, false);
   assert.throws(() => parseImplementation({ ...request(), unexpected: true }), /Unknown implementation field/);
-  assert.equal((await branchState(root)).clean, true);
+});
+test('Stage relay runs only on main or the recorded default, confirmed on the exact branch and commit, with uncommitted work allowed', async () => {
+  await assert.rejects(plane.submit(stageStart()), /task\/fixture is a task branch: Stage relay runs only on main or the recorded default/);
+  git('checkout', '--quiet', '--detach'); await assert.rejects(plane.submit(stageStart({ stage: { branch: 'main', head: git('rev-parse', 'HEAD') } })), /Detached HEAD/);
+  git('switch', 'main');
+  await assert.rejects(plane.submit(stageStart({ stage: undefined })), /Confirm the displayed branch and commit/);
+  await assert.rejects(plane.submit(stageStart({ stage: { branch: 'main', head: 'b'.repeat(40) } })), /branch or commit changed/);
+  await assert.rejects(plane.submit(stageStart({ pairId: undefined })), /two-member workspace group/);
+  git('branch', 'master'); git('switch', 'master');
+  await assert.rejects(plane.submit(stageStart()), /master is an integration branch but not main or the recorded default: neither/);
+  assert.deepEqual(sent, []); assert.deepEqual(plane.workflow.runs(), []);
+  // A recorded default other than main also runs Stage relay; main stays eligible beside it.
+  git('branch', 'develop'); git('update-ref', 'refs/remotes/origin/develop', 'HEAD'); git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/develop');
+  git('switch', 'develop'); const onDefault = stageStart(); assert.equal((await plane.submit(onDefault)).status, 'delivered');
+  assert.deepEqual(run(onDefault.requestId).stage, onDefault.stage);
+  plane.action({ runId: onDefault.requestId, action: 'takeover', confirmReady: true });
+  // Staged and unstaged work are the review-handoff skill's input, not a reason to refuse.
+  git('switch', 'main'); writeFileSync(join(root, 'app.txt'), 'uncommitted fix\n'); writeFileSync(join(root, 'new.txt'), 'untracked\n'); git('add', 'new.txt');
+  const dirty = stageStart(); assert.equal((await plane.submit(dirty)).status, 'delivered'); assert.equal(sent.length, 2);
+  assert.deepEqual((await branchState(root)).changes.map((change) => [change.status, change.path]), [[' M', 'app.txt'], ['A ', 'new.txt']]);
+});
+test('Stage relay pauses instead of following a branch or commit that moved during a turn or before a delivery', async () => {
+  git('switch', 'main');
+  const moved = stageStart({ autoContinue: true }); await plane.submit(moved);
+  writeFileSync(join(root, 'app.txt'), 'committed meanwhile\n'); git('commit', '-qam', 'outside commit');
+  await complete(moved.requestId, { outcome: 'accept_and_improve' });
+  assert.equal(run(moved.requestId).status, 'paused'); assert.match(run(moved.requestId).reason, /checkout moved to main at .*bound to main at/);
+  assert.equal(sent.length, 1); assert.equal(plane.workflow.owner(run(moved.requestId).lockKey), moved.requestId);
+  plane.action({ runId: moved.requestId, action: 'takeover', confirmReady: true });
+  // The next delivery rereads the checkout immediately before sending: a switch after the completion was accepted stops it.
+  const racing = stageStart({ autoContinue: true }); await plane.submit(racing); assert.equal(sent.length, 2);
+  let deliveries = 0; const preflight = adapter.preflight.bind(adapter);
+  adapter.preflight = async () => { if (++deliveries === 1) git('switch', '--quiet', '-c', 'task/raced'); return preflight(); };
+  await complete(racing.requestId, { outcome: 'accept_and_improve' });
+  assert.equal(deliveries, 1); assert.equal(sent.length, 2);
+  assert.equal(run(racing.requestId).status, 'paused'); assert.match(run(racing.requestId).reason, /bound to main at .* now on task\/raced/);
+  assert.equal(plane.store.get(run(racing.requestId).currentCommandId)!.status, 'rejected');
+});
+test('a staging run from before branch-scoped Stage relay records its completion but dispatches nothing more', async () => {
+  git('switch', 'main'); const input = stageStart({ autoContinue: true }); await plane.submit(input);
+  const legacy = run(input.requestId); delete legacy.stage;
+  store.db.prepare('UPDATE workflow_runs SET value=? WHERE id=?').run(JSON.stringify(legacy), legacy.id);
+  await complete(input.requestId, { outcome: 'accept_and_improve' });
+  assert.equal(plane.workflow.execution(input.requestId)!.status, 'finished');
+  assert.equal(run(input.requestId).status, 'paused'); assert.match(run(input.requestId).reason, /predates branch-scoped Stage relay/);
+  assert.equal(sent.length, 1); assert.equal(plane.workflow.owner(legacy.lockKey), input.requestId);
 });
 test('v4 migration preserves historical pair IDs and creates versioned groups', () => {
   store.db.prepare('DELETE FROM groups').run(); store.db.pragma('user_version = 4'); store.close();
@@ -588,11 +648,10 @@ test('changed CLI instance at completion prevents handoff even when a valid comm
   const input = request(); await plane.submitImplementation(input); publish(input.requestId, true); adapter.foregrounds.set('codex', '999'); await complete(input.requestId);
   assert.equal(run(input.requestId).status, 'paused'); assert.equal(sent.length, 1); assert.match(run(input.requestId).reason, /Re-register/);
 });
-test('an overlapping group and the staging fallback share the same execution lock', async () => {
+test('an overlapping group and Stage relay cannot take a task branch checkout that a committed run owns', async () => {
   const input = request(); await plane.submitImplementation(input);
   const solo = await assert.rejects(plane.createGroup({ name: 'Concurrent solo', members: ['codex'] }), /run owns/); assert.equal(solo, undefined);
-  plane.config.legacyEnabled = true;
-  await assert.rejects(plane.submit({ requestId: randomUUID(), agentId: 'claude', kind: 'relay', confirmReady: true, pairId: group.id }), /execution owner/);
+  await assert.rejects(plane.submit(stageStart({ agentId: 'claude' })), /task branch: Stage relay runs only on main/);
   assert.equal(sent.length, 1);
 });
 test('a branch setup conflict is persisted as uncertain and a repeated request never retries it', async () => {

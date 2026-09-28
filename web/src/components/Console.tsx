@@ -134,7 +134,6 @@ export function Console() {
   const [readinessSlot, setReadinessSlot] = useState<HTMLElement | null>(null);
   const terminals = useRef(new Map<string, NativeTerminalHandle>());
   const [turnLimit, setTurnLimit] = useState(String(DEFAULT_TURN_LIMIT));
-  const [legacy, setLegacy] = useState(false);
   // One readiness slot for the whole console: the exact displayed state a confirmation was given for, so at most one card is ready.
   const [consent, setConsent] = useState('');
   const [recheckRevision, setRecheckRevision] = useState(0); const [viewEpoch, setViewEpoch] = useState(0);
@@ -236,7 +235,10 @@ export function Console() {
   // The run/transition whose phase this workspace last followed: each transition is applied once, so a later click is never overridden.
   const [followedPhase, setFollowedPhase] = useRemembered<string | null>(`phaseFollowed:${ws}`, null, memory);
   const [settingsTab, setSettingsTab] = useRemembered<'preferences' | 'host'>('settingsTab', 'preferences', memory);
-  const showLegacy = legacy && state?.legacyEnabled && pair?.sessions.length === 2;
+  // Stage relay is uncommitted review on main or the default branch; Commit relay needs a task branch. The mode is view state only.
+  const [relayMode, setRelayMode] = useRemembered<'stage' | 'commit'>(`relayMode:${ws}`, 'stage', memory);
+  const stageEligible = !!git?.stageRelay?.eligible;
+  const stageAvailable = stageEligible && !!state?.legacyEnabled && pair?.sessions.length === 2;
   const visible = pair ? projectSessions.filter((s) => pair.sessions.includes(s.id)) : projectSessions;
   const inputBlocks = new Map(projectSessions.flatMap(s => {
     // By pane identity: discovered agents without a saved registration have no registeredAs.
@@ -278,10 +280,10 @@ export function Console() {
   const displayed = current?.id;
   useEffect(() => { if (displayed && displayed !== paneChoice) setPaneChoice(displayed); }, [displayed, paneChoice, setPaneChoice]);
   const groupInstances = visible.map((s) => [s.id, state?.instances.find((i) => i.agentId === s.id)?.status]);
-  const readinessKey = JSON.stringify([pair, card?.agents, current?.id, current?.registrationId, groupInstances, [...inputBlocks]]);
+  const readinessKey = JSON.stringify([pair, card?.agents, current?.id, current?.registrationId, groupInstances, [...inputBlocks], git?.branch, git?.head]);
   useEffect(() => { setConsent(''); setReady(false); setResetFor(null); }, [readinessKey, project]);
   // Readiness and confirmations attest to what was on screen, so any view switch revokes them. Drafts and choices stay.
-  const viewKey = JSON.stringify([tab, phase, layout, displayed, merged && surface]);
+  const viewKey = JSON.stringify([tab, phase, layout, displayed, merged && surface, relayMode]);
   useEffect(() => { setConsent(''); setReady(false); setResetFor(null); setViewEpoch((epoch) => epoch + 1); }, [viewKey]);
   const chooseLayout = (next: 'parallel' | 'focus') => { setLayout(next); try { localStorage.setItem(LAYOUT, next); } catch { /* preference only */ } };
   const chooseControlPlacement = (next: 'below' | 'side') => { setControlPlacement(next); try { localStorage.setItem(CONTROL_PLACEMENT, next); } catch { /* preference only */ } };
@@ -290,6 +292,7 @@ export function Console() {
   const toggleDrawer = (open: boolean) => { setControlDrawer(open); requestAnimationFrame(() => open ? focusControlPane() : drawerToggle.current?.focus()); };
   const stale = !!error || clock - updated > 10000;
   const inputRun = owned[0] && (owned[0].implementation || owned[0].planning || owned[0].standalone) ? owned[0] : null;
+  const showStage = stageAvailable && relayMode === 'stage' && phase === 'implementation' && !inputRun;
   // A reading that is not current cannot back a confirmation; readiness must be given again once it is.
   useEffect(() => { if (stale) { setConsent(''); setReady(false); } }, [stale]);
   // Every selected collaborator is validated by the server, including a peer that is not the command target.
@@ -323,7 +326,7 @@ export function Console() {
     || (transportHold ? 'An older uncertain delivery holds this workspace. Check its terminals, then take control in Control access.' : '')
     || (unknownRequest ? 'A request has an uncertain result. Check the terminal, then take control in Control access before sending again.' : '')
     || (checking ? 'Wait for Recheck to finish.' : '')
-    || (!!pair && !limitValid ? 'Set the staging fallback maximum automatic turns to 1–200.' : '');
+    || (!!pair && !limitValid ? 'Set the Stage relay maximum automatic turns to 1–200.' : '');
   const manualReason = manualHeld ? 'Manual terminal input holds dispatch across this server. Release and reconcile it in Control access first.' : '';
   const sharedReason = manualReason || dispatchReason;
   const implementationReason = (keyboardHandoff ? '' : manualReason) || dispatchReason;
@@ -411,13 +414,20 @@ export function Console() {
     finally { await Promise.all([refresh(), recheck()]); submission.current = false; setBusy(false); }
   }
   async function send(kind: 'relay' | 'instruction', handoff = false) {
-    if (blocked || !ready || !current || submission.current) return;
+    if (blocked || !ready || !current || !pair || !git?.branch || submission.current) return;
     submission.current = true; setBusy(true); setReady(false);
     const requestId = crypto.randomUUID();
     try {
-      const record = await api<CommandRecord>(token, 'commands', { body: { requestId, agentId: current.id, kind,
-        ...(text.trim() ? { text: text.trim() } : {}), handoff,
-        ...(pair ? { pairId: pair.id, turnLimit: limitValue } : {}), autoContinue: !!pair && autoContinue && (kind === 'relay' || handoff), confirmReady: true } });
+      const standalone = kind === 'instruction' && !handoff;
+      // The run is bound to the branch and commit on screen; the server refuses a start or delivery after either changes.
+      // Plain Send keeps the standalone contract, including instructions that deliberately change HEAD.
+      const record = await api<CommandRecord>(token, standalone ? 'instructions' : 'commands', { body: standalone ? {
+        requestId, agentId: current.id, groupId: pair.id, groupRevision: pair.revision, policy: 'peer',
+        registrations: Object.fromEntries(pair.members.map((id) => [id, state?.sessions.find((session) => session.id === id)?.registrationId ?? ''])),
+        text: text.trim(), confirmReady: true,
+      } : { requestId, agentId: current.id, kind,
+        ...(text.trim() ? { text: text.trim() } : {}), handoff, pairId: pair.id, turnLimit: limitValue,
+        autoContinue: autoContinue && (kind === 'relay' || handoff), stage: { branch: git.branch, head: git.head }, confirmReady: true } });
       setMessage(`${record.status.toUpperCase()}: ${record.error ?? 'Terminal delivery recorded. The server owns this run until completion or human takeover.'}`);
       if (record.status !== 'rejected') setText('');
     } catch (caught) {
@@ -530,7 +540,7 @@ export function Console() {
   ];
   // The composer on screen in Control, mirroring its render conditions below. Its readiness check is shown only in Control access, and
   // only while the Console shows that composer, so a confirmation always attests to the action on screen.
-  const composer = !projectSessions.length ? null : showLegacy ? 'legacy' : inputRun ? current ? 'input' : null
+  const composer = !projectSessions.length ? null : showStage ? 'stage' : inputRun ? current ? 'input' : null
     : phase === 'plan' ? 'plan' : current && actionable && phase === 'implementation' ? 'implementation' : null;
   const readinessHere = !!composer && tab === 'console' && showControl;
   const settings = phase === 'plan' ? planSettings : implementationSettings;
@@ -592,7 +602,7 @@ export function Console() {
         <section className="access-section" aria-label="Workflow"><h3>Controller <span className="muted">· this checkout</span></h3>
           {owned.map((run) => <section key={run.id} className="panel run-card" aria-label="Who controls the agents">
             <div className="section-heading"><h2>{run.status === 'paused' ? 'Controller paused · inspect the checkpoint' : run.status === 'waiting' ? 'Controller waiting for your Next turn' : 'Controller is driving the agents'}</h2><span className="badge">{run.automaticTurns}/{run.turnLimit} automatic turns</span></div>
-            <p><span className="badge">{run.implementation ? 'IMPLEMENTATION' : run.planning ? 'PLAN' : run.standalone ? 'STANDALONE' : 'LEGACY STAGING'}</span> {run.participants.map((s) => s.label).join(' ⇄ ')} · {run.implementation?.group.name ?? run.planning?.group.name ?? run.pairId ?? 'single-agent turn'}</p>
+            <p><span className="badge">{run.implementation ? 'IMPLEMENTATION' : run.planning ? 'PLAN' : run.standalone ? 'STANDALONE' : run.stage ? 'STAGE RELAY' : 'STAGE RELAY (PRE-UPGRADE)'}</span> {run.participants.map((s) => s.label).join(' ⇄ ')} · {run.implementation?.group.name ?? run.planning?.group.name ?? run.pairId ?? 'single-agent turn'}</p>
             {(() => { // Which command this run owns: the current turn's target and its text, so a paused run is recognisable.
               const turn = state.executions.find((e) => e.commandId === run.currentCommandId);
               const text = run.standalone?.text ?? turn?.input.text ?? '';
@@ -626,9 +636,9 @@ export function Console() {
               <button type="button" className="quiet inline-link" onClick={showControlSurface}>{tab !== 'console' ? 'Go to Console' : 'Show Control'}</button></p>}
           {/* Each composer renders its own check here; its consent key and checked state stay with that composer. */}
           <div ref={setReadinessSlot} className="readiness-slot" hidden={!readinessHere} />
-          {showLegacy && <div hidden={!readinessHere}><label className="readiness"><input type="checkbox" aria-label="Ready to send" checked={ready} disabled={blocked} onChange={(e) => setReady(e.target.checked)} />
+          {showStage && <div hidden={!readinessHere}><label className="readiness"><input type="checkbox" aria-label="Ready to send" checked={ready} disabled={blocked} onChange={(e) => setReady(e.target.checked)} />
             I checked that all participants are at empty prompts, have no background writers, use their standard Git index, and will remain under controller ownership for this run.</label>
-            <p className="fine">Applies to the legacy staging actions for {current?.label}.</p></div>}
+            <p className="fine">Applies to the Stage relay actions for {current?.label}.</p></div>}
           {readinessHere && <button type="button" className="quiet" onClick={returnToAction}>Return to action</button>}
         </section>
       </section>
@@ -684,7 +694,7 @@ export function Console() {
         <p className="muted">{missingTree ? <>This worktree is no longer available. Choose another worktree in {selectedProject.name}.</> : selectedProject?.error ?? selectedTree?.error ?? card?.agents.find((agent) => agent.reason && (agent.kind === 'codex' || agent.kind === 'claude'))?.reason ?? (project ? <>Start coding CLIs in <span className="mono">{project}</span>, then Recheck in Projects. Collaborators need the same directory. No registration is needed.</> : 'Choose a project and worktree with running coding agents. Nothing is sent until you explicitly start work.')}</p>
         <button type="button" className="primary" onClick={() => showTab('workspaces')}>Open Projects</button></section>}
       {!!projectSessions.length && <>
-        <RunSettingsBar settings={settings} git={git} members={members} sessions={sessions} displayed={current?.id} disabled={busy || !!(phase === 'implementation' && !showLegacy ? implementationReason : sharedReason)} notice={settingsNotice} legacy={!!showLegacy} onPhase={setPhase} />
+        <RunSettingsBar settings={settings} git={git} members={members} sessions={sessions} displayed={current?.id} disabled={busy || !!(phase === 'implementation' && !showStage ? implementationReason : sharedReason)} notice={settingsNotice} stage={showStage} onPhase={setPhase} />
         {/* Watch zone: a recessed stage of terminal captures. Commands sit under each capture or below the stage, never over it. */}
         {/* Outside Plan this is one frame: the switch shows the terminals or Control, and the hidden surface stays mounted. */}
         <div className={`workbench${merged ? ` merged ${surface}` : controlPlacement === 'side' ? ' side' : ''}`}>
@@ -742,31 +752,41 @@ export function Console() {
         <section ref={controlPane} id="altcli-control" tabIndex={-1} className={`control-pane${controlDrawer && !merged ? ' drawer' : ''}`} aria-label="Control" hidden={!showControl}
           onKeyDown={(e) => { if (controlDrawer && !merged && e.key === 'Escape') { e.stopPropagation(); toggleDrawer(false); } }}>
           {/* Names the recipient chosen by the Agent selector; Plan setup is the one control addressed to the whole group. */}
-          <div className="control-heading"><h2>Control{phase === 'plan' && !inputRun && !showLegacy ? <span className="control-recipient"> · All agents</span> : current && <span className="control-recipient"> · {current.label}</span>}</h2>{controlDrawer && !merged && <button type="button" className="quiet drawer-close" onClick={() => toggleDrawer(false)}>Close drawer</button>}</div>
+          <div className="control-heading"><h2>Control{phase === 'plan' && !inputRun ? <span className="control-recipient"> · All agents</span> : current && <span className="control-recipient"> · {current.label}</span>}</h2>{controlDrawer && !merged && <button type="button" className="quiet drawer-close" onClick={() => toggleDrawer(false)}>Close drawer</button>}</div>
           <div className="control-body">
-          {current && inputRun && !showLegacy && <InteractionComposer key={current.id} token={token} state={state} run={inputRun} agent={current} draftKey={`draft:${scope}:${current.id}`} disabled={busy || stale || setupHeld || manualHeld || !state.inputEnabled || !!identityBlockedReason || !!cardReason(current)} viewEpoch={viewEpoch} refresh={refresh} readinessSlot={readinessSlot} />}
-          {current && actionable && !inputRun && phase === 'implementation' && !showLegacy && <PaneActions key={current.id} {...common} group={pair} agent={current} settings={implementationSettings} blockedReason={implementationReason || cardReason(current)} keyboardHandoff={keyboardHandoff} viewEpoch={viewEpoch} draftKey={`draft:${scope}:${current.id}`} onOpenAccess={() => openAccess(readinessSlot?.querySelector('input'))} />}
-        {phase === 'plan' && !inputRun && !showLegacy && <>{commandDivider}<PlanSetup {...common} group={pair && members.length ? pair : undefined} settings={planSettings} displayed={current?.id}
+          {stageAvailable && phase === 'implementation' && !inputRun && <div className="relay-mode">
+            <div className="segmented" role="group" aria-label="Relay mode">
+              <button type="button" className={relayMode === 'stage' ? 'selected' : 'quiet'} aria-pressed={relayMode === 'stage'} onClick={() => setRelayMode('stage')}>Stage relay</button>
+              <button type="button" className={relayMode === 'commit' ? 'selected' : 'quiet'} aria-pressed={relayMode === 'commit'} onClick={() => setRelayMode('commit')}>Commit relay</button></div>
+            <p className="fine">{relayMode === 'stage' ? <>Uncommitted review on <span className="mono">{git?.branch}</span>: accepted changes are staged and nothing is committed for you.</>
+              : 'Committed handoffs need a task branch: create one here in Settings, or a task worktree in Projects.'}</p></div>}
+          {stageEligible && !stageAvailable && phase === 'implementation' && !inputRun && !!members.length && <p className="fine">{!state.legacyEnabled
+            ? <>Stage relay is disabled on this host (<span className="mono">ALTCLI_ENABLE_LEGACY_RELAY=false</span>). Remove that line or set it to true, then restart the host.</>
+            : <>Stage relay on <span className="mono">{git?.branch}</span> needs a two-member group. Select two agents in Projects.</>}</p>}
+          {current && inputRun && <InteractionComposer key={current.id} token={token} state={state} run={inputRun} agent={current} draftKey={`draft:${scope}:${current.id}`} disabled={busy || stale || setupHeld || manualHeld || !state.inputEnabled || !!identityBlockedReason || !!cardReason(current)} viewEpoch={viewEpoch} refresh={refresh} readinessSlot={readinessSlot} />}
+          {current && actionable && !inputRun && phase === 'implementation' && !showStage && <PaneActions key={current.id} {...common} group={pair} agent={current} settings={implementationSettings} blockedReason={implementationReason || cardReason(current)} keyboardHandoff={keyboardHandoff} viewEpoch={viewEpoch} draftKey={`draft:${scope}:${current.id}`} onOpenAccess={() => openAccess(readinessSlot?.querySelector('input'))} />}
+        {phase === 'plan' && !inputRun && <>{commandDivider}<PlanSetup {...common} group={pair && members.length ? pair : undefined} settings={planSettings} displayed={current?.id}
           blockedReason={sharedReason || cardReason(current)} draftKey={`plan:${scope}`} /></>}
-        {showLegacy && commandDivider}
-        {showLegacy && <section className="composer command-zone"><div className="section-heading"><h2>Legacy staging: send to {current?.label}</h2><span className="badge">{owned.length ? 'EXECUTION OWNED' : 'MANUAL START'}</span></div>
+        {showStage && commandDivider}
+        {showStage && <section className="composer command-zone" aria-label="Stage relay"><div className="section-heading"><h2>Stage relay: send to {current?.label}</h2><span className="badge">{owned.length ? 'EXECUTION OWNED' : 'MANUAL START'}</span></div>
           {!state?.inputEnabled && <p>Read-only console: the host has disabled input.</p>}
+          <p className="fine">Reviews changes in this checkout; accepted changes are staged. Commit the finished fix yourself. The run stays on <span className="mono">{git?.branch}</span> at <span className="mono">{git?.head.slice(0, 7)}</span> and stops if either changes.</p>
           <form onSubmit={(e) => { e.preventDefault(); void send('instruction'); }}>
             <label className="sr-only" htmlFor="instruction">Instruction to {current?.label}</label>
             <div className="command-line"><textarea id="instruction" autoComplete="off" rows={3} value={text} disabled={blocked} maxLength={1900} onChange={(e) => setText(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void send('instruction'); } }} placeholder="Instruction or optional review context. ⌘/Ctrl+Enter sends." />
               <button className="primary" disabled={blocked || !ready || !text.trim()}>Send {current?.label}</button>
-              <button type="button" disabled={blocked || !ready || !text.trim() || !pair} onClick={() => void send('instruction', true)}>Send {current?.label} &amp; relay {state.sessions.find((session) => pair?.sessions.includes(session.id) && session.id !== current?.id)?.label} ↗</button>
-              <button type="button" disabled={blocked || !ready} onClick={() => void send('relay')}>Relay {current?.label} ↗</button></div>
+              <button type="button" disabled={blocked || !ready || !text.trim()} onClick={() => void send('instruction', true)}>Send {current?.label} &amp; stage-relay to {state.sessions.find((session) => pair?.sessions.includes(session.id) && session.id !== current?.id)?.label} ↗</button>
+              <button type="button" disabled={blocked || !ready} onClick={() => void send('relay')}>Stage-relay review by {current?.label} ↗</button></div>
             {!blocked && !ready && <p className="fine">Confirm readiness in Control access.</p>}
+            {!busy && (sharedReason || cardReason(current)) && <p className="fine" role="status">{sharedReason || cardReason(current)}</p>}
           </form>
           {pair && <label className="readiness auto"><input type="checkbox" aria-label="Auto-relay" checked={autoContinue} disabled={busy || owned.length > 0} onChange={(e) => { setAutoContinue(e.target.checked); try { localStorage.setItem(PREFERENCE, String(e.target.checked)); } catch { /* preference only */ } }} />
-            Prefer automatic continuation for the next explicitly started run of group &quot;{pair.name}&quot;. Plain Send never relays; Send &amp; relay requests one review even when this preference is off, and only if the worker changed the worktree.</label>}
+            Prefer automatic continuation for the next explicitly started run of group &quot;{pair.name}&quot;. Plain Send never relays; Send &amp; stage-relay requests one review even when this preference is off, and only if the worker changed the worktree.</label>}
           {pair && <label className="readiness turn-limit">Maximum automatic turns per run
             <input type="number" inputMode="numeric" aria-label="Maximum automatic turns" min={1} max={200} step={1} value={turnLimit} disabled={busy || owned.length > 0} aria-invalid={!limitValid}
               onChange={(e) => { setTurnLimit(e.target.value); try { localStorage.setItem(TURN_LIMIT, e.target.value); } catch { /* preference only */ } }} />
             <span className="muted">1–200, default {DEFAULT_TURN_LIMIT}; frozen into the run when it starts.</span></label>}
-          {!pair && <p className="fine">No group in use: Send &amp; relay is unavailable and Relay reviews without a partner. Choose a group in Projects to relay between two agents.</p>}
         </section>}
           </div>
         </section>
@@ -813,8 +833,6 @@ export function Console() {
         <LaunchProfiles token={token} enabled={config?.launchEnabled === true && state?.inputEnabled === true} />
         <label className="readiness"><input type="checkbox" aria-label="Stay unlocked on this device" checked={stayUnlocked} onChange={(e) => rememberToken(e.target.checked)} />
           Stay unlocked on this device: keep the host access token in this browser so reopening the page does not ask for it. Anyone who can use this browser profile can then open the console; the host still checks the token on every request. <strong>Lock</strong> always forgets the token.</label>
-        {state.legacyEnabled ? <label className="readiness"><input type="checkbox" aria-label="Staging fallback" checked={!!showLegacy} disabled={pair?.sessions.length !== 2} onChange={(e) => setLegacy(e.target.checked)} />Show the deprecated staging fallback in the Console for the current two-member group (supervised relay; no branch handoffs or fixed roles). It applies to <span className="mono">{project ? nameOf(project) : 'the selected checkout'}</span> and is forgotten on Lock.</label>
-          : <p className="fine">The deprecated staging fallback is disabled by the host (<span className="mono">ALTCLI_ENABLE_LEGACY_RELAY</span>).</p>}
       </section>}
       <section className="panel settings-panel" aria-label="Host configuration" hidden={settingsTab !== 'host'}>
         <div className="section-heading"><h2>Host configuration</h2><span className="badge">READ AT START</span></div>
@@ -826,7 +844,7 @@ export function Console() {
             ['tmux socket', config.tmuxSocket ?? 'tmux default', 'ALTCLI_TMUX_SOCKET', `tmux's default socket`],
             ['Data store', config.dataDir, 'ALTCLI_DATA_DIR', '~/.local/share/altcli/<mode>'],
             ['Task worktrees', config.worktreeDir, '', '~/.altcli/<repo>/<branch>'],
-            ['Integration branches', `${config.integrationBranches.join(', ')} + each project's default branch`, 'ALTCLI_INTEGRATION_BRANCHES', 'main, master'],
+            ['Integration branches', `${[...new Set([...config.integrationBranches, 'main'])].join(', ')} + each project's default branch`, 'ALTCLI_INTEGRATION_BRANCHES', 'main, master'],
             ['Adapter', config.mode === 'mock' ? 'mock (simulated panes)' : 'tmux', 'ALTCLI_ADAPTER', 'tmux'],
             ['Native terminals', config.terminalEnabled ? 'enabled' : 'disabled', 'ALTCLI_ENABLE_TERMINAL', 'false'],
             ['Agent launch', config.launchEnabled ? 'enabled' : 'disabled', 'ALTCLI_ENABLE_AGENT_LAUNCH', 'false'],
@@ -835,7 +853,7 @@ export function Console() {
               ['Terminal limits', `${TERMINAL_LIMITS.hostConnections} connections per host, ${TERMINAL_LIMITS.sessionConnections} per session; ${TERMINAL_LIMITS.inputFrame / 1024} KiB input frames, 256 KiB paste; ${TERMINAL_LIMITS.outputHigh / 1024 / 1024} MiB output credit; ${TERMINAL_LIMITS.ticketMs / 1000} s ticket, ${TERMINAL_LIMITS.leaseMs / 1000} s heartbeat lease`, '', 'fixed'],
             ] : []),
             ['Console input', config.inputEnabled ? 'enabled' : 'read-only', 'ALTCLI_ENABLE_INPUT', 'true'],
-            ['Deprecated staging relay', config.legacyEnabled ? 'allowed' : 'disabled', 'ALTCLI_ENABLE_LEGACY_RELAY', 'false'],
+            ['Stage relay', config.legacyEnabled ? 'enabled on main and each project\'s default branch' : 'disabled', 'ALTCLI_ENABLE_LEGACY_RELAY', 'true'],
             ['Allowed origins', config.allowedOrigins.join(', '), 'ALTCLI_ALLOWED_ORIGINS', 'http://127.0.0.1:8787, http://localhost:8787'],
             ['Claude config', config.claudeConfigDir, 'CLAUDE_CONFIG_DIR', '~/.claude'],
             ['Codex home', config.codexHome, 'CODEX_HOME', '~/.codex'],

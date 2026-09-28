@@ -3,6 +3,8 @@
 > September 24 extension: ADR-0021 separately permits confirmed session launching in an existing or newly ready checkout. It does not combine branch/worktree consent, copy dirty source files or prepare environments.
 >
 > September 25 extension: [Confirmed closing of launched sessions](#confirmed-closing-of-launched-sessions) adds a fifth, narrow end-of-task exception: **Finish branch** closes only the tmux sessions AltCLI itself launched for a linked task worktree, then hands over to the existing removal or discard.
+>
+> September 27 extension: `main` is always an integration name, because it runs Stage relay ([ADR-0014](ADR-0014-commit-relay-and-deprecation.md#branch-scoped-stage-relay-september-27-2026)); this is implemented. [Reusable task worktrees](#reusable-task-worktrees-update-rename-and-move) accepts three more narrow exceptions (update from main, branch rename, directory move) as design direction. They are **not implemented**, and their open objections must be resolved first.
 
 
 Date: September 19, 2026
@@ -41,7 +43,7 @@ Inspect the branch **currently checked out in this worktree**. Other local/remot
 | Detached HEAD at a valid commit | Offer confirmed new named-branch creation at that commit, or ask the user to check out a branch and Recheck. Do not pretend it is main. |
 | Unknown branch state, missing baseline, or failed Git inspection | Block commit implementation with an explanation; do not guess, initialize history, or repair automatically. |
 
-Do not hard-code `main` as the only integration name. The integration set is the repository default branch as recorded locally in `origin/HEAD` plus the host's `ALTCLI_INTEGRATION_BRANCHES` list (default `main,master`); keep the actual checked-out name visible. If default-branch information is unavailable, the configured list still applies and the picker says no default is recorded, rather than classifying the checkout as a safe task branch by accident. Exact default-source and fallback detection remain implementation details, not an excuse for automatic network or configuration writes.
+Do not hard-code `main` as the only integration name. The integration set is the repository default branch as recorded locally in `origin/HEAD`, literal `main` (since September 27, 2026, because `main` runs Stage relay even when the configured list omits it), and the host's `ALTCLI_INTEGRATION_BRANCHES` list (default `main,master`). Keep the actual checked-out name visible. If default-branch information is unavailable, the configured list still applies and the picker says no default is recorded, rather than classifying the checkout as a safe task branch by accident. Exact default-source and fallback detection remain implementation details, not an excuse for automatic network or configuration writes.
 
 One implementation branch is recorded per run segment, and it is always a task branch: integration branches are starting points, never implementation branches, so intermediate work and review commits stay off them. Verified initial input, lineage, group ownership, ordinary permissions and final verification still apply. No PR is required and no automatic merge follows. The branch belongs to the workspace checkout, not to an individual agent or group object.
 
@@ -142,8 +144,22 @@ reports the merge base, the commits being squashed (newest first, at most 100
 listed), the merged tree, a default commit message and the exact commands. Dirty
 task-worktree changes are reported, not squashed. An already-integrated branch is
 pointed at Check removal. Run or delivery ownership of either checkout refuses the
-preview; idle panes in either checkout are permitted, so confirmation states
-that its agents must be idle because the merge changes its files and index.
+preview. Every agent pane in both checkouts, including subdirectories and unselected agents, must have a
+verified current CLI, settled native turn evidence and a fresh process scan with no task processes.
+Unknown evidence, active background work, unsupported processes and status acknowledgements alone
+refuse squash. Codex's native Ready/Idle still needs the process scan; Claude also needs an explicit
+clear background report. A shell pane is permitted only when its root shell is the observed foreground
+process and no task processes remain under or attached to its terminal. Claude's exact bounded
+`caffeinate -i -t 300` sleep-prevention helper is excluded using transient argument evidence; children
+and other invocations remain work. Pane identity, occupancy and lifecycle changes during inspection refuse it.
+These checks repeat before staging and before committing. A failure after staging keeps the operation
+uncertain. Exact parent/tree/cleanliness verification establishes completion; later activity cannot turn
+that verified squash back into an uncertain operation. Read-only inspection checks settled writers before
+inspecting Git; after finding the verified historical commit, it records completion without a later activity
+gate. Releasing an attempt without that commit still requires a second writer check.
+One lifecycle revision spans each request up to its final applicable writer check, so even a native turn
+that starts and finishes between those checks invalidates it.
+This is cooperative same-user inspection, not OS isolation from external writers.
 
 User requirement, September 21, 2026: squash can run in multiple explicitly
 confirmed batches. The user selects an inclusive **through commit** (a SHA on
@@ -167,7 +183,21 @@ those boundaries. SQLite v12 prevents older servers from reusing retired records
 
 [Git 2.40 or newer](https://git-scm.com/docs/git-merge-tree/2.40.0) computes
 the three-way result using the explicit batch base (`git merge-tree --merge-base=<base>`). This preserves intervening main changes
-without replaying previously integrated changes. The exact result is staged
+without replaying previously integrated changes. Before inspecting checkout status or calculating that result,
+squash preview reads effective Git configuration (including includes and worktree configuration). It refuses
+configured external merge drivers, even unused definitions, and attributes selecting configured clean, smudge or
+process filters. Git resolves attributes from the checkout, index and each merge input tree, including nested,
+macro and host-local attributes. Unused filter definitions such as global Git LFS defaults remain allowed; a repository whose attributes select one,
+such as a repository that stores files in Git LFS, is refused (an open choice in OPEN-DECISIONS).
+Correction after the September 27 review: this refusal is scoped to squash. Ordinary discovery, clean-entry,
+publication and worktree lifecycle checks use normal Git status semantics, including configured filters
+and filesystem monitors. They do not refuse LFS repositories or scan all attributes before each status read.
+The public squash endpoint's discovery refresh has those same semantics; it is not a command-free sandbox.
+Squash's own status/merge reads preflight initialized submodules recursively and refuse external
+filesystem-monitor hooks. Inventory reads do not invoke those monitors. Confirmation and uncertain-result
+inspection repeat the scoped preflight; AltCLI does not disable drivers or filters or change Git configuration.
+The preview can create unreachable Git objects, but changes no ref, index or checkout file.
+The exact result is staged
 through `git diff --binary` piped directly to `git apply --index --binary`, with
 argument arrays and both processes awaited, then committed under normal hooks.
 This also refuses ignored files that obstruct incoming paths instead of deleting
@@ -330,6 +360,87 @@ released only by verified success, a verified no-effect failure, an explicit sto
 step, or a recorded human inspection decision after the session step's effects are
 reconciled. Restart turns in-flight steps uncertain; inspection is read-only and never repeats a
 kill or Git command.
+
+### Reusable task worktrees: update, rename and move
+
+User requirement, September 27, 2026 (Plan run with human-approved frozen plan, items P-2 and P-6 to P-15):
+reuse a prepared linked task worktree after integration instead of removing and recreating it. **Accepted
+design direction, not implemented.** These are three more narrow Git-write exceptions for linked task
+worktrees only; primary checkouts are excluded. None runs automatically.
+
+**Shared contract.**
+- **Preview.** Read-only. It pins these facts in a consent digest: project and worktree identity; branch,
+  HEAD and cleanliness; target ref and SHA, or the new name or path; integration evidence; every pane in the
+  worktree and its subdirectories; upstream facts; obstruction findings; the recovery ref; and the exact
+  commands.
+- **Confirmation.** Re-derives the preview and refuses any change.
+- **Holds.** Holds are claimed in the same transaction that checks the index owner. Start, dispatch,
+  setup, launch, the other lifecycle operations and keyboard acquisition all respect them.
+- **Refusals.** Each operation refuses:
+  - run owners, including paused runs;
+  - unresolved deliveries, launches or setup;
+  - manual-input barriers;
+  - in-progress merge, rebase, cherry-pick, revert, bisect or sequencer state;
+  - hidden index flags or sparse checkout, and submodules;
+  - installed hook or skill references inside the worktree;
+  - the running AltCLI host's own checkout inside the worktree;
+  - overlap with controller data.
+- **Hooks.** Disabled (`-c core.hooksPath=/dev/null`), as for creation and removal. This is decided
+  explicitly here: post-checkout hooks could otherwise bootstrap environments. Final squash integration
+  keeps normal hooks.
+- **Uncertainty.** Every step is persisted before it runs. An attempted mutation with an unknown result is
+  uncertain, and restart turns applying into uncertain. Inspection is read-only. There is no retry, rollback
+  or automatic repair, and a duplicate request returns its record.
+
+**Update from main.**
+- **Scope.** A clean linked task worktree whose whole branch is proven integrated: by ancestry, by a
+  verified squash checkpoint through HEAD, or by an exact patch match.
+- **Target.** The squash target (local `main`, else the recorded default) at a pinned SHA, with no fetch.
+- **Steps.**
+  1. Archive the journal.
+  2. Create the create-only recovery ref `refs/altcli/preserved/<requestId>` at the old tip.
+  3. Check for local obstructions: ignored files, files where directories go, case collisions, symlinked
+     parents.
+  4. Run `git checkout --no-overwrite-ignore --no-recurse-submodules -B <branch> <SHA>`.
+  5. Verify that HEAD is attached, that `<branch>@{1}` is the old tip, the checkout is clean with the
+     expected tree, the recovery ref is in place and the identity is unchanged.
+  6. Retire the worktree's squash checkpoints.
+- **Never.** `git rebase`, `reset --hard` or `reset --keep`. In scratch tests with Git 2.47, both
+  `git rebase` and `git reset --keep` silently overwrote an ignored local file that
+  `checkout --no-overwrite-ignore` refused.
+- **Remote copies.** A non-fast-forward update is refused when the branch has an upstream or a
+  remote-tracking counterpart.
+- **Intent.** Continue task or new task is recorded. Old runs never resume across rewritten history.
+- **Later increment.** Replaying unintegrated suffix commits uses `git merge-tree` and `git commit-tree` in
+  the object database. It refuses conflicts, merges, more than 100 commits, redundant commits and
+  signed-commit configuration before any ref or worktree change.
+
+**Rename branch.**
+- **Command.** `git branch -m` only, never `-M`, with a validated new name.
+- **Refused** when the branch has an upstream or remote-tracking counterpart.
+- **Unchanged.** The directory, tmux session names and launch records.
+- **Squash batches.** Their boundaries follow verified rename records instead of the branch name alone.
+
+**Move directory.**
+- **Command.** `git worktree move` once, without force.
+- **Destination.** Only under the task-worktree root, on the same filesystem, and never a case-only rename.
+- **Occupancy.** No pane, process or service may be inside the worktree. Close app-launched sessions first
+  with Finish branch "Close only".
+- **Identity.** The worktree ID survives, because the Git directory and index path do not change.
+- **Records.** The relocation is recorded without rewriting history, and requests carrying the old path are
+  rejected.
+- **Agents.** Relaunch is a separate launch preview. Resuming a conversation is not claimed.
+
+**Unresolved before implementation.** A peer raised these objections when the plan was approved by human
+override; OPEN-DECISIONS tracks them.
+1. Ready or Idle activity is not proof that writers have settled. Current process and background evidence
+   is needed for every affected pane.
+2. `git merge-tree` honors configured merge drivers, which run commands. Check the effective configuration
+   and attributes, and refuse external drivers before any replay preview. The existing squash preview now
+   enforces this as described above; future replay must preserve the same boundary for every input tree.
+3. A failed recovery-ref creation stays uncertain unless the ref's absence is proven.
+4. The dirty-state policy is set per operation. Update requires a clean checkout. Rename and move may carry
+   dirty content only if the preview pins it and verification checks it.
 
 ### Branch consent and Plan approval are separate gates
 

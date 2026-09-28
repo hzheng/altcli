@@ -139,6 +139,19 @@ test('persistent browser REPL infrastructure is excluded but its task workers re
   assert.ok(processesForPane(rows.map(p => ({ ...p, args: undefined })), '1').some(p => p.pid === '4'));
   assert.ok(processesForPane(rows.map(p => p.pid === '3' ? { ...p, command: 'node' } : p), '1').some(p => p.pid === '4'));
 });
+test('only the exact bounded caffeinate helper is excluded from task evidence', () => {
+  const root = { pid: '1', ppid: '0', tty: 'fixture', command: 'claude' };
+  const helper = { pid: '2', ppid: '1', tty: 'fixture', command: '/usr/bin/caffeinate', args: 'caffeinate -i -t 300' };
+  assert.deepEqual(processesForPane([root, helper], '1'), []);
+  assert.deepEqual(processesForPane([root, { ...helper, args: '/usr/bin/caffeinate -i -t 300' }], '1'), []);
+  for (const change of [{ args: undefined }, { args: 'caffeinate -i -t 300 node writer.js' }, { args: 'caffeinate -i -t 301' },
+    { args: 'caffeinate -i' }, { command: '/tmp/caffeinate' }]) {
+    const row = { ...helper, ...change };
+    assert.deepEqual(processesForPane([root, row], '1'), [{ pid: row.pid, command: row.command }]);
+  }
+  // A worker remains visible even if it inherited the helper's parentage or terminal.
+  assert.deepEqual(processesForPane([root, helper, { pid: '3', ppid: '2', tty: 'fixture', command: 'node' }], '1'), [{ pid: '3', command: 'node' }]);
+});
 test("prompt text keeps line breaks, normalizes CRLF, and refuses other controls", () => {
   assert.equal(promptText("first\r\nsecond\rthird"), "first\nsecond\nthird");
   for (const value of ["a\tb", "a\u001bb", "a\u0085b", "", "  ", null]) assert.throws(() => promptText(value));

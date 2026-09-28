@@ -2980,3 +2980,240 @@ its own mode gates. A planning regression case covers a copy-mode pane.
 No tests, type checks or builds were run: this worktree has no installed web
 dependencies, and validation remains deferred to the final step at the user's
 request. The new case has not been observed passing.
+
+## 2026-09-27 — branch-scoped Stage relay on main/default
+
+The frozen plan of Plan run `5c1941da` was approved by the human over a recorded peer objection. This implements
+its policy increment and its Stage relay increment. The uncommitted relay becomes **Stage relay** and runs only on
+literal `main` or the recorded default branch.
+
+What changed:
+- **Server enforcement.** A new start needs the two-member group and the displayed branch and commit
+  (`stage`).
+- **Binding.** The run is bound to that branch and commit. They are reread before every delivery and at each
+  completion; a change pauses the run with ownership retained.
+- **Older runs.** Staging runs from before the binding record their completion but never dispatch another turn.
+- **Integration names.** `main` is always an integration name, so committed work is refused on it even when
+  `ALTCLI_INTEGRATION_BRANCHES` omits it.
+- **Host setting.** `ALTCLI_ENABLE_LEGACY_RELAY` keeps its name; absent now means enabled.
+- **Console.** Control's Relay mode (Stage relay / Commit relay) replaces the Settings preference, and the Stage
+  relay composer shows its blocker.
+
+ADR-0011–0014, the ledger (D02, D03, D42, D45, D50, D51, D52), the guides and OpenAPI are updated. Worktree reuse
+(update from main, branch rename, directory move) is recorded as accepted but **unimplemented** design, with the
+peer's open objections.
+
+What ran (Node v24.12.0, Git 2.47.0, macOS):
+- `npm ci --prefix web`, with the user's approval. This worktree had no dependencies; the lockfile is unchanged.
+- `./scripts/check.sh` exited 0: skill-link check, 32 hook/setup, 43 smoke, 404 workflow and 83 unit tests, type
+  checks and the production build. New cases, in disposable real Git repositories with a mock terminal:
+  - Stage relay is refused on a task branch, detached HEAD, `master` and without a pair, `stage` or a current commit.
+  - It is accepted on `main`, on a recorded default `develop` and on a dirty checkout.
+  - A commit during a turn pauses the run at completion; a branch switch before a continuation rejects the delivery.
+  - An unbound run dispatches nothing more.
+  - An explicit `false` refuses new starts while an existing request returns its record.
+  - `main` is refused for committed work, and as a new branch name, with a custom integration list that omits it.
+
+  A mock-mode case also checks that the `stage` validator rejects malformed input.
+
+  One terminal-broker case failed once while Playwright ran concurrently. It passed in isolation (28/28) and in the
+  final `check.sh` run.
+- Playwright (`ALTCLI_E2E_PORT=9787`, desktop and iPhone), against the final code:
+  - `console`, `layout` and `native` specs: 198 passed, 10 skipped.
+  - `planning` and `projects` specs: 68 passed.
+  - `implementation` spec: 52 passed, 4 failed.
+  - An earlier full-suite pass (313 passed) exposed the layout, native-copy-mode and fixture cases fixed before
+    these reruns.
+
+Observed but not changed: the 4 failures are `implementation.spec.ts:303` ("peer / worker_reviewer relay of new
+commits …") on both projects. They are stale at baseline. At `5717fc9` the test still expects the button title
+"Control access at the top right, check “Ready for implementation”", while that same commit changed `PaneActions.tsx`
+`NOT_READY` to "Check “Ready for implementation” in Control access …". This change does not touch that code.
+
+Not run: installed-host acceptance with real Codex and Claude sessions, and the private-tmux native suites
+(`npm run test:native`). No live backend, installed hook, skill or deployed configuration was changed.
+
+## 2026-09-27 — review the Stage relay implementation against the approved plan
+
+Reviewed `5345b94` against Plan run `5c1941da-490a-4678-be05-4b890b54baa8`, captured revision 1,
+SHA-256 `9597c954b18b4f516200214dc4f89191d079366ab82511210dd5877fea1d31c9`, and the five objections
+in result `74461268-082f-4690-a04a-55b727f2f643`. The captured plan, rather than an edited planning document,
+is the comparison baseline. The human-approved scope implemented here remains Increments 1–2; reuse
+operations in Increments 3–6 remain unimplemented.
+
+Disposition of the earlier objections:
+- **Writer evidence:** still a requirement before implementing reuse. Ready/Idle does not establish that
+  background work has stopped; this review does not claim those future guards exist.
+- **External merge drivers:** still affected the existing squash preview. Five real-Git regressions reproduced
+  command execution before confirmation: an attribute-selected driver from included configuration, a
+  worktree-local default driver, and clean, smudge and process filters. Squash now checks effective configuration
+  and attributes before status/merge calculation and repeats the check during confirmation. It refuses every
+  configured external merge driver and selected content filters without disabling or changing configuration.
+  Unused filters remain allowed. Additional cases cover a filter present only in a committed input tree,
+  nested attribute macros, and a driver introduced after preview. Preview may write unreachable objects;
+  refusal preserves both tips, the integration index and checkout files.
+- **Literal main:** already fixed by `integrationNames`; the targeted custom-configuration admission tests pass.
+- **Recovery-ref uncertainty:** remains a prerequisite for the unimplemented update/replay operations.
+- **Dirty-state policy:** remains a prerequisite for the unimplemented rename/move operations.
+
+One further departure from Increment 2 was corrected: plain Send in the Stage composer now uses the
+standalone instruction route with exact group/registration consent, so an explicit instruction that changes
+HEAD does not acquire a Stage binding. Auto-relay does not add a successor. Its browser regression failed
+on the incoming code because the run had no standalone contract. The previously documented stale readiness
+title assertion now matches the existing production text while retaining the disabled-button and consent checks.
+
+Observed validation (Node v24.12.0, Git 2.47.0, macOS):
+- Targeted Stage/integration-branch tests: 6 passed. Targeted squash-preview/confirmation tests: 8 passed,
+  including the normal squash integration case. Git and SQLite are real, in disposable directories.
+- `./scripts/check.sh`: exit 0; skill-link check, 32 hook/setup, 43 smoke, 411 workflow and 83 unit tests,
+  type checks and production build passed.
+- `./scripts/check.sh --e2e`: exit 0; repeated the checks above, then Playwright finished with 324 passed
+  and 10 viewport-specific skips across desktop and iPhone. These browser tests use simulated agents/API
+  fixtures, not installed-agent acceptance.
+- `git diff --check`: passed. Final diff screening found no secrets; nothing was withheld.
+
+Not run: private-tmux native suites or real Codex/Claude acceptance. Fresh isolated test backends ran the
+changed code; the live backend was not restarted while this implementation assignment was active.
+
+## 2026-09-27 — review of the squash-preview guard and standalone Send
+
+Reviewed `5345b94..c09a549` against the frozen plan of Plan run `5c1941da` (SHA-256 `9597c954…31c9`) and the five
+objections in result `74461268`. The candidate is accepted:
+- Its merge-driver guard applies objection 2 to the existing squash preview.
+- Routing the Stage composer's plain Send through the standalone route restores the plan's "Plain Send stays the
+  standalone path"; the earlier commit had diverged from it.
+
+Objections 1, 4 and 5 still concern only the unimplemented reuse operations. Objection 3 remains fixed by
+`integrationNames`.
+
+Improvement: the new attribute scan lists every tracked path through `ls-files`, `ls-tree` and `check-attr` whenever
+any content filter is configured. A global Git LFS install configures one on this host. Under the default 2 MiB
+output buffer, a checkout with more than 2 MiB of path names failed preview with `PROJECT_GIT`. A new real-Git
+regression with 3,000 long paths reproduced that failure on `c09a549`. Those three calls now allow 256 MiB, and the
+case passes.
+
+Open, not changed: repositories whose attributes select a configured filter (such as LFS) are now refused. Scratch
+repositories under Git 2.47 showed that `git merge-tree` runs filters only with `merge.renormalize`, while `git status`
+runs a clean filter after a stat change. The trade-off is recorded in OPEN-DECISIONS and ADR-0013. `GIT_OPTIONAL_LOCKS=0`
+keeps status from rewriting the index, as the ADR states.
+
+Observed (Node v24.12.0, Git 2.47.0, macOS):
+- Squash preview/confirmation/integration tests: 10 passed, including the new large-checkout case.
+- `./scripts/check.sh`: exit 0. It covered the skill-link check, 32 hook/setup, 43 smoke, 412 workflow and 83 unit
+  tests, type checks and the production build.
+- Playwright `console` and `implementation` specs, desktop and iPhone: 122 passed.
+
+Not run: the full Playwright suite (the peer reported 324 passed at `c09a549`; this improvement changes no UI), the
+private-tmux native suites and installed-agent acceptance.
+
+## 2026-09-27 — close public squash inspection and writer-evidence gaps
+
+The follow-up review found two remaining gaps at `7d11c97`. The public squash entry refreshed workspace
+status before the catalog's filter guard, allowing a clean/process filter to execute before refusal.
+The squash ownership guard also admitted unowned native/background work. This supersedes the earlier
+assessment that the writer concern applied only to future worktree reuse.
+
+Status inspection now checks effective configuration and attributes before running status, including
+discovery and initialized submodules. External filesystem-monitor hooks are refused as well. The existing
+merge-driver and merge-input attribute checks remain, including the large-checkout output allowance.
+No repository configuration is changed; selected content filters remain unsupported for status/squash.
+
+Squash preview, confirmation and reconciliation now inspect every pane in both checkouts and their
+subdirectories. Native turn evidence and fresh process evidence are both required; display acknowledgements
+cannot bypass them. Unknown activity, task processes, active background evidence, unsupported panes,
+changed CLI identities, unavailable inventories and changes during inspection refuse mutation. Checks
+repeat before staging, before commit and after Git result verification. Once Git has started, a failed
+check retains uncertain ownership through restart and read-only reconciliation. This remains cooperative
+host observation, not isolation from arbitrary external writers. Update, rename and move remain deferred.
+
+Observed with Node 24.12.0 and Git 2.47.0:
+
+- Sixteen initial public-entry/writer regressions failed on the incoming code, then passed. Submodule-filter
+  and external-monitor refusal cases also failed before their guards were added. The suite adds 27 cases,
+  including successful settled-agent integration, subdirectory/copy-mode agents, changes immediately before
+  staging/commit/verification, duplicate confirmation, restart and retained reconciliation ownership.
+- `./scripts/check.sh` exited 0 against the final code: skill-link check, 32 hook/setup, 43 smoke, 439 workflow and 83 unit tests,
+  type checking and production build. Git/SQLite are real in disposable directories; tmux and native
+  lifecycle/process evidence are simulated.
+- After placing the last writer check after Git result verification, five focused integration/race cases
+  passed again. Two further cases reproduced a native turn starting and finishing between separate checks;
+  both passed after pinning one lifecycle revision across each request, before the final full check above.
+- `npm run e2e -- e2e/projects.spec.ts` passed all 52 desktop/iPhone cases on fresh isolated test backends.
+  This preceded the final lifecycle-revision change. Browser fixtures simulate agents and API results;
+  this does not claim installed-agent acceptance.
+- Final diff and the new Git-inspection helper were screened for secrets; none found, nothing withheld.
+
+Git mutations were confined to disposable test repositories. No live agent, installed configuration or
+skill was changed. The live backend runs from the separate main checkout; restarting it would not load
+these worktree changes, so it was left running.
+The full browser suite, private-tmux native suites and installed Codex/Claude acceptance were not run.
+
+## 2026-09-27 — resolve the follow-up squash objection and explain paused input
+
+The review of `09ecedd` correctly identified that the shared status preflight expanded the squash
+restriction to all filtered repositories, including LFS, and could strand worktree creation after Git
+had already created the checkout. This correction supersedes the preceding section's app-wide refusal:
+ordinary discovery, clean-entry/publication and lifecycle checks again use normal configured Git status.
+The public squash endpoint's ordinary discovery refresh has the same semantics. Squash-specific
+status/merge/verification reads keep their filter, monitor and merge-driver preflights. Removing the
+shared preflight also removes its per-poll configuration and attribute scans.
+
+Writer checks remain before staging and committing. Exact result verification now completes a squash
+without a later activity check undoing it. Read-only reconciliation likewise records a verified historical
+commit; an attempt with no matching commit still needs a final settled-writer check before release.
+Shell panes need their root shell in the foreground and no task processes. The exact bounded
+`caffeinate -i -t 300` helper is identified using transient arguments; other invocations and children
+remain visible as work. Refusals identify the observed pane/process when available. These checks remain
+cooperative host observations, not OS isolation or proof against arbitrary external writers.
+
+The owned-input checkbox now shows its blocking reason beside the check with an accessible description.
+A finished human-directed objection explains takeover, and the composer labels the paused/finished state
+instead of claiming the run is in progress. Viewing and switching surfaces never release ownership;
+the existing deliberate takeover confirmation is still required.
+
+Observed with Node 24.12.0 and Git 2.47.0:
+
+- Five targeted regressions failed on the incoming code and passed after correction. Cases cover selected
+  filters, uncertain-creation recovery, idle shells, the Claude helper and activity after verification.
+  Additional cases preserve refusal of active/unknown work, exact helper arguments and child processes.
+  Git/SQLite are real in disposable directories; panes, process tables and native lifecycle are simulated.
+- `./scripts/check.sh`: exit 0; skill-link check, 32 hook/setup, 44 smoke, 446 workflow and 83 unit tests,
+  type checking and production build passed.
+- The browser regression reproduced the missing explanation before the UI edit. The focused objection/
+  takeover and active-input/checkpoint tests then passed on desktop and iPhone (4 cases); screenshots
+  were inspected. A final copy-only adjustment hides the obsolete after-task note for a finished turn.
+- `./scripts/check.sh --e2e`: exit 0 against the final source; repeated the checks above, then all
+  326 browser cases passed with 10 viewport-specific skips across desktop and iPhone. These use isolated
+  mock backends and API fixtures, not installed agents. Both new paused-input cases passed in this run.
+- Diff screening found no secrets; nothing was withheld. `git diff --check` passed.
+
+No live run, result file, installed agent or host configuration was changed. The live backend runs from
+the separate main checkout, so restarting it would not load this worktree's changes. Fresh isolated
+test backends load the changed source. Private-tmux native suites and installed-agent acceptance were
+not run; filtered-repository tests use an isolated passthrough filter rather than a real LFS transfer.
+
+## 2026-09-27 — review of the scoped squash guards
+
+Reviewed `09ecedd..fa9f588` and accepted it. It resolves the earlier objection:
+- `branchState()` again uses normal configured Git status. The filter, monitor and merge-driver preflight now runs
+  only on squash paths.
+- Exact verification completes a squash without a later activity check undoing it.
+- Idle shells and Claude's bounded `caffeinate -i -t 300` helper no longer block squash, and refusals name the process.
+
+The owned-input explanations are accurate for paused and waiting runs.
+
+Reproduction scripts from the objection were re-run against the candidate:
+- Under this host's global Git LFS configuration, status of a filtered repository succeeds.
+- Task-worktree creation in a repository with an attribute-selected filter reaches `ready`, and no project hold
+  remains.
+
+Cleanup: removed the `.next-e2e-2819-*` include entries that `next dev` added to `web/tsconfig.json` during a
+one-off browser run. The project's Playwright configuration uses `.next-e2e-altcli-*`.
+
+Observed (Node v24.12.0, Git 2.47.0, macOS):
+- `./scripts/check.sh`: exit 0. It covered the skill-link check, 32 hook/setup, 44 smoke, 446 workflow and 83 unit
+  tests, type checks and the production build.
+- Playwright `implementation` spec, desktop and iPhone: 58 passed, including the new finished-objection input case.
+
+Not run: the full browser suite (the author reported 326 passed at `fa9f588`), private-tmux native suites and
+installed-agent acceptance.

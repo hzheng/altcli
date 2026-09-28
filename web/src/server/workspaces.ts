@@ -5,9 +5,11 @@ import { messageOf } from '../core/errors.ts';
 import { groupWorkspaces, type DirectoryInspection } from '../core/workspaces.ts';
 import type { ListedPane, TerminalAdapter } from './adapters/terminal.ts';
 import { currentBranch, resolveWorktree } from './worktree.ts';
-import { branchState, taskBaseline } from './commit-handoff.ts';
+import { branchState, stageRelayEligibility, taskBaseline } from './commit-handoff.ts';
 /** Simulated checkouts: the demo project sits on its integration branch, every other directory on a task branch at its baseline. */
 const mockBranch = (cwd: string) => cwd === '/demo/project' ? 'main' : `task/${cwd.split('/').filter(Boolean).pop() ?? 'work'}`;
+/** Simulated checkouts live under /demo; every other path, such as a test's temporary repository, is read with Git even in mock mode. */
+export const mockCheckout = (root: string) => root.startsWith('/demo/') ? { branch: mockBranch(root), head: 'a'.repeat(40), primary: 'main' } : null;
 /** Read-only inspection of one pane directory. Mock panes have no filesystem: each directory is its own worktree on "main". */
 async function inspect(cwd: string, mode: AdapterMode): Promise<DirectoryInspection> {
   if (mode === 'mock') return { cwd, worktree: { root: cwd, gitDir: `${cwd}/.git`, indexPath: `${cwd}/.git/index` }, branch: mockBranch(cwd) };
@@ -29,9 +31,13 @@ export async function discoverWorkspaces(adapter: TerminalAdapter, mode: Adapter
   await Promise.all(result.workspaces.map(async (workspace) => {
     if (mode === 'mock') {
       const branch = mockBranch(workspace.cwd); const head = 'a'.repeat(40);
-      workspace.git = { branch, primary: 'main', head, clean: true, changes: [], changeCount: 0, integration: branch === 'main', taskBase: branch === 'main' ? null : head }; return;
+      workspace.git = { branch, primary: 'main', head, clean: true, changes: [], changeCount: 0, integration: branch === 'main', taskBase: branch === 'main' ? null : head,
+        stageRelay: stageRelayEligibility(branch, 'main', integrationBranches) }; return;
     }
-    try { const state = await branchState(workspace.worktree.root); workspace.git = { ...state, ...await taskBaseline(workspace.worktree.root, state, integrationBranches) }; }
+    try {
+      const state = await branchState(workspace.worktree.root);
+      workspace.git = { ...state, ...await taskBaseline(workspace.worktree.root, state, integrationBranches), stageRelay: stageRelayEligibility(state.branch, state.primary, integrationBranches) };
+    }
     catch (error) { workspace.gitError = messageOf(error); }
   }));
   return { ...result, error: null, discoveredAt };

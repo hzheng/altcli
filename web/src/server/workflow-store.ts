@@ -1,6 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { CommandRecord, TurnEvent } from '../contracts/api.ts';
 import type { BackgroundEvidence, Execution, HistoryExport, HookEvent, HookReceipt, ManagedSession, ProcessRecord, RelayRun, StartInput } from '../contracts/workflow.ts';
+import type { BranchState } from '../contracts/implementation.ts';
+/** The checkout's branch (null on detached HEAD) and HEAD, as read at a Stage relay completion. */
+type StageObservation = Pick<BranchState, 'branch' | 'head'>;
 import { AppError } from '../core/errors.ts';
 import { promptText } from '../core/validation.ts';
 import type { Store } from './store.ts';
@@ -211,7 +214,7 @@ export class WorkflowStore {
           if (hash(existingRun.implementation.request) !== hash(implementation.request)) throw new AppError('ID_CONFLICT', 'This request ID is bound to another implementation request.', 409);
           return existing;
         }
-        if (existing.runId !== input.requestId || existing.input.kind !== input.kind || existing.agentId !== input.agentId || existing.wireText !== wire || existingRun.pairId !== pairId ||
+        if (existing.runId !== input.requestId || existing.input.kind !== input.kind || existing.agentId !== input.agentId || existing.wireText !== wire || existingRun.pairId !== pairId || hash(existingRun.stage ?? null) !== hash(input.stage ?? null) ||
           existingRun.autoContinue !== (input.autoContinue === true) || existingRun.turnLimit !== (input.turnLimit ?? DEFAULT_TURN_LIMIT) || (existingRun.pauseOnObjection === true) !== (input.pauseOnObjection === true) || (existing.input.handoff === true) !== (input.handoff === true)) {
           throw new AppError('ID_CONFLICT', 'This request ID is already bound to different work or policy.', 409);
         }
@@ -224,7 +227,8 @@ export class WorkflowStore {
       const run: RelayRun = { id: input.requestId, repository: first.repository, lockKey, pairId, participants,
         autoContinue: input.autoContinue === true, pauseOnObjection: input.pauseOnObjection === true, pauseRequested: false, status: 'running', reason: 'Waiting for this command to finish.',
         currentCommandId: input.requestId, automaticTurns: 0, turnLimit: input.turnLimit ?? DEFAULT_TURN_LIMIT, createdAt: timestamp, updatedAt: timestamp,
-        ...(implementation ? { implementation } : {}), ...(planning ? { planning } : {}), ...(standalone ? { standalone } : {}) };
+        ...(implementation ? { implementation } : {}), ...(planning ? { planning } : {}), ...(standalone ? { standalone } : {}),
+        ...(!implementation && !planning && !standalone && input.stage ? { stage: { branch: input.stage.branch, head: input.stage.head } } : {}) };
       const turn: Execution = planning ? this.planTurn(run) : implementation ? this.commitTurn(run, first.id, implementation.request.kind !== 'review' ? 'work' : implementation.policy === 'peer' ? 'review_and_improve' : 'review', input.text ?? '', input.handoff === true, input.requestId) : { commandId: input.requestId, runId: run.id, agentId: first.id, input, wireText: wire,
         status: 'planned', sessionId: null, sourceTurnId: null, continuation: false, baselineProcesses: null, baselineWorktree: null };
       this.saveRun(run); this.saveExecution(turn);
@@ -254,8 +258,10 @@ export class WorkflowStore {
     this.stop(this.run(turn.runId)!, 'Delivery may have occurred. Inspect the terminal; it will not be replayed.');
   }
   /** `evidence` is the server's own background-work reading for this completion; it is consulted only when the hook reports unknown.
-   * `worktree` is the worktree digest read at this completion for a handoff instruction; null when not gathered or unreadable. */
-  receive(input: HookEvent, evidence: BackgroundEvidence | null = null, worktree: string | null = null, publication: PublicationResult | null = null, planCapture: PlanCapture | null = null): HookReceipt {
+   * `worktree` is the worktree digest read at this completion for a handoff instruction; null when not gathered or unreadable.
+   * `stage` is the checkout's branch and HEAD read at a Stage relay completion; null when not gathered or unreadable. */
+  receive(input: HookEvent, evidence: BackgroundEvidence | null = null, worktree: string | null = null, publication: PublicationResult | null = null, planCapture: PlanCapture | null = null,
+    stage: StageObservation | null = null): HookReceipt {
     if (input.event === 'session_started') return { accepted: false, reason: 'Session startup is display evidence only.', event: null };
     if (!input.commandId || !input.sourceTurnId || !input.sessionId || !input.identity || input.event === 'outcome') {
       // Old hooks/follow-ups remain diagnostic only. They can never complete a newer command.
@@ -274,7 +280,7 @@ export class WorkflowStore {
       }
       if (row?.receipt) return JSON.parse(row.receipt) as HookReceipt;
       if (!row) this.store.db.prepare('INSERT INTO workflow_events(id,command_id,digest,value) VALUES (?,?,?,?)').run(key, input.commandId, digest, json(input));
-      return this.apply(key, input, evidence, worktree, publication, planCapture);
+      return this.apply(key, input, evidence, worktree, publication, planCapture, stage);
     }).immediate();
   }
   /** Lifecycle events that arrived before the terminal transport returned. The caller gathers evidence per event. */
@@ -282,7 +288,7 @@ export class WorkflowStore {
     return (this.store.db.prepare('SELECT value FROM workflow_events WHERE command_id=? AND receipt IS NULL ORDER BY rowid').all(id) as {value:string}[])
       .map((row) => JSON.parse(row.value) as HookEvent);
   }
-  private apply(key: string, input: HookEvent, evidence: BackgroundEvidence | null, worktree: string | null, publication: PublicationResult | null, planCapture: PlanCapture | null): HookReceipt {
+  private apply(key: string, input: HookEvent, evidence: BackgroundEvidence | null, worktree: string | null, publication: PublicationResult | null, planCapture: PlanCapture | null, stage: StageObservation | null): HookReceipt {
     const done = (reason: string, event: TurnEvent | null = null, completion?: HookReceipt['completion']): HookReceipt => {
       const state = completion ?? (event && input.event === 'turn_complete' ? this.execution(input.commandId!)?.status === 'finished' ? 'finished' : 'pending' : undefined);
       const receipt: HookReceipt = { accepted: event !== null, reason, event, ...(state ? { completion: state } : {}) };
@@ -383,6 +389,13 @@ export class WorkflowStore {
       return done(run.reason, event);
     }
     if (run.pauseRequested || run.status === 'paused') { this.stop(run, 'Turn finished; run remains paused until human takeover.'); return done(run.reason, event); }
+    // Stage relay stays on the branch and commit it was confirmed on: a moved or unreadable checkout schedules and releases nothing.
+    if (!run.standalone && !run.stage) { this.stop(run, 'This staging run predates branch-scoped Stage relay: its completion is recorded, but nothing more is dispatched. Inspect the agents and take over.'); return done(run.reason, event); }
+    if (run.stage && (stage?.branch !== run.stage.branch || stage.head !== run.stage.head)) {
+      this.stop(run, stage ? `The checkout moved to ${stage.branch ?? 'detached HEAD'} at ${stage.head.slice(0, 12)} during the turn; Stage relay is bound to ${run.stage.branch} at ${run.stage.head.slice(0, 12)}. Nothing was scheduled; inspect the checkout and take over.`
+        : 'The checkout could not be read at completion, so Stage relay scheduled nothing. Inspect the checkout and take over.');
+      return done(run.reason, event);
+    }
     const isInstruction = turn.input.kind === 'instruction';
     if (isInstruction && turn.input.handoff === true) {
       // A review needs something to review. Compare the worktree with its pre-delivery digest rather than reading the agent's

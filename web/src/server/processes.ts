@@ -56,12 +56,18 @@ function isReplInfrastructure(row: ProcessTableRow, rows: ProcessTableRow[]): bo
     rows.some((p) => p.pid === parent.ppid && repl.test(p.command)) &&
     row.args?.startsWith(`${row.command} --experimental-vm-modules `) === true && /\/(kernel|trusted-worker)\.js(?: |$)/.test(row.args);
 }
+/** Claude's bounded macOS sleep-prevention helper runs no utility. Keep other caffeinate invocations and any children
+ * visible as work. Arguments are transient evidence, never returned or persisted. */
+function isSleepPrevention(row: ProcessTableRow): boolean {
+  return (row.command === '/usr/bin/caffeinate' || row.command === 'caffeinate') &&
+    /^(?:\/usr\/bin\/)?caffeinate -i -t 300$/.test(row.args ?? '');
+}
 /** Select the pane's descendants plus processes still attached to its tty. The tty union retains ordinary
  * background children after their short-lived parent exits and the OS reparents them. */
 export function processesForPane(rows: ProcessTableRow[], rootPid: string): ProcessRecord[] {
   const ids = paneMembers(rows, rootPid);
   if (!ids) throw new AppError("PS_FAILED", "The pane process is no longer present.", 409);
-  return rows.filter((row) => ids.has(row.pid) && !isReplInfrastructure(row, rows)).map(({ pid, command }) => ({ pid, command }));
+  return rows.filter((row) => ids.has(row.pid) && !isReplInfrastructure(row, rows) && !isSleepPrevention(row)).map(({ pid, command }) => ({ pid, command }));
 }
 /** PIDs of the root's descendants plus processes still on its terminal (excluding the root); null when the root is gone. */
 function paneMembers(rows: ProcessTableRow[], rootPid: string): Set<string> | null {
@@ -92,7 +98,7 @@ export async function paneProcessTree(rootPid: string): Promise<{ root: FinishPr
   const table = rows.map((row) => ({ ...row, args: args.get(row.pid) }));
   const ids = paneMembers(table, rootPid);
   const evidence = (row: ProcessTableRow): FinishProcess => ({ pid: row.pid, command: row.command, started: starts?.get(row.pid) ?? null,
-    infrastructure: isCodexHelper(row.command) || isReplInfrastructure(row, table) });
+    infrastructure: isCodexHelper(row.command) || isReplInfrastructure(row, table) || isSleepPrevention(row) });
   const root = table.find((row) => row.pid === rootPid);
   return { root: root ? evidence(root) : null, processes: ids ? table.filter((row) => ids.has(row.pid)).map(evidence) : [] };
 }

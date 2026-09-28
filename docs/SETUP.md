@@ -194,9 +194,9 @@ starts are disabled until the index and nonignored worktree are clean. The conso
 lists staged, unstaged and untracked files. Commit intended changes on your task
 branch, then **Recheck** and confirm readiness again. Creating a branch alone does
 not clean the checkout. To review that work after committing, choose a **Review
-baseline** and use **Relay [peer]**; to leave it uncommitted, use the optional
-staging fallback. Keep unrelated changes separate or create another clean task
-worktree.
+baseline** and use **Relay [peer]**. To review an uncommitted quick fix instead,
+use Stage relay on `main` or the default branch. Keep unrelated changes separate or
+create another clean task worktree.
 AltCLI never automatically stages, commits, combines, stashes or discards them.
 
 Before Start, check all agents
@@ -308,13 +308,17 @@ command just because an HTTP response failed.
 A backend restart pauses owned runs without replay. Closing or locking a browser
 does not pause them. Resolve outstanding work before starting another run.
 
-## Optional staging fallback
+## Stage relay on main
 
-The supervised two-agent staging flow is off by default. To use it, set
-`ALTCLI_ENABLE_LEGACY_RELAY=true`, restart after active deliveries settle, and
-select **Staging fallback**. Its `relay` instruction rule and staging contract are
+The supervised two-agent staging flow runs as **Stage relay** on `main` or the
+recorded default branch, and nowhere else. Implementation's Control offers it by
+default there, beside **Commit relay**. It needs no Settings preference, and it is
+on unless `web/.env.local` sets `ALTCLI_ENABLE_LEGACY_RELAY=false`. Older templates
+wrote that line; remove it or set it to `true`, then restart after active
+deliveries settle. The run is bound to the branch and commit shown at start and
+pauses if either changes. Its `relay` instruction rule and staging contract are
 documented in [SKILLS.md](SKILLS.md#mapping-relay-to-the-skill). This option does
-not change Plan or committed Implementation.
+not change Plan or committed Implementation, which stay on task branches.
 
 ## Verify before regular use
 

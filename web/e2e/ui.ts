@@ -15,15 +15,24 @@ export async function expandAgents(page: Page, name: string) {
   const card = page.getByRole('list', { name: 'Available worktrees' }).getByRole('listitem').filter({ has: page.getByLabel(`Worktree ${name}`, { exact: true }) });
   await expand(card, 'Agents & group');
 }
+/** On main or the default branch Implementation's Control starts on Stage relay; chooses Commit relay, whose committed actions and
+ * next-run settings the helpers below address. Elsewhere, and in Plan, there is no Relay mode and nothing changes. */
+async function commitRelay(page: Page) {
+  const commit = page.getByRole('group', { name: 'Relay mode', includeHidden: true }).getByRole('button', { name: 'Commit relay', exact: true, includeHidden: true });
+  if (!await commit.count() || await commit.getAttribute('aria-pressed') === 'true') return;
+  await showSurface(page, 'Control'); await commit.click();
+}
 /** Opens the next run's settings editor for the phase on screen unless it is already open. */
 export async function editSettings(page: Page) {
+  await commitRelay(page);
   const toggle = page.getByRole('region', { name: /^(Implementation|Plan) settings$/ }).getByRole('button', { name: 'Settings', exact: true });
   if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
 }
-/** Selects an agent, whom the single Control pane then addresses, and outside Plan switches the frame to Control. This revokes readiness. */
+/** Selects an agent, whom the single Control pane then addresses, and outside Plan switches the frame to Control. On main or the
+ * default branch, where Control starts on Stage relay, it chooses Commit relay so the agent's committed actions are shown. This revokes readiness. */
 export async function openCard(page: Page, name: string) {
   await page.getByRole('navigation', { name: 'Agent' }).getByRole('button', { name, exact: true }).click();
-  await showSurface(page, 'Control');
+  await showSurface(page, 'Control'); await commitRelay(page);
   return page.getByRole('region', { name: `Actions for ${name}`, exact: true });
 }
 /** Outside Plan, shows the terminals or Control in the shared frame; in Plan there is no switch and both stay shown. */

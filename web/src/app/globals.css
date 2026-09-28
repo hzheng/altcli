@@ -386,6 +386,9 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
 .control-body > .pane-actions { border-top:0; }
 .control-body > .composer { margin-top:0; border:0; border-radius:0; }
 .control-body > .command-divider { margin-top:0; padding-top:12px; }
+.control-body > .relay-mode { display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; padding:10px 12px 0; }
+.control-body > .relay-mode .fine { margin:0; }
+.control-body > .fine { margin:0; padding:10px 12px; }
 /* Outside Plan the stage and Control are one frame: the switch shows one surface and hides the other, which stays mounted. The scoped
    rule must win over .panes { display:grid } so hidden content also leaves the tab order and accessibility tree. */
 .workbench .panes[hidden], .workbench .control-pane[hidden] { display:none; }

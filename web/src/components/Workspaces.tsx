@@ -84,7 +84,7 @@ export function Workspaces(props: Props) {
           <span className="workspace-title"><strong><span aria-hidden="true">{expanded ? '▾' : '▸'} </span>{tree.main ? 'Main checkout' : nameOf(tree.path)}</strong><span className="badge">{agents.filter((a) => a.eligible).length} AGENTS</span></span>
           <span className="mono cwd" title={tree.path}>{tree.path}</span>
           <span>Branch: <span className="mono">{tree.branch ?? 'detached HEAD'}</span></span>
-          <span className="muted">{tree.error ?? (run ? `${run.implementation ? 'Implementation' : run.planning ? 'Plan' : 'Staging'} · ${run.status}` : agents.length ? agents.map((a) => a.label).join(', ') : 'No agents · start coding CLIs here, then Recheck')}</span>
+          <span className="muted">{tree.error ?? (run ? `${run.implementation ? 'Implementation' : run.planning ? 'Plan' : run.standalone ? 'Send' : 'Stage relay'} · ${run.status}` : agents.length ? agents.map((a) => a.label).join(', ') : 'No agents · start coding CLIs here, then Recheck')}</span>
         </summary>{workspace && <WorkspaceDetail key={workspaceKey(workspace)} workspace={workspace} {...props} />}<div className="worktree-controls"><button type="button" className="quiet" aria-pressed={selected} aria-label={`Open ${nameOf(tree.path)}`} onClick={() => {
           setDirectoryRoot(tree.path);
           if (workspace) onSelectWorkspace(workspace); else onSelectWorktree(tree);

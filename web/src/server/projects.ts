@@ -12,6 +12,7 @@ import { AppError, messageOf } from '../core/errors.ts';
 import { parseDiscard, parseDiscardFinish, parseDiscardPreview, parseIntegrate, parseIntegrationPreview, parseProjectAdd, parseWorktreeCreate, parseWorktreePreview, parseRemoval, parseRemovalPreview } from '../core/project-validation.ts';
 import { defaultSquashMessage } from '../core/squash-message.ts';
 import { branchState, defaultBranch, integrationNames, validateNewBranch } from './commit-handoff.ts';
+import { assertGitInspection } from './git-inspection.ts';
 import type { Config } from './config.ts';
 import type { Store } from './store.ts';
 import { currentBranch, gitEnvironment, resolveWorktree, sameWorktree, worktreeFingerprint } from './worktree.ts';
@@ -486,11 +487,12 @@ export class ProjectCatalog {
     } catch { return null; } // Old objects may have been pruned; they cannot override fresh integration/removal evidence.
     return { through, commit: previous.commit };
   }
-  /** Read-only: what one squash commit into the integration branch would contain, computed without touching any checkout. */
+  /** What one squash commit would contain. merge-tree may write unreachable objects, but no checkout, index or ref changes. */
   async previewIntegration(raw: WorktreeIntegrationInput): Promise<WorktreeIntegrationPreview> {
     const input = parseIntegrationPreview(raw);
     if (this.config.mode === 'mock') throw new AppError('MOCK_WORKTREE', 'Simulated panes cannot integrate real Git branches.', 409);
     const { tree, trees, primary } = await this.taskWorktree(input.projectId, input.worktreeId, 'squashed');
+    await assertGitInspection(tree.path, []);
     const source = await branchState(tree.path);
     if (source.head !== tree.head || source.branch !== tree.branch) throw new AppError('WORKTREE_CHANGED', 'The task worktree changed during inspection. Recheck.', 409);
     const through = input.through ? (await git(['-C', tree.path, 'rev-parse', '--verify', `${input.through}^{commit}`])).trim() : tree.head;
@@ -499,6 +501,7 @@ export class ProjectCatalog {
     // The squash commit is made where the integration branch is checked out; Git allows one such checkout at a time.
     const target = trees.find((w) => w.branch === name && w.identity && !w.error && w.path !== tree.path);
     if (!target?.identity) throw new AppError('INTEGRATION_CHECKOUT', `No checkout has ${name} checked out. Check it out in its own worktree yourself, then Recheck.`, 409);
+    await assertGitInspection(target.path, []);
     const state = await branchState(target.path);
     if (state.branch !== name || state.head !== targetHead) throw new AppError('WORKTREE_CHANGED', `The ${name} checkout changed during inspection. Recheck.`, 409);
     if (!state.clean) throw new AppError('INTEGRATION_DIRTY', `The ${name} checkout at ${target.path} has modified or untracked files. Commit or clean it yourself before squashing into it.`, 409);
@@ -509,6 +512,7 @@ export class ProjectCatalog {
     const mergeBase = previous?.through ?? bases[0]!;
     if (mergeBase === through) throw new AppError('ALREADY_INTEGRATED', `This endpoint is already integrated into ${name}. Choose a later commit, or use Check removal when the whole branch is integrated.`, 409);
     if ((await gitAnswer(['-C', tree.path, 'merge-base', '--is-ancestor', mergeBase, through])).code !== 0) throw new AppError('INTEGRATION_RANGE', 'Choose a commit after the previous squash batch.', 409);
+    await assertGitInspection(target.path, [mergeBase, targetHead, through]);
     const merged = await gitAnswer(['-C', target.path, 'merge-tree', '--write-tree', '--no-messages', '--name-only', `--merge-base=${mergeBase}`, targetHead, through]);
     const merge = merged.stdout.split('\n');
     if (merged.code !== 0 || !/^[0-9a-f]{40,64}$/.test(merge[0] ?? '')) {
@@ -561,19 +565,22 @@ export class ProjectCatalog {
       // Stage the exact previewed three-way result. A normal merge would reuse the original merge base and replay prior batches.
       await stageIntegrationTree(input.target.root, input.targetHead, input.tree);
       if ((await git(['-C', input.target.root, 'write-tree'])).trim() !== input.tree) throw new Error('Staged squash does not match the preview');
+      await guard(input.target, input.worktree);
       await git(['-C', input.target.root, 'commit', '--quiet', '-m', input.message]);
       const commit = await this.integratedExactly(operation);
       if (!commit) throw new Error('Integration verification failed');
+      // Verification establishes the completed Git result. Later activity does not undo this operation.
       return this.integrationFinish(operation, 'integrated', `Squashed ${input.branch} through ${input.through.slice(0, 12)} into ${input.targetRef.replace('refs/heads/', '')} as ${commit.slice(0, 12)}. The task branch and worktree are unchanged; ${input.through === input.head ? 'use Check removal when you are done with them' : 'preview another batch to integrate the remaining commits'}.`, commit);
     } catch (error) {
       return this.integrationFinish(operation, attempted ? 'uncertain' : 'failed', attempted
-        ? `The squash or its verification is uncertain. Inspect ${input.target.root}: a staged squash without a commit means the commit step failed (for example a rejecting hook); commit or reset it yourself, then Inspect. Nothing is retried.` : messageOf(error));
+        ? `The squash or its verification is uncertain. ${messageOf(error)} Inspect ${input.target.root}: a staged squash without a commit means the commit step failed (for example a rejecting hook); commit or reset it yourself, then Inspect. Nothing is retried.` : messageOf(error));
     }
   }
   /** The exact expected result: the integration checkout clean on its branch at one new commit whose parent and tree match the consent. */
   private async integratedExactly(operation: WorktreeIntegration): Promise<string | null> {
     const { input } = operation; const name = input.targetRef.replace('refs/heads/', '');
     try {
+      await assertGitInspection(input.target.root, []);
       const state = await branchState(input.target.root);
       if (!state.clean || state.branch !== name || state.head === input.targetHead) return null;
       const lineage = (await git(['-C', input.target.root, 'rev-list', '--parents', '-n', '1', state.head])).trim().split(' ');
@@ -594,21 +601,25 @@ export class ProjectCatalog {
     }
     return null;
   }
-  /** Read-only inspection of an uncertain squash. A dirty integration checkout may still hold the staged squash, so ownership is
-   * retained. A clean checkout settles it: the previewed commit on the branch (even under later commits) completes the
+  /** Read-only inspection of an uncertain squash. Unsettled writers or a dirty integration checkout retain ownership.
+   * A clean checkout with settled writers settles it: the previewed commit on the branch (even under later commits) completes the
    * operation; otherwise the human resolved it another way, by leaving the tip untouched or by integrating, resetting or
    * rewriting by hand, and the hold is released as failed. Nothing is retried and no Git state is changed. */
-  async reconcileIntegration(requestId: string): Promise<WorktreeIntegration> {
+  async reconcileIntegration(requestId: string, guard: (target: WorktreeIdentity, source: WorktreeIdentity) => Promise<void>): Promise<WorktreeIntegration> {
     const operation = this.store.worktreeIntegrations().find((op) => op.input.requestId === requestId);
     if (!operation) throw new AppError('NOT_FOUND', 'Integration operation not found.', 404);
     if (operation.status !== 'uncertain') return operation;
     const { input } = operation; const name = input.targetRef.replace('refs/heads/', '');
     try {
+      await guard(input.target, input.worktree);
+      await assertGitInspection(input.target.root, []);
       const state = await branchState(input.target.root);
       if (!state.clean) return operation; // the staged squash (or other work) is still pending for the human
       const tip = (await git(['-C', input.target.root, 'rev-parse', '--verify', `${input.targetRef}^{commit}`])).trim();
       const commit = await this.integratedEventually(operation, tip);
       if (commit) return this.integrationFinish(operation, 'integrated', `Squash verified as ${commit.slice(0, 12)}${commit === tip ? '' : `; ${name} has moved on since`}. No Git changes were made by inspection.`, commit);
+      // A verified historical commit establishes completion; releasing an unverified attempt still needs settled writers.
+      await guard(input.target, input.worktree);
       if (tip === input.targetHead) return this.integrationFinish(operation, 'failed', 'The integration checkout is unchanged at its previous commit. Nothing was squashed; preview again if needed.');
       return this.integrationFinish(operation, 'failed', `${name} moved from ${input.targetHead.slice(0, 12)} to ${tip.slice(0, 12)} without the previewed squash commit: it was integrated, reset or rewritten by hand. The hold is released; nothing was retried. Check removal or a new squash preview will judge the current history on its own evidence.`);
     } catch { /* Missing evidence retains ownership. */ }
