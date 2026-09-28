@@ -9,10 +9,9 @@ import { FINISH_HOLDING } from '../contracts/projects';
 
 interface ActionProps { project: Project; tree: ProjectWorktree; token: string; disabled: boolean; disabledReason?: string; onChanged: (notice: string) => Promise<void>;
   /** Increases whenever the view changes; hiding a confirmation revokes it. */
-  viewEpoch?: number }
-/** Deletion actions disable only for hard blocks (read-only host, a request in flight, unreadable state); a known soft blocker is shown as a hint
- * and the click still runs the server preview, whose exact refusal (pane inside, dirty files, not integrated) is then displayed. */
-interface DeletionProps extends ActionProps { hint?: string }
+  viewEpoch?: number;
+  /** ID of the shared blocker or hint that WorktreeActions shows once for this action. */
+  noticeId?: string }
 const nameFor = (tree: ProjectWorktree) => tree.branch ?? tree.path.split('/').filter(Boolean).pop() ?? tree.path;
 /** Any applying or uncertain operation on the project holds every lifecycle action until it is inspected. */
 const isHeld = (project: Project) => [...project.creations, ...(project.removals ?? []), ...(project.integrations ?? []), ...(project.discards ?? []), ...(project.updates ?? []), ...(project.renames ?? [])].some((op) => ['applying', 'uncertain'].includes(op.status))
@@ -21,25 +20,35 @@ const short = (sha: string) => sha.slice(0, 12);
 const refName = (ref: string) => ref.replace('refs/heads/', '');
 
 /** The confirmed end-of-task operations on a linked worktree, each with its own server preview and confirmation. Finish branch
- * closes the sessions AltCLI launched there, then hands over to removal or discard. */
+ * closes the sessions AltCLI launched there, then hands over to removal or discard.
+ * Deletion actions disable only for hard blocks (read-only host, a request in flight, unreadable state); a known soft blocker is shown as a hint
+ * and the click still runs the server preview, whose exact refusal (pane inside, dirty files, not integrated) is then displayed.
+ * Blockers and hints shared by several actions are shown once below them; each action refers to its notice by ID. */
 export function WorktreeActions(props: ActionProps & { deletionReason?: string; deletionHint?: string }) {
+  const baseId = useId(); const held = isHeld(props.project);
+  const heldReason = held ? 'A worktree operation is applying, uncertain or waiting (Finish branch). Inspect or complete it first.' : '';
+  const squashBlock = props.disabled ? props.disabledReason || 'These actions are unavailable. Recheck the worktree.' : heldReason;
+  const deletionBlock = props.deletionReason || heldReason; const hint = deletionBlock ? '' : props.deletionHint ?? '';
+  const notices = [...new Set([squashBlock, deletionBlock, hint].filter(Boolean))];
+  const idOf = (text: string) => text ? `${baseId}-${notices.indexOf(text)}` : undefined;
   return <div className="worktree-actions">
-    <IntegrateWorktree {...props} />
-    <UpdateWorktree {...props} />
-    <RenameBranch {...props} />
-    <FinishBranch {...props} disabled={!!props.deletionReason} disabledReason={props.deletionReason} />
-    <RemoveWorktree {...props} disabled={!!props.deletionReason} disabledReason={props.deletionReason} hint={props.deletionHint} />
-    <DiscardWorktree {...props} disabled={!!props.deletionReason} disabledReason={props.deletionReason} hint={props.deletionHint} />
+    <IntegrateWorktree {...props} noticeId={idOf(squashBlock)} />
+    <UpdateWorktree {...props} noticeId={idOf(squashBlock)} />
+    <RenameBranch {...props} noticeId={idOf(squashBlock)} />
+    <FinishBranch {...props} disabled={!!props.deletionReason} noticeId={idOf(props.deletionReason ?? '')} />
+    <RemoveWorktree {...props} disabled={!!props.deletionReason} noticeId={idOf(deletionBlock || hint)} />
+    <DiscardWorktree {...props} disabled={!!props.deletionReason} noticeId={idOf(deletionBlock || hint)} />
+    {notices.map((text, index) => <div key={text}><p className="fine" id={`${baseId}-${index}`} role="status">{text}</p></div>)}
   </div>;
 }
-const holdReason = (disabled: boolean, disabledReason: string | undefined, held: boolean, unknown: boolean, busy: boolean, what: string) =>
-  disabled ? disabledReason || `${what} is unavailable. Recheck the worktree.`
-    : held ? 'A worktree operation is applying, uncertain or waiting (Finish branch). Inspect or complete it first.'
-    : unknown ? `The last ${what.toLowerCase()} response is unknown. Inspect its result before continuing.`
+/** Reasons that concern only one action; shared blockers are explained by its notice. */
+const localReason = (unknown: boolean, busy: boolean, what: string) =>
+  unknown ? `The last ${what.toLowerCase()} response is unknown. Inspect its result before continuing.`
     : busy ? 'Checking or applying this operation. Wait for it to finish.' : '';
+const describedBy = (...ids: (string | false | undefined)[]) => ids.filter(Boolean).join(' ') || undefined;
 
 /** One squash commit on the integration branch, made in the checkout that has it checked out. The task worktree is untouched. */
-export function IntegrateWorktree({ project, tree, token, disabled, disabledReason, onChanged }: ActionProps) {
+export function IntegrateWorktree({ project, tree, token, disabled, noticeId, onChanged }: ActionProps) {
   const [preview, setPreview] = useState<WorktreeIntegrationPreview | null>(null); const [message, setMessage] = useState('');
   const [choosing, setChoosing] = useState(false); const [through, setThrough] = useState('');
   const [commits, setCommits] = useState<WorktreeIntegrationPreview['commits']>([]); const controlId = useId();
@@ -48,9 +57,8 @@ export function IntegrateWorktree({ project, tree, token, disabled, disabledReas
   const current = preview?.head === tree.head && preview?.branch === tree.branch && preview?.worktree.root === tree.path;
   // The same budget the server enforces: the JSON-encoded message, so escapes count and the confirmation always fits.
   const messageBytes = messageJsonBytes(message); const messageValid = !!message.trim() && messageBytes <= MAX_MESSAGE_JSON_BYTES;
-  const blockedReason = disabled ? disabledReason || 'Squash is unavailable. Recheck the worktree.'
-    : held ? 'A worktree operation is applying or uncertain. Inspect its result below before squashing.'
-    : unknown ? 'The last squash response is unknown. Inspect its result before continuing.'
+  const blocked = disabled || held;
+  const blockedReason = unknown ? 'The last squash response is unknown. Inspect its result before continuing.'
     : busy ? 'Checking or applying this squash. Wait for it to finish.' : '';
   const reason = blockedReason || (preview && !current ? 'The worktree changed. Preview this batch again.'
     : preview && !messageValid ? 'Enter a nonempty commit message within the size limit.' : '');
@@ -84,14 +92,14 @@ export function IntegrateWorktree({ project, tree, token, disabled, disabledReas
     finally { setBusy(false); }
   }
   return <div className="create-worktree">
-    {!choosing && <button type="button" className="quiet" aria-label={`Squash ${name} into main`} aria-describedby={reason ? `${controlId}-reason` : undefined} disabled={!!blockedReason} onClick={() => void inspect()}>Squash into main</button>}
+    {!choosing && <button type="button" className="quiet" aria-label={`Squash ${name} into main`} aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={blocked || !!blockedReason} onClick={() => void inspect()}>Squash into main</button>}
     {reason && <p className="fine" id={`${controlId}-reason`} role="status">{reason}</p>}
     {choosing && <div className="notice">
       <label>Squash through commit<input aria-label="Squash through commit" placeholder="Leave empty for HEAD, or paste a SHA" list={`${controlId}-commits`} value={through} disabled={busy || unknown}
         onChange={(event) => { setThrough(event.target.value); setPreview(null); setError(''); }} /></label>
       <datalist id={`${controlId}-commits`}>{commits.map((commit) => <option key={commit.sha} value={commit.sha}>{commit.subject}</option>)}</datalist>
       <p className="fine">Leave empty for all remaining commits. A SHA includes that commit and stops this batch there. Each batch creates one commit on main; later batches resume after the last integrated commit.</p>
-      <button type="button" disabled={!!blockedReason} onClick={() => void inspect()}>Preview batch</button>
+      <button type="button" disabled={blocked || !!blockedReason} onClick={() => void inspect()}>Preview batch</button>
       {!preview && <button type="button" className="quiet" disabled={busy || unknown} onClick={cancel}>Cancel</button>}
     </div>}
     {preview && <div className="notice" role="region" aria-label={`Squash ${name}`}>
@@ -100,11 +108,11 @@ export function IntegrateWorktree({ project, tree, token, disabled, disabledReas
       <p className="mono commands">{preview.commands.join('\n')}</p>
       {preview.dirty && <p>The task worktree has uncommitted changes; they are not part of this squash.</p>}
       <p>Agents in <span className="mono">{preview.target.root}</span> must be idle: the merge changes its files and index. The task branch and worktree stay as they are; use Check removal afterwards. This cannot be undone in the app.</p>
-      <SquashAdvice key={preview.consent} token={token} preview={preview} disabled={!!reason || busy || unknown} />
+      <SquashAdvice key={preview.consent} token={token} preview={preview} disabled={blocked || !!reason || busy || unknown} />
       <label>Commit message<textarea aria-label="Squash commit message" value={message} disabled={busy || unknown} rows={6} onChange={(e) => setMessage(e.target.value)} /></label>
       <p className="fine" aria-live="polite">{messageBytes.toLocaleString()} of {MAX_MESSAGE_JSON_BYTES.toLocaleString()} bytes (JSON-encoded, as sent){messageBytes > MAX_MESSAGE_JSON_BYTES ? ' — shorten the message to confirm.' : ''}</p>
       {!current && <p>The worktree changed. Cancel and check again.</p>}
-      <button type="button" aria-describedby={reason ? `${controlId}-reason` : undefined} disabled={!!reason} onClick={() => void integrate()}>Confirm squash</button>
+      <button type="button" aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={blocked || !!reason} onClick={() => void integrate()}>Confirm squash</button>
       <button type="button" className="quiet" disabled={busy || unknown} onClick={cancel}>Cancel</button>
     </div>}
     {unknown && <button type="button" disabled={busy} onClick={() => void inspectUnknown()}>Inspect this squash result</button>}
@@ -114,11 +122,11 @@ export function IntegrateWorktree({ project, tree, token, disabled, disabledReas
 
 /** Update from main: move the task branch onto main in place, so the directory, its ignored environment and the agents are reused.
  * A fully integrated branch moves to main's tip; later commits are replayed on top. The old tip is kept under refs/altcli/preserved. */
-export function UpdateWorktree({ project, tree, token, disabled, disabledReason, onChanged }: ActionProps) {
+export function UpdateWorktree({ project, tree, token, disabled, noticeId, onChanged }: ActionProps) {
   const [preview, setPreview] = useState<WorktreeUpdatePreview | null>(null);
   const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [unknown, setUnknown] = useState(false);
   const controlId = useId(); const held = isHeld(project); const name = nameFor(tree);
-  const blockedReason = holdReason(disabled, disabledReason, held, unknown, busy, 'Update');
+  const blocked = disabled || held; const blockedReason = localReason(unknown, busy, 'Update');
   const current = preview?.head === tree.head && preview?.branch === tree.branch && preview?.worktree.root === tree.path;
   const reason = blockedReason || (preview && !current ? 'The worktree changed. Preview the update again.' : '');
   async function inspect() {
@@ -150,7 +158,7 @@ export function UpdateWorktree({ project, tree, token, disabled, disabledReason,
   }
   const target = preview ? refName(preview.targetRef) : 'main';
   return <div className="create-worktree">
-    {!preview && <button type="button" className="quiet" aria-label={`Update ${name} from main`} aria-describedby={reason ? `${controlId}-reason` : undefined} disabled={!!blockedReason} onClick={() => void inspect()}>Update from main</button>}
+    {!preview && <button type="button" className="quiet" aria-label={`Update ${name} from main`} aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={blocked || !!blockedReason} onClick={() => void inspect()}>Update from main</button>}
     {reason && <p className="fine" id={`${controlId}-reason`} role="status">{reason}</p>}
     {preview && <div className="notice" role="region" aria-label={`Update ${name}`}>
       <p>{preview.replay.length
@@ -165,7 +173,7 @@ export function UpdateWorktree({ project, tree, token, disabled, disabledReason,
       <p>The directory, ignored files such as dependencies and local configuration, and the agents stay. Agents here must be idle: tracked files change under them, and they need fresh instructions for the new baseline. Nothing is pushed.</p>
       <p className="mono commands">{preview.commands.join('\n')}</p>
       {!current && <p>The worktree changed. Cancel and check again.</p>}
-      <button type="button" aria-describedby={reason ? `${controlId}-reason` : undefined} disabled={!!reason} onClick={() => void update()}>Confirm update</button>
+      <button type="button" aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={blocked || !!reason} onClick={() => void update()}>Confirm update</button>
       <button type="button" className="quiet" disabled={busy || unknown} onClick={() => setPreview(null)}>Cancel</button>
     </div>}
     {unknown && <button type="button" disabled={busy} onClick={() => void inspectUnknown()}>Inspect this update result</button>}
@@ -174,7 +182,7 @@ export function UpdateWorktree({ project, tree, token, disabled, disabledReason,
 }
 
 /** Rename the task branch in place: files, the directory, agents and tmux session names are unchanged. */
-export function RenameBranch({ project, tree, token, disabled, disabledReason, onChanged, viewEpoch }: ActionProps) {
+export function RenameBranch({ project, tree, token, disabled, noticeId, onChanged, viewEpoch }: ActionProps) {
   const [editing, setEditing] = useState(false); const [newBranch, setNewBranch] = useState('');
   const [preview, setPreview] = useState<WorktreeRenamePreview | null>(null);
   // A preview is consent for what was on screen: hiding the view clears it; the typed name stays.
@@ -183,7 +191,7 @@ export function RenameBranch({ project, tree, token, disabled, disabledReason, o
   const [pending, setPending] = useState<string | null>(null);
   const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [unknown, setUnknown] = useState(false);
   const controlId = useId(); const held = isHeld(project); const name = nameFor(tree);
-  const blockedReason = holdReason(disabled, disabledReason, held, unknown, busy, 'Rename');
+  const blocked = disabled || held; const blockedReason = localReason(unknown, busy, 'Rename');
   const current = preview?.head === tree.head && preview?.branch === tree.branch && preview?.worktree.root === tree.path;
   const reason = blockedReason || (preview && !current ? 'The worktree changed. Preview the rename again.' : '');
   const cancel = () => { setEditing(false); setNewBranch(''); setPreview(null); setError(''); setPending(null); };
@@ -216,11 +224,11 @@ export function RenameBranch({ project, tree, token, disabled, disabledReason, o
     finally { setBusy(false); }
   }
   return <div className="create-worktree">
-    {!editing && <button type="button" className="quiet" aria-label={`Rename branch ${name}`} aria-describedby={reason ? `${controlId}-reason` : undefined} disabled={!!blockedReason} onClick={() => { setEditing(true); setNewBranch(tree.branch ?? ''); }}>Rename…</button>}
+    {!editing && <button type="button" className="quiet" aria-label={`Rename branch ${name}`} aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={blocked || !!blockedReason} onClick={() => { setEditing(true); setNewBranch(tree.branch ?? ''); }}>Rename…</button>}
     {reason && <p className="fine" id={`${controlId}-reason`} role="status">{reason}</p>}
     {editing && <div className="notice">
       <label>New branch name<input aria-label="New branch name" value={newBranch} maxLength={150} disabled={busy || unknown} onChange={(event) => { setNewBranch(event.target.value); setPreview(null); setError(''); }} /></label>
-      <button type="button" disabled={!!blockedReason || !newBranch.trim() || newBranch.trim() === tree.branch} onClick={() => void inspect()}>Preview rename</button>
+      <button type="button" disabled={blocked || !!blockedReason || !newBranch.trim() || newBranch.trim() === tree.branch} onClick={() => void inspect()}>Preview rename</button>
       {!preview && <button type="button" className="quiet" disabled={busy || unknown} onClick={cancel}>Cancel</button>}
     </div>}
     {preview && <div className="notice" role="region" aria-label={`Rename ${name}`}>
@@ -228,7 +236,7 @@ export function RenameBranch({ project, tree, token, disabled, disabledReason, o
       <p>The directory <span className="mono">{preview.worktree.root}</span>, its files{preview.dirty ? ' (including your uncommitted changes, which stay exactly as they are)' : ''}, the agents and tmux session names stay the same.{preview.checkpoints ? ` ${preview.checkpoints} recorded squash batch${preview.checkpoints === 1 ? ' carries' : 'es carry'} over to the new name.` : ''} Nothing is pushed.</p>
       <p className="mono commands">{preview.commands.join('\n')}</p>
       {!current && <p>The worktree changed. Cancel and check again.</p>}
-      <button type="button" aria-describedby={reason ? `${controlId}-reason` : undefined} disabled={!!reason} onClick={() => void rename()}>Confirm rename</button>
+      <button type="button" aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={blocked || !!reason} onClick={() => void rename()}>Confirm rename</button>
       <button type="button" className="quiet" disabled={busy || unknown} onClick={cancel}>Cancel</button>
     </div>}
     {unknown && <button type="button" disabled={busy} onClick={() => void inspectUnknown()}>Inspect this rename result</button>}
@@ -237,13 +245,12 @@ export function RenameBranch({ project, tree, token, disabled, disabledReason, o
 }
 
 /** Deletion always requires a fresh server preview and explicit confirmation. */
-export function RemoveWorktree({ project, tree, token, disabled, disabledReason, hint, onChanged }: DeletionProps) {
+export function RemoveWorktree({ project, tree, token, disabled, noticeId, onChanged }: ActionProps) {
   const [preview, setPreview] = useState<WorktreeRemovalPreview | null>(null);
   const [busy, setBusy] = useState(false); const [error, setError] = useState('');
   const [unknown, setUnknown] = useState(false); const controlId = useId();
   const held = isHeld(project); const name = nameFor(tree);
-  const blockedReason = holdReason(disabled, disabledReason, held, unknown, busy, 'Removal');
-  const reason = blockedReason || (!preview && hint) || '';
+  const reason = localReason(unknown, busy, 'Removal');
   const current = preview?.head === tree.head && preview?.branch === tree.branch && preview?.worktree.root === tree.path;
   async function inspect() {
     setBusy(true); setError(''); setPreview(null);
@@ -273,7 +280,7 @@ export function RemoveWorktree({ project, tree, token, disabled, disabledReason,
     finally { setBusy(false); }
   }
   return <div className="create-worktree">
-    {!preview && <button type="button" className="quiet" aria-label={`Check removal of ${name}`} aria-describedby={reason ? `${controlId}-reason` : undefined} disabled={!!blockedReason} onClick={() => void inspect()}>Check removal</button>}
+    {!preview && <button type="button" className="quiet" aria-label={`Check removal of ${name}`} aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={disabled || held || !!reason} onClick={() => void inspect()}>Check removal</button>}
     {reason && <p className="fine" id={`${controlId}-reason`} role="status">{reason}</p>}
     {preview && <div className="notice" role="region" aria-label={`Remove ${name}`}>
       <p>{preview.integratedBy === 'squash' ? 'Squash integration verified' : 'Merged ancestry verified'} in <span className="mono">{refName(preview.targetRef)}</span> at <span className="mono">{short(preview.integratedCommit)}</span>.</p>
@@ -289,15 +296,14 @@ export function RemoveWorktree({ project, tree, token, disabled, disabledReason,
 }
 
 /** Forced deletion of the worktree and its branch without integration evidence: the branch name must be typed to confirm. */
-export function DiscardWorktree({ project, tree, token, disabled, disabledReason, hint, onChanged, viewEpoch }: DeletionProps) {
+export function DiscardWorktree({ project, tree, token, disabled, noticeId, onChanged, viewEpoch }: ActionProps) {
   const [preview, setPreview] = useState<WorktreeDiscardPreview | null>(null); const [typed, setTyped] = useState('');
   // The typed branch name is the confirmation: hiding the view clears it, while the preview stays for re-checking.
   useEffect(() => { setTyped(''); }, [viewEpoch]);
   const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [unknown, setUnknown] = useState(false);
   const controlId = useId();
   const held = isHeld(project); const name = nameFor(tree);
-  const blockedReason = holdReason(disabled, disabledReason, held, unknown, busy, 'Discard');
-  const reason = blockedReason || (!preview && hint) || '';
+  const reason = localReason(unknown, busy, 'Discard');
   const current = preview?.head === tree.head && preview?.branch === tree.branch && preview?.worktree.root === tree.path;
   async function inspect() {
     setBusy(true); setError(''); setPreview(null); setTyped('');
@@ -327,7 +333,7 @@ export function DiscardWorktree({ project, tree, token, disabled, disabledReason
     finally { setBusy(false); }
   }
   return <div className="create-worktree">
-    {!preview && <button type="button" className="quiet danger" aria-label={`Discard ${name}`} aria-describedby={reason ? `${controlId}-reason` : undefined} disabled={!!blockedReason} onClick={() => void inspect()}>Discard…</button>}
+    {!preview && <button type="button" className="quiet danger" aria-label={`Discard ${name}`} aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={disabled || held || !!reason} onClick={() => void inspect()}>Discard…</button>}
     {reason && <p className="fine" id={`${controlId}-reason`} role="status">{reason}</p>}
     {preview && <div className="notice error" role="region" aria-label={`Discard ${name}`}>
       <p><strong>Discard {preview.branch}?</strong> This deletes the directory <span className="mono">{preview.worktree.root}</span>, including ignored files, and deletes the branch <span className="mono">{preview.branch}</span> at <span className="mono">{short(preview.head)}</span>. It does not check that anything was integrated.</p>

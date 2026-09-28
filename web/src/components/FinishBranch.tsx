@@ -18,8 +18,10 @@ const OUTCOMES: { value: FinishOutcome; label: string }[] = [
 /** Finish branch: close the tmux sessions AltCLI launched for this task worktree without typing in a terminal, then optionally remove
  * or discard it through the existing confirmed operations. Each step shows fresh evidence and needs its own confirmation; nothing
  * is merged, retried or run automatically. */
-export function FinishBranch({ project, tree, token, disabled, disabledReason, onChanged, viewEpoch }: {
-  project: Project; tree: ProjectWorktree; token: string; disabled: boolean; disabledReason?: string; onChanged: (notice: string) => Promise<void>; viewEpoch?: number;
+export function FinishBranch({ project, tree, token, disabled, noticeId, onChanged, viewEpoch }: {
+  project: Project; tree: ProjectWorktree; token: string; disabled: boolean; onChanged: (notice: string) => Promise<void>; viewEpoch?: number;
+  /** ID of the shared notice explaining why Finish branch is disabled; WorktreeActions shows it once. */
+  noticeId?: string;
 }) {
   const [preview, setPreview] = useState<FinishPreview | null>(null), [outcome, setOutcome] = useState<FinishOutcome>('close'), [stopActive, setStopActive] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [lost, setLost] = useState<string | null>(null), [note, setNote] = useState(''), [inspected, setInspected] = useState(false);
@@ -71,10 +73,8 @@ export function FinishBranch({ project, tree, token, disabled, disabledReason, o
   const reason = !preview ? '' : preview.blockers[0] || (outcome === 'remove' ? removeReason : '')
     || (preview.active && !stopActive ? 'Some sessions may have unfinished work or background processes: confirm stopping them anyway.' : '')
     || (outcome === 'close' && !closable.length ? 'There are no app-launched sessions to close.' : '');
-  const blocked = disabled ? disabledReason || 'Finish branch is unavailable. Recheck the worktree.' : '';
   return <div className="create-worktree finish-branch">
-    {!preview && !holding && <button type="button" className="quiet" aria-label={`Finish ${name}`} aria-describedby={blocked ? `${controlId}-reason` : undefined} disabled={!!blocked || busy || !!lost} onClick={() => void check()}>Finish branch…</button>}
-    {blocked && !holding && <p className="fine" id={`${controlId}-reason`} role="status">{blocked}</p>}
+    {!preview && !holding && <button type="button" className="quiet" aria-label={`Finish ${name}`} aria-describedby={disabled ? noticeId : undefined} disabled={disabled || busy || !!lost} onClick={() => void check()}>Finish branch…</button>}
     {preview && <div className="notice" role="region" aria-label={`Finish ${name}`}>
       <p><strong>Finish {preview.branch}</strong>: close the tmux sessions AltCLI launched for <span className="mono">{preview.worktree.root}</span>. Sessions you opened yourself are never closed.</p>
       {preview.sessions.length ? <ul className="finish-sessions" aria-label="App-launched sessions">{preview.sessions.map((s) => <li key={s.sessionId}>
