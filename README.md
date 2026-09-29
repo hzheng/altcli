@@ -19,8 +19,8 @@ again resets a failed connection. Several terminals and browsers can write indep
 including to the same pane (where native input can interleave). Input holds AltCLI
 dispatch/setup/launch across the tmux server. Focus, observation and clicks in Display grant
 nothing. Automatically sized tmux windows use captured observation to avoid resizing workers;
-Terminal still opens a normal native writer. Display, or **Stop typing here** / **Stop typing in
-this browser** in Control access, stops writers. Held workflow checkpoint review remains explicit.
+Terminal still opens a normal native writer. Each terminal's own Display toggle stops its writer; the
+toggle is also the pane's typing/viewing indicator. Held workflow checkpoint review remains explicit.
 
 One **Agent** selector above the terminals chooses both the terminal shown and the
 active Control recipient. **Parallel** shows every agent's controls side by side on wide
@@ -38,7 +38,7 @@ those holds (ending the run, stopping all typing, recording the input as accepte
 starts. Projects' squash, update, rebase, reset, rename, finish, removal, discard and launch use one
 such **Proceed anyway** acknowledgement, and a squash refused only for possible agent activity can
 be previewed anyway. **Control access**, the one entry in the page heading's status row, explains
-every hold and keeps typing stops, pause and takeover, and other recovery; nothing there is
+every hold and offers pause, takeover, and other recovery; nothing there is
 required first. The ⌨️ status to its right reports the
 active input connection count and whether automation is held, beside connection status. Taking control is one confirmation after a list of what to notice; for
 earlier manual input its fixed acknowledgement is recorded as the decision note. Projects adds a project by its main/default starting checkout,

@@ -14,7 +14,7 @@ import { PlanningProgress } from './PlanningProgress';
 import { PaneActions } from './PaneActions';
 import { LaunchProfiles } from './LaunchProfiles';
 import { NativeTerminal, type NativeTerminalHandle } from './NativeTerminal';
-import { useKeyboardControls, keyboardOwnerOf } from './KeyboardSelector';
+import { keyboardOwnerOf } from './KeyboardSelector';
 import { Acknowledgement, clearHolds, holdConsequences, holdKey, overrideKey, TakeControlHere, type Holds, type Override } from './Holds';
 import { StatusIcon } from './Hint';
 import { PlanSetup } from './PlanSetup';
@@ -128,10 +128,6 @@ export function Console() {
   const [clock, setClock] = useState(Date.now()); const [unknownRequest, setUnknownRequest] = useState<string | null>(null);
   const [resetFor, setResetFor] = useState<string | null>(null);
   const [layout, setLayout] = useState<'parallel' | 'focus'>('parallel');
-  // Phone widths show only the active pane (CSS); Control access offers to show a writer that is out of view.
-  const [narrow, setNarrow] = useState(false);
-  useEffect(() => { const query = window.matchMedia('(max-width: 760px)'); const update = () => setNarrow(query.matches); update();
-    query.addEventListener('change', update); return () => query.removeEventListener('change', update); }, []);
   // Alternate placements of the one control pane: beside the stage on wide screens, or a drawer on phones. Never a second composer.
   const [controlPlacement, setControlPlacement] = useState<'below' | 'side'>('below');
   const [controlDrawer, setControlDrawer] = useState(false);
@@ -380,11 +376,6 @@ export function Console() {
   const showActiveTerminal = () => { setControlDrawer(false); if (merged) setSurface('terminal'); requestAnimationFrame(() => stage.current?.scrollIntoView({ block: 'nearest' })); };
   /** Moves focus to the already visible action; a still-current confirmation is kept. */
   const returnToAction = () => { controlPane.current?.focus(); (controlPane.current?.querySelector('.control-agent.active') ?? controlPane.current)?.scrollIntoView({ block: 'nearest' }); };
-  // A card's terminal is on screen in the Console; Focus and phone widths show only the selected one.
-  const inView = (id: string) => tab === 'console' && showTerminals && (id === displayed || (layout === 'parallel' && !narrow));
-  const keyboard = useKeyboardControls({ sessions: state?.manualSessions ?? [], clientInstanceId, token, describe: describeTerminal, disabled: !token || busy || stale || !config?.terminalEnabled,
-    refresh, options: visible.filter((s) => s.registrationId).map((s) => ({ key: s.id, label: s.label, inView: inView(s.id) })),
-    handle: (key) => terminals.current.get(key), onShow: showAgentTerminal });
   const unknownActivity = projectSessions.filter((s) => state?.activities?.find((a) => a.agentId === s.id)?.state === 'unknown');
   const otherWorktrees = [...new Set((state?.manualSessions ?? []).flatMap((m) => m.runs)
     .map((r) => state?.runs.find((run) => run.id === r.id)?.repository).filter((repo): repo is string => !!repo && repo !== project))];
@@ -626,7 +617,8 @@ export function Console() {
           <span className="badge">{item.scope === 'server' ? 'Server-wide' : 'This checkout'}</span> <span>{item.text}</span>
           {item.id === 'setup' && <button type="button" className="quiet inline-link" onClick={() => showTab('workspaces')}>Open Projects</button>}
           {(item.id === 'process' || item.id === 'agent') && <button type="button" className="quiet inline-link" disabled={busy || checking} onClick={recheckNow}>Recheck agents</button>}</li>)}
-          {unresolvedManual.map((m) => <li key={m.id} className="muted">Earlier manual input: {m.reason} {m.bytes} input bytes · {m.runs.length} affected runs.</li>)}</ul></>}
+          {unresolvedManual.map((m) => <li key={m.id} className="muted">Earlier manual input: {m.reason} {m.bytes} input bytes · {m.runs.length} affected runs.</li>)}
+          {(state?.manualSessions ?? []).filter((m) => m.live && m.recoveryRequired).map((m) => <li key={m.id} className="muted">Input needs inspection: {m.reason}</li>)}</ul></>}
         {/* Optional, one click each, once nothing holds this checkout: the notes above say what to look at first. */}
         {!owned.length && unknownActivity.map((s) => { const block = resetStatusReason(s);
           return <div key={s.id} className="pane-buttons access-agent" role="group" aria-label={`Status of ${s.label}`}>
@@ -643,8 +635,6 @@ export function Console() {
           onPause={owned.some((r) => r.status !== 'paused') ? () => { for (const run of owned.filter((r) => r.status !== 'paused')) void action(run, 'pause'); } : undefined} />
           : <p className="fine">No controller run, uncertain delivery or earlier manual input needs takeover.
             {liveManual && ' Active typing still holds automation; an action’s acknowledgement stops and records it.'}</p>}
-        {config?.terminalEnabled && <section className="access-section" aria-label="Keyboard"><h3>Keyboard <span className="muted">· server-wide</span></h3>
-          {keyboard.recovery}</section>}
         <section className="access-section" aria-label="Workflow"><h3>Controller <span className="muted">· this checkout</span></h3>
           {owned.map((run) => <section key={run.id} className="panel run-card" aria-label="Who controls the agents">
             <div className="section-heading"><h2>{run.status === 'paused' ? 'Controller paused · inspect the checkpoint' : run.status === 'waiting' ? 'Controller waiting for your Next turn' : 'Controller is driving the agents'}</h2><span className="badge">{run.automaticTurns}/{run.turnLimit} automatic turns</span></div>

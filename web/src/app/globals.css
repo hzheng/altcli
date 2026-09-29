@@ -479,7 +479,6 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
 .keyboard-claim { padding:0 .5rem; min-width:0; font-size:12px; }
 .keyboard-claim:empty { display:none; }
 .keyboard-claim > button { margin:0 6px 6px 0; }
-.keyboard-claim > .notice, .keyboard-release > .notice { margin:8px 0; }
 /* Host directory browser for choosing a project's starting checkout. */
 .directory-picker { border:1px solid var(--line); border-radius:10px; padding:12px; margin:10px 0; background:#121c20; min-width:0; }
 .picker-path { display:flex; align-items:center; gap:8px; min-width:0; }

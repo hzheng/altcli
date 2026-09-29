@@ -21,7 +21,12 @@ async function toggleTerminal(page:Page,name:string) {
 const totalBytes=async(page:Page)=>((await state(page.request)).manualSessions??[]).reduce((n,m)=>n+m.bytes,0);
 /** Starts input with the toggle, then types one arrow key: the same input evidence the earlier first-keystroke admission left. */
 async function chooseKeyboard(page:Page,name:string) {
-  if(name==='Nobody (observe only)') {await (await openAccess(page)).getByRole('button',{name:'Stop typing here',exact:true}).click();return;}
+  if(name==='Nobody (observe only)') {
+    // Each terminal's own Display toggle stops its typing; there is no separate keyboard list.
+    const typing=page.getByRole('button',{name:'Terminal mode',exact:true,pressed:true});
+    for(const toggle of await typing.all())await toggle.click();
+    await expect(typing).toHaveCount(0);return;
+  }
   const before=await totalBytes(page),terminal=await toggleTerminal(page,name);
   await expect(badge(terminal,'Typing enabled')).toBeVisible();
   await terminal.locator('.xterm-helper-textarea').focus();await page.keyboard.press('ArrowRight');
@@ -31,8 +36,9 @@ async function takeKeyboard(page:Page,name='Codex') {await chooseKeyboard(page,n
 async function expectKeyboard(page:Page,_name:string) {
   await expect(page.locator('.page-heading').getByRole('img',{name:'Input: 1 active · automation held',exact:true})).toBeVisible();
 }
-/** A terminal card's status badge: an emoji whose accessible name states the badge. */
-const badge=(card:Locator,name:string)=>card.getByRole('img',{name,exact:true});
+/** A terminal card's state. Typing and plain viewing are shown by the mode toggle alone; other states by a status badge. */
+const badge=(card:Locator,name:string)=>name==='Typing enabled'||name==='Observing'
+  ?card.getByRole('button',{name:'Terminal mode',exact:true,pressed:name==='Typing enabled'}):card.getByRole('img',{name,exact:true});
 async function openKeyboard(page:Page) {
   await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
   const card=page.getByRole('region',{name:'Codex terminal',exact:true});
@@ -60,7 +66,8 @@ test('terminal status is informational; focus and keys in Display admit nothing,
   await expect(terminal.locator('.xterm-helper-textarea')).toBeFocused();await page.keyboard.insertText('x');
   await expectKeyboard(page,'Codex');
   await expect.poll(async()=>(await state(request)).manualSessions?.[0]?.bytes).toBe(1);
-  const access=await openAccess(page);await expect(access).toContainText('1 active input connection');
+  // Control access no longer lists keyboards: each terminal's toggle shows and stops its own typing.
+  await expect((await openAccess(page)).getByRole('region',{name:'Keyboard',exact:true})).toHaveCount(0);
   await page.screenshot({path:info.outputPath('direct-terminal-input.png'),fullPage:true});
 });
 test('Display stops input, Terminal starts it again, and a toggle on a failed or refused connection reconnects first',async({page,request})=>{
@@ -463,7 +470,7 @@ test(`one Take control confirmation ends the controller run, then records the de
   const after=await state(request);
   expect(after.runs.find(r=>r.id===id)?.status).toBe('stopped');expect(after.manualSessions??[]).toEqual([]);
 });
-for(const failed of [false,true])test(`a delayed ${failed?'failed':'successful'} input response cannot stall or revoke a newer keyboard generation`,async({page,request})=>{
+for(const failed of [false,true])test(`a delayed ${failed?'failed':'successful'} input response cannot stall or revoke a newer keyboard generation on the same connection`,async({page,request})=>{
   const card=await openKeyboard(page);
   let release!:()=>void, received!:()=>void, finished!:()=>void;
   const gate=new Promise<void>(r=>{release=r;}),captured=new Promise<void>(r=>{received=r;}),done=new Promise<void>(r=>{finished=r;});
@@ -474,10 +481,16 @@ for(const failed of [false,true])test(`a delayed ${failed?'failed':'successful'}
   },{times:1});
   try {
     await card.locator('.xterm-helper-textarea').focus();await page.keyboard.insertText('a');await captured;
-    await chooseKeyboard(page,'Nobody (observe only)');
+    // Stop server-side while the response is delayed in the browser. Keep the terminal mounted so the late callback shares its connection.
+    const manual=(await state(request)).manualSessions![0]!,writer=manual.writers.find(w=>w.live)!;
+    await post(request,'terminals/stop',{requestId:crypto.randomUUID(),expectedBootId:manual.bootId,manualSessionId:manual.id,expectedRevision:manual.revision,
+      writers:[{connectionId:writer.connectionId,generation:writer.generation,revision:writer.revision}]});
+    await expect(badge(card,'Observing')).toBeVisible();
     await expect(page.getByRole('region',{name:'Confirm keyboard'})).toHaveCount(0);
     await takeKeyboard(page);
     await expect(badge(card,'Typing enabled')).toBeVisible();
+    const next=(await state(request)).manualSessions![0]!.writers.find(w=>w.live)!;
+    expect(next.connectionId).toBe(writer.connectionId);expect(next.generation).not.toBe(writer.generation);
     await card.locator('.xterm-helper-textarea').focus();await page.keyboard.insertText('b');
     await expect.poll(async()=>((await state(request)).manualSessions??[])[0]?.bytes).toBe(8);
     release();await done;
@@ -666,16 +679,16 @@ test('a native keyboard hold keeps the Plan brief editable; Start Plan waits for
   expect(((await state(request)).manualSessions??[])[0]?.bytes).toBe(3);
 });
 
-test('local terminals retain independent writers and one batch stop ends exactly this browser set',async({page,request})=>{
+test('local terminals retain independent writers and each Display toggle stops only its own',async({page,request})=>{
   const card=await openKeyboard(page),original=(await state(request)).manualSessions![0]!.writers.find(w=>w.live)!;
   await takeKeyboard(page,'Claude');
   await expect.poll(async()=>(await state(request)).manualSessions?.[0]?.writers.filter(w=>w.live).length).toBe(2);
   expect((await state(request)).manualSessions![0]!.writers.find(w=>w.connectionId===original.connectionId)!.generation).toBe(original.generation);
   await page.getByRole('navigation',{name:'Agent'}).getByRole('button',{name:'Codex',exact:true}).click();await expect(badge(card,'Typing enabled')).toBeVisible();
-  await showSurface(page,'Control');const access=await openAccess(page);
-  await access.getByRole('button',{name:'Show Claude',exact:true}).click();
-  await expect(badge(page.getByRole('region',{name:'Claude terminal',exact:true}),'Typing enabled')).toBeVisible();
-  await access.getByRole('button',{name:'Stop typing in this browser',exact:true}).click();
+  await badge(card,'Typing enabled').click();
+  await expect.poll(async()=>(await state(request)).manualSessions?.[0]?.writers.filter(w=>w.live).length).toBe(1);
+  await page.getByRole('navigation',{name:'Agent'}).getByRole('button',{name:'Claude',exact:true}).click();
+  await badge(page.getByRole('region',{name:'Claude terminal',exact:true}),'Typing enabled').click();
   await expect.poll(async()=>(await state(request)).manualSessions?.[0]?.live).toBe(false);
   expect((await state(request)).manualSessions![0]!.reconciliationRequired).toBe(true);
 });

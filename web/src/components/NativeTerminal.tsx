@@ -335,7 +335,8 @@ export function NativeTerminal({ ref, token, target, clientInstanceId, label, fa
       const text=event.clipboardData.getData('text/plain');
       if(!allowPaste(text)){event.preventDefault();event.stopPropagation();}else clearModifiers();
     }}>
-    <div className="terminal-tools"><StatusIcon icon={BADGES[badge][0]} label={badge} help={BADGES[badge][1]} />
+    {/* The mode toggle already shows typing or viewing; the status badge appears only for states the toggle cannot show. */}
+    <div className="terminal-tools">{(!inputEnabled || (badge !== 'Typing enabled' && badge !== 'Observing')) && <StatusIcon icon={BADGES[badge][0]} label={badge} help={BADGES[badge][1]} />}
       {inputEnabled && <IconButton icon={writer ? '⌨️' : '👁️'} label="Terminal mode" className="mode-toggle" aria-pressed={writer} aria-busy={busy} disabled={busy}
         help={writer ? 'Terminal: typing goes to this pane. Press to switch to Display (view only); input already sent stays, and automation waits until manual input is reconciled.'
           : 'Display: view only. Press to switch to Terminal and type here. If the connection failed, this reconnects first.'}

@@ -1,10 +1,8 @@
 'use client';
-import { useState } from 'react';
 import { api } from '../client/api';
 import type { ManualSession, ManualWriter, TerminalTarget } from '../contracts/terminals';
 import type { FrozenWriter, NativeTerminalHandle } from './NativeTerminal';
 
-export interface KeyboardOption { key: string; label: string; inView: boolean }
 export interface KeyboardOwner { kind: 'this-browser' | 'this-browser-elsewhere' | 'other-browser' | 'unresolved'; key: string; label: string }
 /** An aggregate display summary, never an exclusive keyboard owner or an admission decision. */
 export function keyboardOwnerOf(sessions: ManualSession[] | undefined, clientInstanceId: string, here: (target: TerminalTarget) => { key: string; label: string } | undefined, describe?: (target: TerminalTarget) => string | undefined): KeyboardOwner | null {
@@ -45,38 +43,4 @@ export async function stopTerminalWriters(token: string, manual: ManualSession, 
     }
     throw error;
   }
-}
-
-/** Explicit stop/recovery only. The Terminal toggle in NativeTerminal owns admission. */
-export function useKeyboardControls({ sessions, clientInstanceId, token, options, handle, disabled, refresh, describe, onShow }: {
-  sessions: ManualSession[]; clientInstanceId: string; token: string;
-  options: KeyboardOption[]; handle: (key: string) => NativeTerminalHandle | undefined;
-  disabled: boolean; refresh: () => Promise<void>; describe: (target: TerminalTarget) => string;
-  onShow?: (key: string) => void;
-}) {
-  const [pending, setPending] = useState(false), [message, setMessage] = useState('');
-  const localHandle = (writer: ManualWriter) => options.map(o => handle(o.key)).find(h => h?.matches(writer));
-  const live = sessions.flatMap(m => m.writers.filter(w => w.live).map(writer => ({ manual: m, writer })));
-  const mine = live.filter(({ writer }) => writer.clientInstanceId === clientInstanceId);
-  async function stop(manual: ManualSession, writers: ManualWriter[]) {
-    setPending(true); setMessage('');
-    try { const result = await stopTerminalWriters(token, manual, writers, localHandle); setMessage(result.reason); }
-    catch (error) { setMessage(error instanceof Error ? error.message : 'Typing could not be stopped. Inspect manual input.'); }
-    finally { setPending(false); await refresh(); }
-  }
-  const recovery = <div className="keyboard-release">
-    <p className="fine">{live.length ? `${live.length} active input connection${live.length === 1 ? '' : 's'}. Automation is held across this server.` : 'No active input connections. Use a terminal’s Terminal toggle to type.'}</p>
-    {live.map(({ manual, writer }) => <div className="pane-buttons" key={writer.connectionId}>
-      <span>{describe(writer.target)} · {writer.clientInstanceId === clientInstanceId ? 'this browser' : 'another browser/tab'}</span>
-      {writer.clientInstanceId === clientInstanceId && <button type="button" className="quiet" disabled={disabled || pending || !localHandle(writer)} onClick={() => void stop(manual, [writer])}>Stop typing here</button>}
-      {writer.clientInstanceId !== clientInstanceId && <span className="fine">Typing in another browser or tab; an action’s acknowledgement stops it too.</span>}
-      {(() => { const target = writer.target, option = 'agentId' in target ? options.find(o => o.key === target.agentId) : undefined;
-        return option && !option.inView && onShow && <button type="button" className="quiet" onClick={() => onShow(option.key)}>Show {option.label}</button>; })()}
-    </div>)}
-    {mine.length > 1 && <button type="button" className="quiet" disabled={disabled || pending || mine.some(x => !localHandle(x.writer)) || new Set(mine.map(x => x.manual.id)).size !== 1}
-      onClick={() => void stop(mine[0]!.manual, mine.map(x => x.writer))}>Stop typing in this browser</button>}
-    {sessions.filter(m => m.recoveryRequired).map(m => <p className="fine" key={m.id}>Input needs inspection: {m.reason}</p>)}
-    {message && <p className="fine" aria-live="polite">{message}</p>}
-  </div>;
-  return { recovery };
 }

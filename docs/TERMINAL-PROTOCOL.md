@@ -102,9 +102,10 @@ Legacy owners still need settlement/takeover. Current modern turns can finish wh
 cannot dispatch a successor; branch-scoped Stage relay keeps its fault/takeover rule.
 
 The terminal's **Terminal / Display** toggle posts `acquire` or `release` for its own connection;
-a toggle on a failed or closed connection first opens a fresh observer connection. **Stop typing
-here** and **Stop typing in this browser** in Control access freeze the selected local queues and
-post `/api/v1/terminals/stop` with period ID, boot ID and the exact connection, generation and
+a toggle on a failed or closed connection first opens a fresh observer connection. The toggle is the
+pane's only typing/viewing indicator; a status badge beside it appears only for other states
+(disconnected, replaced CLI, held or unresolved manual input). An action's acknowledgement freezes
+the local queues it stops and posts `/api/v1/terminals/stop` with period ID, boot ID and the exact connection, generation and
 writer revision set. Plain stop accepts subsequent byte revisions, drains admitted work and
 retains the barrier; a replacement generation is always refused. Another browser's writers are
 stopped only by an action's acknowledgement that lists them. Disconnect, expiry, Lock and restart

@@ -392,8 +392,8 @@ holds when the action runs. Terminal observation opens automatically. A terminal
 Display** toggle enables or ends input on that connection, and toggling again resets a failed one;
 several terminals and browsers can write independently under one server-wide automation barrier.
 Focus grants nothing.
-The heading reports active input connections. **Stop typing here** and **Stop typing in this
-browser** stop exact local writers while retaining the manual barrier. An acknowledged action
+The heading reports active input connections. Each terminal's Display toggle stops its own writer
+while retaining the manual barrier; Control access has no separate keyboard list. An acknowledged action
 stops every writer, local and remote, and records the manual input as accepted by human inspection
 before it starts. Disconnect, Lock and restart mark the period for recovery; new writers may still
 join it, and automation waits until it is reconciled. Each original workflow checkpoint review
