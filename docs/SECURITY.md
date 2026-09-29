@@ -1,6 +1,6 @@
 # Security and operational boundary
 
-**Current versus target:** the lifecycle boundary below originated at `46f228b`; later local Plan/Implementation and setup support is recorded in [VALIDATION](../VALIDATION.md). [ADR-0013](adr/ADR-0013-confirmed-branch-setup.md) owns the two narrow controller Git-write exceptions: confirmed new-branch checkout and separately confirmed task-worktree creation. No general Git-write API exists.
+**Current versus target:** the lifecycle boundary below originated at `46f228b`; later local Plan/Implementation and setup support is recorded in the ADRs and commit history. [ADR-0013](adr/ADR-0013-confirmed-branch-setup.md) owns the two narrow controller Git-write exceptions: confirmed new-branch checkout and separately confirmed task-worktree creation. No general Git-write API exists.
 
 AltCLI controls coding agents with their existing host privileges. It is not a
 sandbox, process attestation system or lock against external filesystem writers.

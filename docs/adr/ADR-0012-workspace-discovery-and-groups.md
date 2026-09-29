@@ -7,7 +7,7 @@ Date: September 19, 2026
 
 Status: Accepted design direction; local workspace grouping implemented, host acceptance pending.
 Items explicitly labeled working specification, recommendation, or open choice retain that status.
-See VALIDATION.md for executed checks; broader adapter capabilities remain future work.
+Broader adapter capabilities remain future work.
 
 Relationship: ADR-0004 and ADR-0005 for future onboarding and participant terminology; runtime pair compatibility remains until migration.
 

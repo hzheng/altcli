@@ -31,8 +31,8 @@ receipt and finish updating its turn binding before another assignment arrives.
 This is an additional delivery barrier, not completion or background-work
 evidence: existing correlation, publication and task/cron checks still apply.
 Unverifiable exit or a five-second timeout pauses without replay; restart retains
-the existing reconciliation requirement. See VALIDATION for isolated regression
-coverage; installed-provider acceptance remains open.
+the existing reconciliation requirement. Regression tests cover this in
+isolation; installed-provider acceptance remains open.
 
 ## Context
 

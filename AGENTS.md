@@ -2,8 +2,8 @@
 
 **Documentation authority:** [ADR-0012 through ADR-0018](Architecture_Decision.md#accepted-collaboration-direction-not-yet-implemented) and the linked guides now own the accepted collaboration design; there is no separate design draft to consult. These are target decisions, not claims that new runtime features or skills exist; [OPEN-DECISIONS](docs/OPEN-DECISIONS.md) remains unresolved.
 
-Read README.md, ROADMAP.md, Architecture_Decision.md and VALIDATION.md before
-changing behavior or claiming acceptance. ADR-0011 is the current relay boundary.
+Read README.md, ROADMAP.md and Architecture_Decision.md before changing behavior
+or claiming acceptance. ADR-0011 is the current relay boundary.
 
 ## Product and engineering rules
 
@@ -51,6 +51,8 @@ faults, duplicate events, overlapping pairs, multiple clients, history truncatio
 restart, and unknown background work. Preserve fake-vs-real test distinctions.
 Restart the development backend after server-code changes: the process singleton
 must not be replaced while a delivery is active. No unobserved test is 'passed'.
+Record what actually ran, and what did not, in the commit message (and in a handoff
+result's checks); there is no separate validation log.
 
 ## Implementing the next collaboration increments
 

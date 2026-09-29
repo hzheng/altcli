@@ -49,8 +49,8 @@ Launch cards and cleanup previews use the agent's saved display name; after a
 rename, the original tmux session name is shown separately. Excluding an agent
 from the group does not stop its CLI; closing requires separate confirmation.
 Sessions you opened yourself are never closed. This is host-shell
-power for the authenticated owner. See [the protocol](docs/TERMINAL-PROTOCOL.md)
-and [validation](VALIDATION.md); feature activation is not acceptance.
+power for the authenticated owner. See [the protocol](docs/TERMINAL-PROTOCOL.md);
+feature activation is not acceptance.
 
 ## Accepted next direction
 
@@ -61,7 +61,7 @@ exact-version endorsements, and a separate human approval checkpoint. The [ADR i
 and [workflow guide](docs/WORKFLOWS.md) describe the broader design; source support
 does not imply installed-host acceptance.
 
-Owned modern assignments expose **Add detail to this task** and literal terminal controls. Input holds the whole run until its original result validates and you review the checkpoint. A disabled input check explains its blocker beside the checkbox in Control access. After a human-directed objection, inspect the terminals and use **Take control…** to end the paused run before sending a new instruction; opening the panel or changing views does not release ownership. A separately saved waiting checkpoint can be restored after exactly observed external work settles; restoration sends nothing. Projects can request read-only squash-batch advice, with a fresh human preview and confirmation for every integration. See [ADR-0019](docs/adr/ADR-0019-terminal-input-and-checkpoints.md) and the installed-provider limits in [VALIDATION](VALIDATION.md).
+Owned modern assignments expose **Add detail to this task** and literal terminal controls. Input holds the whole run until its original result validates and you review the checkpoint. A disabled input check explains its blocker beside the checkbox in Control access. After a human-directed objection, inspect the terminals and use **Take control…** to end the paused run before sending a new instruction; opening the panel or changing views does not release ownership. A separately saved waiting checkpoint can be restored after exactly observed external work settles; restoration sends nothing. Projects can request read-only squash-batch advice, with a fresh human preview and confirmation for every integration. See [ADR-0019](docs/adr/ADR-0019-terminal-input-and-checkpoints.md). Installed-provider acceptance remains open.
 
 **Stage relay** reviews uncommitted quick fixes on `main` or the recorded default
 branch. There, Implementation's Control offers it by default for a two-member
@@ -86,7 +86,7 @@ Use [ROADMAP](ROADMAP.md#migration-and-implementation-sequence) for rollout, [OP
 ## Status and boundaries
 
 This is an experimental implementation, not a production release or a security
-certification. See [VALIDATION.md](VALIDATION.md) for exactly what was exercised.
+certification. Each change's commit message records exactly what was exercised.
 The server, not the browser, owns active runs. Closing or locking a page does
 not stop a run. A backend restart pauses owned runs without replaying commands.
 

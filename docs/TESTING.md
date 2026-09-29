@@ -1,6 +1,6 @@
 # Validation layers
 
-**Scope:** the existing suite description below is retained. The [acceptance scenarios](#acceptance-scenarios) are requirements for future collaboration increments, not a claim that those tests exist or pass. See [VALIDATION](../VALIDATION.md) for recorded executed checks.
+**Scope:** the existing suite description below is retained. The [acceptance scenarios](#acceptance-scenarios) are requirements for future collaboration increments, not a claim that those tests exist or pass. Executed checks are recorded in commit messages.
 
 Run the repository gate from the root; no root package.json is required.
 
@@ -70,7 +70,7 @@ first-frame ticket replay rejection and shutdown. It uses isolated stores.
 `probe:terminal:http` retains the rejected six-HTTP-stream experiment for comparison.
 Application checks include broker admission, restart, duplicate and checkpoint
 fixtures; browser tests distinguish mock rendering from actual tmux behavior.
-See [the protocol](TERMINAL-PROTOCOL.md) and [validation](../VALIDATION.md).
+See [the protocol](TERMINAL-PROTOCOL.md).
 
 Use a disposable repository and private tmux socket first. Start with a harmless
 read/echo process to check transport, then actual installed Codex and Claude Code.

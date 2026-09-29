@@ -95,5 +95,5 @@ browser connection-limit failure. The owner approved captured text wherever nati
 observers could resize workers. ADR-0020/0021 own these decisions; they do not settle
 larger-group rollout or provider capability questions. Deployment acceptance through
 the actual remote proxy, physical Safari/IME and installed CLI versions remains
-open; see VALIDATION.md. The owner chose on September 24 to have setup enable
+open. The owner chose on September 24 to have setup enable
 both flags.

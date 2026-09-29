@@ -359,7 +359,7 @@ Follow [TESTING.md](TESTING.md), then exercise Plan and Implementation with real
 Codex/Claude sessions in a disposable repository. Check wrong-pane/shell/copy-mode
 refusal, Unicode input, duplicate requests, stale hooks, background activity,
 approval and branch consent, two browsers, pause and restart. Record actual CLI
-versions, commit and results in [VALIDATION.md](../VALIDATION.md); mock tests do not
+versions, commit and results with the change they accept; mock tests do not
 establish installed-agent compatibility.
 
 Use [TAILSCALE.md](TAILSCALE.md) for private remote access. Never expose a development

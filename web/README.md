@@ -16,7 +16,7 @@ handlers; `src/server/` owns privileged operations. `src/core/` contains determi
 validation/policy and `src/contracts/` contains portable API types. The initial
 transport is polling, not WebSocket/SSE, and captures are not a transcript.
 
-See the root [README](../README.md), [validation record](../VALIDATION.md), and
+See the root [README](../README.md) and
 [host setup guide](../docs/SETUP.md). tmux is the default adapter; `mock` exists
 for the automated tests. Panes are registered from the console, not from a script.
 `ALTCLI_ENABLE_INPUT=false` makes the console read-only.

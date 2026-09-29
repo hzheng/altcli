@@ -25,7 +25,7 @@ evidence. Implementation runs paused at this gate show the observed publication,
 bounded task/cron counts and task types. **Recheck and relay** explicitly revalidates
 current completion, participants, publication and checkout before applying the
 frozen policy once. It does not recover explicit pauses, restart, uncertain delivery
-or manual-input holds. Installed-hook acceptance remains open; see VALIDATION.
+or manual-input holds. Installed-hook acceptance remains open.
 
 The input-preflight follow-up retains ownership when unrelated native work starts
 after completion has paused an input hold, before a checkpoint can be captured.
@@ -50,7 +50,7 @@ of Steps 4–6: N-shaped assignments, captured results, exact-version endorsemen
 human checkpoint/overrides, and one branch-gated transition. Native adapter
 plan-mode integration, in-flight guidance queues, membership/retry reconciliation,
 larger enabled rosters, concurrent drafting and Step 8 remain future work.
-See VALIDATION for executed checks;
+Executed checks are in the commit messages;
 installed-agent host acceptance is not claimed. The older milestones below
 describe the `46f228b` staging baseline. Task phases Plan/Implementation are distinct
 from those older milestone headings.
@@ -241,7 +241,7 @@ terminal and launch implementation.
 | M3: holds and recovery | Durable server-wide manual barriers, exact checkpoints, transfer, release, disconnect and explicit human reconciliation implemented. | Supervised installed-provider completion/restoration and host restart demonstration. |
 | M4: profiles and launch | Repository-directory entry, versioned literal argv profiles, batch launch, partial-result inspection and a separate launch action after verified worktree creation implemented. | Real installed CLI startup, readiness and workflow demonstration in a disposable checkout. |
 | M4A/M4B: image attachments | Deferred: native upload/insertion and control-pane reuse. | Separate implementation and provider acceptance; no attachment support is advertised. |
-| M5: remote/mobile/security | Automated browser, ownership and private-tmux checks exist; exact observed results are in VALIDATION. | Actual private HTTPS/WSS proxy, physical iPhone, network switching, two-device input and installed-host fault acceptance. |
+| M5: remote/mobile/security | Automated browser, ownership and private-tmux checks exist; exact observed results are in their commit messages. | Actual private HTTPS/WSS proxy, physical iPhone, network switching, two-device input and installed-host fault acceptance. |
 | M6: docs and guarded release | Maintained protocol, setup, acceptance checklist and host flags are present; setup writes both as true by the owner's September 24 decision. | Settled host rollout, upgrade/rollback and deployed acceptance. |
 
 The September 24 follow-up adds the missing visible focus escape, optional
@@ -260,7 +260,7 @@ confirmed closing of app-launched sessions before the existing removal or discar
 device, installed-CLI and deployed-host acceptance of these remain separate.
 
 Use [TESTING](docs/TESTING.md#terminal-and-launch-release-checklist) for the
-remaining demonstrations and [VALIDATION](VALIDATION.md) for commands that
+remaining demonstrations; commit messages record the commands that
 actually ran. Setup writes `ALTCLI_ENABLE_TERMINAL` and `ALTCLI_ENABLE_AGENT_LAUNCH`
 as true; set them false on a deployment you have not accepted. Adopt backend changes only when no delivery is active;
 disabling either flag preserves unresolved ownership. Larger-group and

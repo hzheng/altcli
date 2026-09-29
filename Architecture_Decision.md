@@ -31,8 +31,8 @@ not claims about the current implementation.
 | [ADR-0010](docs/adr/ADR-0010-outcome-line-and-auto-relay.md) | Defines the skill's final outcome line; browser scheduler and transcript fallback superseded |
 | [ADR-0011](docs/adr/ADR-0011-server-owned-relay-runs.md) | Server-owned runs, explicit immutable pairs, correlated events, persistent execution ownership and safe config installation |
 
-See [ROADMAP.md](ROADMAP.md) for implementation versus remaining acceptance, and
-[VALIDATION.md](VALIDATION.md) for executed checks. Original roadmap/ADR documents
+See [ROADMAP.md](ROADMAP.md) for implementation versus remaining acceptance;
+executed checks are recorded in each change's commit message. Original roadmap/ADR documents
 remain under [docs/history/2026-09-13](docs/history/2026-09-13/), and pre-hardening
 operating documents under [docs/history/2026-09-16-pre-hardening](docs/history/2026-09-16-pre-hardening/).
 
@@ -69,7 +69,7 @@ ADR-0001 through ADR-0011 remain historical/current-runtime records without bein
 
 ## Scope and decision status
 
-This registry preserves the submitted design's decision IDs and status distinctions after migration into maintained documents. Project-centered task groups, solo operation, optional Plan, committed Implementation, human checkpoints, and confirmed branch/worktree setup are the direction. Quota policy and product-name selection remain out of scope; agent, adapter, and model identity remain relevant to attribution and capabilities. Source and historical versions are provenance, not required reading dependencies. Local implementation and executed checks are recorded separately in VALIDATION; this registry does not claim installed-host acceptance.
+This registry preserves the submitted design's decision IDs and status distinctions after migration into maintained documents. Project-centered task groups, solo operation, optional Plan, committed Implementation, human checkpoints, and confirmed branch/worktree setup are the direction. Quota policy and product-name selection remain out of scope; agent, adapter, and model identity remain relevant to attribution and capabilities. Source and historical versions are provenance, not required reading dependencies. Executed checks are recorded in commit messages; this registry does not claim installed-host acceptance.
 
 Use these labels when implementing:
 

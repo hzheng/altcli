@@ -9,7 +9,7 @@ branch-gated transition are implemented in source. Start settings are frozen;
 Request changes updates the shared brief only at a captured, settled boundary.
 Live guidance queues, membership replacement, larger enabled planning groups,
 parallel drafting and native CLI plan-mode permissions remain target behavior,
-not installed-host acceptance claims. See [VALIDATION](../VALIDATION.md).
+not installed-host acceptance claims.
 
 ## Executive decision
 
