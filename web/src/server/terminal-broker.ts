@@ -223,10 +223,9 @@ export class TerminalBroker implements TerminalGateway {
     if (input.action === 'acquire') {
       this.enabled(true);
       return this.authority.acquire(async () => {
-        const pending = this.authority.pending();
-        if (pending.length > 1) throw new AppError('MANUAL_CHANGED', 'Reconcile earlier manual sessions first.', 409);
-        const owner = pending[0];
-        if (owner?.recoveryRequired || owner && owner.bootId !== this.authority.bootId) throw new AppError('MANUAL_CHANGED', 'Earlier input needs inspection. Stop the writers and reconcile it in Control access first.', 409);
+        // New input joins the newest unsettled period, even one that needs recovery or began before a restart:
+        // typing never waits for reconciliation. Its evidence and recovery flag stay, so automation remains held.
+        const owner = this.authority.pending().at(-1);
         if (c.writer) throw new AppError('KEYBOARD_HELD', 'This connection is already writable.', 409);
         this.current(id); const generation = randomUUID();
         const record = await this.services.begin(c.input, c.id, generation, owner && this.authority.get(owner.id));

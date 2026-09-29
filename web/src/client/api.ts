@@ -1,7 +1,9 @@
 import type { ApiError } from "../contracts/api";
 export class HttpError extends Error {
   readonly status: number;
-  constructor(message: string, status: number) { super(message); this.status = status; }
+  /** The server's error code, when it sent one. */
+  readonly code?: string;
+  constructor(message: string, status: number, code?: string) { super(message); this.status = status; this.code = code; }
 }
 export async function api<T>(token: string, path: string, init: { method?: "GET" | "POST" | "PATCH" | "DELETE"; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
   const method = init.method ?? (init.body === undefined ? "GET" : "POST");
@@ -9,6 +11,6 @@ export async function api<T>(token: string, path: string, init: { method?: "GET"
     headers: { Authorization: `Bearer ${token}`, ...(init.body === undefined ? {} : { "Content-Type": "application/json" }) },
     ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }), cache: "no-store", signal: init.signal });
   const data: unknown = await response.json();
-  if (!response.ok) throw new HttpError((data as ApiError).error?.message ?? "Request failed.", response.status);
+  if (!response.ok) throw new HttpError((data as ApiError).error?.message ?? "Request failed.", response.status, (data as ApiError).error?.code);
   return data as T;
 }

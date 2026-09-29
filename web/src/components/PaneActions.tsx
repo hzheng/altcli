@@ -1,18 +1,17 @@
 'use client';
 import { useEffect, useId, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import type { CommandRecord } from '../contracts/api';
 import type { Group, ReviewPreview, WorkspaceGit } from '../contracts/implementation';
 import type { ManagedSession, WorkflowState } from '../contracts/workflow';
-import type { KeyboardSettlement, ManualSession } from '../contracts/terminals';
 import { api, HttpError } from '../client/api';
 import { useRemembered } from '../client/memory';
 import { paneRequest, sendAction, type AfterSend, type PaneAction } from '../core/pane-actions';
 import { isSha, type RunSettings } from './RunSettings';
+import { Acknowledgement, overrideKey, type Override } from './Holds';
 
 type Preview = { key: string; data?: ReviewPreview; error?: string };
 /** The last gate, with the exact location and label of the check that enables sending. */
-const NOT_READY = 'Check “Ready for implementation” in Control access after inspecting every agent and the displayed range.';
+const NOT_READY = 'Check “Ready for implementation” above after inspecting every agent and the displayed range.';
 /** Read-only previews of one review range for one recipient. Every range is read by the server; nothing here is estimated or sent. */
 function useReviewRange({ token, group, git, logPath, recipient, reviewTaskBase, commitPending, enabled, recheck, memoryKey, onPreview }: {
   token: string; group: Group; git?: WorkspaceGit; logPath?: string; recipient?: string; reviewTaskBase: string; commitPending: boolean; enabled: boolean;
@@ -94,7 +93,8 @@ export interface PaneActionsProps {
   settings: RunSettings;
   /** First reason every action in this card is blocked (shared checkout gates, then this agent's own), or empty. */
   blockedReason: string;
-  keyboardHandoff?: { manual: ManualSession; label: string; release: (requestId: string) => Promise<KeyboardSettlement> };
+  /** What proceeding overrides (controller runs, delivery holds, manual input), listed in the readiness check and cleared at start. */
+  override: Override | null;
   viewEpoch: number;
   busy: boolean;
   /** Runs one request under the console-wide submission guard. */
@@ -107,8 +107,9 @@ export interface PaneActionsProps {
   refresh: () => Promise<void>; onRecheck: () => Promise<void>; onMessage: (message: string) => void; onUncertain: (id: string) => void;
   /** An accepted start: the console shows the recipient's terminal. */
   onSent: () => void;
-  /** Control access's readiness slot: the one place this card's check is shown. Its state and key stay here. */
-  readinessSlot: HTMLElement | null;
+  /** The selected card: only it shows its readiness check. */
+  active: boolean;
+  /** Opens Control access for reference; nothing there is required before sending. */
   onOpenAccess: () => void;
 }
 /** The actions under one agent pane. Every control's first delivery goes to this card's agent; nothing is sent from an effect. */
@@ -146,21 +147,23 @@ export function PaneActions(p: PaneActionsProps) {
   const instances = members.map((id) => p.state.instances.find((instance) => instance.agentId === id)?.status);
   const stateKey = JSON.stringify(['pane', agent.id, agent.registrationId, group.id, group.revision, registrations, instances, p.agentsKey, git ?? null, p.workspaceError,
     s.consent, after, p.state.legacyEnabled, handoffOnly, snapshot.consent, review.consent, p.runMark, p.recheck]);
-  const manual = p.keyboardHandoff?.manual;
-  const key = JSON.stringify([stateKey, manual ? [manual.id, manual.writers, manual.revision, text, note, context] : null]);
-  // A release changes keyboard state itself; everything else the click authorized must stay exact while it waits.
-  const intent = JSON.stringify([stateKey, p.state.activities, p.token, p.viewEpoch, text, note, context]);
+  // A changed set of overridden holds needs a fresh acknowledgement, even when its consequences read the same.
+  const key = JSON.stringify([stateKey, overrideKey(p.override)]);
+  keyRef.current = key;
+  // Everything a click authorizes except the holds it clears (clearing ends runs and settles manual input, so those and the run mark
+  // are excluded): target, view, drafts, settings and agent activity. The revision is monotonic, so restoring an earlier value while
+  // the holds are cleared still cancels the start.
+  const intent = JSON.stringify([agent.id, agent.registrationId, group.id, group.revision, registrations, instances, p.agentsKey, git ?? null, p.workspaceError,
+    s.consent, after, p.state.legacyEnabled, handoffOnly, snapshot.consent, review.consent, p.recheck, p.state.activities, p.token, p.viewEpoch, p.active, text, note, context]);
   const intentRef = useRef({ key: intent, revision: 0 });
   if (intentRef.current.key !== intent) intentRef.current = { key: intent, revision: intentRef.current.revision + 1 };
   const mounted = useRef(true);
-  useEffect(() => {mounted.current = true;return () => {mounted.current = false;};}, []);
-  keyRef.current = key;
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   // Once the displayed checkout, settings or range change, returning to old values must not revive consent.
   const consented = useRef(key);
   useEffect(() => { if (consented.current !== key) { const previous = consented.current; consented.current = key; p.setConsent((current) => current === previous ? '' : current); } }, [key]);
   const ready = p.consent === key;
-  const common = p.blockedReason || (staging && p.state.manualSessions?.length ? 'Manual terminal input holds dispatch across this server. Release and reconcile it in Control access first.' : '')
-    || (p.busy ? 'Wait for the current request to finish.' : '') || (p.workspaceError || !git ? 'Recheck the workspace Git state before starting.' : '');
+  const common = p.blockedReason || (p.busy ? 'Wait for the current request to finish.' : '') || (p.workspaceError || !git ? 'Recheck the workspace Git state before starting.' : '');
   const branchLabel = s.branchChoice === 'new' ? `new branch ${s.branchName.trim() || '…'}` : s.branchChoice === 'stay' ? git?.branch ?? 'this branch' : 'the chosen branch';
   function reasonFor(action: PaneAction): string {
     if (common) return common;
@@ -186,8 +189,8 @@ export function PaneActions(p: PaneActionsProps) {
     const range = action === 'commit_relay' ? snapshot.selectedRange : action === 'relay' ? review.selectedRange : undefined;
     if (reasonFor(action) || !git) return;
     if ((action === 'commit_relay' || action === 'relay') && (!range || range.head !== git.head)) return;
-    const requestId = crypto.randomUUID();
-    const intentRevision = intentRef.current.revision;
+    const requestId = crypto.randomUUID(); const intentRevision = intentRef.current.revision;
+    const submitted = { text, note, context };
     const request = paneRequest({ action, requestId, groupId: group.id, groupRevision: group.revision, registrations, agentId: agent.id, policy: s.selectedPolicy, workerId: s.workerId,
       text: action === 'commit' || action === 'commit_relay' ? '' : action === 'relay' ? context : text, reviewNote: note, branch: s.branch(), automatic: s.automatic, turnLimit: s.limit,
       pauseOnObjection: s.pauseOnObjection, logPath: s.logPath, reviewBase: range?.base });
@@ -195,19 +198,21 @@ export function PaneActions(p: PaneActionsProps) {
     await p.submit(async () => {
       let dispatched = false;
       try {
-        let body = request.body;
-        if (p.keyboardHandoff && request.path !== 'commands') {
-          const keyboardSettlement = await p.keyboardHandoff.release(requestId);
-          if (!mounted.current || intentRef.current.revision !== intentRevision) throw Error('Keyboard released, but the draft, target or displayed state changed. Inspect and confirm readiness again; nothing was sent.');
-          body = { ...body, keyboardSettlement };
+        // The acknowledgement authorized clearing every listed hold first. The request was built from the confirmed draft before
+        // that; a failed step, or any change to the draft, target or view meanwhile, stops before anything is sent.
+        if (p.override) {
+          await p.override.clear();
+          if (!mounted.current || intentRef.current.revision !== intentRevision) throw Error('The holds were cleared, but the draft, target or displayed state changed. Inspect and confirm readiness again; nothing was sent.');
         }
         dispatched = true;
-        const record = await api<CommandRecord>(p.token, request.path, { body });
+        const record = await api<CommandRecord>(p.token, request.path, { body: request.body });
         if (record.status === 'rejected') setStartError(`REJECTED: ${record.error ?? 'The server refused this start.'}`);
         else {
           p.onMessage(`${record.status.toUpperCase()}: ${record.error ?? `${action === 'send' ? 'Standalone instruction' : action === 'send_stage_relay' ? 'Stage relay' : 'Implementation'} started. The server owns this run.`}`);
-          // Clear only the inputs this action consumed.
-          if (action === 'relay') { setContext(''); review.reset(); } else { setText(''); if (action === 'commit_relay') snapshot.reset(); if (action === 'commit_relay' || action === 'send_commit_relay') setNote(''); }
+          // Clear only the inputs this action consumed, and only if they still hold what was sent: a newer draft survives.
+          const consumed = (sent: string) => (current: string) => current === sent ? '' : current;
+          if (action === 'relay') { setContext(consumed(submitted.context)); review.reset(); }
+          else { setText(consumed(submitted.text)); if (action === 'commit_relay') snapshot.reset(); if (action === 'commit_relay' || action === 'send_commit_relay') setNote(consumed(submitted.note)); }
           p.onSent();
         }
       } catch (error) {
@@ -239,15 +244,15 @@ export function PaneActions(p: PaneActionsProps) {
   const title = (reason: string, help: string) => `${reason ? `${reason} ` : ''}${help}`;
   const openSettings = () => { s.setOpen(true); document.getElementById('run-settings')?.scrollIntoView({ block: 'nearest' }); };
   const inputOff = !!common;
-  const accessLink = <button type="button" className="quiet inline-link" aria-controls="control-access" onClick={p.onOpenAccess}>Go to Control access</button>;
-  // Rendered once, in Control access; the consent key and checked state remain this card's own.
-  const readiness = <div className="access-check" role="group" aria-label={`Readiness for ${name}`}>
-    <label className="readiness"><input type="checkbox" aria-label="Ready for implementation" checked={ready} disabled={inputOff} onChange={(e) => p.setConsent(() => e.target.checked ? key : '')} />
-      <span><strong>Ready for implementation</strong>. {p.keyboardHandoff && !staging ? `All panes on this host are settled: empty prompts, no background writers. This action releases the ${p.keyboardHandoff.label} keyboard, verifies settlement, then sends to ${name}.` : 'All agents in this checkout are settled: empty prompts, no background writers.'} {canSend && <span className="muted">({relevant.join(' · ')})</span>}</span></label>
-    <p className="fine">{canSend ? <><strong>{sendLabel}</strong>: {authorization}</> : relayHelp}</p>
-  </div>;
+  const accessLink = <button type="button" className="quiet inline-link" aria-controls="control-access" onClick={p.onOpenAccess}>Why? Control access</button>;
+  // Beside the actions of the selected card; the consent key and checked state remain this card's own. One check confirms readiness
+  // and accepts every listed consequence of the holds this action overrides.
+  const readiness = p.active ? <div role="group" aria-label={`Readiness for ${name}`}>
+    <Acknowledgement label="Ready for implementation" checked={ready} disabled={inputOff} onChange={(checked) => p.setConsent(() => checked ? key : '')} lines={p.override?.lines ?? []}>
+      <strong>Ready for implementation</strong>. All agents in this checkout are settled: empty prompts, no background writers. {canSend && <span className="muted">({relevant.join(' · ')})</span>}</Acknowledgement>
+    <p className="fine">{canSend ? <><strong>{sendLabel}</strong>: {authorization}</> : relayHelp}{p.override && <> {accessLink}</>}</p>
+  </div> : <p className="fine">Select {name} to confirm readiness and send.</p>;
   return <section className="pane-actions" aria-label={`Actions for ${name}`}>
-    {p.readinessSlot && createPortal(readiness, p.readinessSlot)}
     <p className="zone-label"><span aria-hidden="true">⌨️</span> Command · {canSend ? `Send to ${name}` : `${name} reviews`}</p>
     {canSend && <>
       <label className="sr-only" htmlFor={`${ids}-text`}>Instruction for {name}</label>
@@ -265,11 +270,11 @@ export function PaneActions(p: PaneActionsProps) {
         <p className="fine">{peerName} reviews all changes after the selected baseline through the new snapshot. Choose current HEAD to review only the current changes.</p></>}
     </>}
     {!canSend && <p className="fine">Reviewer: reviews without editing project files. Change roles in settings.</p>}
+    {readiness}
     <div className="ready-row">
-      {!common && !ready && (!canSend || !showSendBlocker) && <span className="ready-state fine">Confirm readiness in Control access. {accessLink}</span>}
       {canSend && <button type="button" className="primary" title={title(sendReason, sendHelp)} aria-describedby={`${showSendBlocker ? `${ids}-blocked ` : ''}${ids}-line`} disabled={!!sendReason} onClick={() => void start(sendChoice)}>{sendLabel}</button>}
     </div>
-    {canSend && showSendBlocker && <p className="notice" id={`${ids}-blocked`} role="status"><strong>{sendLabel} is disabled.</strong> {sendReason} {sendReason === NOT_READY && accessLink}</p>}
+    {canSend && showSendBlocker && <p className="notice" id={`${ids}-blocked`} role="status"><strong>{sendLabel} is disabled.</strong> {sendReason}</p>}
     {canSend && <p className="fine pane-line" id={`${ids}-line`}>{!showSendBlocker && sendReason && sendReason !== NOT_READY ? sendReason : authorization}
       {/* A settings gap is fixed in the shared settings, so the reason opens them. */}
       {sendReason && sendReason === s.branchReason && <button type="button" className="quiet inline-link" onClick={openSettings}>Settings</button>}</p>}

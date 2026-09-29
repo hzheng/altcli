@@ -145,6 +145,38 @@ and explicit host-boot checks refuse old tabs. Roll out only at a settled backen
 and browser evidence is recorded with this proposal; physical Safari/IME, remote transport and
 installed-provider acceptance remain separate release gates.
 
+September 29 follow-up, at the owner's direction: one **Terminal / Display** toggle in each
+terminal's tool row replaces the entry field. Terminal is one deliberate request for input on that
+connection, with no pre-grant queue; Display releases it and keeps watching. Keys, paste, soft keys
+and mouse reports reach the pane only in Terminal mode; focus, output and clicks in Display admit
+nothing. A toggle on a failed or closed connection first replaces it with a fresh observer (nothing
+is replayed), then requests input; Terminal chosen while a connection is opening starts once it is
+connected, and focus is not pulled back if the user moved elsewhere meanwhile. New input may join
+an unsettled period that requires recovery or began before a restart: the period keeps its
+evidence, recovery flag and automation barrier and adopts the current boot. This replaces
+"requires inspection before any new admission" above; automation still waits for reconciliation.
+
+Every action has one readiness check beside it. While something holds the checkout, the same
+check lists each consequence of proceeding: controller runs it ends, an older delivery hold or
+uncertain-request warning it clears, every terminal writer it stops (other browsers and tabs
+included; they switch to Display) and the manual input it records as accepted by human
+inspection. The acknowledgement is bound to the exact holds (run and command, delivery, request,
+and each record's revision and writer generations), so a replacement revokes it even when the
+listed consequences read the same. The action performs those steps in that order before it
+starts, as Take control does: each is its own checked request, the first refusal or unknown
+result stops the rest, and nothing is sent or retried. A change to the draft, target, view or
+agent activity while the holds are cleared, or the composer or confirmation going away (Lock,
+another workspace), cancels the action after them; the recorded decisions stand. A successful
+send clears a draft only if it still holds what was sent. This replaces the checked local batch handoff: remote writers, recovery and
+affected checkpoints no longer block Send, and runs a period paused stay paused for checkpoint
+review. Projects applies the same single acknowledgement to squash, update, rebase, reset, rename,
+Finish branch, removal, discard and launch. A squash refused only because agents or processes may
+be working can be previewed and confirmed with an explicit activity acknowledgement that its
+consent digest covers (ADR-0013). Read-only hosts, stale reads, unconfirmed CLI identity, copy
+mode or synchronized input, detached HEAD, unresolved setup and Git refusals remain blockers that
+no acknowledgement clears. Control access stays the reference that explains every hold and keeps
+Take control, stops and recovery; nothing there is required first.
+
 See
 [the protocol](../TERMINAL-PROTOCOL.md) for limits, recovery and deployment checks.
 This amends ADR-0001's optional terminal boundary and extends ADR-0019; it does

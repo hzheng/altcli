@@ -1,6 +1,6 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import type { WorkflowState } from '../src/contracts/workflow';
-import { backToControl, expandAgents, openAccess, openCard, pane, readiness, showSurface } from './ui';
+import { backToControl, expand, expandAgents, openAccess, openCard, pane, readiness, showSurface } from './ui';
 const headers={Authorization:`Bearer ${'a'.repeat(64)}`};
 async function state(request:APIRequestContext):Promise<WorkflowState>{return (await request.get('/api/v1/state',{headers})).json();}
 async function post(request:APIRequestContext,path:string,data:unknown){const r=await request.post(`/api/v1/${path}`,{headers,data});expect(r.ok(),await r.text()).toBe(true);return r.json();}
@@ -11,12 +11,21 @@ async function reconcileFixtureKeyboard(request:APIRequestContext) {
     if(fresh)await post(request,'terminals/reconcile',{requestId:crypto.randomUUID(),manualSessionId:m.id,expectedRevision:fresh.revision,confirmReady:true});
   }
 }
-/** Direct input admits the exact terminal; selecting it still grants nothing. */
+/** The Terminal toggle admits the exact terminal; selecting or focusing it still grants nothing. */
+async function toggleTerminal(page:Page,name:string) {
+  await page.getByRole('navigation',{name:'Agent'}).getByRole('button',{name,exact:true}).click();await showSurface(page,'Terminal');
+  const terminal=page.getByRole('region',{name:`${name} terminal`,exact:true});
+  const toggle=terminal.getByRole('button',{name:'Terminal mode',exact:true});await expect(toggle).toBeEnabled();await toggle.click();
+  return terminal;
+}
+const totalBytes=async(page:Page)=>((await state(page.request)).manualSessions??[]).reduce((n,m)=>n+m.bytes,0);
+/** Starts input with the toggle, then types one arrow key: the same input evidence the earlier first-keystroke admission left. */
 async function chooseKeyboard(page:Page,name:string) {
   if(name==='Nobody (observe only)') {await (await openAccess(page)).getByRole('button',{name:'Stop typing here',exact:true}).click();return;}
-  await page.getByRole('navigation',{name:'Agent'}).getByRole('button',{name,exact:true}).click();await showSurface(page,'Terminal');
-  const entry=page.getByRole('region',{name:`${name} terminal`,exact:true}).getByRole('textbox',{name:`${name} terminal input`,exact:true});
-  await expect(entry).toBeEnabled();await entry.press('ArrowRight');
+  const before=await totalBytes(page),terminal=await toggleTerminal(page,name);
+  await expect(badge(terminal,'Typing enabled')).toBeVisible();
+  await terminal.locator('.xterm-helper-textarea').focus();await page.keyboard.press('ArrowRight');
+  await expect.poll(()=>totalBytes(page)).toBe(before+3);
 }
 async function takeKeyboard(page:Page,name='Codex') {await chooseKeyboard(page,name);await expect(badge(page.getByRole('region',{name:`${name} terminal`,exact:true}),'Typing enabled')).toBeVisible();}
 async function expectKeyboard(page:Page,_name:string) {
@@ -37,30 +46,43 @@ test.beforeEach(async({request})=>{
 });
 // Finish intercepted polling requests before Playwright closes the page, then clear keyboard records.
 test.afterEach(async({page,request})=>{await page.unrouteAll({behavior:'wait'});await reconcileFixtureKeyboard(request);});
-test('terminal status is informational and first input enables a writer without a claim',async({page,request},info)=>{
+test('terminal status is informational; focus and keys in Display admit nothing, and the Terminal toggle starts a writer',async({page,request},info)=>{
   await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
   const status=page.locator('.page-heading').getByRole('img',{name:'Input: 0 active',exact:true});
   await expect(status).toBeVisible();await status.click();expect((await state(request)).manualSessions??[]).toHaveLength(0);
-  const terminal=page.getByRole('region',{name:'Codex terminal',exact:true});
-  const entry=terminal.getByRole('textbox',{name:'Codex terminal input',exact:true});
-  await expect(entry).toBeEnabled();await entry.focus();expect((await state(request)).manualSessions??[]).toHaveLength(0);
+  const terminal=page.getByRole('region',{name:'Codex terminal',exact:true}),toggle=terminal.getByRole('button',{name:'Terminal mode',exact:true});
+  await expect(terminal.getByRole('textbox',{name:'Codex terminal input'})).toHaveCount(0);
   await expect(page.getByRole('button',{name:'Claim keyboard',exact:true})).toHaveCount(0);
-  await entry.press('x');await expect(badge(terminal,'Typing enabled')).toBeVisible();
+  await expect(toggle).toHaveAttribute('aria-pressed','false');await expect(terminal.getByRole('group',{name:'Terminal keys'})).toHaveCount(0);
+  await terminal.locator('.xterm-helper-textarea').focus();await page.keyboard.insertText('x');await page.keyboard.press('Enter');
+  await page.waitForTimeout(300);expect((await state(request)).manualSessions??[]).toHaveLength(0);
+  await toggle.click();await expect(badge(terminal,'Typing enabled')).toBeVisible();await expect(toggle).toHaveAttribute('aria-pressed','true');
+  await expect(terminal.locator('.xterm-helper-textarea')).toBeFocused();await page.keyboard.insertText('x');
   await expectKeyboard(page,'Codex');
   await expect.poll(async()=>(await state(request)).manualSessions?.[0]?.bytes).toBe(1);
   const access=await openAccess(page);await expect(access).toContainText('1 active input connection');
   await page.screenshot({path:info.outputPath('direct-terminal-input.png'),fullPage:true});
 });
-test('text typed in the entry once admitted is the same writer’s input, never a second admission',async({page,request})=>{
-  const terminal=await openKeyboard(page),entry=terminal.getByRole('textbox',{name:'Codex terminal input',exact:true,includeHidden:true});
-  await expect(entry).toBeHidden();
-  const before=(await state(request)).manualSessions![0]!.bytes;
-  // Focus leaves the entry only after the writer render hides it; reproduce typing in that window.
-  await entry.evaluate(element=>{(element as HTMLTextAreaElement).hidden=false;});await entry.focus();await page.keyboard.type('yz');
-  await expect.poll(async()=>(await state(request)).manualSessions?.[0]?.bytes).toBe(before+2);
-  await expect(badge(terminal,'Typing enabled')).toBeVisible();
-  const manual=(await state(request)).manualSessions![0]!;
-  expect(manual.writers.filter(w=>w.live)).toHaveLength(1);expect(manual.recoveryRequired).toBe(false);
+test('Display stops input, Terminal starts it again, and a toggle on a failed or refused connection reconnects first',async({page,request})=>{
+  const terminal=await openKeyboard(page),toggle=terminal.getByRole('button',{name:'Terminal mode',exact:true});
+  const live=async()=>((await state(request)).manualSessions??[]).flatMap(m=>m.writers.filter(w=>w.live));
+  await toggle.click();await expect(badge(terminal,'Observing · manual input unresolved')).toBeVisible();
+  await expect.poll(async()=>(await live()).length).toBe(0);expect((await state(request)).manualSessions![0]!.reconciliationRequired).toBe(true);
+  await toggle.click();await expect(badge(terminal,'Typing enabled')).toBeVisible();
+  const first=(await live())[0]!;
+  // The connection fails server-side; the next toggle replaces it before asking for input, and the new writer joins the held period.
+  await post(request,`terminals/${first.connectionId}/close`,{});await expect(badge(terminal,'Disconnected')).toBeVisible();
+  let opens=0;page.on('request',r=>{if(r.method()==='POST'&&new URL(r.url()).pathname==='/api/v1/terminals')opens++;});
+  await toggle.click();await expect(badge(terminal,'Typing enabled')).toBeVisible();expect(opens).toBe(1);
+  const second=(await live())[0]!;expect(second.connectionId).not.toBe(first.connectionId);
+  expect((await state(request)).manualSessions![0]!.recoveryRequired).toBe(true);
+  // A refused request leaves Display; toggling again resets the connection and succeeds.
+  await toggle.click();await expect(badge(terminal,'Observing · manual input unresolved')).toBeVisible();
+  await page.route('**/api/v1/terminals/*/keyboard',route=>route.fulfill({status:409,json:{error:{code:'INPUT_BUSY',message:'Fixture operation in flight.'}}}),{times:1});
+  await toggle.click();await expect(terminal.getByRole('status')).toContainText('Toggle Terminal again to reset the connection');
+  await expect(badge(terminal,'Typing enabled')).toHaveCount(0);
+  await toggle.click();await expect(badge(terminal,'Typing enabled')).toBeVisible();expect(opens).toBe(2);
+  const before=await totalBytes(page);await page.keyboard.insertText('y');await expect.poll(()=>totalBytes(page)).toBe(before+1);
 });
 async function prepareKeyboardSend(page:Page,recipient='Codex') {
   await page.route('**/api/v1/workspaces',async route=>{
@@ -69,48 +91,39 @@ async function prepareKeyboardSend(page:Page,recipient='Codex') {
     await route.fulfill({response,json:body});
   });
   const terminal=await openKeyboard(page);
-  // Control replaces the terminals in the frame; the writer's terminal stays mounted and connected for the handoff.
+  // Control replaces the terminals in the frame; the writer's terminal stays mounted and connected.
   await openCard(page,recipient);
   const control=page.getByRole('region',{name:'Control',exact:true});
   const draft=control.getByLabel(`Instruction for ${recipient}`);
-  await draft.fill('Implement the checked keyboard handoff.');
+  await draft.fill('Implement the acknowledged handoff.');
   await control.getByRole('region',{name:`Actions for ${recipient}`,exact:true}).getByLabel('After send').selectOption('commit');
-  await expect(await openAccess(page)).toContainText(`releases the Codex keyboard, verifies settlement, then sends to ${recipient}`);
-  await (await readiness(page)).check();
   const send=control.getByRole('button',{name:`Send & commit ${recipient}`,exact:true});
+  await expect(send).toBeDisabled();
+  // One check beside the action lists every consequence; Control access is not needed.
+  const consequences=control.getByRole('list',{name:'Consequences of proceeding'});
+  await expect(consequences).toContainText('Typing stops in Codex (this browser)');await expect(consequences).toContainText('3 bytes');await expect(consequences).toContainText('recorded as accepted');
+  await expect(page.getByRole('region',{name:'Control access',exact:true})).toBeHidden();
+  await (await readiness(page)).check();
   await expect(send).toBeEnabled();
   return {terminal,control,draft,send};
 }
-test('Send & commit hands this browser keyboard to a different control recipient exactly once',async({page,request})=>{
+test('Send & commit with the acknowledgement stops typing, records manual input and sends exactly once',async({page,request})=>{
   const {terminal,draft,send}=await prepareKeyboardSend(page,'Claude');
-  const starts:unknown[]=[];
+  const starts:Record<string,unknown>[]=[],decisions:string[]=[];
+  page.on('request',r=>{if(r.url().endsWith('/terminals/reconcile'))decisions.push(r.postDataJSON().note);});
   await page.route('**/api/v1/implementation',async route=>{
     expect((await state(request)).manualSessions).toEqual([]);
     starts.push(route.request().postDataJSON());await route.fulfill({json:{status:'delivered',error:null}});
   });
   await send.click();
   await expect.poll(()=>starts.length).toBe(1);
-  expect(starts[0]).toMatchObject({agentId:'claude',kind:'work',text:'Implement the checked keyboard handoff.',keyboardSettlement:{manualSessionId:expect.any(String),revision:expect.any(Number)}});
+  expect(starts[0]).toMatchObject({agentId:'claude',kind:'work',text:'Implement the acknowledged handoff.'});expect(starts[0]!.keyboardSettlement).toBeUndefined();
+  expect(decisions).toEqual(['Acknowledged the listed consequences at an action and chose to proceed.']);
   await backToControl(page);await expect(draft).toHaveValue('');
   await expect(badge(terminal,'Typing enabled')).toHaveCount(0);
   expect((await state(request)).manualSessions).toEqual([]);
 });
-test('Send & commit retains the draft and barrier when settlement fails',async({page,request})=>{
-  const {control,draft,send}=await prepareKeyboardSend(page);
-  const starts:string[]=[];page.on('request',r=>{if(r.url().endsWith('/implementation'))starts.push(r.url());});
-  // Perform a real release but simulate a refused settlement; a successful HTTP response alone cannot authorize dispatch.
-  await page.route('**/api/v1/terminals/stop',async route=>{
-    const body=route.request().postDataJSON();delete body.handoffRequestId;delete body.confirmReady;
-    const response=await route.fetch({postData:body}),result=await response.json();
-    await route.fulfill({response,json:{...result,reason:'Released; barrier retained. Agent is still working.'}});
-  });
-  await send.click();
-  await expect(control.getByRole('alert')).toContainText('Agent is still working');
-  await expect(draft).toHaveValue('Implement the checked keyboard handoff.');
-  expect(starts).toEqual([]);
-  expect((await state(request)).manualSessions?.[0]?.reconciliationRequired).toBe(true);
-});
-for(const change of ['draft','restored draft','target','view','activity'] as const)test(`Send & commit cancels dispatch when the ${change} changes during release`,async({page,request})=>{
+for(const change of ['draft','restored draft','target','view','activity'] as const)test(`Send & commit cancels dispatch when the ${change} changes while holds are cleared`,async({page,request})=>{
   const {control,draft,send}=await prepareKeyboardSend(page);
   let release!:()=>void,received!:()=>void,finished!:()=>void;
   const gate=new Promise<void>(r=>{release=r;}),captured=new Promise<void>(r=>{received=r;}),done=new Promise<void>(r=>{finished=r;});
@@ -120,7 +133,7 @@ for(const change of ['draft','restored draft','target','view','activity'] as con
     await send.click();await captured;
     if(change==='draft'||change==='restored draft') {
       await draft.fill('A newer draft must survive.');
-      if(change==='restored draft')await draft.fill('Implement the checked keyboard handoff.');
+      if(change==='restored draft')await draft.fill('Implement the acknowledged handoff.');
     } else if(change==='activity') {
       await page.route('**/api/v1/state',async route=>{const response=await route.fetch(),body=await response.json();
         body.activities=body.activities.map((a:{agentId:string})=>a.agentId==='codex'?{...a,state:'working',detail:'New external work after settlement.'}:a);
@@ -134,58 +147,65 @@ for(const change of ['draft','restored draft','target','view','activity'] as con
     await expect(page.getByRole('button',{name:'Recheck',exact:true}).first()).toBeEnabled();
     if(change!=='target')await expect(control.getByRole('alert')).toContainText('nothing was sent');
     else await page.getByRole('navigation',{name:'Agent'}).getByRole('button',{name:'Codex',exact:true}).click();
-    await expect(draft).toHaveValue(change==='draft'?'A newer draft must survive.':'Implement the checked keyboard handoff.');
+    await expect(draft).toHaveValue(change==='draft'?'A newer draft must survive.':'Implement the acknowledged handoff.');
+    // The acknowledged holds were cleared (that was consented to); only the send was cancelled.
     expect(starts).toEqual([]);expect((await state(request)).manualSessions).toEqual([]);
   } finally {release();await done;}
 });
-test('Send & commit refuses pending native input without releasing or dispatching',async({page,request})=>{
-  const {terminal,control,draft,send}=await prepareKeyboardSend(page);
-  let release!:()=>void,received!:()=>void,finished!:()=>void;
-  const gate=new Promise<void>(r=>{release=r;}),captured=new Promise<void>(r=>{received=r;}),done=new Promise<void>(r=>{finished=r;});
-  const starts:string[]=[];page.on('request',r=>{if(r.url().endsWith('/implementation'))starts.push(r.url());});
-  await page.route('**/api/v1/terminals/*/input',async route=>{const response=await route.fetch();received();await gate;try{await route.fulfill({response});}finally{finished();}},{times:1});
+test('a draft edited while an acknowledged send is in flight survives its accepted response',async({page})=>{
+  const {draft,send}=await prepareKeyboardSend(page,'Claude');
+  let release!:()=>void,arrived!:()=>void;const gate=new Promise<void>(r=>release=r),received=new Promise<void>(r=>arrived=r);
+  const starts:Record<string,unknown>[]=[];
+  await page.route('**/api/v1/implementation',async route=>{starts.push(route.request().postDataJSON());arrived();await gate;await route.fulfill({json:{status:'delivered',error:null}});});
   try {
-    // Typing needs the terminal shown; Control and the terminals share one frame, and switching revokes the earlier Ready.
-    await showSurface(page,'Terminal');
-    await terminal.locator('.xterm-helper-textarea').focus();await page.keyboard.insertText('x');await captured;
-    // The admitted byte revises the manual-input record. Once the page observes it, confirming again is safe; confirming before
-    // that observation would race the next state poll, which revokes a fresh confirmation too.
-    await expect.poll(async()=>((await state(request)).manualSessions??[])[0]?.bytes).toBe(4);
-    await openCard(page,'Codex');await expect((await readiness(page))).not.toBeChecked();
-    await page.getByRole('button',{name:'Recheck',exact:true}).first().click();
-    await (await readiness(page)).check();await send.click();
-    await expect(control.getByRole('alert')).toContainText('Input is still being sent in Codex');
-    expect((await state(request)).manualSessions?.[0]?.live).toBe(true);
-    await expect(draft).toHaveValue('Implement the checked keyboard handoff.');expect(starts).toEqual([]);
-  } finally {release();await done;}
+    await send.click();await received;
+    await draft.fill('A newer draft must survive.');release();
+    await expect.poll(()=>starts.length).toBe(1);expect(starts[0]).toMatchObject({text:'Implement the acknowledged handoff.'});
+    await backToControl(page);await expect(draft).toHaveValue('A newer draft must survive.');
+  } finally {release();}
 });
-test('Send & commit refuses native input arriving after confirmation even before polling sees it',async({page,request})=>{
+test('a replaced writer revokes the acknowledgement even when its consequences read the same',async({page})=>{
+  const {control,send}=await prepareKeyboardSend(page);
+  const consequences=control.getByRole('list',{name:'Consequences of proceeding'}),before=await consequences.textContent();
+  // Only the displayed writer generation is simulated: the same terminal, bytes and wording, but another grant.
+  await page.route('**/api/v1/state',async route=>{const response=await route.fetch(),body=await response.json();
+    body.manualSessions=body.manualSessions.map((m:{writers:{live:boolean;generation:string}[]})=>({...m,writers:m.writers.map(w=>w.live?{...w,generation:'replacement-generation'}:w)}));
+    await route.fulfill({response,json:body});
+  });
+  await expect(await readiness(page)).not.toBeChecked();await expect(send).toBeDisabled();
+  expect(await consequences.textContent()).toBe(before);
+});
+test('a refused acknowledgement step keeps the draft and the hold and sends nothing',async({page,request})=>{
   const {control,draft,send}=await prepareKeyboardSend(page);
   const starts:string[]=[];page.on('request',r=>{if(r.url().endsWith('/implementation'))starts.push(r.url());});
-  await page.route('**/api/v1/terminals/stop',async route=>{
-    const m=(await state(request)).manualSessions![0]!.writers.find(w=>w.live)!;
-    // This frame was admitted after the readiness snapshot, before the checked release reached the server.
-    await post(request,`terminals/${m.connectionId}/input`,{generation:m.generation,seq:2,encoding:'utf8',data:'x'});
-    const response=await route.fetch();await route.fulfill({response});
-  });
+  await page.route('**/api/v1/terminals/reconcile',route=>route.fulfill({status:409,json:{error:{code:'MANUAL_CHANGED',message:'Fixture input changed.'}}}));
   await send.click();
-  await expect(control.getByRole('alert')).toContainText('writer set or input changed');
-  await expect(draft).toHaveValue('Implement the checked keyboard handoff.');
-  expect(starts).toEqual([]);expect((await state(request)).manualSessions?.[0]?.reconciliationRequired).toBe(true);
+  const alert=control.getByRole('alert');
+  await expect(alert).toContainText('Stopped: Fixture input changed.');await expect(alert).toContainText('Already done: stopped 1 typing connection');await expect(alert).toContainText('nothing was retried');
+  await expect(draft).toHaveValue('Implement the acknowledged handoff.');expect(starts).toEqual([]);
+  const manual=(await state(request)).manualSessions![0]!;expect(manual.live).toBe(false);expect(manual.reconciliationRequired).toBe(true);
 });
-test('Send & commit never dispatches or retries an uncertain release response',async({page,request})=>{
+test('an uncertain acknowledgement step is never retried and sends nothing',async({page,request})=>{
   const {control,draft,send}=await prepareKeyboardSend(page);
-  const starts:string[]=[];let releases=0;
+  const starts:string[]=[];let stops=0;
   page.on('request',r=>{if(r.url().endsWith('/implementation'))starts.push(r.url());});
-  await page.route('**/api/v1/terminals/stop',async route=>{releases++;await route.fetch();await route.abort('failed');});
+  await page.route('**/api/v1/terminals/stop',async route=>{stops++;await route.fetch();await route.abort('failed');});
   await send.click();
-  await expect(control.getByRole('alert')).toBeVisible();
-  await expect(draft).toHaveValue('Implement the checked keyboard handoff.');
+  await expect(control.getByRole('alert')).toContainText('The last step’s result is unknown');
+  await expect(draft).toHaveValue('Implement the acknowledged handoff.');
   await expect(page.getByRole('button',{name:'Recheck',exact:true}).first()).toBeEnabled();
-  expect(starts).toEqual([]);expect(releases).toBe(1);expect((await state(request)).manualSessions).toEqual([]);
+  expect(starts).toEqual([]);expect(stops).toBe(1);
 });
-test('another browser keyboard still blocks Send & commit',async({page})=>{
-  await prepareKeyboardSend(page);
+test('input arriving after the acknowledgement revokes it before anything is sent',async({page,request})=>{
+  const {send}=await prepareKeyboardSend(page);
+  const writer=(await state(request)).manualSessions![0]!.writers.find(w=>w.live)!;
+  // Another client types through this writer's connection after the check; the listed consequence changes, so the check is cleared.
+  await post(request,`terminals/${writer.connectionId}/input`,{generation:writer.generation,seq:2,encoding:'utf8',data:'x'});
+  await expect(await readiness(page)).not.toBeChecked();await expect(send).toBeDisabled();
+  await expect(page.getByRole('region',{name:'Control',exact:true}).getByRole('list',{name:'Consequences of proceeding'})).toContainText('4 bytes');
+});
+test('another browser’s typing is listed and stopped by the acknowledgement',async({page,request})=>{
+  const {terminal}=await prepareKeyboardSend(page);
   const other=await page.context().newPage();
   try {
     await other.route('**/api/v1/workspaces',async route=>{
@@ -193,28 +213,31 @@ test('another browser keyboard still blocks Send & commit',async({page})=>{
       for(const workspace of body.workspaces)Object.assign(workspace.git,{branch:'task/current',integration:false,stageRelay:{eligible:false,reason:'A task branch uses committed handoffs.'},taskBase:workspace.git.head});
       await route.fulfill({response,json:body});
     });
+    const starts:string[]=[];await other.route('**/api/v1/implementation',async route=>{starts.push(route.request().url());await route.fulfill({json:{status:'delivered',error:null}});});
     await other.goto('/');await other.getByLabel('Host access token').fill('a'.repeat(64));await other.getByRole('button',{name:'Open console'}).click();
     await openCard(other,'Codex');const control=other.getByRole('region',{name:'Control',exact:true});
-    await control.getByLabel('Instruction for Codex').fill('Do not take another browser keyboard.');
+    await control.getByLabel('Instruction for Codex').fill('Send even though another browser is typing.');
     await control.getByRole('region',{name:'Actions for Codex',exact:true}).getByLabel('After send').selectOption('commit');
-    await expect(control.getByRole('button',{name:'Send & commit Codex',exact:true})).toBeDisabled();
-    await expect(control.getByRole('region',{name:'Actions for Codex',exact:true}).getByRole('status')).toContainText('Send & commit Codex is disabled. Manual terminal input holds dispatch across this server. Release and reconcile it in Control access first.');
-    await expect((await readiness(other))).toBeDisabled();
-    await expect(control).toContainText('Release and reconcile it in Control access first');
+    await expect(control.getByRole('list',{name:'Consequences of proceeding'})).toContainText('Typing stops in Codex (another browser or tab)');
+    await (await readiness(other)).check();await control.getByRole('button',{name:'Send & commit Codex',exact:true}).click();
+    await expect.poll(()=>starts.length).toBe(1);
+    await showSurface(page,'Terminal');await expect(badge(terminal,'Typing enabled')).toHaveCount(0);
+    expect((await state(request)).manualSessions).toEqual([]);
   } finally {await other.close();}
 });
-test('Stage relay after Send keeps the native keyboard barrier and requires explicit release',async({page,request})=>{
+test('Stage relay after Send lists active typing in its check and clears it when sent',async({page,request})=>{
   const terminal=await openKeyboard(page);
   const codex=await openCard(page,'Codex');
   await codex.getByLabel('Instruction for Codex').fill('Stage the reviewed changes on main.');
   await codex.getByLabel('After send').selectOption('stage_relay');
   const send=codex.getByRole('button',{name:'Send Codex & stage-relay to Claude',exact:true});
   await expect(send).toBeDisabled();
-  await expect(codex.getByRole('status')).toContainText('Release and reconcile it in Control access first');
-  const ready=await readiness(page);await expect(ready).toBeDisabled();
-  await expect((await openAccess(page)).getByRole('group',{name:'Readiness for Codex'})).not.toContainText('This action releases');
-  await showSurface(page,'Terminal');await expect(badge(terminal,'Typing enabled')).toBeVisible();
-  expect((await state(request)).manualSessions?.[0]?.live).toBe(true);
+  await expect(codex.getByRole('list',{name:'Consequences of proceeding'})).toContainText('Typing stops in Codex (this browser)');
+  const commands:Record<string,unknown>[]=[];
+  await page.route('**/api/v1/commands',async route=>{expect((await state(request)).manualSessions).toEqual([]);commands.push(route.request().postDataJSON());await route.fulfill({json:{status:'delivered',error:null}});});
+  await (await readiness(page)).check();await send.click();
+  await expect.poll(()=>commands.length).toBe(1);
+  await showSurface(page,'Terminal');await expect(badge(terminal,'Typing enabled')).toHaveCount(0);
 });
 test('copy mode keeps the native terminal mounted and its keyboard generation intact',async({page,request})=>{
   const card=await openKeyboard(page);
@@ -296,9 +319,10 @@ test('observation is automatic; direct input, stop and Lock preserve manual auth
   await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
   const card=page.getByRole('region',{name:'Codex terminal',exact:true});await expect(badge(card,'Observing')).toBeVisible();
   expect((await state(request)).manualSessions).toEqual([]);
-  const entry=card.getByRole('textbox',{name:'Codex terminal input',exact:true});await entry.focus();
+  await card.locator('.xterm-helper-textarea').focus();
   expect((await state(request)).manualSessions).toEqual([]);
-  await page.keyboard.insertText('é次');await expect(badge(card,'Typing enabled')).toBeVisible();
+  await card.getByRole('button',{name:'Terminal mode',exact:true}).click();await expect(badge(card,'Typing enabled')).toBeVisible();
+  await page.keyboard.insertText('é次');
   await expect.poll(async()=>(await state(request)).manualSessions?.[0]?.bytes).toBe(5);
   const ctrl=card.getByRole('button',{name:'Ctrl next key'}),alt=card.getByRole('button',{name:'Alt next key'});
   await ctrl.click();await page.keyboard.insertText('c');await expect(ctrl).toHaveAttribute('aria-pressed','false');
@@ -576,28 +600,69 @@ test('several browsers can type independently while unresolved input and replace
   } finally {await other.close();}
 });
 
-test('moving focus while admission is pending discards unsent input without stealing focus',async({page,request})=>{
+test('moving focus while input is starting keeps the writer but never steals focus',async({page,request})=>{
   await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
   const card=page.getByRole('region',{name:'Codex terminal',exact:true});
   let release!:()=>void,entered!:()=>void;const gate=new Promise<void>(r=>release=r),received=new Promise<void>(r=>entered=r);
   await page.route('**/api/v1/terminals/*/keyboard',async route=>{entered();await gate;await route.continue();},{times:1});
   try {
-    await chooseKeyboard(page,'Codex');await received;
+    await toggleTerminal(page,'Codex');await received;
     const elsewhere=page.getByRole('button',{name:'Recheck',exact:true});await elsewhere.focus();release();
-    await expect.poll(async()=>(await state(request)).manualSessions?.[0]?.live).toBe(false);
-    expect((await state(request)).manualSessions![0]!.bytes).toBe(0);await expect(elsewhere).toBeFocused();
-    await expect(badge(card,'Typing enabled')).toHaveCount(0);
+    await expect(badge(card,'Typing enabled')).toBeVisible();await expect(elsewhere).toBeFocused();
+    expect((await state(request)).manualSessions![0]!.bytes).toBe(0);expect((await state(request)).manualSessions![0]!.live).toBe(true);
   } finally {release();}
 });
 
-test('a native keyboard hold keeps the Plan brief editable but blocks Start Plan',async({page,request})=>{
+test('a Terminal toggle that reconnects first keeps focus where the user moved it',async({page,request})=>{
+  const card=await openKeyboard(page),toggle=card.getByRole('button',{name:'Terminal mode',exact:true});
+  const writer=(await state(request)).manualSessions![0]!.writers.find(w=>w.live)!;
+  await post(request,`terminals/${writer.connectionId}/close`,{});await expect(badge(card,'Disconnected')).toBeVisible();
+  let release!:()=>void,entered!:()=>void;const gate=new Promise<void>(r=>release=r),opening=new Promise<void>(r=>entered=r);
+  await page.route('**/api/v1/terminals',async route=>{entered();await gate;await route.continue();},{times:1});
+  try {
+    await toggle.click();await opening;
+    const elsewhere=page.getByRole('button',{name:'Recheck',exact:true});await elsewhere.focus();release();
+    await expect(badge(card,'Typing enabled')).toBeVisible();await expect(elsewhere).toBeFocused();
+  } finally {release();}
+});
+for(const leave of ['Lock','another workspace'] as const)for(const purpose of ['update','literal answer'] as const)test(`a pending owned-run ${purpose} is never sent after ${leave} unmounts its composer while holds clear`,async({page,request})=>{
+  await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
+  const codex=await openCard(page,'Codex');await codex.getByLabel('Instruction for Codex').fill('Fixture work');
+  await (await readiness(page)).check();await codex.getByRole('button',{name:'Send Codex',exact:true}).click();
+  await expect.poll(async()=>(await state(request)).runs.find(r=>r.status==='running'&&!!r.standalone)?.id).toBeTruthy();
+  const s=await state(request),run=s.runs.find(r=>r.status==='running'&&!!r.standalone)!;
+  const turn=s.executions.find(e=>e.commandId===run.currentCommandId)!,agent=run.participants.find(p=>p.id===turn.agentId)!;
+  // The real mock-API run acknowledges its native start, so literal input is otherwise deliverable.
+  await post(request,'events',{commandId:turn.commandId,source:agent.agentType,paneId:agent.identity.paneId,socketPath:agent.identity.socketPath,identity:agent.identity,
+    sessionId:`fixture-input-${crypto.randomUUID()}`,sourceTurnId:`fixture-turn-${crypto.randomUUID()}`,prompt:turn.wireText,settled:true,backgroundState:'clear',event:'turn_started'});
+  await takeKeyboard(page);await showSurface(page,'Control');
+  const update=page.getByRole('region',{name:'Input for Codex',exact:true});
+  if(purpose==='update')await update.getByLabel('Add detail for Codex').fill('Must never arrive.');
+  else {await expand(update,'Terminal controls');await update.getByLabel('Literal answer for Codex').fill('1');}
+  const check=update.getByRole('checkbox',{name:/I inspected Codex/});await expect(check).toBeEnabled({timeout:8000});
+  await expect(update.getByRole('list',{name:'Consequences of proceeding'})).toContainText('Typing stops in Codex');await check.check();
+  let release!:()=>void,arrived!:()=>void;const gate=new Promise<void>(r=>release=r),received=new Promise<void>(r=>arrived=r);
+  await page.route('**/api/v1/terminals/reconcile',async route=>{const response=await route.fetch();arrived();await gate;await route.fulfill({response});},{times:1});
+  const sent:string[]=[];page.on('request',r=>{if(r.method()==='POST'&&new URL(r.url()).pathname==='/api/v1/interactions')sent.push(r.url());});
+  try {
+    await update.getByRole('button',{name:purpose==='update'?'Send update to Codex':'Send answer',exact:true}).click();await received;
+    if(leave==='Lock'){await page.getByRole('button',{name:'Lock',exact:true}).click();await expect(page.getByRole('button',{name:'Open console'})).toBeVisible();}
+    else {await page.getByRole('combobox',{name:'Switch project'}).selectOption({label:'other'});await expect(update).toHaveCount(0);}
+    release();
+    // The acknowledged decision on manual input stands; only the pending input is dropped.
+    await expect.poll(async()=>((await state(request)).manualSessions??[]).length).toBe(0);await page.waitForTimeout(500);
+    expect(sent).toEqual([]);expect(((await state(request)).interactions??[]).filter(r=>r.input.runId===run.id)).toEqual([]);
+  } finally {release();}
+});
+test('a native keyboard hold keeps the Plan brief editable; Start Plan waits for the acknowledgement that lists it',async({page,request})=>{
   await openKeyboard(page);
   await page.getByRole('group',{name:'Phase'}).getByRole('button',{name:'Plan',exact:true}).click();
   const brief=page.getByLabel('Shared task brief');
   await expect(brief).toBeEditable();await brief.fill('Drafted while the keyboard is held.');
   await expect(brief).toHaveValue('Drafted while the keyboard is held.');
-  await expect(page.getByRole('button',{name:'Start Plan',exact:true})).toBeDisabled();
-  await expect(page.getByText('Manual terminal input holds dispatch across this server. Release and reconcile it in Control access first.').filter({visible:true}).first()).toBeVisible();
+  const start=page.getByRole('button',{name:'Start Plan',exact:true});await expect(start).toBeDisabled();
+  await expect(page.getByRole('group',{name:'Readiness for Plan'}).getByRole('list',{name:'Consequences of proceeding'})).toContainText('Typing stops in Codex (this browser)');
+  await (await readiness(page,'Ready for planning')).check();await expect(start).toBeEnabled();
   expect(((await state(request)).manualSessions??[])[0]?.bytes).toBe(3);
 });
 
@@ -615,14 +680,19 @@ test('local terminals retain independent writers and one batch stop ends exactly
   expect((await state(request)).manualSessions![0]!.reconciliationRequired).toBe(true);
 });
 
-test('a terminal still connecting accepts no input and creates no authority',async({page,request})=>{
-  let release!:()=>void;const gate=new Promise<void>(r=>release=r);
-  await page.route('**/api/v1/terminals',async route=>{await gate;await route.continue();});
+test('a terminal still connecting creates no authority; Terminal chosen meanwhile starts once connected',async({page,request})=>{
+  let release!:()=>void;const gate=new Promise<void>(r=>release=r);let opens=0;
+  await page.route('**/api/v1/terminals',async route=>{opens++;await gate;await route.continue();});
   try {
     await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
-    const entry=page.getByRole('textbox',{name:'Codex terminal input',exact:true});await expect(entry).toBeDisabled();
-    expect((await state(request)).manualSessions??[]).toEqual([]);release();await expect(entry).toBeEnabled();
-    expect((await state(request)).manualSessions??[]).toEqual([]);
+    const card=page.getByRole('region',{name:'Codex terminal',exact:true});await expect(badge(card,'Disconnected')).toBeVisible();
+    await card.getByRole('button',{name:'Terminal mode',exact:true}).click();await expect(card.getByRole('status')).toContainText('Connecting, then starting input');
+    // Focus moved elsewhere while the connection opened: the later grant must not take it back.
+    const elsewhere=page.getByRole('button',{name:'Recheck',exact:true});await elsewhere.focus();
+    expect((await state(request)).manualSessions??[]).toEqual([]);release();
+    await expect(badge(card,'Typing enabled')).toBeVisible();await expect(elsewhere).toBeFocused();
+    expect(((await state(request)).manualSessions??[]).flatMap(m=>m.writers.filter(w=>w.live))).toHaveLength(1);
+    expect(opens).toBe(2); // one connection per terminal card; waiting never opened another
   } finally {release();}
 });
 
@@ -810,30 +880,36 @@ for(const scenario of ['dead','missing','live','lost'] as const)test(`launch cle
   await expect(page.getByRole('navigation',{name:'Agent'}).getByRole('button',{name:kept.label,exact:true})).toHaveAttribute('aria-pressed','true');
 });
 
-for(const delayed of ['response','writer frame'] as const)test(`first input waits for the ${delayed} and forwards Unicode once`,async({page,request})=>{
+for(const delayed of ['response','writer frame'] as const)test(`the Terminal toggle waits for the ${delayed} before typing, then forwards Unicode once`,async({page,request})=>{
   let release!:()=>void,arrived!:()=>void;const gate=new Promise<void>(r=>release=r),captured=new Promise<void>(r=>arrived=r);
   if(delayed==='response')await page.route('**/api/v1/terminals/*/keyboard',async route=>{const response=await route.fetch();arrived();await gate;await route.fulfill({response});},{times:1});
   else await page.routeWebSocket('**/api/v1/terminals/socket',socket=>{const server=socket.connectToServer();server.onMessage(async message=>{const frame=JSON.parse(String(message));if(frame.type==='keyboard'&&frame.writer){arrived();await gate;}socket.send(message);});});
   try {
     await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
     await page.getByRole('combobox',{name:'Switch project'}).selectOption({label:'project'});
-    const terminal=page.getByRole('region',{name:'Codex terminal',exact:true}),entry=terminal.getByRole('textbox',{name:'Codex terminal input',exact:true});
-    await expect(entry).toBeEnabled();await entry.focus();await page.keyboard.insertText('é');await captured;await page.keyboard.insertText('次');
+    const terminal=page.getByRole('region',{name:'Codex terminal',exact:true});
+    await terminal.getByRole('button',{name:'Terminal mode',exact:true}).click();await captured;
+    // Keys before the writer is ready reach nothing: xterm stays read-only until both the response and the writer frame arrive.
+    await terminal.locator('.xterm-helper-textarea').focus();await page.keyboard.insertText('z');
     expect((await state(request)).manualSessions![0]!.bytes).toBe(0);await expect(badge(terminal,'Typing enabled')).toHaveCount(0);
-    release();await expect.poll(async()=>(await state(request)).manualSessions![0]!.bytes).toBe(5);await expect(badge(terminal,'Typing enabled')).toBeVisible();
+    release();await expect(badge(terminal,'Typing enabled')).toBeVisible();
+    await page.keyboard.insertText('é次');await expect.poll(async()=>(await state(request)).manualSessions![0]!.bytes).toBe(5);
   } finally {release();}
 });
-test('cancelled first multiline paste creates no manual period; a soft key admits direct input',async({page,request})=>{
+test('Display mode offers no paste or soft keys and admits nothing; in Terminal mode a soft key types',async({page,request})=>{
   await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
     await page.getByRole('combobox',{name:'Switch project'}).selectOption({label:'project'});
-  const terminal=page.getByRole('region',{name:'Codex terminal',exact:true});await expect(terminal.getByRole('textbox',{name:'Codex terminal input',exact:true})).toBeEnabled();
-  await page.evaluate(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:{readText:async()=> 'first\nsecond'}}));
-  page.once('dialog',dialog=>dialog.dismiss());await terminal.getByRole('button',{name:'Paste text',exact:true}).click();
-  expect((await state(request)).manualSessions??[]).toEqual([]);await terminal.getByRole('button',{name:'↑',exact:true}).click();
-  await expect.poll(async()=>(await state(request)).manualSessions![0]!.bytes).toBe(3);await expect(badge(terminal,'Typing enabled')).toBeVisible();
+  const terminal=page.getByRole('region',{name:'Codex terminal',exact:true});await expect(badge(terminal,'Observing')).toBeVisible();
+  await expect(terminal.getByRole('button',{name:'Paste text',exact:true})).toHaveCount(0);await expect(terminal.getByRole('button',{name:'↑',exact:true})).toHaveCount(0);
+  const textarea=terminal.locator('.xterm-helper-textarea');
+  await textarea.evaluate(element=>{const data=new DataTransfer();data.setData('text/plain','first\nsecond');element.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));});
+  await page.waitForTimeout(300);expect((await state(request)).manualSessions??[]).toEqual([]);
+  await terminal.getByRole('button',{name:'Terminal mode',exact:true}).click();await expect(badge(terminal,'Typing enabled')).toBeVisible();
+  await terminal.getByRole('button',{name:'↑',exact:true}).click();
+  await expect.poll(async()=>(await state(request)).manualSessions![0]!.bytes).toBe(3);
 });
 
-test('mouse reporting admits an intentional protocol click, while its focus-only click grants nothing',async({page,request})=>{
+test('with mouse reporting, a click in Display grants nothing and a click in Terminal mode is reported',async({page,request})=>{
   // Give the mock terminal a mouse-reporting application. Keep the real broker's
   // output-credit accounting exact after adding the fixture's application modes.
   await page.routeWebSocket('**/api/v1/terminals/socket',socket=>{
@@ -847,10 +923,11 @@ test('mouse reporting admits an intentional protocol click, while its focus-only
   });
   await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
     await page.getByRole('combobox',{name:'Switch project'}).selectOption({label:'project'});
-  const card=page.getByRole('region',{name:'Codex terminal',exact:true}),entry=card.getByRole('textbox',{name:'Codex terminal input',exact:true}),surface=card.locator('.xterm-screen');
-  await expect(entry).toBeEnabled();await surface.click({position:{x:20,y:20}});await expect(entry).toBeFocused();
-  expect((await state(request)).manualSessions??[]).toEqual([]);
+  const card=page.getByRole('region',{name:'Codex terminal',exact:true}),surface=card.locator('.xterm-screen');
+  await expect(badge(card,'Observing')).toBeVisible();await surface.click({position:{x:20,y:20}});await surface.click({position:{x:20,y:20}});
+  await page.waitForTimeout(300);expect((await state(request)).manualSessions??[]).toEqual([]);
   const frames:string[]=[];page.on('request',r=>{if(/\/terminals\/[^/]+\/input$/.test(r.url())){const b=r.postDataJSON();frames.push(Buffer.from(b.data,'base64').toString());}});
-  await surface.click({position:{x:20,y:20}});await expect(badge(card,'Typing enabled')).toBeVisible();
+  await card.getByRole('button',{name:'Terminal mode',exact:true}).click();await expect(badge(card,'Typing enabled')).toBeVisible();
+  await surface.click({position:{x:20,y:20}});
   await expect.poll(()=>frames.join('')).toMatch(/^\x1b\[<0;\d+;\d+M\x1b\[<0;\d+;\d+m$/);
 });

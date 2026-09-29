@@ -8,12 +8,17 @@ import { MAX_MESSAGE_JSON_BYTES, messageJsonBytes } from '../core/squash-message
 import { SquashAdvice } from './SquashAdvice';
 import { FinishBranch } from './FinishBranch';
 import { FINISH_HOLDING } from '../contracts/projects';
+import { Acknowledgement, prepared, useLatest, useMounted, useOverride, type Override, type Proceed } from './Holds';
 
 interface ActionProps { project: Project; tree: ProjectWorktree; token: string; disabled: boolean; disabledReason?: string; onChanged: (notice: string) => Promise<void>;
   /** Increases whenever the view changes; hiding a confirmation revokes it. */
   viewEpoch?: number;
   /** ID of the shared blocker or hint that WorktreeActions shows once for this action. */
-  noticeId?: string }
+  noticeId?: string;
+  /** Holds on this worktree (controller run, delivery, manual input) that the shared acknowledgement clears. */
+  override?: Override | null;
+  /** The shared acknowledgement as each action consumes it. */
+  proceed?: Proceed }
 const nameFor = (tree: ProjectWorktree) => tree.branch ?? tree.path.split('/').filter(Boolean).pop() ?? tree.path;
 /** Any applying or uncertain operation on the project holds every lifecycle action until it is inspected. */
 const isHeld = (project: Project) => [...project.creations, ...(project.removals ?? []), ...(project.integrations ?? []), ...(project.discards ?? []), ...(project.updates ?? []), ...(project.renames ?? [])].some((op) => ['applying', 'uncertain'].includes(op.status))
@@ -30,12 +35,16 @@ const refName = (ref: string) => ref.replace('refs/heads/', '');
 /** The Branch tab: two labelled groups whose buttons stay in view. Each action's preview or form opens below its group's buttons. */
 export function WorktreeActions(props: ActionProps & { deletionReason?: string; deletionHint?: string }) {
   const baseId = useId(); const held = isHeld(props.project); const name = nameFor(props.tree);
+  // One acknowledgement for every action below: it lists what proceeding ends or accepts, and each preview or confirmation clears it first.
+  const override = useOverride(props.override, `this ${name} action`);
+  props = { ...props, proceed: override };
   const heldReason = held ? HELD_REASON : '';
   const squashBlock = props.disabled ? props.disabledReason || 'These actions are unavailable. Recheck the worktree.' : heldReason;
   const deletionBlock = props.deletionReason || heldReason; const hint = deletionBlock ? '' : props.deletionHint ?? '';
   const notices = [...new Set([squashBlock, deletionBlock, hint].filter(Boolean))];
   const idOf = (text: string) => text ? `${baseId}-${notices.indexOf(text)}` : undefined;
   return <div className="worktree-actions">
+    {override.node}
     {notices.map((text, index) => <p key={text} className="fine" id={`${baseId}-${index}`} role="status" tabIndex={-1}>{text}</p>)}
     <section className="branch-group" role="group" aria-label={`Main actions for ${name}`}>
       <h3>Main</h3><p className="fine">Squash this branch into main, or bring main into this branch.</p>
@@ -48,7 +57,7 @@ export function WorktreeActions(props: ActionProps & { deletionReason?: string; 
       <h3>Branch</h3><p className="fine">Rename this branch, or finish it and remove its worktree.</p>
       <div className="branch-group-actions">
         <RenameBranch {...props} noticeId={idOf(squashBlock)} />
-        <FinishBranch {...props} disabled={!!deletionBlock} disabledReason={deletionBlock} noticeId={idOf(deletionBlock)} />
+        <FinishBranch {...props} disabled={!!deletionBlock} disabledReason={deletionBlock} noticeId={idOf(deletionBlock)} proceed={override} />
         <RemoveWorktree {...props} disabled={!!props.deletionReason} disabledReason={props.deletionReason} noticeId={idOf(deletionBlock || hint)} />
         <DiscardWorktree {...props} disabled={!!props.deletionReason} disabledReason={props.deletionReason} noticeId={idOf(deletionBlock || hint)} />
       </div>
@@ -62,13 +71,15 @@ const localReason = (unknown: boolean, busy: boolean, what: string) =>
 const describedBy = (...ids: (string | false | undefined)[]) => ids.filter(Boolean).join(' ') || undefined;
 
 /** One squash commit on the integration branch, made in the checkout that has it checked out. The task worktree is untouched. */
-export function IntegrateWorktree({ project, tree, token, disabled, disabledReason, noticeId, onChanged }: ActionProps) {
+export function IntegrateWorktree({ project, tree, token, disabled, disabledReason, noticeId, onChanged, proceed }: ActionProps) {
   const tilde = useTildify();
   const [preview, setPreview] = useState<WorktreeIntegrationPreview | null>(null); const [message, setMessage] = useState('');
   const [choosing, setChoosing] = useState(false); const [through, setThrough] = useState('');
   const [commits, setCommits] = useState<WorktreeIntegrationPreview['commits']>([]); const controlId = useId();
   const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [unknown, setUnknown] = useState(false);
-  const held = isHeld(project); const name = nameFor(tree);
+  // The server refused for agents or processes that may still be working; the human may accept that and squash anyway.
+  const [activity, setActivity] = useState<{ message: string; accepted: boolean } | null>(null);
+  const held = isHeld(project); const name = nameFor(tree); const mounted = useMounted();
   const current = preview?.head === tree.head && preview?.branch === tree.branch && preview?.worktree.root === tree.path;
   // The same budget the server enforces: the JSON-encoded message, so escapes count and the confirmation always fits.
   const messageBytes = messageJsonBytes(message); const messageValid = !!message.trim() && messageBytes <= MAX_MESSAGE_JSON_BYTES;
@@ -78,20 +89,23 @@ export function IntegrateWorktree({ project, tree, token, disabled, disabledReas
   const unavailableReason = blockedReason || (disabled ? disabledReason || 'These actions are unavailable. Recheck the worktree.' : held ? HELD_REASON : '');
   const reason = blockedReason || (preview && !current ? 'The worktree changed. Preview this batch again.'
     : preview && !messageValid ? 'Enter a nonempty commit message within the size limit.' : '');
-  const cancel = () => { setPreview(null); setChoosing(false); setThrough(''); setCommits([]); setError(''); };
-  async function inspect() {
+  const cancel = () => { setPreview(null); setChoosing(false); setThrough(''); setCommits([]); setError(''); setActivity(null); };
+  async function inspect(acknowledgeActivity = false) {
     if (unavailableReason) { setError(focusNotice(unavailableReason, noticeId, `${controlId}-reason`) ? '' : unavailableReason); return; }
-    setChoosing(true); setBusy(true); setError(''); setPreview(null);
-    try { const shown = await api<WorktreeIntegrationPreview>(token, 'projects/worktrees/integration/preview', { body: { projectId: project.id, worktreeId: tree.id, ...(through.trim() ? { through: through.trim() } : {}) } }); setPreview(shown); setMessage(shown.message); setCommits(shown.commits); }
-    catch (caught) { setError(caught instanceof Error ? caught.message : 'Squash check failed.'); }
+    setBusy(true); setError('');
+    if (!await prepared(proceed, setError)) { setBusy(false); return; }
+    setChoosing(true); setPreview(null);
+    try { const shown = await api<WorktreeIntegrationPreview>(token, 'projects/worktrees/integration/preview', { body: { projectId: project.id, worktreeId: tree.id, ...(through.trim() ? { through: through.trim() } : {}), ...(acknowledgeActivity ? { acknowledgeActivity: true } : {}) } }); setPreview(shown); setMessage(shown.message); setCommits(shown.commits); setActivity(null); }
+    catch (caught) { if (caught instanceof HttpError && caught.code === 'INTEGRATION_WRITERS') setActivity({ message: caught.message, accepted: false }); else setError(caught instanceof Error ? caught.message : 'Squash check failed.'); }
     finally { setBusy(false); }
   }
   async function integrate() {
     if (!preview || !current || busy || held || unknown || disabled || !messageValid) return;
     setBusy(true); setError('');
+    if (!await prepared(proceed, setError, () => mounted.current)) { setBusy(false); return; }
     try {
       // Compact consent: the digest stands for the previewed operation, so the request stays small however many commits were listed.
-      const result = await api<WorktreeIntegration>(token, 'projects/worktrees/integration', { body: { projectId: project.id, worktreeId: tree.id, through: preview.through, requestId: preview.requestId, consent: preview.consent, message, confirm: true } });
+      const result = await api<WorktreeIntegration>(token, 'projects/worktrees/integration', { body: { projectId: project.id, worktreeId: tree.id, through: preview.through, ...(preview.acknowledgeActivity ? { acknowledgeActivity: true } : {}), requestId: preview.requestId, consent: preview.consent, message, confirm: true } });
       await onChanged(result.message); cancel();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Squash response is unknown. Inspect the integration checkout; do not resend.');
@@ -118,13 +132,18 @@ export function IntegrateWorktree({ project, tree, token, disabled, disabledReas
       <p className="fine">Leave empty for all remaining commits. A SHA includes that commit and stops this batch there. Each batch creates one commit on main; later batches resume after the last integrated commit.</p>
       <button type="button" disabled={blocked || !!blockedReason} onClick={() => void inspect()}>Preview batch</button>
       {!preview && <button type="button" className="quiet" disabled={busy || unknown} onClick={cancel}>Cancel</button>}
+      {activity && <div role="group" aria-label="Squash despite activity">
+        <Acknowledgement label="Squash anyway" checked={activity.accepted} disabled={busy || unknown} onChange={(accepted) => setActivity({ ...activity, accepted })}
+          lines={[activity.message, 'Agents or processes in the integration checkout or this task worktree may still be working. The squash stages and commits in the integration checkout under them: a concurrent edit there can end up in the commit, be left uncommitted, or make the squash fail.']}>
+          <strong>Squash anyway.</strong> I checked the terminals and accept that work may still be running.</Acknowledgement>
+        <button type="button" disabled={blocked || !!blockedReason || !activity.accepted} onClick={() => void inspect(true)}>Preview batch anyway</button></div>}
     </div>}
     {preview && <div className="notice" role="region" aria-label={`Squash ${name}`}>
       <p>Squash {preview.commitCount} commit{preview.commitCount === 1 ? '' : 's'} from <span className="mono">{preview.branch}</span> (<span className="mono">{preview.mergeBase.slice(0, 7)}..{preview.through.slice(0, 7)}</span>) into <span className="mono">{refName(preview.targetRef)}</span> at <span className="mono">{short(preview.targetHead)}</span>, in <span className="mono">{tilde(preview.target.root)}</span>. Merged without conflicts; the new commit's tree will be <span className="mono">{short(preview.tree)}</span>.</p>
       <p>{preview.previousCommit ? `Continues after squash ${short(preview.previousCommit)}. ` : ''}{preview.through !== preview.head ? 'Later task commits will remain for another batch.' : 'This batch reaches the current task HEAD.'}</p>
       <p className="mono commands">{preview.commands.join('\n')}</p>
       {preview.dirty && <p>The task worktree has uncommitted changes; they are not part of this squash.</p>}
-      <p>Agents in <span className="mono">{tilde(preview.target.root)}</span> must be idle: the merge changes its files and index. The task branch and worktree stay as they are; use Check removal afterwards. This cannot be undone in the app.</p>
+      <p>{preview.acknowledgeActivity ? <strong>You accepted that agents or processes may still be working; they are not checked again.</strong> : <>Agents in <span className="mono">{tilde(preview.target.root)}</span> must be idle:</>} The merge changes its files and index. The task branch and worktree stay as they are; use Check removal afterwards. This cannot be undone in the app.</p>
       <SquashAdvice key={preview.consent} token={token} preview={preview} disabled={blocked || !!reason || busy || unknown} />
       <label>Commit message<textarea aria-label="Squash commit message" value={message} disabled={busy || unknown} rows={6} onChange={(e) => setMessage(e.target.value)} /></label>
       <p className="fine" aria-live="polite">{messageBytes.toLocaleString()} of {MAX_MESSAGE_JSON_BYTES.toLocaleString()} bytes (JSON-encoded, as sent){messageBytes > MAX_MESSAGE_JSON_BYTES ? ' — shorten the message to confirm.' : ''}</p>
@@ -158,12 +177,12 @@ function alignSummary(preview: WorktreeUpdatePreview): string {
 }
 /** Align the task branch with main in place, so the directory, its ignored environment and the agents are reused: update after a
  * squash, rebase, or reset. Each previews its exact steps; a rewritten branch keeps its old tip under refs/altcli/preserved. */
-export function AlignWorktree({ project, tree, token, disabled, disabledReason, noticeId, onChanged, viewEpoch }: ActionProps) {
+export function AlignWorktree({ project, tree, token, disabled, disabledReason, noticeId, onChanged, viewEpoch, proceed }: ActionProps) {
   const [mode, setMode] = useState<WorktreeUpdateMode>('update');
   const [preview, setPreview] = useState<WorktreeUpdatePreview | null>(null); const [previewEpoch, setPreviewEpoch] = useState(viewEpoch);
   // A view change revokes confirmation, but keeps the request ID available to inspect an unknown result.
   const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [unknown, setUnknown] = useState(false);
-  const controlId = useId(); const held = isHeld(project); const name = nameFor(tree);
+  const controlId = useId(); const held = isHeld(project); const name = nameFor(tree); const epoch = useLatest(viewEpoch); const mounted = useMounted();
   const blocked = disabled || held; const blockedReason = localReason(unknown, busy, ALIGN[mode].label.replace('…', ''));
   const unavailableReason = blockedReason || (disabled ? disabledReason || 'These actions are unavailable. Recheck the worktree.' : held ? HELD_REASON : '');
   const current = previewEpoch === viewEpoch && preview?.head === tree.head && preview?.branch === tree.branch && preview?.worktree.root === tree.path;
@@ -172,13 +191,15 @@ export function AlignWorktree({ project, tree, token, disabled, disabledReason, 
   async function inspect(next: WorktreeUpdateMode) {
     if (unavailableReason) { setError(focusNotice(unavailableReason, noticeId, `${controlId}-reason`) ? '' : unavailableReason); return; }
     setMode(next); setBusy(true); setError(''); setPreview(null); setPreviewEpoch(viewEpoch);
+    if (!await prepared(proceed, setError)) { setBusy(false); return; }
     try { setPreview(await api<WorktreeUpdatePreview>(token, 'projects/worktrees/update/preview', { body: { projectId: project.id, worktreeId: tree.id, mode: next } })); }
     catch (caught) { setError(caught instanceof Error ? caught.message : 'The check failed.'); }
     finally { setBusy(false); }
   }
   async function align() {
     if (!preview || !current || busy || held || unknown || disabled) return;
-    setBusy(true); setError('');
+    setBusy(true); setError(''); const confirmedEpoch = viewEpoch;
+    if (!await prepared(proceed, setError, () => mounted.current && epoch.current === confirmedEpoch)) { setBusy(false); return; }
     try {
       const result = await api<WorktreeUpdate>(token, 'projects/worktrees/update', { body: { projectId: project.id, worktreeId: tree.id, mode: preview.mode, requestId: preview.requestId,
         consent: preview.consent, confirm: true } });
@@ -234,7 +255,7 @@ export function AlignWorktree({ project, tree, token, disabled, disabledReason, 
 }
 
 /** Rename the task branch in place: files and the directory are unchanged; app-launched sessions named after the branch follow it. */
-export function RenameBranch({ project, tree, token, disabled, disabledReason, noticeId, onChanged, viewEpoch }: ActionProps) {
+export function RenameBranch({ project, tree, token, disabled, disabledReason, noticeId, onChanged, viewEpoch, proceed }: ActionProps) {
   const tilde = useTildify();
   const [editing, setEditing] = useState(false); const [newBranch, setNewBranch] = useState('');
   const [preview, setPreview] = useState<WorktreeRenamePreview | null>(null);
@@ -243,7 +264,7 @@ export function RenameBranch({ project, tree, token, disabled, disabledReason, n
   // The request sent for confirmation is kept apart from that revocable preview: an unknown result is inspected by its ID.
   const [pending, setPending] = useState<string | null>(null);
   const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [unknown, setUnknown] = useState(false);
-  const controlId = useId(); const held = isHeld(project); const name = nameFor(tree);
+  const controlId = useId(); const held = isHeld(project); const name = nameFor(tree); const epoch = useLatest(viewEpoch); const mounted = useMounted();
   const blocked = disabled || held; const blockedReason = localReason(unknown, busy, 'Rename');
   const unavailableReason = blockedReason || (disabled ? disabledReason || 'These actions are unavailable. Recheck the worktree.' : held ? HELD_REASON : '');
   const current = preview?.head === tree.head && preview?.branch === tree.branch && preview?.worktree.root === tree.path;
@@ -251,13 +272,16 @@ export function RenameBranch({ project, tree, token, disabled, disabledReason, n
   const cancel = () => { setEditing(false); setNewBranch(''); setPreview(null); setError(''); setPending(null); };
   async function inspect() {
     setBusy(true); setError(''); setPreview(null);
+    if (!await prepared(proceed, setError)) { setBusy(false); return; }
     try { setPreview(await api<WorktreeRenamePreview>(token, 'projects/worktrees/rename/preview', { body: { projectId: project.id, worktreeId: tree.id, newBranch: newBranch.trim() } })); }
     catch (caught) { setError(caught instanceof Error ? caught.message : 'Rename check failed.'); }
     finally { setBusy(false); }
   }
   async function rename() {
     if (!preview || !current || busy || held || unknown || disabled) return;
-    setBusy(true); setError(''); setPending(preview.requestId);
+    setBusy(true); setError(''); const confirmedEpoch = viewEpoch;
+    if (!await prepared(proceed, setError, () => mounted.current && epoch.current === confirmedEpoch)) { setBusy(false); return; }
+    setPending(preview.requestId);
     try {
       const result = await api<WorktreeRename>(token, 'projects/worktrees/rename', { body: { ...preview, confirm: true } });
       await onChanged(result.message); cancel();
@@ -303,11 +327,11 @@ export function RenameBranch({ project, tree, token, disabled, disabledReason, n
 }
 
 /** Deletion always requires a fresh server preview and explicit confirmation. */
-export function RemoveWorktree({ project, tree, token, disabled, disabledReason, noticeId, onChanged }: ActionProps) {
+export function RemoveWorktree({ project, tree, token, disabled, disabledReason, noticeId, onChanged, proceed }: ActionProps) {
   const tilde = useTildify();
   const [preview, setPreview] = useState<WorktreeRemovalPreview | null>(null);
   const [busy, setBusy] = useState(false); const [error, setError] = useState('');
-  const [unknown, setUnknown] = useState(false); const controlId = useId();
+  const [unknown, setUnknown] = useState(false); const controlId = useId(); const mounted = useMounted();
   const held = isHeld(project); const name = nameFor(tree);
   const reason = localReason(unknown, busy, 'Removal');
   const unavailableReason = reason || (disabled ? disabledReason || 'These actions are unavailable. Recheck the worktree.' : held ? HELD_REASON : '');
@@ -315,6 +339,7 @@ export function RemoveWorktree({ project, tree, token, disabled, disabledReason,
   async function inspect() {
     if (unavailableReason) { setError(focusNotice(unavailableReason, noticeId, `${controlId}-reason`) ? '' : unavailableReason); return; }
     setBusy(true); setError(''); setPreview(null);
+    if (!await prepared(proceed, setError)) { setBusy(false); return; }
     try { setPreview(await api<WorktreeRemovalPreview>(token, 'projects/worktrees/removal/preview', { body: { projectId: project.id, worktreeId: tree.id } })); }
     catch (caught) { setError(caught instanceof Error ? caught.message : 'Removal check failed.'); }
     finally { setBusy(false); }
@@ -322,6 +347,7 @@ export function RemoveWorktree({ project, tree, token, disabled, disabledReason,
   async function remove() {
     if (!preview || !current || busy || held || unknown || disabled) return;
     setBusy(true); setError('');
+    if (!await prepared(proceed, setError, () => mounted.current)) { setBusy(false); return; }
     try {
       const result = await api<WorktreeRemoval>(token, 'projects/worktrees/removal', { body: { ...preview, confirm: true } });
       await onChanged(result.message); setPreview(null);
@@ -357,13 +383,13 @@ export function RemoveWorktree({ project, tree, token, disabled, disabledReason,
 }
 
 /** Forced deletion of the worktree and its branch without integration evidence: the branch name must be typed to confirm. */
-export function DiscardWorktree({ project, tree, token, disabled, disabledReason, noticeId, onChanged, viewEpoch }: ActionProps) {
+export function DiscardWorktree({ project, tree, token, disabled, disabledReason, noticeId, onChanged, viewEpoch, proceed }: ActionProps) {
   const tilde = useTildify();
   const [preview, setPreview] = useState<WorktreeDiscardPreview | null>(null); const [typed, setTyped] = useState('');
   // The typed branch name is the confirmation: hiding the view clears it, while the preview stays for re-checking.
   useEffect(() => { setTyped(''); }, [viewEpoch]);
   const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [unknown, setUnknown] = useState(false);
-  const controlId = useId();
+  const controlId = useId(); const epoch = useLatest(viewEpoch); const mounted = useMounted();
   const held = isHeld(project); const name = nameFor(tree);
   const reason = localReason(unknown, busy, 'Discard');
   const unavailableReason = reason || (disabled ? disabledReason || 'These actions are unavailable. Recheck the worktree.' : held ? HELD_REASON : '');
@@ -371,13 +397,15 @@ export function DiscardWorktree({ project, tree, token, disabled, disabledReason
   async function inspect() {
     if (unavailableReason) { setError(focusNotice(unavailableReason, noticeId, `${controlId}-reason`) ? '' : unavailableReason); return; }
     setBusy(true); setError(''); setPreview(null); setTyped('');
+    if (!await prepared(proceed, setError)) { setBusy(false); return; }
     try { setPreview(await api<WorktreeDiscardPreview>(token, 'projects/worktrees/discard/preview', { body: { projectId: project.id, worktreeId: tree.id } })); }
     catch (caught) { setError(caught instanceof Error ? caught.message : 'Discard check failed.'); }
     finally { setBusy(false); }
   }
   async function discard() {
     if (!preview || !current || busy || held || unknown || disabled || typed !== preview.branch) return;
-    setBusy(true); setError('');
+    setBusy(true); setError(''); const confirmedEpoch = viewEpoch;
+    if (!await prepared(proceed, setError, () => mounted.current && epoch.current === confirmedEpoch)) { setBusy(false); return; }
     try {
       const result = await api<WorktreeDiscard>(token, 'projects/worktrees/discard', { body: { ...preview, confirmBranch: typed, confirm: true } });
       await onChanged(result.message); setPreview(null);

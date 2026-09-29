@@ -170,6 +170,13 @@ gate. Releasing an attempt without that commit still requires a second writer ch
 One lifecycle revision spans each request up to its final applicable writer check, so even a native turn
 that starts and finishes between those checks invalidates it.
 This is cooperative same-user inspection, not OS isolation from external writers.
+September 29, at the owner's direction: when these activity checks are the only refusal, the human may
+acknowledge that agents or processes in either checkout may still be working and preview and confirm the
+squash anyway. The request carries `acknowledgeActivity: true`; the pinned preview records it, so its consent
+digest covers it and a confirmation without it no longer matches. It skips only the settled-writer evidence
+at preview, staging, commit and inspection; run and delivery ownership, cleanliness, conflicts, the pinned
+tree and the manual-input hold still apply. The confirmation says that a concurrent edit in the integration
+checkout can end up in the commit, stay uncommitted or make the squash fail.
 
 User requirement, September 21, 2026: squash can run in multiple explicitly
 confirmed batches. The user selects an inclusive **through commit** (a SHA on

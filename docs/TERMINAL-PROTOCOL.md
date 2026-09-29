@@ -101,12 +101,15 @@ setup, delivery and other keyboard decisions; existing writers have independent 
 Legacy owners still need settlement/takeover. Current modern turns can finish while held but
 cannot dispatch a successor; branch-scoped Stage relay keeps its fault/takeover rule.
 
-**Stop typing here** and **Stop typing in this browser** in Control access freeze the selected
-local queues and post `/api/v1/terminals/stop` with period ID, boot ID and the exact connection,
-generation and writer revision set. Plain stop accepts subsequent byte revisions, drains admitted
-work and retains the barrier; a replacement generation is always refused. It never stops another
-browser implicitly. Disconnect, expiry, Lock and restart retain the barrier and require inspection
-before new writers join; other existing writers remain live. Metadata contains identities,
+The terminal's **Terminal / Display** toggle posts `acquire` or `release` for its own connection;
+a toggle on a failed or closed connection first opens a fresh observer connection. **Stop typing
+here** and **Stop typing in this browser** in Control access freeze the selected local queues and
+post `/api/v1/terminals/stop` with period ID, boot ID and the exact connection, generation and
+writer revision set. Plain stop accepts subsequent byte revisions, drains admitted work and
+retains the barrier; a replacement generation is always refused. Another browser's writers are
+stopped only by an action's acknowledgement that lists them. Disconnect, expiry, Lock and restart
+retain the barrier and mark the period for recovery; new writers may still join it, and other
+existing writers remain live. Metadata contains identities,
 checkpoints, times and byte counts, never raw input. Stopped writer details may be pruned on join;
 the period retains its aggregate counts and initial targets for cleanup checks.
 
@@ -146,8 +149,8 @@ checkpoints retain the barrier. A pane that had already exited when the keyboard
 was granted (such as a remain-on-exit launch pane) has no process tree to read; it
 neither blocks the grant nor fails settlement while it stays exited.
 
-In the browser, **Take control…** in Control access records this human decision for every
-unresolved record after one confirmation, including when no agents remain or feature flags are
+In the browser, an action's readiness acknowledgement, or **Take control…** in Control access,
+records this human decision for every unresolved record after one confirmation, including when no agents remain or feature flags are
 off. Its notes say that earlier input may have run commands or left background work; the fixed
 acknowledgement wording is recorded as the decision note, with no checkbox or typed note.
 `POST /api/v1/terminals/reconcile` accepts either `confirmReady: true` for the
@@ -204,20 +207,27 @@ The shared Control frame keeps a separate composer for each agent:
   control recipient together (Plan setup addresses the whole group). In Parallel,
   clicking a card's heading or focusing its controls does the same. Parallel shows all agent
   controls, side by side on wide screens and stacked on phones; Focus shows one. Each keeps
-  its own draft, and only the active card supplies the readiness check in Control access.
+  its own draft, and only the active card shows its readiness check, beside its actions.
   Selection starts on a working agent. In Focus it
   then follows the next agent that starts working; in Parallel it is held. Either way it
   revokes readiness and sends nothing; it never selects the keyboard writer.
+- **Readiness:** each action's one check sits beside it and is offered only while the Console
+  shows that action. While a controller run, an uncertain delivery or request, or manual input
+  holds the checkout, the check lists each consequence and the action clears those holds in the
+  Take control order (plus stopping every live writer) before it starts; the first refusal or
+  unknown result stops, and nothing is sent or retried. The check is bound to the holds' exact
+  identities (commands, deliveries, record revisions, writer generations); a draft, target, view
+  or activity change while they are cleared, or the composer unmounting (Lock, another workspace),
+  cancels the action, and only the sent draft is cleared.
 - **Control access:** one nonmodal panel under the page heading, opened from its entry in the
-  page heading's status row (entry, then the ⌨️ keyboard status, then connection status) on every tab
-  and reachable with no agents. Implementation readiness hints also offer **Go to Control access**,
-  focusing the visibly labelled checkbox without confirming it or sending work. It holds keyboard release, manual-input
+  page heading's status row (entry, then the ⌨️ input status, then connection status) on every tab
+  and reachable with no agents. It explains every hold and holds typing stops, manual-input
   reconciliation, the controller's run card with pause and one-click checkpoint or handoff
   continuation, a list of what to notice, one **Take control…** confirmation (ending this
   checkout's controller run, clearing an uncertain-request warning, releasing an older delivery
   hold and recording the decision on earlier manual input, in that order), one-click **Mark
-  <agent> Ready**, workspace reset, and each composer's readiness check. A check is offered only while the
-  Console shows its action; opening or closing the panel changes nothing.
+  <agent> Ready** and workspace reset. Nothing there is required before an action; opening or
+  closing the panel changes nothing.
 
 Terminal tools are icon buttons that keep their full accessible names, with help on hover and
 focus, and a **?** legend that also works by tap: **Reconnect** 🔄 (observe only), **Captured text** 📄 / **Show terminal** 🖥️, **Expand terminal** ⤢ / **Collapse terminal** ⤡,

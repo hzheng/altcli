@@ -15,24 +15,24 @@ export function keyboardOwnerOf(sessions: ManualSession[] | undefined, clientIns
     label: writers.map(w => (here(w.target)?.label ?? describe?.(w.target) ?? 'terminal') + (w.clientInstanceId === clientInstanceId ? '' : ' (another browser/tab)')).join(', ') };
 }
 
-/** Freeze every local queue before asking the server to stop the exact displayed set.
+/** Freeze every local queue before asking the server to stop the exact displayed set. With `remote`, writers without a terminal in
+ * this page (another browser or tab) are stopped too; that page sees the stop and switches to Display.
  * After a request is sent, an error never thaws a grant that may already have ended. */
-export async function stopTerminalWriters(token: string, manual: ManualSession, writers: ManualWriter[], handle: (writer: ManualWriter) => NativeTerminalHandle | undefined, confirmReady = false, handoffRequestId?: string): Promise<ManualSession> {
+export async function stopTerminalWriters(token: string, manual: ManualSession, writers: ManualWriter[], handle: (writer: ManualWriter) => NativeTerminalHandle | undefined, remote = false): Promise<ManualSession> {
   const frozen: { terminal: NativeTerminalHandle; state: FrozenWriter }[] = [];
   let sent = false;
   try {
     for (const writer of writers) {
       const terminal = handle(writer);
-      if (!terminal?.matches(writer)) throw Error('A selected terminal is no longer writable in this page. Inspect its input.');
-      const state = terminal.freeze(!confirmReady);
+      if (!terminal?.matches(writer)) { if (remote) continue; throw Error('A selected terminal is no longer writable in this page. Inspect its input.'); }
+      const state = terminal.freeze(true);
       if (!state) throw Error('A selected writer changed. Nothing was stopped.');
       frozen.push({ terminal, state });
     }
     sent = true;
     const result = await api<ManualSession>(token, 'terminals/stop', { body: { requestId: crypto.randomUUID(), expectedBootId: manual.bootId,
       manualSessionId: manual.id, expectedRevision: manual.revision,
-      writers: writers.map(w => ({ connectionId: w.connectionId, generation: w.generation, revision: w.revision })),
-      ...(confirmReady ? { confirmReady: true } : {}), ...(handoffRequestId ? { handoffRequestId } : {}) } });
+      writers: writers.map(w => ({ connectionId: w.connectionId, generation: w.generation, revision: w.revision })) } });
     if (result.id !== manual.id || result.bootId !== manual.bootId || !Array.isArray(result.writers) || writers.some(w =>
       !result.writers.some(stopped => stopped.connectionId === w.connectionId && stopped.generation === w.generation && !stopped.live)))
       throw Error('The stop receipt does not match the selected writers. Inspect manual input.');
@@ -47,7 +47,7 @@ export async function stopTerminalWriters(token: string, manual: ManualSession, 
   }
 }
 
-/** Explicit stop/recovery only. Typing in NativeTerminal owns initial admission. */
+/** Explicit stop/recovery only. The Terminal toggle in NativeTerminal owns admission. */
 export function useKeyboardControls({ sessions, clientInstanceId, token, options, handle, disabled, refresh, describe, onShow }: {
   sessions: ManualSession[]; clientInstanceId: string; token: string;
   options: KeyboardOption[]; handle: (key: string) => NativeTerminalHandle | undefined;
@@ -65,11 +65,11 @@ export function useKeyboardControls({ sessions, clientInstanceId, token, options
     finally { setPending(false); await refresh(); }
   }
   const recovery = <div className="keyboard-release">
-    <p className="fine">{live.length ? `${live.length} active input connection${live.length === 1 ? '' : 's'}. Automation is held across this server.` : 'No active input connections. Type directly in a terminal to begin.'}</p>
+    <p className="fine">{live.length ? `${live.length} active input connection${live.length === 1 ? '' : 's'}. Automation is held across this server.` : 'No active input connections. Use a terminal’s Terminal toggle to type.'}</p>
     {live.map(({ manual, writer }) => <div className="pane-buttons" key={writer.connectionId}>
       <span>{describe(writer.target)} · {writer.clientInstanceId === clientInstanceId ? 'this browser' : 'another browser/tab'}</span>
       {writer.clientInstanceId === clientInstanceId && <button type="button" className="quiet" disabled={disabled || pending || !localHandle(writer)} onClick={() => void stop(manual, [writer])}>Stop typing here</button>}
-      {writer.clientInstanceId !== clientInstanceId && <span className="fine">Stop this connection in its own browser.</span>}
+      {writer.clientInstanceId !== clientInstanceId && <span className="fine">Typing in another browser or tab; an action’s acknowledgement stops it too.</span>}
       {(() => { const target = writer.target, option = 'agentId' in target ? options.find(o => o.key === target.agentId) : undefined;
         return option && !option.inView && onShow && <button type="button" className="quiet" onClick={() => onShow(option.key)}>Show {option.label}</button>; })()}
     </div>)}

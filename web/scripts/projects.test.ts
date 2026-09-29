@@ -441,6 +441,19 @@ test(`squash checks ${mode} shell process evidence`, async () => {
   const result = await plane.integrateWorktree(confirmSquash(await plane.previewIntegration(target)));
   assert.equal(result.status, 'integrated', result.message);
 });
+test('an acknowledged squash proceeds despite unsettled activity, and the acknowledgement is part of its consent', async () => {
+  const { target, request } = await taskFixture(); const { plane, adapter, panes } = await squashPlane();
+  const shell = { ...mockPanes()[2]!, cwd: request.path, command: 'zsh' }; panes.push(shell);
+  adapter.foreground = async session => session.identity.paneId !== shell.identity.paneId ? '100' : shell.identity.panePid;
+  adapter.processes = async session => session.identity.paneId !== shell.identity.paneId ? [{ pid: '100', command: 'codex' }] : [{ pid: '200', command: 'sleep' }];
+  await assert.rejects(plane.previewIntegration(target), { code: 'INTEGRATION_WRITERS' });
+  const preview = await plane.previewIntegration({ ...target, acknowledgeActivity: true });
+  assert.equal(preview.acknowledgeActivity, true);
+  // Confirming without repeating the acknowledgement re-derives a different preview: the consent no longer matches.
+  await assert.rejects(plane.integrateWorktree(confirmSquash(preview)), { code: 'WORKTREE_CHANGED' });
+  const result = await plane.integrateWorktree({ ...confirmSquash(preview), requestId: randomUUID(), acknowledgeActivity: true });
+  assert.equal(result.status, 'integrated', result.message); assert.equal(result.input.acknowledgeActivity, true);
+});
 for (const mode of ['clear', 'writer', 'unavailable', 'changed', 'respawned'] as const)
 test(`squash checks ${mode} evidence for the exact AltCLI host pane`, async () => {
   const { target, request } = await taskFixture(); const { plane, adapter, panes } = await squashPlane();

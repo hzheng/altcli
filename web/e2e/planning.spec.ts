@@ -59,8 +59,8 @@ test('Start Plan explains why it is disabled, including a confirmation cleared b
   // Ticking Ready first and typing afterwards is the sequence that used to fail silently.
   await ready.check(); await page.getByLabel('Shared task brief').fill('Plan a scoped feature.');
   await expect(ready).not.toBeChecked(); await expect(start).toBeDisabled();
-  await expect(reason).toHaveText(/Confirm Ready for planning in Control access\. Changing the brief, a setting or the checkout clears an earlier confirmation\./);
-  await expect(start).toHaveAccessibleDescription(/Confirm Ready for planning/); await expect(start).toHaveAttribute('title', /Confirm Ready for planning.*Start document-only planning\./);
+  await expect(reason).toHaveText(/Check Ready for planning above\. Changing the brief, a setting or the checkout clears an earlier confirmation\./);
+  await expect(start).toHaveAccessibleDescription(/Check Ready for planning above/); await expect(start).toHaveAttribute('title', /Check Ready for planning above.*Start document-only planning\./);
   await ready.check(); await expect(reason).toHaveCount(0); await expect(start).toBeEnabled(); await expect(start).toHaveAttribute('title', 'Start document-only planning.');
   await editSettings(page); await page.getByLabel('Maximum automatic turns across both phases').fill('0');
   await expect(ready).not.toBeChecked(); await expect(reason).toHaveText('Set the maximum automatic turns to a whole number from 1 to 200.');

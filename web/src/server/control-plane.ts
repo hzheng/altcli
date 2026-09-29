@@ -157,8 +157,7 @@ export class ControlPlane {
       // never overwrite their byte evidence, revisions or a disconnect with the old copy.
       if (prior) {
         prior = this.authority.get(prior.id);
-        if (prior.recoveryRequired || prior.bootId !== this.authority.bootId || !prior.reconciliationRequired)
-          throw new AppError('MANUAL_CHANGED', 'Manual input changed during admission. Inspect the current period.', 409);
+        if (!prior.reconciliationRequired) throw new AppError('MANUAL_CHANGED', 'Manual input changed during admission. Inspect the current period.', 409);
       }
       const known = new Set(prior?.runs.map(r => r.id) ?? []);
       for (const run of runs) if (!known.has(run.id)) {
@@ -173,7 +172,7 @@ export class ControlPlane {
         clientInstanceId: prior?.clientInstanceId ?? input.clientInstanceId, connectionId: prior?.connectionId ?? connectionId,
         generation: prior?.generation ?? generation, target: prior?.target ?? input.target, live: true, reconciliationRequired: true,
         targets: [...(prior?.targets ?? []), ...(prior?.targets.some(t => isDeepStrictEqual(t, input.target)) ? [] : [input.target])],
-        recoveryRequired: false, writers: [...(prior?.writers ?? []).filter(w => w.live && w.connectionId !== connectionId),
+        recoveryRequired: prior?.recoveryRequired ?? false, writers: [...(prior?.writers ?? []).filter(w => w.live && w.connectionId !== connectionId),
           { connectionId, clientInstanceId: input.clientInstanceId, generation, target: input.target, identity: resolved.identity, sessionId: resolved.sessionId,
             revision: 1, live: true, bytes: 0, inputMayHaveOccurred: false }],
         inputMayHaveOccurred: prior?.inputMayHaveOccurred ?? false, bytes: prior?.bytes ?? 0, createdAt: prior?.createdAt ?? now, updatedAt: now,
@@ -328,13 +327,14 @@ export class ControlPlane {
   }
   /** Squash shares the checkout with every pane, including unselected agents and subdirectories. Native idle/ready is
    * only turn evidence: fresh process evidence must also exclude surviving writers before each Git mutation. */
-  private async integrationGuard(target: NonNullable<ManagedSession['worktree']>, source: NonNullable<ManagedSession['worktree']>, revision: number): Promise<void> {
+  private async integrationGuard(target: NonNullable<ManagedSession['worktree']>, source: NonNullable<ManagedSession['worktree']>, revision: number, acknowledged = false): Promise<void> {
     const ownership = () => {
       if (this.workflow.owner(target.indexPath) || this.store.activeFor(target.root)) throw new AppError('WORKTREE_BUSY', 'A run or unresolved delivery owns the integration checkout. Inspect and take over before squashing into it.', 409);
       if (this.workflow.owner(source.indexPath) || this.store.activeFor(source.root)) throw new AppError('WORKTREE_BUSY', 'A run or unresolved delivery owns the task worktree. Let it finish or take over before squashing its branch.', 409);
     };
     ownership();
-    await this.settledWriters([target, source], revision, 'INTEGRATION_WRITERS', 'Squash requires settled agents and clear process evidence in both checkouts.');
+    // An acknowledged squash accepts that agents may still be working; ownership still refuses.
+    if (!acknowledged) await this.settledWriters([target, source], revision, 'INTEGRATION_WRITERS', 'Squash requires settled agents and clear process evidence in both checkouts. To proceed anyway, acknowledge that agents may be working.');
     ownership();
   }
   /** Aligning or renaming a worktree uses the human's confirmation of agent risks.
@@ -403,17 +403,20 @@ export class ControlPlane {
     const revision = this.nativeRevision;
     await this.workspaces();
     const preview = await this.projects.previewIntegration(input);
-    await this.integrationGuard(preview.target, preview.worktree, revision); return preview;
+    await this.integrationGuard(preview.target, preview.worktree, revision, preview.acknowledgeActivity === true); return preview;
   }
   async integrateWorktree(input: WorktreeIntegrateRequest) { return this.authority.automated(() => this.integrateWorktreeAdmitted(input)); }
   private async integrateWorktreeAdmitted(input: WorktreeIntegrateRequest) {
     // One revision spans the entire operation: even a turn that starts and finishes between checks invalidates it.
     const revision = this.nativeRevision;
-    await this.workspaces(); return this.projects.integrate(input, async (target, source) => this.integrationGuard(target, source, revision));
+    const acknowledged = (input as { acknowledgeActivity?: unknown }).acknowledgeActivity === true; // parsed strictly by integrate
+    await this.workspaces(); return this.projects.integrate(input, async (target, source) => this.integrationGuard(target, source, revision, acknowledged));
   }
   async reconcileIntegration(requestId: string) {
     const revision = this.nativeRevision;
-    return this.projects.reconcileIntegration(requestId, (target, source) => this.integrationGuard(target, source, revision));
+    // Inspection applies the confirmed decision: an acknowledged squash is not refused for activity it accepted.
+    const acknowledged = this.store.worktreeIntegrations().find((op) => op.input.requestId === requestId)?.input.acknowledgeActivity === true;
+    return this.projects.reconcileIntegration(requestId, (target, source) => this.integrationGuard(target, source, revision, acknowledged));
   }
   async previewUpdate(input: WorktreeUpdateInput) {
     await this.workspaces();

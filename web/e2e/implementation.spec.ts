@@ -322,7 +322,7 @@ for (const policy of ['peer', 'worker_reviewer'] as const) test(`${policy} relay
   expect(previews.filter((preview) => preview.recipient === 'claude').at(-1)!.base).toBeUndefined();
   if (policy === 'worker_reviewer') expect(previews.slice(afterPolicy).some((preview) => preview.recipient === 'codex')).toBe(false); // the fixed worker never reviews
   const review = claude.getByRole('button', { name: 'Relay Claude', exact: true });
-  await expect(review).toBeDisabled(); await expect(review).toHaveAttribute('title', /Check “Ready for implementation” in Control access/);
+  await expect(review).toBeDisabled(); await expect(review).toHaveAttribute('title', /Check “Ready for implementation” above/);
   await (await readiness(page)).check(); await review.click();
   await expect.poll(() => starts.length).toBe(1);
   expect(starts[0]).toMatchObject({ kind: 'review', agentId: 'claude', policy, reviewBase: 'b'.repeat(40), branch: { head: 'a'.repeat(40) } });
@@ -383,7 +383,7 @@ test('reconciliation discovers the restarted peer for the next Commit without a 
   expect(starts[0]).toMatchObject({ groupId: group.id, kind: 'commit', handoff: false, autoContinue: false, confirmReady: true, registrations: { claude: renewed } });
   expect(resets).toEqual([]);
   // Finish the post-send state/discovery refresh before teardown removes their route handlers.
-  await expect(ready).toBeEnabled();
+  await backToControl(page); await expect(await readiness(page)).toBeEnabled();
 });
 test('an unknown peer blocks sending and Recheck requires fresh readiness after identity recovers', async ({ page, request }) => {
   await snapshotAvailable(page);
@@ -827,7 +827,9 @@ test('a finished human objection explains disabled input beside its check and re
   await openGroup(page, group); await openCard(page, 'Claude'); const access = await openAccess(page);
   const update = page.getByRole('region', { name: 'Input for Claude', exact: true });
   await update.getByLabel('Add detail for Claude').fill('Use normal Git status behavior.');
-  const check = access.getByRole('group', { name: 'Input check for Claude' });
+  // The check sits beside the input; Take control is offered right there too, and in Control access.
+  const check = update.getByRole('group', { name: 'Input check for Claude' });
+  await expect(page.getByRole('region', { name: 'Control', exact: true }).locator('details.take-control-here')).toHaveAttribute('open', '');
   await expect(check.getByRole('checkbox')).toBeDisabled();
   await expect(check).toContainText('This run paused after an objection requiring human direction.');
   await expect(check).toContainText('Take control');
@@ -837,11 +839,14 @@ test('a finished human objection explains disabled input beside its check and re
   await showSurface(page, 'Terminal'); await showSurface(page, 'Control');
   await expect(check.getByRole('checkbox')).toBeDisabled(); expect(writes).toEqual([]);
   await page.screenshot({ path: info.outputPath('objection-input-disabled.png'), fullPage: true });
-  await access.getByRole('button', { name: 'Take control…', exact: true }).click();
-  expect(writes).toEqual([]);
-  await access.getByRole('button', { name: 'Take control now', exact: true }).click();
+  // Taking control needs no trip to Control access: one check beside the input lists what it ends.
+  const here = page.getByRole('region', { name: 'Control', exact: true }).locator('details.take-control-here');
+  await expect(here.getByRole('list', { name: 'Consequences of proceeding' })).toContainText('paused run for');
+  await expect(here.getByRole('button', { name: 'Take control', exact: true })).toBeDisabled();
+  await here.getByRole('checkbox', { name: 'Take control here', exact: true }).check(); expect(writes).toEqual([]);
+  await here.getByRole('button', { name: 'Take control', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Control access · you', exact: true })).toBeVisible();
-  await expect(update).toHaveCount(0);
+  await expect(update).toHaveCount(0); await expect(access).toBeVisible();
   expect(writes).toEqual(['/api/v1/runs']);
   await expect(await openCard(page, 'Claude')).toBeVisible();
 });
@@ -860,13 +865,13 @@ test('owned composer sends literal input only to the acknowledged holder and che
   const lifecycle = { commandId: turn.commandId, source: agent.agentType, paneId: agent.identity.paneId, socketPath: agent.identity.socketPath, identity: agent.identity,
     sessionId: 'fixture-input', sourceTurnId: 'fixture-input-turn', prompt: turn.wireText, settled: true, backgroundState: 'clear' };
   await post(request, 'events', { ...lifecycle, event: 'turn_started' });
-  // The inspection check for literal input is shown once, in Control access.
-  const inspected = (await openAccess(page)).getByRole('checkbox', { name: /I inspected Codex/ }); await expect(inspected).toBeEnabled({ timeout: 8000 });
+  // The inspection check for literal input is shown once, beside the selected agent's input.
+  const inspected = update.getByRole('checkbox', { name: /I inspected Codex/ }); await expect(inspected).toBeEnabled({ timeout: 8000 });
   await inspected.check();
   const other = page.getByRole('region', { name: 'Input for Claude', exact: true });
   await other.getByLabel('Add detail for Claude').fill('Keep this separate draft.');
   await expect(inspected).toHaveCount(0);
-  await expect((await openAccess(page)).getByRole('checkbox', { name: /I inspected Claude/ })).toBeDisabled();
+  await expect(other.getByRole('checkbox', { name: /I inspected Claude/ })).toBeDisabled();
   await expect(update.getByRole('button', { name: 'Send update to Codex' })).toBeDisabled();
   await expect(other.getByRole('button', { name: 'Send update to Claude' })).toBeDisabled();
   await update.getByLabel('Add detail for Codex').click();

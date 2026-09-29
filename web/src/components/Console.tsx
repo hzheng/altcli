@@ -14,7 +14,8 @@ import { PlanningProgress } from './PlanningProgress';
 import { PaneActions } from './PaneActions';
 import { LaunchProfiles } from './LaunchProfiles';
 import { NativeTerminal, type NativeTerminalHandle } from './NativeTerminal';
-import { useKeyboardControls, keyboardOwnerOf, stopTerminalWriters } from './KeyboardSelector';
+import { useKeyboardControls, keyboardOwnerOf } from './KeyboardSelector';
+import { Acknowledgement, clearHolds, holdConsequences, holdKey, overrideKey, TakeControlHere, type Holds, type Override } from './Holds';
 import { StatusIcon } from './Hint';
 import { PlanSetup } from './PlanSetup';
 import { CheckpointControls, InteractionComposer } from './InteractionControls';
@@ -135,9 +136,8 @@ export function Console() {
   const [controlPlacement, setControlPlacement] = useState<'below' | 'side'>('below');
   const [controlDrawer, setControlDrawer] = useState(false);
   const controlPane = useRef<HTMLElement>(null); const drawerToggle = useRef<HTMLButtonElement>(null);
-  // The one Control access panel and its entry; the panel hosts the composers' readiness checks in this slot.
+  // The one Control access panel and its entry: a reference for why something is held. Readiness is checked next to each action.
   const accessPanel = useRef<HTMLElement>(null); const accessEntry = useRef<HTMLButtonElement>(null); const stage = useRef<HTMLDivElement>(null);
-  const [readinessSlot, setReadinessSlot] = useState<HTMLElement | null>(null);
   const terminals = useRef(new Map<string, NativeTerminalHandle>());
   const [turnLimit, setTurnLimit] = useState(String(DEFAULT_TURN_LIMIT));
   // One readiness slot for the whole console: the exact displayed state a confirmation was given for, so at most one card is ready.
@@ -326,15 +326,30 @@ export function Console() {
   const describeTerminal = (target: import('../contracts/terminals').TerminalTarget) => 'agentId' in target
     ? state?.sessions.find(s => s.id === target.agentId && s.registrationId === target.registrationId)?.label ?? 'terminal' : 'launched terminal';
   const writerHandle = (writer: import('../contracts/terminals').ManualWriter) => [...terminals.current.values()].find(h => h.matches(writer));
-  const keyboardHandoff = liveManual && state?.manualSessions?.length === 1 && !liveManual.recoveryRequired && !liveManual.runs.length && writers.length &&
-    writers.every(w => w.clientInstanceId === clientInstanceId && writerHandle(w)) ? {
-    manual: liveManual, label: writers.map(w => describeTerminal(w.target)).join(', '), release: async (requestId: string) => {
-      const result = await stopTerminalWriters(token, liveManual, writers, writerHandle, true, requestId);
-      if (result.id !== liveManual.id || result.live || result.reconciliationRequired || result.settlement?.requestId !== requestId)
-        throw Error(result.reason || 'Manual input could not be settled. Inspect before sending.');
-      return { manualSessionId: result.id, revision: result.revision };
-    },
-  } : undefined;
+  // What an action's acknowledgement clears before the action runs, as observed now: this checkout's controller runs, an older delivery
+  // hold, the uncertain-request warning and every manual-input record on the server. Each step keeps its own request and server checks.
+  const holds: Holds = { request: unknownRequest, runs: owned.map((r) => ({ id: r.id, commandId: r.currentCommandId, status: r.status, label: r.participants.map((p) => p.label).join(' ⇄ ') })),
+    delivery: !owned.length && transportHold ? transportHold.activeCommandId : null, manual: state?.manualSessions ?? [] };
+  const overrideOf = (h: Holds): Override | null => { const lines = holdConsequences(h, describeTerminal, clientInstanceId);
+    return lines.length ? { lines, key: holdKey(h), clear: () => clearHolds(token, h, writerHandle, () => setUnknownRequest(null)) } : null; };
+  const override = overrideOf(holds);
+  // Input into a running turn keeps that run: only manual input and the request warning are overridden there.
+  const inputOverride = overrideOf({ ...holds, runs: [], delivery: null });
+  // A changed set of holds needs a fresh acknowledgement, even when it reads the same (the composers' consent keys include the same key).
+  const holdsKey = JSON.stringify(overrideKey(override));
+  useEffect(() => { setReady(false); }, [holdsKey]);
+  // What a Stage relay click authorizes except the holds it clears: the view, target, drafts, branch and agent activity. The
+  // revision is monotonic; any change while holds are cleared cancels the send.
+  const stageIntentKey = JSON.stringify([viewKey, stageDrafts, state?.activities ?? null, pair?.id ?? null, pair?.revision ?? null, git?.branch ?? null, git?.head ?? null]);
+  const stageIntent = useRef({ key: stageIntentKey, revision: 0 });
+  if (stageIntent.current.key !== stageIntentKey) stageIntent.current = { key: stageIntentKey, revision: stageIntent.current.revision + 1 };
+  /** Projects: a worktree operation also ends that worktree's own controller run or delivery hold; a launch only needs manual input cleared. */
+  const worktreeOverride = (root: string, scope: 'worktree' | 'launch') => {
+    const runs = scope === 'launch' ? [] : (state?.runs ?? []).filter((r) => r.repository === root && ['running','waiting','paused'].includes(r.status));
+    const delivery = scope === 'launch' ? undefined : state?.reservations.find((r) => r.repository === root);
+    return overrideOf({ request: null, runs: runs.map((r) => ({ id: r.id, commandId: r.currentCommandId, status: r.status, label: r.participants.map((p) => p.label).join(' ⇄ ') })),
+      delivery: !runs.length && delivery ? delivery.activeCommandId : null, manual: state?.manualSessions ?? [] });
+  };
   // The shared manual-input hold as the server reports it, independent of the selected checkout.
   const keyboardOwner = keyboardOwnerOf(state?.manualSessions, clientInstanceId, target => 'agentId' in target && visible.some(s => s.id === target.agentId)
     ? { key: target.agentId, label: describeTerminal(target) } : undefined, describeTerminal);
@@ -342,14 +357,12 @@ export function Console() {
     || (groupInputBlock ? `${groupInputBlock.label}: ${inputBlocks.get(groupInputBlock.id)}` : '') || (stale ? 'The console is not current. Wait for it to reconnect.' : '')
     || (setupHeld ? 'A worktree operation is applying or uncertain. Reconcile it in Projects before starting work.' : '')
     || (!state?.inputEnabled ? 'Read-only console: the host has disabled input.' : '')
-    || (owned.length ? 'The controller is driving the agents in this checkout. Wait for it to finish, or pause it and take control in Control access.' : '')
-    || (transportHold ? 'An older uncertain delivery holds this workspace. Check its terminals, then take control in Control access.' : '')
-    || (unknownRequest ? 'A request has an uncertain result. Check the terminal, then take control in Control access before sending again.' : '')
     || (checking ? 'Wait for Recheck to finish.' : '')
     || (!!pair && !limitValid ? 'Set the Stage relay maximum automatic turns to 1–200.' : '');
-  const manualReason = manualHeld ? 'Manual terminal input holds dispatch across this server. Release and reconcile it in Control access first.' : '';
-  const sharedReason = manualReason || dispatchReason;
-  const implementationReason = (keyboardHandoff ? '' : manualReason) || dispatchReason;
+  // Controller runs, delivery holds, uncertain requests and manual input are not blockers here: each action lists them in its
+  // acknowledgement and clears them when it runs. Only what no acknowledgement can clear blocks.
+  const sharedReason = dispatchReason;
+  const implementationReason = dispatchReason;
   const cardReason = (s?: ManagedSession) => !s ? 'Choose an agent first.' : !s.registrationId ? `Recheck ${s.label} before sending: its identity is not registered.`
     : state?.snapshots.find((snapshot) => snapshot.agentId === s.id)?.status !== 'available' ? `${s.label}'s pane cannot be captured right now. Recheck before sending.` : '';
   const blocked = busy || !!sharedReason || !!cardReason(current);
@@ -359,12 +372,6 @@ export function Console() {
   const select = (id: string) => { setPaneChoice(id); setConsent(''); setReady(false); };
   const openAccess = (target: HTMLElement | null = null) => { setControlDrawer(false); setAccessOpen(true); requestAnimationFrame(() => { const destination = target ?? accessPanel.current; destination?.focus(); destination?.scrollIntoView({ block: target ? 'nearest' : 'start' }); }); };
   const closeAccess = () => { setAccessOpen(false); requestAnimationFrame(() => accessEntry.current?.focus()); };
-  const openActionAccess = (id: string) => {
-    if (id !== displayed) select(id);
-    setControlDrawer(false); setAccessOpen(true);
-    requestAnimationFrame(() => { const target = accessPanel.current?.querySelector<HTMLInputElement>('.readiness-slot input, .stage-readiness input') ?? accessPanel.current;
-      target?.focus(); target?.scrollIntoView({ block: 'nearest' }); });
-  };
   /** Inspection only: shows an agent's terminal and leaves Control access open. Changing the view clears earlier confirmations; nothing is sent. */
   const showAgentTerminal = (id: string) => { if (tab !== 'console') showTab('console'); select(id); if (merged) setSurface('terminal');
     requestAnimationFrame(() => stage.current?.scrollIntoView({ block: 'nearest' })); };
@@ -445,8 +452,15 @@ export function Console() {
     if (blocked || !ready || agent.id !== current?.id || !pair || !git?.branch || submission.current) return;
     const text = stageDrafts[agent.id] ?? '';
     submission.current = true; setBusy(true); setReady(false);
-    const requestId = crypto.randomUUID();
+    const requestId = crypto.randomUUID(); let dispatched = false; const intentRevision = stageIntent.current.revision;
     try {
+      // The acknowledgement authorized clearing every listed hold first; a failed step, or any change to the draft, target or view
+      // meanwhile, stops before anything is sent.
+      if (override) {
+        await override.clear();
+        if (stageIntent.current.revision !== intentRevision) throw Error('The holds were cleared, but the draft, target or displayed state changed. Inspect and confirm readiness again; nothing was sent.');
+      }
+      dispatched = true;
       const standalone = kind === 'instruction' && !handoff;
       // The run is bound to the branch and commit on screen; the server refuses a start or delivery after either changes.
       // Plain Send keeps the standalone contract, including instructions that deliberately change HEAD.
@@ -458,10 +472,11 @@ export function Console() {
         ...(text.trim() ? { text: text.trim() } : {}), handoff, pairId: pair.id, turnLimit: limitValue,
         autoContinue: autoContinue && (kind === 'relay' || handoff), stage: { branch: git.branch, head: git.head }, confirmReady: true } });
       setMessage(`${record.status.toUpperCase()}: ${record.error ?? 'Terminal delivery recorded. The server owns this run until completion or human takeover.'}`);
-      if (record.status !== 'rejected') { setStageDrafts((drafts) => ({ ...drafts, [agent.id]: '' })); showActiveTerminal(); }
+      // Only the sent draft is cleared; a newer one survives.
+      if (record.status !== 'rejected') { setStageDrafts((drafts) => drafts[agent.id] === text ? { ...drafts, [agent.id]: '' } : drafts); showActiveTerminal(); }
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : 'Command failed.');
-      if (!(caught instanceof HttpError) || caught.status >= 500) setUnknownRequest(requestId);
+      if (dispatched && (!(caught instanceof HttpError) || caught.status >= 500)) setUnknownRequest(requestId);
     } finally { await refresh(); submission.current = false; setBusy(false); }
   }
   /** Pause and the controller's own continuations; taking control is `takeControl` below. */
@@ -548,13 +563,14 @@ export function Console() {
     ? <StatusIcon icon="⏳" label="Connecting" align="end" help="Connecting to the host. Actions stay disabled until the first update arrives." />
     : stale ? <StatusIcon icon="🔴" label="Not current" align="end" help={`Not current: ${error || 'no update for more than 10 seconds'}. Last update ${lastUpdate}. Actions that depend on current state stay disabled until the console reconnects.`} />
     : <StatusIcon icon="🟢" label="Connected" align="end" help={`Connected to the host. Last update ${lastUpdate}; the console refreshes every 2 seconds.`} />}</div>;
-  const keyboardLabel = !keyboardOwner || keyboardOwner.kind === 'unresolved' ? 'nobody' : keyboardOwner.kind === 'this-browser' ? `${keyboardOwner.label} (this browser)` : keyboardOwner.label;
+  // Several terminals can type at once: this names every active input connection, never one keyboard owner.
+  const inputLabel = !keyboardOwner || keyboardOwner.kind === 'unresolved' ? 'none active' : keyboardOwner.kind === 'this-browser' ? `${keyboardOwner.label} (this browser)` : keyboardOwner.label;
   // The global Control access entry, then the active input count, then connection status: on every tab.
   const headingStatus = <div className="heading-status">
     {state && <button type="button" ref={accessEntry} className={`quiet access-entry${access.attention ? ' attention' : ''}`} aria-expanded={accessOpen} aria-controls="control-access"
       onClick={() => accessOpen ? closeAccess() : openAccess()}>{access.attention && <span aria-hidden="true">⚠ </span>}Control access · {access.summary}{access.attention && <span className="sr-only"> (action needed)</span>}</button>}
     {state && (config?.terminalEnabled || manualHeld) && <StatusIcon icon="⌨️" label={`Input: ${writers.length} active${manualHeld ? ' · automation held' : ''}`} align="end"
-      help={`${keyboardLabel}. ${stale ? 'This is the last reported state; the console is not current. ' : ''}Type directly in terminals. Stop typing and reconcile manual input in Control access.`} />}
+      help={`Typing: ${inputLabel}. ${stale ? 'This is the last reported state; the console is not current. ' : ''}Use a terminal's Terminal toggle to type. An action's acknowledgement stops typing and records manual input before it runs.`} />}
     {connection}
   </div>;
   const actionable = !!pair && members.length <= 2;
@@ -568,8 +584,8 @@ export function Console() {
     ...(takePlan.delivery ? ['Release the older delivery hold; nothing is replayed.'] : []),
     ...(takePlan.manual.length ? [`Record that you accept possible effects of earlier manual input (${takePlan.manual.length === 1 ? 'one record' : `${takePlan.manual.length} records`}), lifting the server-wide hold. Runs in other worktrees keep their own holds.`] : []),
   ];
-  // The composer on screen in Control, mirroring its render conditions below. Its readiness check is shown only in Control access, and
-  // only while the Console shows that composer, so a confirmation always attests to the action on screen.
+  // The composer on screen in Control, mirroring its render conditions below. Its readiness check sits beside its action and only the
+  // shown composer can be confirmed, so a confirmation always attests to the action on screen.
   const composer = !projectSessions.length ? null : showStage ? 'stage' : inputRun ? current ? 'input' : null
     : phase === 'plan' ? 'plan' : current && actionable && phase === 'implementation' ? 'implementation' : null;
   const readinessHere = !!composer && tab === 'console' && showControl;
@@ -580,7 +596,7 @@ export function Console() {
   const locationOf = (s: ManagedSession) => card?.agents.find((a) => a.identity.paneId === s.identity.paneId && a.identity.socketPath === s.identity.socketPath
     && a.identity.serverPid === s.identity.serverPid && a.identity.serverStarted === s.identity.serverStarted)?.location;
   const common = { token, state: state!, git, workspaceError, agentsKey: JSON.stringify([card?.agents ?? null, [...inputBlocks]]), busy, submit: guarded, consent, setConsent, runMark,
-    recheck: recheckRevision, refresh, onRecheck: recheckAll, onMessage: setMessage, onUncertain: setUnknownRequest, onSent: showActiveTerminal, readinessSlot };
+    recheck: recheckRevision, refresh, onRecheck: recheckAll, onMessage: setMessage, onUncertain: setUnknownRequest, onSent: showActiveTerminal, override, onOpenAccess: () => openAccess() };
   return <MemoryContext.Provider value={memory}><HomeContext.Provider value={home}><main className="console-shell">
     <header className="topbar"><div className="wordmark"><span className="brand-mark">A</span> AltCLI</div>
       <nav className="section-tabs" aria-label="Sections">
@@ -604,7 +620,7 @@ export function Console() {
         <div className="section-heading"><h2>Control access</h2><button type="button" className="quiet" onClick={closeAccess}>Close</button></div>
         <p className="fine access-scope">{project ? <>Checkout <span className="mono" title={project}>{tilde(project)}</span></> : 'No checkout selected'}{current ? <> · selected agent <strong>{current.label}</strong></> : ''}
           {' · '}workflow held by {owned[0] ? `system (${owned[0].status})` : 'you'}
-          {' · '}keyboard {keyboardLabel}</p>
+          {' · '}input: {inputLabel}</p>
         {!!access.items.length && <><h3>Before you take control</h3>
         <ul className="access-items" aria-label="What to notice">{access.items.map((item) => <li key={item.id} className={item.attention ? 'attention' : undefined}>
           <span className="badge">{item.scope === 'server' ? 'Server-wide' : 'This checkout'}</span> <span>{item.text}</span>
@@ -626,7 +642,7 @@ export function Console() {
         {takeSteps.length ? <TakeControl key={JSON.stringify([takePlan, viewEpoch])} steps={takeSteps} disabled={busy} onConfirm={() => void takeControl(takePlan)}
           onPause={owned.some((r) => r.status !== 'paused') ? () => { for (const run of owned.filter((r) => r.status !== 'paused')) void action(run, 'pause'); } : undefined} />
           : <p className="fine">No controller run, uncertain delivery or earlier manual input needs takeover.
-            {liveManual && ' The keyboard still holds dispatch; check its owner in the notes above.'}</p>}
+            {liveManual && ' Active typing still holds automation; an action’s acknowledgement stops and records it.'}</p>}
         {config?.terminalEnabled && <section className="access-section" aria-label="Keyboard"><h3>Keyboard <span className="muted">· server-wide</span></h3>
           {keyboard.recovery}</section>}
         <section className="access-section" aria-label="Workflow"><h3>Controller <span className="muted">· this checkout</span></h3>
@@ -665,23 +681,15 @@ export function Console() {
           {!owned.length && !latestRun && <p className="fine">The controller is not driving this checkout: no command is in flight, and nothing it drove earlier involves the agents shown here.</p>}
         </section>
         <section className="access-section" aria-label="Action readiness"><h3>Action readiness</h3>
-          {!composer ? <p className="fine">No action is available for this checkout.</p>
-            : !readinessHere && <p className="fine">{tab !== 'console' ? 'Readiness is confirmed while the Console shows its action.' : 'Show Control to confirm readiness for its action. Changing the view clears an earlier confirmation, so return from inspecting terminals before confirming.'}
-              <button type="button" className="quiet inline-link" onClick={showControlSurface}>{tab !== 'console' ? 'Go to Console' : 'Show Control'}</button></p>}
-          {/* Each composer renders its own check here; its consent key and checked state stay with that composer. */}
-          <div ref={setReadinessSlot} className="readiness-slot" hidden={!readinessHere} />
-          {showStage && <div className="stage-readiness" hidden={!readinessHere}><label className="readiness"><input type="checkbox" aria-label="Ready to send" checked={ready} disabled={blocked} onChange={(e) => setReady(e.target.checked)} />
-            I checked that all participants are at empty prompts, have no background writers, use their standard Git index, and will remain under controller ownership for this run.</label>
-            <p className="fine">Applies to the Stage relay actions for {current?.label}.</p></div>}
-          {readinessHere && <button type="button" className="quiet" onClick={returnToAction}>Return to action</button>}
+          <p className="fine">{!composer ? 'No action is available for this checkout.' : 'Readiness is checked next to each action, in one acknowledgement that also lists everything proceeding would override. Nothing here is required first; this panel explains why something is held.'}</p>
+          {composer && <button type="button" className="quiet" onClick={readinessHere ? returnToAction : showControlSurface}>{readinessHere ? 'Return to action' : tab !== 'console' ? 'Go to Console' : 'Show Control'}</button>}
         </section>
       </section>
     <div className="section-panel" hidden={tab !== 'workspaces'}>
       {feedback}
       <Workspaces token={token} disabled={busy} discovery={discovery} discoveryError={discoveryError} onRecheck={() => recheck()}
         inputEnabled={state.inputEnabled} runs={state.runs} selectedRoot={project ?? null} onSelectWorktree={chooseWorktree}
-        deliveryRepositories={state.reservations.map((reservation) => reservation.repository)}
-        launchEnabled={config?.launchEnabled === true} manualHeld={manualHeld} sessions={sessions} pairs={groups} lockedRepositories={[...setupHolds, ...state.runs.filter((run) => ['running','waiting','paused'].includes(run.status)).map((run) => run.repository)]}
+        launchEnabled={config?.launchEnabled === true} overrideFor={worktreeOverride} sessions={sessions} pairs={groups} lockedRepositories={[...setupHolds, ...state.runs.filter((run) => ['running','waiting','paused'].includes(run.status)).map((run) => run.repository)]}
         onSelectWorkspace={chooseWorkspace} viewEpoch={viewEpoch}
         onChanged={async (notice) => { setMessage(notice); await Promise.all([refresh(), recheck()]); }} />
     </div>
@@ -713,7 +721,7 @@ export function Console() {
       {(workspaceError || card?.gitError) && <p className="notice error" role="alert">{tilde(workspaceError || card?.gitError || '')} Recheck before starting.</p>}
       {setupHeld && <p className="notice">This worktree operation is applying or uncertain. Inspect and reconcile its result in Projects before starting work.</p>}
       {unknownRequest && <div className="notice error" role="alert">Request {unknownRequest} has an uncertain HTTP result. Inspect its server run and the terminal; do not resend it.
-        Check the terminal, then take control in Control access to clear it.</div>}
+        Check the terminal; the next action’s acknowledgement, or Take control in Control access, clears this warning.</div>}
       {!!resetAgents.length && <section className="notice" aria-label="Agent identity changed">
         <p>{owned.length ? 'CLI identity changed for' : 'Workspace reset required for'} {resetAgents.map((s) => s.label).join(', ')}. A saved CLI identity is outdated. Inspect these panes and confirm the intended CLIs are running.</p>
         {owned.length ? <p>The controller is still driving the agents in this checkout. Pause it in Control access, inspect every participant, then take control. A restarted CLI in the same pane and directory will then be rediscovered automatically, keeping names and group settings.</p>
@@ -722,7 +730,7 @@ export function Console() {
         <p>Recheck, or reset the workspace, in Control access.</p>
       </section>}
       {!!unknownAgents.length && <div className="notice">The host cannot confirm the CLI process for {unknownAgents.map((s) => s.label).join(', ')}. Recheck before sending.</div>}
-      {transportHold && !owned.length && <div className="notice">An older uncertain delivery holds this workspace. Inspect its terminals and any partially typed input before taking control in Control access. Nothing is replayed.</div>}
+      {transportHold && !owned.length && <div className="notice">An older uncertain delivery holds this workspace. Inspect its terminals and any partially typed input; the next action’s acknowledgement, or Take control in Control access, releases it. Nothing is replayed.</div>}
       {feedback}
       {!projectSessions.length && <section className="panel empty-console"><h2>No eligible agents here yet</h2>
         <p className="muted">{missingTree ? <>This worktree is no longer available. Choose another worktree in {selectedProject.name}.</> : selectedProject?.error ?? selectedTree?.error ?? card?.agents.find((agent) => agent.reason && (agent.kind === 'codex' || agent.kind === 'claude'))?.reason ?? (project ? <>Start coding CLIs in <span className="mono" title={project}>{tilde(project)}</span>, then Recheck in Projects. Collaborators need the same directory. No registration is needed.</> : 'Choose a project and worktree with running coding agents. Nothing is sent until you explicitly start work.')}</p>
@@ -812,7 +820,7 @@ export function Console() {
           {stageEligible && !stageAvailable && phase === 'implementation' && !inputRun && !!members.length && <p className="fine">{!state.legacyEnabled
             ? <>Stage relay is disabled on this host (<span className="mono">ALTCLI_ENABLE_LEGACY_RELAY=false</span>). Remove that line or set it to true, then restart the host.</>
             : <>Stage relay on <span className="mono">{git?.branch}</span> needs a two-member group. Select two agents in Projects.</>}</p>}
-        {phase === 'plan' && !inputRun && <>{commandDivider}<PlanSetup {...common} group={pair && members.length ? pair : undefined} settings={planSettings} displayed={current?.id}
+        {phase === 'plan' && !inputRun && <>{commandDivider}<PlanSetup {...common} viewEpoch={viewEpoch} group={pair && members.length ? pair : undefined} settings={planSettings} displayed={current?.id}
           blockedReason={sharedReason || cardReason(current)} draftKey={`plan:${scope}`} /></>}
         {(inputRun || (phase === 'implementation' && (showStage || actionable))) && <section aria-label={showStage ? 'Stage relay' : undefined}>
           {showStage && <p className="fine stage-summary">Reviews changes in this checkout; accepted changes are staged. Commit the finished fix yourself. The run stays on <span className="mono">{git?.branch}</span> at <span className="mono">{git?.head.slice(0, 7)}</span> and stops if either changes.</p>}
@@ -824,8 +832,9 @@ export function Console() {
             return <section key={agent.id} className={`control-agent${active ? ' active' : ''}`} hidden={layout === 'focus' && !active}
               onFocusCapture={activate} onPointerDownCapture={activate}>
               <div className="control-agent-heading"><button type="button" className="quiet" aria-label={`Select ${agent.label} controls`} aria-pressed={active} onClick={activate}><Icon badge={status.badge} />{agent.label}</button><span className="muted">{status.badge}</span></div>
-              {inputRun && <InteractionComposer token={token} state={state} run={inputRun} agent={agent} draftKey={`draft:${scope}:${agent.id}`} disabled={busy || stale || setupHeld || manualHeld || !state.inputEnabled || !!identityBlockedReason || !!cardReason(agent)} viewEpoch={viewEpoch} refresh={refresh} onSent={showActiveTerminal} readinessSlot={active ? readinessSlot : null} />}
-              {actionable && !inputRun && !showStage && <PaneActions {...common} group={pair} agent={agent} settings={implementationSettings} blockedReason={implementationReason || cardReason(agent)} keyboardHandoff={keyboardHandoff} viewEpoch={viewEpoch} draftKey={`draft:${scope}:${agent.id}`} consent={active ? consent : ''} readinessSlot={active ? readinessSlot : null} onOpenAccess={() => openActionAccess(agent.id)} />}
+              {inputRun && <InteractionComposer token={token} state={state} run={inputRun} agent={agent} draftKey={`draft:${scope}:${agent.id}`} disabled={busy || stale || setupHeld || !state.inputEnabled || !!identityBlockedReason || !!cardReason(agent)} viewEpoch={viewEpoch} refresh={refresh} onSent={showActiveTerminal} active={active} override={inputOverride} />}
+              {inputRun && active && override && <TakeControlHere key={viewEpoch} override={override} open={inputRun.status !== 'running'} disabled={busy || stale || !state.inputEnabled} submit={guarded} onMessage={setMessage} onDone={recheckAll} />}
+              {actionable && !inputRun && !showStage && <PaneActions {...common} group={pair} agent={agent} settings={implementationSettings} blockedReason={implementationReason || cardReason(agent)} viewEpoch={viewEpoch} draftKey={`draft:${scope}:${agent.id}`} consent={active ? consent : ''} active={active} />}
               {showStage && <form className="pane-actions stage-actions" onSubmit={(e) => { e.preventDefault(); void send(agent, 'instruction'); }}>
                 <p className="zone-label">Stage relay · Send to {agent.label}</p>
                 <label className="sr-only" htmlFor={`instruction-${agent.id}`}>Instruction to {agent.label}</label>
@@ -834,7 +843,9 @@ export function Console() {
                   <button className="primary" disabled={stageBlocked || !stageReady || !text.trim()}>Send {agent.label}</button>
                   <button type="button" disabled={stageBlocked || !stageReady || !text.trim()} onClick={() => void send(agent, 'instruction', true)}>Send {agent.label} &amp; stage-relay to {state.sessions.find((session) => pair?.sessions.includes(session.id) && session.id !== agent.id)?.label} ↗</button>
                   <button type="button" disabled={stageBlocked || !stageReady} onClick={() => void send(agent, 'relay')}>Stage-relay review by {agent.label} ↗</button></div>
-                {!stageBlocked && !stageReady && <p className="fine">Confirm readiness in Control access. <button type="button" className="quiet inline-link" onClick={() => openActionAccess(agent.id)}>Go to Control access</button></p>}
+                {active ? <Acknowledgement label="Ready to send" checked={ready} disabled={stageBlocked} onChange={setReady} lines={override?.lines ?? []}>
+                  I checked that all participants are at empty prompts, have no background writers, use their standard Git index, and will remain under controller ownership for this run.</Acknowledgement>
+                  : <p className="fine">Select {agent.label} to confirm readiness and send.</p>}
                 {!busy && (sharedReason || cardReason(agent)) && <p className="fine" role="status">{sharedReason || cardReason(agent)}</p>}
               </form>}
             </section>;
@@ -913,7 +924,7 @@ export function Console() {
       <section className="panel about" aria-label="How this works">
         <div className="section-heading"><h2>How this works</h2></div>
         <p>AltCLI is a host-resident console for coding agents running in tmux panes. You can start CLIs yourself or explicitly preview and confirm profile launches when the host enables that feature. The console coordinates their turns.</p>
-        <p>The Agent selector above the terminals chooses both the terminal shown and the Control pane's recipient; it starts on a working agent. In <strong>Focus</strong> it then follows whichever agent starts working, for the terminal and Control alike; in <strong>Parallel</strong> all agent controls appear side by side on wide screens and stacked on phones, with separate drafts. Selecting a card activates its readiness check and clears the previous confirmation. Outside Plan, the <strong>Terminal / Control</strong> switch shows one or the other in the same frame, and an accepted command from Control switches back to the terminals. Plan setup addresses the whole group and keeps its own section. The worktree group's <strong>Agents</strong> toggle, beside its local <strong>Settings</strong> toggle, shows agent status. Local Settings remain available in Stage relay; they configure Plan and committed work. <strong>Control access</strong>, at the top of every page, is the one place to take control: keyboard release, manual-input recovery, the controller, other recovery and each action’s readiness check. The keyboard emoji reports active input connections and the shared automation hold. Type directly in terminals; each remains writable when you focus another. Send delivers an instruction; After send can add one handoff commit, or a commit and one review by the named peer. Current changes snapshots work as it stands, and Committed review asks this agent to review a committed range. Every action names its recipients and needs a fresh readiness confirmation.</p>
+        <p>The Agent selector above the terminals chooses both the terminal shown and the Control pane's recipient; it starts on a working agent. In <strong>Focus</strong> it then follows whichever agent starts working, for the terminal and Control alike; in <strong>Parallel</strong> all agent controls appear side by side on wide screens and stacked on phones, with separate drafts. Selecting a card activates its readiness check and clears the previous confirmation. Outside Plan, the <strong>Terminal / Control</strong> switch shows one or the other in the same frame, and an accepted command from Control switches back to the terminals. Plan setup addresses the whole group and keeps its own section. The worktree group's <strong>Agents</strong> toggle, beside its local <strong>Settings</strong> toggle, shows agent status. Local Settings remain available in Stage relay; they configure Plan and committed work. Every action has one readiness check beside it; while something holds the checkout (a controller run, an uncertain delivery or request, manual terminal input) the check lists each consequence and the action clears those holds before it runs. <strong>Control access</strong>, at the top of every page, explains what holds work and offers Take control, typing stops and recovery; nothing there is required first. The keyboard emoji reports active input connections and the shared automation hold. Each terminal has a <strong>Terminal / Display</strong> toggle: Terminal types in that pane and stays writable when you focus another; Display only watches, and toggling again resets a failed connection. Send delivers an instruction; After send can add one handoff commit, or a commit and one review by the named peer. Current changes snapshots work as it stands, and Committed review asks this agent to review a committed range. Every action names its recipients and needs a fresh readiness confirmation.</p>
         <p>The server owns every run, validates and deduplicates correlated completions, and pauses on unknown background work. No effect in this page sends commands. A completed chain is not final task acceptance.</p>
         <p>Viewing another worktree never changes a running relay. Pause a run before manual terminal takeover. Locking this view or disconnecting your phone does not interrupt workers.</p>
         <p className="fine">Plan produces documents and an approval checkpoint; Implementation runs committed handoffs on a task branch. Integration branches are starting points only. The detailed design lives in the repository’s README, docs/WORKFLOWS.md and the ADRs.</p>

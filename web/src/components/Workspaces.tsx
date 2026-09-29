@@ -10,18 +10,21 @@ import { LifecycleResults, WorktreeActions } from './RemoveWorktree';
 import { LaunchAgents } from './LaunchAgents';
 import { CreateWorktree } from './CreateWorktree';
 import { AddProject } from './DirectoryPicker';
+import type { Override } from './Holds';
 export const nameOf = (path: string) => path.split('/').filter(Boolean).pop() ?? path;
 export const workspaceKey = (w: Workspace) => `${w.socketPath}\0${w.cwd}`;
 type WorktreeTab = 'agents' | 'branch';
 interface Props {
   token: string; disabled: boolean;
-  launchEnabled?: boolean; manualHeld?: boolean;
+  launchEnabled?: boolean;
+  /** What an acknowledgement clears before a worktree action or launch (controller runs and deliveries on that worktree, manual input),
+   * or null when nothing holds it. */
+  overrideFor?: (root: string, scope: 'worktree' | 'launch') => Override | null;
   discovery: WorkspaceDiscovery | null; discoveryError: string; onRecheck: () => Promise<void>;
   sessions: SessionRegistration[]; pairs: Group[]; lockedRepositories: string[];
   onSelectWorkspace: (workspace: Workspace) => void;
   selectedRoot: string | null; onSelectWorktree: (worktree: ProjectWorktree) => void;
   inputEnabled: boolean; runs: RelayRun[];
-  deliveryRepositories?: string[];
   /** Something changed on the server: show the notice and refresh. */
   onChanged: (notice: string) => Promise<void>;
   /** Increases whenever the view changes; confirmations in this section are revoked when it is hidden. */
@@ -75,10 +78,9 @@ export function Workspaces(props: Props) {
         const hardReason = !props.inputEnabled ? 'The host is read-only. Enable input before changing worktrees.'
           : props.disabled ? 'Another request is in progress. Wait for it to finish.'
           : discoveryError || discovery?.error || tree.error || project.error || '';
-        const ownerReason = (!tree.branch ? 'The task worktree has detached HEAD. Check out its task branch, then Recheck.' : '')
-          || (run ? [`The controller is ${run.status} on this worktree.`, run.reason, 'Let it finish or use Take control in Console → Control access first.'].filter(Boolean).join(' ') : '')
-          || (props.deliveryRepositories?.includes(tree.path) ? 'An unresolved delivery owns this worktree. Inspect it in Console first.' : '');
-        const squashReason = hardReason || ownerReason;
+        // A controller run or unresolved delivery on this worktree is not a blocker: the actions' acknowledgement lists and ends it.
+        const detachedReason = !tree.branch ? 'The task worktree has detached HEAD. Check out its task branch, then Recheck.' : '';
+        const squashReason = hardReason || detachedReason;
         const occupied = agents.length ? `${agents.map((a) => a.label).join(', ')} ${agents.length === 1 ? 'is' : 'are'} still in this worktree; the server refuses removal while a pane is inside it. Finish branch closes sessions AltCLI launched; close or move other panes yourself, then Recheck.` : '';
         const selected = (directoryRoot ?? selectedRoot) === tree.path;
         const name = !tree.main && tree.branch ? tree.branch : nameOf(tree.path);
@@ -99,10 +101,10 @@ export function Workspaces(props: Props) {
             if (workspace) onSelectWorkspace(workspace); else onSelectWorktree(tree);
           }}>Open console</button>}
           agents={<WorkspaceDetail workspace={workspace} tree={tree} {...props}>
-            <LaunchAgents requested={launchRequest?.treeId === tree.id ? launchRequest.nonce : 0} token={props.token} projectId={project.id} tree={tree} sessions={props.sessions} enabled={props.launchEnabled === true && props.inputEnabled} inputEnabled={props.inputEnabled} held={props.manualHeld === true} onChanged={props.onChanged} viewEpoch={viewEpoch} busy={props.disabled}/>
+            <LaunchAgents requested={launchRequest?.treeId === tree.id ? launchRequest.nonce : 0} token={props.token} projectId={project.id} tree={tree} sessions={props.sessions} enabled={props.launchEnabled === true && props.inputEnabled} inputEnabled={props.inputEnabled} override={props.overrideFor?.(tree.path, 'launch') ?? null} onChanged={props.onChanged} viewEpoch={viewEpoch} busy={props.disabled}/>
           </WorkspaceDetail>}
           branch={tree.main ? <p className="muted">This is the main checkout. Manage and integrate task branches from their worktrees.</p> : <WorktreeActions project={project} tree={tree} token={props.token}
-          disabled={!!squashReason} disabledReason={squashReason} deletionReason={hardReason} deletionHint={ownerReason || occupied}
+          disabled={!!squashReason} disabledReason={squashReason} deletionReason={hardReason} deletionHint={detachedReason || occupied} override={props.overrideFor?.(tree.path, 'worktree') ?? null}
           onChanged={props.onChanged} viewEpoch={viewEpoch} />} />;
       })}</ul>
       <LifecycleResults project={project} token={props.token} onChanged={props.onChanged} />

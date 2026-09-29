@@ -1,5 +1,6 @@
 import { expect, test, type Page, type APIRequestContext } from '@playwright/test';
 import type { WorkspaceDiscovery, WorkflowState } from '../src/contracts/workflow';
+import type { ManualSession } from '../src/contracts/terminals';
 import type { DirectoryListing, FinishPreview, ProjectWorktree, TaskFinish, WorktreeCreateInput, WorktreeCreation, WorktreeDiscard, WorktreePreview } from '../src/contracts/projects';
 import { observationTransport, expandAgents, expandWorktree } from './ui';
 
@@ -720,16 +721,28 @@ test('worktree actions stay clickable and explain blockers without sending reque
     await expect(page.getByRole('button', { name: 'Confirm update', exact: true })).toHaveCount(0);
     expect(writes).toEqual([]);
   };
+  // A controller run or delivery on the worktree is not a blocker: one acknowledgement lists it, and an action clicked without it
+  // explains that and sends nothing. With it, ending the run is the first request, and a refusal stops before any worktree request.
+  const squash = main.getByRole('button', { name: 'Squash feature/finished into main' });
+  const acknowledgement = card.getByRole('group', { name: 'Proceed with this feature/finished action anyway acknowledgement' });
   for (const status of ['paused', 'running', 'waiting'] as const) {
     const reason = status === 'paused' ? 'Backend restarted. Reconcile this run before starting another; nothing was replayed.' : 'The run still owns this worktree.';
     state.runs = [{ id: 'owned-run', repository: target.path, lockKey: target.identity!.indexPath, pairId: null, participants: [],
       autoContinue: false, pauseOnObjection: true, pauseRequested: false, status, reason, currentCommandId: 'owned-command',
       automaticTurns: 0, turnLimit: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }];
-    await assertBlocked(`The controller is ${status} on this worktree. ${reason} Let it finish or use Take control in Console → Control access first.`);
+    await expect(acknowledgement).toContainText(`The controller’s ${status} run for`);
+    await expect(squash).not.toHaveAttribute('aria-describedby');
+    await squash.click(); await expect(main.getByRole('alert')).toContainText('Check “Proceed anyway” above');
+    expect(writes).toEqual([]);
   }
+  await acknowledgement.getByRole('checkbox').check(); await squash.click();
+  await expect(main.getByRole('alert')).toContainText('Nothing was changed. The action was not started');
+  expect(writes.map(url => new URL(url).pathname)).toEqual(['/api/v1/runs']); writes.length = 0;
   state.runs = []; state.reservations = [{ repository: target.path, activeCommandId: 'owned-command' }];
-  await assertBlocked('An unresolved delivery owns this worktree. Inspect it in Console first.');
-  state.reservations = []; state.inputEnabled = false;
+  await expect(acknowledgement).toContainText('The older uncertain delivery hold is released');
+  await squash.click(); await expect(main.getByRole('alert')).toContainText('Check “Proceed anyway” above'); expect(writes).toEqual([]);
+  state.reservations = []; await expect(acknowledgement).toHaveCount(0);
+  state.inputEnabled = false;
   await assertBlocked('The host is read-only. Enable input before changing worktrees.', true);
   state.inputEnabled = true;
   project.creations = [{ input: { ...preview(inventory, 'feature/pending'), confirm: true }, status: 'uncertain', message: 'Inspect creation.', updatedAt: new Date().toISOString() }];
@@ -762,9 +775,10 @@ test('idle source agents permit squash and leave deletion clickable with an occu
   await expect(check).toBeEnabled(); await expect(check).toHaveAccessibleDescription('The host is read-only. Enable input before changing worktrees.');
   await shownOnce('The host is read-only');
   state.inputEnabled = true; state.reservations = [{ repository: target.path, activeCommandId: crypto.randomUUID() }];
-  await expect(squash).toHaveAccessibleDescription('An unresolved delivery owns this worktree. Inspect it in Console first.');
-  await expect(check).toBeEnabled(); await expect(check).toHaveAccessibleDescription('An unresolved delivery owns this worktree. Inspect it in Console first.'); // ownership is a hint for deletion; the server decides
-  await shownOnce('An unresolved delivery owns this worktree');
+  // A delivery that owns the worktree is listed once in the acknowledgement instead of blocking the actions.
+  await expect(card.getByRole('group', { name: /acknowledgement$/ })).toContainText('The older uncertain delivery hold is released');
+  await expect(squash).not.toHaveAttribute('aria-describedby');
+  await expect(check).toBeEnabled(); await expect(check).toHaveAccessibleDescription(/are still in this worktree/); // the occupant hint remains; the server decides
   state.reservations = [];
   project.creations = [{ input: { ...preview(inventory, 'feature/pending'), confirm: true }, status: 'uncertain', message: 'Inspect creation.', updatedAt: new Date().toISOString() }];
   await page.getByRole('button', { name: 'Recheck', exact: true }).click();
@@ -774,6 +788,98 @@ test('idle source agents permit squash and leave deletion clickable with an occu
   project.creations = []; target.branch = null;
   await page.getByRole('button', { name: 'Recheck', exact: true }).click();
   await expect((await worktreeAction(page, 'Squash batches into main'))).toHaveAccessibleDescription('The task worktree has detached HEAD. Check out its task branch, then Recheck.');
+});
+test('one acknowledgement records earlier manual input before Update from main, and the preview follows it', async ({ page, request }) => {
+  const inventory = await fixture(page, request); const project = inventory.projects![0]!;
+  const target = tree('/home/fixture/tasks/finished', 'feature/finished'); project.worktrees.push(target);
+  const state = await (await request.get('/api/v1/state', { headers })).json() as WorkflowState;
+  state.runs = []; state.executions = []; state.reservations = []; state.inputEnabled = true;
+  const now = new Date().toISOString();
+  // Only the displayed record is simulated; the acknowledgement's request order is what this test observes.
+  const manual: ManualSession = { id: 'manual-fixture', revision: 4, bootId: 'fixture-boot', clientInstanceId: 'other-browser', connectionId: 'gone', generation: 'g', target: { launchId: crypto.randomUUID() },
+    live: false, reconciliationRequired: true, inputMayHaveOccurred: true, bytes: 5, createdAt: now, updatedAt: now, reason: 'Fixture input.', panes: [], runs: [], writers: [], recoveryRequired: true, targets: [] };
+  state.manualSessions = [manual];
+  await page.route('**/api/v1/state', (route) => route.fulfill({ json: state }));
+  const calls: string[] = [];
+  await page.route('**/api/v1/terminals/reconcile', (route) => {
+    calls.push('reconcile'); expect(route.request().postDataJSON()).toMatchObject({ manualSessionId: 'manual-fixture', expectedRevision: 4, confirmInspected: true });
+    state.manualSessions = []; return route.fulfill({ json: { ...manual, reconciliationRequired: false, recoveryRequired: false, revision: 5 } });
+  });
+  await page.route('**/api/v1/projects/worktrees/update/preview', (route) => { calls.push('preview'); return route.fulfill({ json: alignPreview(project, target, {}) }); });
+  await page.getByRole('button', { name: 'Recheck', exact: true }).click(); await expandWorktree(page, 'feature/finished');
+  const main = await openWorktreeMenu(page, 'Main', 'feature/finished'), card = main.locator('xpath=ancestor::li[1]');
+  const acknowledgement = card.getByRole('group', { name: 'Proceed with this feature/finished action anyway acknowledgement' });
+  await expect(acknowledgement).toContainText('Manual terminal input (5 bytes, some of it uncertain) is recorded as accepted');
+  const update = main.getByRole('button', { name: 'Update feature/finished from main', exact: true });
+  await update.click(); await expect(main.getByRole('alert')).toContainText('Check “Proceed anyway” above'); expect(calls).toEqual([]);
+  await acknowledgement.getByRole('checkbox').check(); await update.click();
+  await expect(page.getByRole('region', { name: 'Update feature/finished', exact: true })).toBeVisible();
+  expect(calls).toEqual(['reconcile', 'preview']); await expect(acknowledgement).toHaveCount(0);
+});
+test('Proceed anyway is bound to the exact run command, delivery and writer, not to how they read', async ({ page, request }) => {
+  const inventory = await fixture(page, request); const project = inventory.projects![0]!;
+  const target = tree('/home/fixture/tasks/finished', 'feature/finished'); project.worktrees.push(target);
+  const state = await (await request.get('/api/v1/state', { headers })).json() as WorkflowState;
+  state.runs = []; state.executions = []; state.reservations = []; state.inputEnabled = true;
+  const now = new Date().toISOString();
+  const run = { id: 'owned-run', repository: target.path, lockKey: target.identity!.indexPath, pairId: null, participants: [], autoContinue: false, pauseOnObjection: true,
+    pauseRequested: false, status: 'paused', reason: 'Fixture.', currentCommandId: 'old-command', automaticTurns: 0, turnLimit: 1, createdAt: now, updatedAt: now };
+  state.runs = [run as unknown as WorkflowState['runs'][number]];
+  await page.route('**/api/v1/state', (route) => route.fulfill({ json: state }));
+  const writes: string[] = []; page.on('request', r => { if (r.method() !== 'GET' && !observationTransport(r.url())) writes.push(r.url()); });
+  await page.getByRole('button', { name: 'Recheck', exact: true }).click(); await expandWorktree(page, 'feature/finished');
+  const main = await openWorktreeMenu(page, 'Main', 'feature/finished'), card = main.locator('xpath=ancestor::li[1]');
+  const acknowledgement = card.getByRole('group', { name: 'Proceed with this feature/finished action anyway acknowledgement' });
+  const box = acknowledgement.getByRole('checkbox'), text = async () => acknowledgement.getByRole('list', { name: 'Consequences of proceeding' }).textContent();
+  const replaced = async (change: () => void) => {
+    await box.check(); const before = await text(); change();
+    await expect(box).not.toBeChecked({ timeout: 8000 }); expect(await text()).toBe(before);
+  };
+  // The same paused run now owns another command: its status and label read the same.
+  await expect(acknowledgement).toContainText('The controller’s paused run for');
+  await replaced(() => { state.runs = [{ ...state.runs[0]!, currentCommandId: 'new-command' }]; });
+  // Another delivery, read the same way.
+  state.runs = []; state.reservations = [{ repository: target.path, activeCommandId: 'first-delivery' }];
+  await expect(acknowledgement).toContainText('The older uncertain delivery hold is released');
+  await replaced(() => { state.reservations = [{ repository: target.path, activeCommandId: 'second-delivery' }]; });
+  // Another grant for the same terminal: bytes and wording unchanged.
+  state.reservations = [];
+  const manual: ManualSession = { id: 'manual-fixture', revision: 4, bootId: 'fixture-boot', clientInstanceId: 'other-browser', connectionId: 'c1', generation: 'g1', target: { launchId: 'fixture-launch' },
+    live: true, reconciliationRequired: true, inputMayHaveOccurred: true, bytes: 5, createdAt: now, updatedAt: now, reason: 'Fixture input.', panes: [], runs: [], recoveryRequired: false, targets: [],
+    writers: [{ connectionId: 'c1', clientInstanceId: 'other-browser', generation: 'g1', target: { launchId: 'fixture-launch' }, identity: null, sessionId: null, revision: 2, live: true, bytes: 5, inputMayHaveOccurred: true }] };
+  state.manualSessions = [manual];
+  await expect(acknowledgement).toContainText('Typing stops in launched terminal (another browser or tab)'); await expect(acknowledgement).not.toContainText('delivery');
+  await replaced(() => { state.manualSessions = [{ ...manual, writers: [{ ...manual.writers[0]!, generation: 'g2' }] }]; });
+  expect(writes).toEqual([]);
+});
+test('a squash refused for possible activity can be previewed anyway, and confirmation repeats that acknowledgement', async ({ page, request }) => {
+  const inventory = await fixture(page, request); const project = inventory.projects![0]!;
+  const target = tree('/home/fixture/tasks/batches', 'feature/batches'); project.worktrees.push(target);
+  const previews: Record<string, unknown>[] = []; const confirms: Record<string, unknown>[] = []; const base = 'b'.repeat(40);
+  let shown: Record<string, unknown> = {};
+  await page.route('**/api/v1/projects/worktrees/integration/preview', (route) => {
+    const input = route.request().postDataJSON(); previews.push(input);
+    if (!input.acknowledgeActivity) return route.fulfill({ status: 409, json: { error: { code: 'INTEGRATION_WRITERS', message: 'Squash requires settled agents and clear process evidence in both checkouts.' } } });
+    shown = { ...input, through: target.head, projectId: project.id, worktreeId: target.id, requestId: crypto.randomUUID(), worktree: target.identity, branch: target.branch, head: target.head, dirty: false,
+      targetRef: 'refs/heads/main', targetHead: base, target: project.worktrees[0]!.identity, mergeBase: base, previousCommit: null, commitCount: 1,
+      commits: [{ sha: target.head, subject: 'change' }], tree: 'e'.repeat(40), message: 'Change\n', commands: ['Stage previewed changes', 'Commit'], consent: 'f'.repeat(64) };
+    return route.fulfill({ json: shown });
+  });
+  await page.route('**/api/v1/projects/worktrees/integration', (route) => {
+    confirms.push(route.request().postDataJSON());
+    return route.fulfill({ json: { input: { ...shown, confirm: true }, status: 'integrated', message: 'Batch integrated.', updatedAt: new Date().toISOString(), commit: 'd'.repeat(40) } });
+  });
+  await page.getByRole('button', { name: 'Recheck', exact: true }).click(); await expandWorktree(page, 'feature/batches');
+  await (await worktreeAction(page, 'Squash feature/batches into main')).click();
+  const anyway = page.getByRole('group', { name: 'Squash despite activity' });
+  await expect(anyway).toContainText('Squash requires settled agents'); await expect(anyway).toContainText('may still be working');
+  const again = anyway.getByRole('button', { name: 'Preview batch anyway', exact: true }); await expect(again).toBeDisabled();
+  await anyway.getByRole('checkbox', { name: 'Squash anyway', exact: true }).check(); await again.click();
+  await expect(page.getByRole('region', { name: 'Squash feature/batches' })).toContainText('You accepted that agents or processes may still be working');
+  await page.getByRole('button', { name: 'Confirm squash', exact: true }).click();
+  await expect.poll(() => confirms.length).toBe(1);
+  expect(previews.map((p) => p.acknowledgeActivity ?? false)).toEqual([false, true]);
+  expect(confirms[0]).toMatchObject({ acknowledgeActivity: true, consent: 'f'.repeat(64) });
 });
 test('changing the batch endpoint revokes its preview and confirms only the chosen range with an edited message', async ({ page, request }, info) => {
   const inventory = await fixture(page, request); const project = inventory.projects![0]!;

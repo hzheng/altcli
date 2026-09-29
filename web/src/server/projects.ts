@@ -589,7 +589,7 @@ export class ProjectCatalog {
     if (!project) throw new AppError('PROJECT_CHANGED', 'Recheck this project.', 409);
     // The compact confirmation carries only the consent digest; the durable record is the re-derived preview it must still match.
     const changed = new AppError('WORKTREE_CHANGED', 'The task branch, the integration checkout or the merge result changed. Preview and confirm again.', 409);
-    const derived = await this.previewIntegration({ projectId: request.projectId, worktreeId: request.worktreeId, ...(request.through ? { through: request.through } : {}) });
+    const derived = await this.previewIntegration({ projectId: request.projectId, worktreeId: request.worktreeId, ...(request.through ? { through: request.through } : {}), ...(request.acknowledgeActivity ? { acknowledgeActivity: true } : {}) });
     if (derived.consent !== request.consent) throw changed;
     const input: WorktreeIntegrateInput = { ...derived, requestId: request.requestId, message: request.message, confirm: true };
     const operation: WorktreeIntegration = { input, status: 'applying', message: 'Checking the confirmed squash integration.', updatedAt: new Date().toISOString(), commit: null };
@@ -603,7 +603,7 @@ export class ProjectCatalog {
     try {
       await guard(input.target, input.worktree);
       // Guard awaited host inspection; recheck Git and consent immediately before mutation too.
-      if ((await this.previewIntegration({ projectId: input.projectId, worktreeId: input.worktreeId, through: input.through })).consent !== input.consent) throw new AppError('WORKTREE_CHANGED', 'The checkouts changed during integration checks.', 409);
+      if ((await this.previewIntegration({ projectId: input.projectId, worktreeId: input.worktreeId, through: input.through, ...(input.acknowledgeActivity ? { acknowledgeActivity: true } : {}) })).consent !== input.consent) throw new AppError('WORKTREE_CHANGED', 'The checkouts changed during integration checks.', 409);
       await guard(input.target, input.worktree);
       attempted = true;
       // Final integration uses the repository's normal hook policy; only handoff commits bypass hooks.

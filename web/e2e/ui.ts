@@ -52,9 +52,11 @@ export async function openAccess(page: Page) {
   if (await entry.getAttribute('aria-expanded') !== 'true') await entry.click();
   return page.getByRole('region', { name: 'Control access', exact: true });
 }
-/** The readiness check for the action on screen; it lives only in Control access, which this opens. */
+/** The readiness check for the action on screen: beside the selected card's actions in Control, which this shows. The same check
+ * acknowledges every hold the action overrides. */
 export async function readiness(page: Page, label = 'Ready for implementation') {
-  return (await openAccess(page)).getByLabel(label, { exact: true });
+  await showSurface(page, 'Control');
+  return page.getByRole('region', { name: 'Control', exact: true }).getByRole('checkbox', { name: label, exact: true });
 }
 /** Takes control in Control access: one confirmation that lists its steps, then those steps in order. */
 export async function takeControl(page: Page) {

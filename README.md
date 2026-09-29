@@ -13,28 +13,33 @@ Native iOS and a third AI supervisor remain deferred.
 `node scripts/setup.mjs` writes `ALTCLI_ENABLE_TERMINAL=true` and
 `ALTCLI_ENABLE_AGENT_LAUNCH=true` into a new `web/.env.local`; a missing line means
 off, so add them to an older file. With the host flags enabled,
-Console observes terminals automatically. Type, paste or use a terminal soft key to enable
-input there; there is no Claim keyboard dialog. Several terminals and browsers can write
-independently, including to the same pane (where native input can interleave). The first input
-holds AltCLI dispatch/setup/launch across the tmux server. Focus and observation grant nothing.
-Automatically sized tmux windows use captured observation to avoid resizing workers;
-the input field still opens a normal native writer. **Stop typing here** or **Stop typing in
-this browser** in Control access stops the selected writers. Reconciliation and held workflow
-checkpoint review remain explicit.
+Console observes terminals automatically. Each terminal's **Terminal / Display** toggle switches
+between typing in that pane and only watching it; there is no Claim keyboard dialog, and toggling
+again resets a failed connection. Several terminals and browsers can write independently,
+including to the same pane (where native input can interleave). Input holds AltCLI
+dispatch/setup/launch across the tmux server. Focus, observation and clicks in Display grant
+nothing. Automatically sized tmux windows use captured observation to avoid resizing workers;
+Terminal still opens a normal native writer. Display, or **Stop typing here** / **Stop typing in
+this browser** in Control access, stops writers. Held workflow checkpoint review remains explicit.
 
 One **Agent** selector above the terminals chooses both the terminal shown and the
 active Control recipient. **Parallel** shows every agent's controls side by side on wide
 screens and stacked on phones, with separate drafts. **Focus** shows one agent and follows
-newly working agents; Parallel holds your selection. Selecting a card activates its readiness
-check in Control access and clears the previous confirmation. Outside Plan, a **Terminal / Control**
+newly working agents; Parallel holds your selection. Selecting a card shows its readiness
+check beside its actions and clears the previous confirmation. Outside Plan, a **Terminal / Control**
 switch shows the terminals or that Control pane in one frame (Terminal first); switching sends
 nothing and clears confirmations. Plan setup addresses the whole group and keeps its own section
 below the terminals. The worktree group row has **Agents** immediately left of its local
 **Settings** toggle; both stay available in Stage relay. Local Settings configure Plan and
-committed work; global Settings hold console preferences and host configuration. **Control access**, the one entry in the page heading's status row, gathers
-keyboard release, manual-input recovery, pause and takeover, other recovery and
-each action's readiness check. Implementation readiness hints offer **Go to Control access**
-to focus the checkbox; **Return to action** goes back to the composer. The ⌨️ status to its right reports the
+committed work; global Settings hold console preferences and host configuration. Each action's
+one readiness check sits beside it; while a controller run, an uncertain delivery or request, or
+manual terminal input holds the checkout, that check lists every consequence and the action clears
+those holds (ending the run, stopping all typing, recording the input as accepted) before it
+starts. Projects' squash, update, rebase, reset, rename, finish, removal, discard and launch use one
+such **Proceed anyway** acknowledgement, and a squash refused only for possible agent activity can
+be previewed anyway. **Control access**, the one entry in the page heading's status row, explains
+every hold and keeps typing stops, pause and takeover, and other recovery; nothing there is
+required first. The ⌨️ status to its right reports the
 active input connection count and whether automation is held, beside connection status. Taking control is one confirmation after a list of what to notice; for
 earlier manual input its fixed acknowledgement is recorded as the decision note. Projects adds a project by its main/default starting checkout,
 typed or found with **Browse…**, even with no tmux panes. Settings (Console preferences
@@ -64,7 +69,7 @@ exact-version endorsements, and a separate human approval checkpoint. The [ADR i
 and [workflow guide](docs/WORKFLOWS.md) describe the broader design; source support
 does not imply installed-host acceptance.
 
-Owned modern assignments expose **Add detail to this task** and literal terminal controls. Input holds the whole run until its original result validates and you review the checkpoint. A disabled input check explains its blocker beside the checkbox in Control access. After a human-directed objection, inspect the terminals and use **Take control…** to end the paused run before sending a new instruction; opening the panel or changing views does not release ownership. A separately saved waiting checkpoint can be restored after exactly observed external work settles; restoration sends nothing. Projects can request read-only squash-batch advice, with a fresh human preview and confirmation for every integration. See [ADR-0019](docs/adr/ADR-0019-terminal-input-and-checkpoints.md). Installed-provider acceptance remains open.
+Owned modern assignments expose **Add detail to this task** and literal terminal controls. Input holds the whole run until its original result validates and you review the checkpoint. A disabled input check explains its blocker beside the checkbox, next to the input. After a human-directed objection, inspect the terminals and use **Take control here** beside the input (or **Take control…** in Control access) to end the paused run before sending a new instruction; opening the panel or changing views does not release ownership. A separately saved waiting checkpoint can be restored after exactly observed external work settles; restoration sends nothing. Projects can request read-only squash-batch advice, with a fresh human preview and confirmation for every integration. See [ADR-0019](docs/adr/ADR-0019-terminal-input-and-checkpoints.md). Installed-provider acceptance remains open.
 
 **Stage relay** reviews uncommitted quick fixes on `main` or the recorded default
 branch. There, Implementation's Control offers it by default for a two-member

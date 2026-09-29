@@ -36,9 +36,9 @@ export function controlItems(input: ControlInput): ControlSummary {
   const add = (id: string, scope: ControlScope, attention: boolean, takeControl: boolean, text: string) => items.push({ id, scope, attention, takeControl, text });
   const k = input.keyboard;
   const unresolved = input.manual.filter((m) => !m.live);
-  if (k?.kind === 'this-browser') add('keyboard', 'server', false, false, `You type in ${k.label} in this browser. AltCLI dispatch, setup and launch wait until you release it below; a Send that offers the keyboard handoff releases it first.`);
-  else if (k && k.kind !== 'unresolved') add('keyboard', 'server', true, false, `Input is active in ${k.label}. Other terminals can also type; automation waits until every writer is stopped and manual input is reconciled.`);
-  if (unresolved.length) add('manual', 'server', true, true, `Earlier manual terminal input (${unresolved.length === 1 ? 'one record' : `${unresolved.length} records`}) may have run commands or left background work that AltCLI cannot see. Taking control records that you accept this and lifts the server-wide hold.`);
+  if (k?.kind === 'this-browser') add('keyboard', 'server', false, false, `You are typing in ${k.label} in this browser. AltCLI dispatch, setup and launch wait until input is stopped and reconciled; checking an action’s acknowledgement does both.`);
+  else if (k && k.kind !== 'unresolved') add('keyboard', 'server', true, false, `Input is active in ${k.label}. Every terminal can type at the same time; automation waits until every writer is stopped and manual input is reconciled, which an action’s acknowledgement does.`);
+  if (unresolved.length) add('manual', 'server', true, true, `Earlier manual terminal input (${unresolved.length === 1 ? 'one record' : `${unresolved.length} records`}) may have run commands or left background work that AltCLI cannot see. Taking control, or checking an action’s acknowledgement, records that you accept this and lifts the server-wide hold.`);
   if ((k || input.manual.length) && input.otherWorktrees.length) add('scope', 'server', false, false, `This server-wide hold also affects runs in ${list(input.otherWorktrees)}.`);
   const status = input.run?.status;
   if (status === 'running') add('workflow', 'checkout', false, true, 'The controller is driving this checkout. Taking control ends its run without interrupting the agent, which may still be working: check its terminal before typing or sending.');
@@ -60,8 +60,7 @@ export function controlItems(input: ControlInput): ControlSummary {
   // Who holds this checkout's workflow is one of two: the system (the controller's run, in any state) or you. A hold worth naming follows it.
   const holder = status === 'running' || status === 'waiting' || status === 'paused' ? 'system' : 'you';
   const detail = unresolved.length ? `manual input unresolved${affected ? ` · ${affected} affected run${affected === 1 ? '' : 's'}` : ''}`
-    : k && k.kind !== 'this-browser' ? 'keyboard held elsewhere'
-    : k ? `keyboard: ${k.label} (this browser)`
+    : k ? `typing in ${k.label}${k.kind === 'this-browser' ? ' (this browser)' : ''}`
     : status === 'paused' ? 'paused' : status === 'waiting' ? 'waiting for you' : '';
   const summary = detail ? `${holder} · ${detail}` : holder;
   return { summary, attention: items.some((item) => item.attention), items };

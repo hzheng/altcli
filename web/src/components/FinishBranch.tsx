@@ -7,6 +7,7 @@ import { api, HttpError } from '../client/api';
 import { focusNotice } from '../client/notices';
 import { useTildify } from '../client/home';
 import { StatusIcon } from './Hint';
+import { prepared, useLatest, useMounted, type Proceed } from './Holds';
 
 const short = (sha: string | null) => sha ? sha.slice(0, 12) : 'unknown';
 const refName = (ref: string | null) => ref ? ref.replace('refs/heads/', '') : 'main';
@@ -20,21 +21,25 @@ const OUTCOMES: { value: FinishOutcome; label: string }[] = [
 /** Finish branch: close the tmux sessions AltCLI launched for this task worktree without typing in a terminal, then optionally remove
  * or discard it through the existing confirmed operations. Each step shows fresh evidence and needs its own confirmation; nothing
  * is merged, retried or run automatically. */
-export function FinishBranch({ project, tree, token, disabled, disabledReason, noticeId, onChanged, viewEpoch }: {
+export function FinishBranch({ project, tree, token, disabled, disabledReason, noticeId, onChanged, viewEpoch, proceed }: {
   project: Project; tree: ProjectWorktree; token: string; disabled: boolean; disabledReason?: string; onChanged: (notice: string) => Promise<void>; viewEpoch?: number;
   /** ID of the shared notice explaining why Finish branch cannot proceed; WorktreeActions shows it once. */
   noticeId?: string;
+  /** The worktree actions' shared acknowledgement: clears a controller run, delivery hold or manual input before each request. */
+  proceed?: Proceed;
 }) {
   const [preview, setPreview] = useState<FinishPreview | null>(null), [outcome, setOutcome] = useState<FinishOutcome>('close'), [stopActive, setStopActive] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [lost, setLost] = useState<string | null>(null), [note, setNote] = useState(''), [inspected, setInspected] = useState(false);
   const [gitPreview, setGitPreview] = useState<WorktreeRemovalPreview | WorktreeDiscardPreview | null>(null), [typed, setTyped] = useState('');
-  const controlId = useId(); const name = tree.branch ?? tree.path; const tilde = useTildify();
+  const controlId = useId(); const name = tree.branch ?? tree.path; const tilde = useTildify(); const epoch = useLatest(viewEpoch); const mounted = useMounted();
   // Confirmations attest to what was on screen; a view change revokes them (previews stay for re-checking).
   useEffect(() => { setStopActive(false); setTyped(''); setInspected(false); }, [viewEpoch]);
   const op = (project.finishes ?? []).filter((f) => f.preview.worktreeId === tree.id).at(-1);
   const holding = op && FINISH_HOLDING.includes(op.status) ? op : undefined;
-  async function act<T>(work: () => Promise<T>, fallback: string): Promise<T | undefined> {
-    setBusy(true); setError('');
+  /** `gated` steps are held by manual input or a controller run; the shared acknowledgement clears those holds first. Inspection is not. */
+  async function act<T>(work: () => Promise<T>, fallback: string, gated = false): Promise<T | undefined> {
+    setBusy(true); setError(''); const confirmedEpoch = viewEpoch;
+    if (gated && !await prepared(proceed, setError, () => mounted.current && epoch.current === confirmedEpoch)) { setBusy(false); return undefined; }
     try { return await work(); } catch (caught) { setError(caught instanceof Error ? caught.message : fallback); return undefined; } finally { setBusy(false); }
   }
   const check = () => {
@@ -44,11 +49,12 @@ export function FinishBranch({ project, tree, token, disabled, disabledReason, n
       : disabled ? disabledReason || 'These actions are unavailable. Recheck the worktree.' : '';
     if (blocker) { setError(focusNotice(blocker, noticeId) ? '' : blocker); return; }
     return act(async () => { setPreview(null); setGitPreview(null); setStopActive(false); setOutcome('close');
-      setPreview(await api<FinishPreview>(token, 'projects/worktrees/finish/preview', { body: { projectId: project.id, worktreeId: tree.id } })); }, 'Finish branch check failed.');
+      setPreview(await api<FinishPreview>(token, 'projects/worktrees/finish/preview', { body: { projectId: project.id, worktreeId: tree.id } })); }, 'Finish branch check failed.', true);
   };
   async function confirm() {
     if (!preview) return;
-    setBusy(true); setError('');
+    setBusy(true); setError(''); const confirmedEpoch = viewEpoch;
+    if (!await prepared(proceed, setError, () => mounted.current && epoch.current === confirmedEpoch)) { setBusy(false); return; }
     try {
       const result = await api<TaskFinish>(token, 'projects/worktrees/finish', { body: { requestId: preview.requestId, digest: preview.digest, outcome, stopActive, confirm: true } });
       setPreview(null); await onChanged(result.message);
@@ -64,12 +70,12 @@ export function FinishBranch({ project, tree, token, disabled, disabledReason, n
   }, 'Inspection failed. Nothing was retried.');
   const kind = holding?.input.outcome === 'discard' ? 'discard' : 'removal';
   const previewGit = () => holding && act(async () => { setTyped('');
-    setGitPreview(await api<WorktreeRemovalPreview | WorktreeDiscardPreview>(token, `projects/worktrees/${kind}/preview`, { body: { projectId: project.id, worktreeId: tree.id } })); }, 'Check failed.');
+    setGitPreview(await api<WorktreeRemovalPreview | WorktreeDiscardPreview>(token, `projects/worktrees/${kind}/preview`, { body: { projectId: project.id, worktreeId: tree.id } })); }, 'Check failed.', true);
   const continueGit = () => holding && gitPreview && act(async () => {
     const child = kind === 'discard' ? { discard: { ...gitPreview, confirmBranch: typed, confirm: true } } : { removal: { ...gitPreview, confirm: true } };
     const result = await api<TaskFinish>(token, 'projects/worktrees/finish/continue', { body: { requestId: holding.requestId, revision: holding.revision, ...child } });
     setGitPreview(null); await onChanged(result.message);
-  }, 'The Git step failed.');
+  }, 'The Git step failed.', true);
   /** Reads the server's record of a request whose response was lost; it never resends it. */
   const inspectLost = () => act(async () => {
     const discovery = await api<WorkspaceDiscovery>(token, 'workspaces');
@@ -97,7 +103,7 @@ export function FinishBranch({ project, tree, token, disabled, disabledReason, n
         {' · '}{preview.git.dirty === null ? 'uncommitted changes unknown' : preview.git.dirty ? `${preview.git.changeCount} uncommitted change${preview.git.changeCount === 1 ? '' : 's'}` : 'clean'}.</p>
       <p>{preview.git.integration === 'integrated' ? <>Integration proven: {preview.git.integratedBy === 'squash' ? 'squash commit' : 'merged ancestry at'} <span className="mono">{short(preview.git.integratedCommit)}</span>.</>
         : <span className="warning-text">Integration {preview.git.integration === 'not_proven' ? 'not proven' : 'could not be inspected'}.</span>} {preview.git.note}</p>
-      {preview.run && <p className="fine">A {preview.run.status} run owns this worktree. It keeps ownership: after the sessions close, take it over in Console once you have checked its writers stopped; removal and discard wait for that.</p>}
+      {preview.run && <p className="fine">A {preview.run.status} run owns this worktree. With “Proceed anyway” checked above, the next step ends it first; otherwise it keeps ownership and removal and discard wait for it.</p>}
       {preview.blockers.map((b) => <p key={b} className="warning-text" role="alert">{b}</p>)}
       <fieldset className="finish-outcome"><legend>Then</legend>{OUTCOMES.map((o) => <label key={o.value} className="readiness"><input type="radio" name={`${controlId}-outcome`} checked={outcome === o.value}
         disabled={busy || (o.value === 'remove' && !!removeReason)} onChange={() => setOutcome(o.value)} />{o.label}{o.value === 'remove' && removeReason && <span className="muted"> ({removeReason})</span>}</label>)}</fieldset>

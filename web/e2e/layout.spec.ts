@@ -55,24 +55,21 @@ test('a typed instruction explains the disabled Send and readiness enables it wi
   await expect(hint).toHaveCount(0);
   await draft.fill('Explain the change.'); await expect(send).toBeDisabled();
   await expect(hint).toContainText('Send Codex is disabled.');
-  await expect(hint).toContainText('in Control access');
-  await expect(hint).toContainText('Ready for implementation');
-  await expect(send).toHaveAccessibleDescription(/in Control access/);
+  await expect(hint).toContainText('Ready for implementation” above');
+  await expect(send).toHaveAccessibleDescription(/Ready for implementation” above/);
   await expect(page.locator('.page-heading').getByRole('img', { name: 'Input: 0 active', exact: true })).toBeVisible();
   await page.screenshot({ path: info.outputPath('disabled-send-hint.png'), fullPage: true });
   await draft.fill('   '); await expect(hint).toHaveCount(0);
   await draft.fill('Explain the change.');
-  await hint.getByRole('button', { name: 'Go to Control access', exact: true }).click();
-  const access = page.getByRole('region', { name: 'Control access', exact: true });
-  const ready = access.getByLabel('Ready for implementation', { exact: true });
-  await expect(access).toBeVisible(); await expect(ready).toBeFocused(); await expect(ready).not.toBeChecked();
+  // The check is beside the action; nothing in Control access is needed.
+  await expect(hint.getByRole('button', { name: 'Go to Control access', exact: true })).toHaveCount(0);
+  const ready = actions.getByLabel('Ready for implementation', { exact: true });
+  await expect(ready).toBeVisible(); await expect(ready).not.toBeChecked();
   await expect(ready.locator('..')).toContainText('Ready for implementation'); // The name is visible, not just an accessibility label.
   await expect(send).toBeDisabled(); await expect(draft).toHaveValue('Explain the change.');
-  await access.getByRole('button', { name: 'Return to action', exact: true }).click();
-  await expect(page.getByRole('region', { name: 'Control', exact: true })).toBeFocused();
-  await hint.getByRole('button', { name: 'Go to Control access', exact: true }).click();
-  await ready.check(); await access.getByRole('button', { name: 'Return to action', exact: true }).click();
+  await ready.check();
   await expect(send).toBeEnabled(); await expect(hint).toHaveCount(0); await expect(ready).toBeChecked();
+  await expect(page.getByRole('region', { name: 'Control access', exact: true })).toBeHidden();
   await expect(draft).toHaveValue('Explain the change.');
   await expect(page.locator('.page-heading').getByRole('img', { name: 'Input: 0 active', exact: true })).toBeVisible();
   expect(sent).toEqual([]);
@@ -167,16 +164,17 @@ test('outside Plan one frame shows the terminals or Control; the hidden surface 
   await expect(page.getByRole('group', { name: 'Codex status' })).toBeVisible(); // the selected agent's activity stays on screen
   await codex.getByLabel('Instruction for Codex').fill('Keep this draft');
   const ready = await readiness(page); await ready.check();
-  await showSurface(page, 'Terminal'); await expect(ready).not.toBeChecked();
+  await showSurface(page, 'Terminal'); await expect(ready).toBeHidden();
   await expect(page.locator('section#altcli-control')).toHaveAttribute('hidden', ''); await expect(page.getByRole('region', { name: 'Control', exact: true })).toHaveCount(0);
   await expect((await openCard(page, 'Codex')).getByLabel('Instruction for Codex')).toHaveValue('Keep this draft');
+  await expect(ready).not.toBeChecked(); // switching surfaces revoked it
   // Plan keeps its own layout: no switch, and Control follows the stage.
   await page.getByRole('group', { name: 'Phase' }).getByRole('button', { name: 'Plan', exact: true }).click();
   await expect(surface).toHaveCount(0); await expect(page.getByRole('region', { name: 'Agent output' })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Plan setup' })).toBeVisible();
   expect(sent).toEqual([]);
 });
-test('Control access is one panel on every tab; opening it sends nothing, and readiness is confirmed there only for the action on screen', async ({ page, request }) => {
+test('Control access is one panel on every tab; opening it sends nothing, and readiness is confirmed beside the action on screen', async ({ page, request }) => {
   const group = await post(request, 'groups', { name: 'Access', members: ['codex','claude'] });
   await taskBranch(page);
   await openGroup(page, group);
@@ -184,22 +182,23 @@ test('Control access is one panel on every tab; opening it sends nothing, and re
   const entry = page.getByRole('button', { name: /^Control access · / });
   await expect(entry).toHaveAccessibleName('Control access · you'); await expect(entry).toHaveAttribute('aria-expanded', 'false');
   const access = await openAccess(page); await expect(access).toBeFocused();
-  // With the terminals shown the check is not offered; Show Control is itself a view change.
-  const ready = access.getByLabel('Ready for implementation', { exact: true });
-  await expect(ready).toBeHidden(); await access.getByRole('button', { name: 'Show Control', exact: true }).click();
+  // Control access explains holds; it hosts no readiness check. With the terminals shown it offers Show Control, itself a view change.
+  await expect(access.getByRole('checkbox')).toHaveCount(0);
+  await expect(access.getByRole('region', { name: 'Action readiness' }).or(access.locator('[aria-label="Action readiness"]'))).toContainText('Readiness is checked next to each action');
+  await access.getByRole('button', { name: 'Show Control', exact: true }).click();
   const codex = page.getByRole('region', { name: 'Actions for Codex', exact: true });
   await codex.getByLabel('Instruction for Codex').fill('Explain the change.');
-  // The composer explains the blocker; its one check, with what it authorizes, is in Control access.
-  await expect(codex.getByRole('checkbox')).toHaveCount(0); await expect(codex.getByRole('status')).toContainText('in Control access');
-  await expect(codex.getByRole('button', { name: 'Go to Control access', exact: true })).toHaveCount(1);
-  await ready.check(); await expect(access.getByRole('group', { name: 'Readiness for Codex' })).toContainText('Send Codex');
+  // The composer's one check, with what it authorizes, is beside its Send.
+  const ready = codex.getByLabel('Ready for implementation', { exact: true });
+  await expect(codex.getByRole('checkbox')).toHaveCount(1); await expect(codex.getByRole('status')).toContainText('Ready for implementation” above');
+  await ready.check(); await expect(codex.getByRole('group', { name: 'Readiness for Codex' })).toContainText('Send Codex');
   // Closing, reopening and returning to the already visible action keep a current confirmation.
   await entry.click(); await expect(access).toBeHidden(); await expect(entry).toBeFocused();
   await entry.click(); await expect(ready).toBeChecked();
   await access.getByRole('button', { name: 'Return to action', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Control', exact: true })).toBeFocused(); await expect(ready).toBeChecked();
   await expect(codex.getByRole('button', { name: 'Send Codex', exact: true })).toBeEnabled();
-  // The same panel is reachable from another tab; there the check waits for the Console, and switching tabs revokes it.
+  // The same panel is reachable from another tab; switching tabs revokes the check.
   await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Projects', exact: true }).click();
   await expect(access).toBeVisible(); await expect(ready).toBeHidden();
   await access.getByRole('button', { name: 'Go to Console', exact: true }).click();
@@ -289,26 +288,29 @@ test('readiness is one slot, revoked by After send, view switches and runs, and 
   await openGroup(page, group); await page.getByRole('button', { name: 'Parallel', exact: true }).click();
   await openCard(page, 'Codex'); const ready = await readiness(page);
   await expect(ready).toHaveCount(1); await ready.check();
-  // Both composers are mounted, but only the selected agent's check occupies Control access; choosing another agent revokes it.
+  // Both composers are mounted, but only the selected agent's card shows its check; choosing another agent revokes it.
   const claude = await openCard(page, 'Claude');
   await expect(ready).toHaveCount(1); await expect(ready).not.toBeChecked();
   await ready.check();
   await claude.getByLabel('After send').selectOption('commit'); await expect(ready).not.toBeChecked();
   await claude.getByLabel('After send').selectOption('nothing'); await expect(ready).not.toBeChecked();
   // The Terminal/Control switch is a view change, and the check is offered only while Control shows its action.
-  await ready.check(); await showSurface(page, 'Terminal'); await expect(ready).not.toBeChecked(); await expect(ready).toBeHidden();
+  await ready.check(); await showSurface(page, 'Terminal'); await expect(ready).toBeHidden();
   await (await openAccess(page)).getByRole('button', { name: 'Show Control', exact: true }).click();
-  await ready.check();
+  await expect(ready).not.toBeChecked(); await ready.check();
   await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Projects', exact: true }).click();
   await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Console', exact: true }).click();
   await expect(ready).not.toBeChecked();
   await ready.check();
-  // A run started elsewhere (another card or client) revokes it too, even after that run is released.
+  // A run started elsewhere (another card or client) revokes it too, even after that run is released. The run does not block:
+  // the fresh check lists that proceeding ends it.
   const id = crypto.randomUUID();
   await post(request, 'commands', { requestId: id, agentId: 'codex', kind: 'instruction', text: 'Elsewhere', confirmReady: true, pairId: group.id, stage: { branch: 'main', head: 'a'.repeat(40) } });
-  await expect(ready).not.toBeChecked({ timeout: 10000 }); await expect(ready).toBeDisabled();
+  await expect(ready).not.toBeChecked({ timeout: 10000 }); await expect(ready).toBeEnabled();
+  await expect(page.getByRole('region', { name: 'Control', exact: true }).getByRole('list', { name: 'Consequences of proceeding' })).toContainText('run for Codex ⇄ Claude ends');
+  await ready.check();
   await post(request, 'runs', { runId: id, action: 'takeover', confirmReady: true });
-  await expect(ready).toBeEnabled({ timeout: 10000 }); await expect(ready).not.toBeChecked();
+  await expect(ready).not.toBeChecked({ timeout: 10000 }); await expect(ready).toBeEnabled();
 });
 test('drafts, choices and disclosures survive tab, layout, phase, section and workspace switches without sending anything', async ({ page, request }) => {
   const group = await post(request, 'groups', { name: 'Keep state', members: ['codex','claude'] });
@@ -732,7 +734,7 @@ test('in Plan on phones the one control pane opens as a bottom drawer and return
   await control.getByRole('button', { name: 'Close drawer', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Open control drawer', exact: true })).toBeFocused();
 });
-test('Plan drawer can open Control access without covering its readiness check', async ({ page }, info) => {
+test('Plan drawer can open Control access without covering the readiness check beside Start Plan', async ({ page }, info) => {
   test.skip(info.project.name !== 'iphone', 'The drawer applies at phone widths.');
   await unlock(page);
   await page.getByRole('group', { name: 'Phase' }).getByRole('button', { name: 'Plan', exact: true }).click();
@@ -742,7 +744,8 @@ test('Plan drawer can open Control access without covering its readiness check',
   await page.locator('.page-heading').getByRole('button', { name: /^Control access · / }).click();
   expect(await control.evaluate((el) => getComputedStyle(el).position)).not.toBe('fixed');
   const access = page.getByRole('region', { name: 'Control access', exact: true });
-  await access.getByLabel('Ready for planning', { exact: true }).check({ timeout: 3000 });
+  await expect(access.getByRole('checkbox')).toHaveCount(0);
+  await control.getByLabel('Ready for planning', { exact: true }).check({ timeout: 3000 });
   await access.getByRole('button', { name: 'Return to action', exact: true }).click();
   await expect(control).toBeFocused();await expect(control.getByRole('button', { name: 'Start Plan', exact: true })).toBeEnabled();
 });

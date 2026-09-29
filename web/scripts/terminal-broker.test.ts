@@ -329,13 +329,14 @@ test('a join preserves input recorded while its target is inspected',async t=>{
   assert.equal(after.writers[0]!.revision,before.writers[0]!.revision);assert.ok(after.revision>before.revision);
 });
 
-test('a disconnected writer retains recovery without revoking an unaffected writer or allowing a fresh grant',async()=>{
+test('a disconnected writer retains recovery without revoking an unaffected writer; a fresh grant joins the held period',async()=>{
   const a=await connect(),b=await connect(),c=await connect();await grant(a);const second=await grant(b);
   a.socket.close();await settle();
   await plane.terminals.input(b.opened.connectionId,{generation:second.generation,seq:1,encoding:'utf8',data:'safe existing connection'});
-  await assert.rejects(grant(c),/needs inspection/);
-  assert.equal(plane.authority.pending()[0]!.recoveryRequired,true);
   assert.equal(plane.authority.pending()[0]!.writers.filter(w=>w.live).length,1);
+  const third=await grant(c);assert.equal(third.writer,true);
+  assert.equal(plane.authority.pending().length,1);assert.equal(plane.authority.pending()[0]!.recoveryRequired,true);assert.equal(plane.authority.blocked,true);
+  assert.equal(plane.authority.pending()[0]!.writers.filter(w=>w.live).length,2);
 });
 
 test('batch handoff binds the full exact writer set, refuses stale input and returns one command-bound receipt',async()=>{
@@ -372,7 +373,10 @@ test('version 17 migration preserves separate original records and requires reco
   for(const period of periods){assert.equal(period.live,false);assert.equal(period.recoveryRequired,true);assert.equal(period.writers[0]!.live,false);assert.deepEqual(period.panes,legacy.panes);}
   assert.equal(periods.find(m=>m.id===legacy.id)!.bytes,17);assert.equal(periods.find(m=>m.id===older.id)!.bytes,3);
   await assert.rejects(plane.terminals.open({target:legacy.target,clientInstanceId:randomUUID(),cols:80,rows:24}),/Reload/);
-  const next=await connect();await assert.rejects(grant(next),/earlier manual sessions/);
+  // New typing joins the newest period after restart; every period keeps its recovery requirement.
+  const next=await connect(),joined=await grant(next);
+  assert.equal(joined.manualSession!.id,periods.at(-1)!.id);assert.equal(joined.manualSession!.recoveryRequired,true);assert.equal(joined.manualSession!.bootId,plane.authority.bootId);
+  await plane.terminals.close(next.opened.connectionId);
   const first=periods[0]!;await plane.reconcileManual({requestId:randomUUID(),manualSessionId:first.id,expectedRevision:first.revision,confirmReady:true});
   assert.equal(plane.authority.blocked,true);
 });
@@ -388,15 +392,17 @@ test('plain stop accepts intervening bytes while preserving the other writer and
   await plane.terminals.input(b.opened.connectionId,{generation:second.generation,seq:2,encoding:'utf8',data:'still live'});
 });
 test('writer-ready waits for the native redraw; failure retains the barrier and closes the attachment',async()=>{
-  let ready!:()=>void,fail!:(error:Error)=>void,closed=0;
-  plane.terminals.services.attach=async(_config,target,writer)=>({pid:1,ready:writer?new Promise<void>((resolve,reject)=>{ready=resolve;fail=reject;}):undefined,
+  let ready!:()=>void,fail!:(error:Error)=>void,closed=0,writers=0;
+  plane.terminals.services.attach=async(_config,target,writer)=>({pid:1,ready:writer?new Promise<void>((resolve,reject)=>{writers++;ready=resolve;fail=reject;}):undefined,
     write:()=>{},resize:()=>{},pause:()=>{},resume:()=>{},close:async()=>{closed++;},active:async()=>({paneId:target.identity.paneId,sessionId:target.sessionId,label:target.label,command:'fixture'})});
   const a=await connect(),pending=grant(a);await settle();
   assert.equal(a.socket.frames.some(f=>f.type==='keyboard'&&f.writer),false);
   const reset=a.socket.frames.filter(f=>f.type==='reset').at(-1)!;assert.equal(reset.type,'reset');
   await assert.rejects(plane.terminals.input(a.opened.connectionId,{generation:reset.generation,seq:1,encoding:'utf8',data:'too soon'}),/no available keyboard/);
   ready();await pending;
-  const b=await connect(),failed=grant(b),rejected=assert.rejects(failed,/redraw failed/);await settle();fail(Error('redraw failed'));await rejected;
+  // Fail b's own redraw: wait until its writer attachment exists rather than a fixed delay, which a loaded host can outlast.
+  const b=await connect(),failed=grant(b),rejected=assert.rejects(failed,/redraw failed/);
+  for(let n=0;writers<2&&n<400;n++)await settle();assert.equal(writers,2);fail(Error('redraw failed'));await rejected;
   assert.equal(b.socket.readyState,3);assert.equal(plane.authority.pending()[0]!.recoveryRequired,true);assert.ok(closed>=2);
   assert.equal(plane.authority.pending()[0]!.writers.filter(w=>w.live).length,1);
 });
@@ -414,12 +420,13 @@ test('a stalled writer queue neither blocks another writer nor lets checked stop
   assert.equal(plane.authority.pending()[0]!.bytes,1);assert.equal(plane.authority.pending()[0]!.writers.filter(w=>w.live).length,1);
 });
 
-test('a partial batch stop failure retains recovery and never permits another implicit grant',async()=>{
+test('a partial batch stop failure retains recovery; a new writer joins it while automation stays held',async()=>{
   const a=await connect(),b=await connect();await grant(a);await grant(b);
   plane.terminals.services.attach=async()=>{throw Error('replacement failed');};
   const m=plane.authority.pending()[0]!;
   await assert.rejects(plane.terminals.stop({requestId:randomUUID(),expectedBootId:plane.authority.bootId,manualSessionId:m.id,expectedRevision:m.revision,
     writers:m.writers.map(w=>({connectionId:w.connectionId,generation:w.generation,revision:w.revision}))}),/replacement failed/);
   assert.equal(plane.authority.pending()[0]!.live,false);assert.equal(plane.authority.pending()[0]!.recoveryRequired,true);assert.equal(plane.authority.blocked,true);
-  delete plane.terminals.services.attach;const next=await connect();await assert.rejects(grant(next),/Earlier input needs inspection/);
+  delete plane.terminals.services.attach;const next=await connect(),joined=await grant(next);
+  assert.equal(joined.writer,true);assert.equal(joined.manualSession!.id,m.id);assert.equal(joined.manualSession!.recoveryRequired,true);assert.equal(plane.authority.blocked,true);
 });

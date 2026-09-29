@@ -375,8 +375,8 @@ in Parallel, clicking a card's heading or focusing its controls does the same. I
 Control recipient, follows the next agent that starts working (a click holds until the working
 agent changes again); in Parallel it is held until you choose another. Parallel shows every
 agent's controls side by side on wide screens and stacked on phones, with separate drafts;
-Focus shows only the selected agent. Only the active card supplies the readiness check in
-Control access. Selecting sends nothing
+Focus shows only the selected agent. Only the active card shows its readiness check, beside its
+actions. Selecting sends nothing
 and revokes readiness. Outside Plan, the **Terminal / Control** switch shows the terminals or
 Control in the same frame; switching also sends nothing and revokes readiness, and a command
 that Control starts successfully switches the frame back to the terminals. Plan is the exception: Plan setup addresses the whole group, so the selector only
@@ -385,23 +385,28 @@ changes the terminal shown, and it stays below the terminals, beside them on wid
 lists what to notice before you take control and then asks once: **Take control…** ends this
 checkout's controller run, clears an uncertain-request warning, releases an older delivery hold
 and records your decision on earlier manual input, stopping at the first refusal. Its global entry
-sits in the page heading's status row; it also holds keyboard release, pause, one-click checkpoint
-or handoff continuation, **Mark <agent> Ready**, and each action's readiness check. Terminal
-observation opens automatically. Typing directly enables that connection; several terminals and
-browsers can write independently under one server-wide automation barrier. Focus grants nothing.
+sits in the page heading's status row; it also holds typing stops, pause, one-click checkpoint
+or handoff continuation and **Mark <agent> Ready**, and explains every hold. It is never required
+first: each action's readiness check beside it lists the consequences of any hold and clears those
+holds when the action runs. Terminal observation opens automatically. A terminal's **Terminal /
+Display** toggle enables or ends input on that connection, and toggling again resets a failed one;
+several terminals and browsers can write independently under one server-wide automation barrier.
+Focus grants nothing.
 The heading reports active input connections. **Stop typing here** and **Stop typing in this
-browser** stop exact local writers while retaining the manual barrier. Checked Send can stop and
-strictly settle the complete local set only with no remote writers or affected checkpoints.
-Disconnect, Lock and restart require inspection before another writer joins. Reconciliation and
-each original workflow checkpoint review remain explicit; faulted/originally paused runs need
-existing takeover. Input does not interrupt an already computing worker.
+browser** stop exact local writers while retaining the manual barrier. An acknowledged action
+stops every writer, local and remote, and records the manual input as accepted by human inspection
+before it starts. Disconnect, Lock and restart mark the period for recovery; new writers may still
+join it, and automation waits until it is reconciled. Each original workflow checkpoint review
+remains explicit; faulted/originally paused runs need existing takeover. Input does not interrupt
+an already computing worker.
 
 Control Send does not require opening a native writer. After an instruction is entered,
-a disabled Send shows its current blocker beside the button. When readiness is the
-remaining gate, **Go to Control access** beside the hint opens that panel and focuses the
-visibly labelled **Ready for implementation** checkbox without checking it. **Return to action**
-returns to the composer, keeping its draft and a still-current confirmation. Other gates, such as branch settings or
-another browser's keyboard hold, show their own reason instead.
+a disabled Send shows its current blocker beside the button. When readiness is the remaining
+gate, the visibly labelled **Ready for implementation** checkbox is right above it; it also lists
+each hold Send would override (active typing in any browser, earlier manual input, a controller
+run, an uncertain delivery or request) and **Why? Control access** opens the reference panel.
+Gates no acknowledgement clears, such as branch settings, copy mode or an unconfirmed CLI, show
+their own reason instead.
 
 Add an absolute Git directory in Projects, select a main or task worktree, and
 preview literal profile launches. Launching after worktree creation is a separate

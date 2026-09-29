@@ -1834,6 +1834,7 @@ components:
         projectId: {type: string}
         worktreeId: {type: string}
         through: {type: string, pattern: '^[0-9a-fA-F]{7,64}$', description: Inclusive task-branch endpoint; omit for HEAD.}
+        acknowledgeActivity: {type: boolean, const: true, description: The human accepts that agents or processes in either checkout may still be working; skips only the settled-agent evidence check.}
     WorktreeIntegrationPreview:
       type: object
       required: [projectId, worktreeId, requestId, worktree, branch, head, through, previousCommit, dirty, targetRef, targetHead, target, mergeBase, commitCount, commits, tree, message, commands, consent]
@@ -1866,6 +1867,7 @@ components:
         tree: {$ref: '#/components/schemas/GitSha', description: The conflict-free merged tree; the squash commit must have exactly this tree.}
         message: {type: string, description: Editable default commit message, generated within the confirmation budget (at most 8 KiB once JSON-encoded, subjects shortened and the list cut with a count of omitted commits).}
         commands: {type: array, maxItems: 4, items: {type: string}, description: The exact Git operations confirmation authorizes, for display.}
+        acknowledgeActivity: {type: boolean, const: true, description: Present when the preview was requested with the activity acknowledgement; covered by consent.}
         consent: {type: string, pattern: '^[0-9a-f]{64}$', description: Server digest of every pinned field except requestId and message.}
     WorktreeIntegrateRequest:
       type: object
@@ -1876,6 +1878,7 @@ components:
         projectId: {type: string, maxLength: 200}
         worktreeId: {type: string, maxLength: 200}
         through: {$ref: '#/components/schemas/GitSha', description: Repeat the preview endpoint; omit only for a full-HEAD preview.}
+        acknowledgeActivity: {type: boolean, const: true, description: Repeat the preview's activity acknowledgement; its consent digest covers it.}
         requestId: {type: string, format: uuid}
         consent: {type: string, pattern: '^[0-9a-f]{64}$'}
         message: {type: string, description: Printable, newlines allowed, at most 8192 bytes once JSON-encoded (escapes count), so every accepted request stays within the 16 KiB body limit together with the bounded identifiers.}

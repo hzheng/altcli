@@ -19,13 +19,16 @@ describe('controlItems', () => {
     expect(held.summary).toBe('system · manual input unresolved · 2 affected runs');
     expect(held.items.map((item) => [item.id, item.scope])).toEqual([['keyboard', 'server'], ['manual', 'server'], ['scope', 'server'], ['workflow', 'checkout']]);
     expect(held.items.find((item) => item.id === 'scope')!.text).toContain('/demo/other');
-    expect(held.items.find((item) => item.id === 'keyboard')).toMatchObject({ takeControl: false, text: expect.stringContaining('Other terminals can also type') });
+    expect(held.items.find((item) => item.id === 'keyboard')).toMatchObject({ takeControl: false, text: expect.stringContaining('Every terminal can type at the same time') });
     // Taking control clears earlier manual input by accepting its possible effects, and says so.
     expect(held.items.find((item) => item.id === 'manual')).toMatchObject({ takeControl: true, text: expect.stringContaining('may have run commands') });
   });
   it('keeps this browser\'s own keyboard informational', () => {
     const mine = controlItems({ ...base, keyboard: { kind: 'this-browser', label: 'Codex' }, manual: [{ live: true, runs: 0 }] });
-    expect(mine).toMatchObject({ summary: 'you · keyboard: Codex (this browser)', attention: false });
+    expect(mine).toMatchObject({ summary: 'you · typing in Codex (this browser)', attention: false });
+    // Several writers may type at once: another browser's input is named, never described as a keyboard held elsewhere.
+    expect(controlItems({ ...base, keyboard: { kind: 'other-browser', label: 'Codex, Claude (another browser/tab)' }, manual: [{ live: true, runs: 0 }] }).summary)
+      .toBe('you · typing in Codex, Claude (another browser/tab)');
     expect(controlItems({ ...base, keyboard: { kind: 'unresolved', label: 'an unresolved manual-input record' }, manual: [{ live: false, runs: 0 }] }).summary).toBe('you · manual input unresolved');
   });
   it('lists blockers that no confirmation resolves without offering one', () => {

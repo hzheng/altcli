@@ -1,15 +1,15 @@
 'use client';
 import { useEffect, useId, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import type { CommandRecord } from '../contracts/api';
 import type { Group, WorkspaceGit } from '../contracts/implementation';
 import type { WorkflowState } from '../contracts/workflow';
 import { api, HttpError } from '../client/api';
 import { useRemembered } from '../client/memory';
 import { isSha, type RunSettings } from './RunSettings';
+import { Acknowledgement, overrideKey, type Override } from './Holds';
 
-/** The last gate before Start Plan; its check is in Control access. */
-const NOT_READY = 'Confirm Ready for planning in Control access. Changing the brief, a setting or the checkout clears an earlier confirmation.';
+/** The last gate before Start Plan; its check is beside the button. */
+const NOT_READY = 'Check Ready for planning above. Changing the brief, a setting or the checkout clears an earlier confirmation.';
 
 /** Group-level Plan start: one shared brief for every planner. Starting a Plan is never a per-pane coding send. */
 export function PlanSetup(p: {
@@ -21,8 +21,11 @@ export function PlanSetup(p: {
   refresh: () => Promise<void>; onRecheck: () => Promise<void>; onMessage: (message: string) => void; onUncertain: (id: string) => void;
   /** An accepted start: the console shows the terminals. */
   onSent: () => void;
-  /** Control access's readiness slot: the one place the Plan check is shown. Its state and key stay here. */
-  readinessSlot: HTMLElement | null;
+  /** What starting overrides (controller runs, delivery holds, manual input), listed in the readiness check and cleared at start. */
+  override: Override | null;
+  onOpenAccess: () => void;
+  /** Increases on every view change; a start that is still clearing holds is cancelled by it. */
+  viewEpoch: number;
 }) {
   const { settings: s, group, git } = p;
   const members = group?.members ?? [];
@@ -33,7 +36,13 @@ export function PlanSetup(p: {
   const target = s.selectedPolicy === 'worker_reviewer' ? s.workerId : members.includes(s.actor) ? s.actor : members.includes(p.displayed ?? '') ? p.displayed! : members[0];
   const registrations = Object.fromEntries(members.map((id) => [id, p.state.sessions.find((session) => session.id === id)?.registrationId ?? '']));
   const instances = members.map((id) => p.state.instances.find((instance) => instance.agentId === id)?.status);
-  const key = JSON.stringify(['plan', group?.id, group?.revision, registrations, instances, p.agentsKey, target, git ?? null, p.workspaceError, s.consent, p.runMark, p.recheck, text]);
+  const key = JSON.stringify(['plan', group?.id, group?.revision, registrations, instances, p.agentsKey, target, git ?? null, p.workspaceError, s.consent, p.runMark, p.recheck, text, overrideKey(p.override)]);
+  // What a click authorizes except the holds it clears (runs and manual input): any change while they are cleared cancels the start.
+  const intent = JSON.stringify([group?.id, group?.revision, registrations, instances, p.agentsKey, target, git ?? null, p.workspaceError, s.consent, p.recheck, p.state.activities, p.token, p.viewEpoch, text]);
+  const intentRef = useRef({ key: intent, revision: 0 });
+  if (intentRef.current.key !== intent) intentRef.current = { key: intent, revision: intentRef.current.revision + 1 };
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   // The consent key includes the brief, so typing after ticking Ready unticks it; returning to old values never revives it.
   const consented = useRef(key);
   useEffect(() => { if (consented.current !== key) { const previous = consented.current; consented.current = key; p.setConsent((current) => current === previous ? '' : current); } }, [key]);
@@ -53,18 +62,28 @@ export function PlanSetup(p: {
   const reasonId = useId(); const briefId = useId();
   async function start() {
     if (disabled || !ready || !text.trim() || !group || !git || !target) return;
-    p.setConsent(() => ''); setStartError(''); const requestId = crypto.randomUUID();
+    p.setConsent(() => ''); setStartError(''); const requestId = crypto.randomUUID(); const intentRevision = intentRef.current.revision;
+    // The request is built from the confirmed brief and settings before any hold is cleared.
+    const brief = text; const body = { requestId, groupId: group.id, groupRevision: group.revision, registrations,
+      text: text.trim(), baseline: { branch: git.branch, head: git.head }, autoContinue: s.automatic, requireApproval: s.requireApproval, turnLimit: s.limit, pauseOnObjection: s.pauseOnObjection, confirmReady: true,
+      implementation: { groupId: group.id, groupRevision: group.revision, registrations, agentId: target, policy: s.selectedPolicy,
+        ...(s.selectedPolicy === 'worker_reviewer' ? { workerId: s.workerId } : {}), handoff: !s.solo, ...(s.logPath ? { logPath: s.logPath } : {}), branch: s.branchChoice ? s.branch() : null } };
     await p.submit(async () => {
+      let dispatched = false;
       try {
-        const record = await api<CommandRecord>(p.token, 'planning', { body: { requestId, groupId: group.id, groupRevision: group.revision, registrations,
-          text: text.trim(), baseline: { branch: git.branch, head: git.head }, autoContinue: s.automatic, requireApproval: s.requireApproval, turnLimit: s.limit, pauseOnObjection: s.pauseOnObjection, confirmReady: true,
-          implementation: { groupId: group.id, groupRevision: group.revision, registrations, agentId: target, policy: s.selectedPolicy,
-            ...(s.selectedPolicy === 'worker_reviewer' ? { workerId: s.workerId } : {}), handoff: !s.solo, ...(s.logPath ? { logPath: s.logPath } : {}), branch: s.branchChoice ? s.branch() : null } } });
+        // The check accepted every listed hold; each is cleared first. A failed step, or any change to the brief, settings or view
+        // meanwhile, starts nothing.
+        if (p.override) {
+          await p.override.clear();
+          if (!mounted.current || intentRef.current.revision !== intentRevision) throw Error('The holds were cleared, but the brief, settings or displayed state changed. Inspect and confirm readiness again; nothing was started.');
+        }
+        dispatched = true;
+        const record = await api<CommandRecord>(p.token, 'planning', { body });
         if (record.status === 'rejected') setStartError(`REJECTED: ${record.error ?? 'The server refused this start.'}`);
-        else { p.onMessage(`${record.status.toUpperCase()}: ${record.error ?? 'Plan started. The server owns this run.'}`); setText(''); p.onSent(); }
+        else { p.onMessage(`${record.status.toUpperCase()}: ${record.error ?? 'Plan started. The server owns this run.'}`); setText((current) => current === brief ? '' : current); p.onSent(); }
       } catch (error) {
         setStartError(error instanceof Error ? error.message : 'Phase start failed.');
-        if (!(error instanceof HttpError) || error.status >= 500) p.onUncertain(requestId);
+        if (dispatched && (!(error instanceof HttpError) || error.status >= 500)) p.onUncertain(requestId);
       } finally { await Promise.all([p.refresh(), p.onRecheck()]); }
     });
   }
@@ -86,11 +105,11 @@ export function PlanSetup(p: {
     {!group ? <p>Select at least one agent in Projects to start.</p> : members.length > 2 ? <p className="notice" role="status">Your group has {members.length} agents. Plan and Implementation currently execute with one or two agents; larger-group execution is not enabled yet. Your selection is saved. Choose one or two members to start a run.</p> : <>
       <p className="fine">Plan documents are kept in AltCLI’s data directory, not in this checkout. No branch is created during Plan. Output permissions are cooperative and validated, not native CLI sandbox isolation.</p>
       <label htmlFor={briefId}>Shared task brief</label><textarea id={briefId} rows={3} value={text} disabled={p.busy} maxLength={1900} onChange={(e) => setText(e.target.value)} />
-      {p.readinessSlot && createPortal(<div className="access-check" role="group" aria-label="Readiness for Plan">
-        <label className="readiness"><input type="checkbox" aria-label="Ready for planning" checked={ready} disabled={disabled} onChange={(e) => p.setConsent(() => e.target.checked ? key : '')} />
-          I checked every selected and unselected agent sharing this checkout: all are settled, prompts are empty, and no background writers remain. I authorize document-only planning and the displayed post-plan settings; any branch choice applies only after Plan finishes.</label>
-        <p className="fine"><strong>Start Plan</strong> for {members.length} {members.length === 1 ? 'planner' : 'planners'}: document-only planning of the shared brief.</p>
-      </div>, p.readinessSlot)}
+      <div role="group" aria-label="Readiness for Plan">
+        <Acknowledgement label="Ready for planning" checked={ready} disabled={disabled} onChange={(checked) => p.setConsent(() => checked ? key : '')} lines={p.override?.lines ?? []}>
+          I checked every selected and unselected agent sharing this checkout: all are settled, prompts are empty, and no background writers remain. I authorize document-only planning and the displayed post-plan settings; any branch choice applies only after Plan finishes.</Acknowledgement>
+        <p className="fine"><strong>Start Plan</strong> for {members.length} {members.length === 1 ? 'planner' : 'planners'}: document-only planning of the shared brief.{p.override && <> <button type="button" className="quiet inline-link" aria-controls="control-access" onClick={p.onOpenAccess}>Why? Control access</button></>}</p>
+      </div>
       <div className="register-actions"><button type="button" className="primary" title={`${reason ? `${reason} ` : ''}Start document-only planning.`} aria-describedby={reason ? reasonId : undefined} disabled={disabled || !ready || !text.trim()} onClick={() => void start()}>Start Plan</button></div>
       {startError && <p className="notice error" role="alert">{startError}</p>}
       {reason && <p className="fine" role="status" id={reasonId}>{reason}</p>}
