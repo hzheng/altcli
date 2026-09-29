@@ -24,6 +24,14 @@ If another applicable instruction forbids publication, report that conflict and
 stop; never manufacture a result. Do not invoke the legacy `review-handoff` skill
 or interpret this request as `relay:`.
 
+For task-scoped implementation or accepted review improvements, dependency
+upgrades to official stable releases and their installation are authorized
+without another permission request. Never upgrade to beta, alpha, RC, nightly or
+other prerelease versions. Keep manifests and lockfiles synchronized and run
+relevant checks. If no stable release fixes a dependency defect, retain the stable
+version and report the limitation. This does not permit changes during read-only
+reviews or `commitOnly` snapshots.
+
 Before work, verify the canonical cwd/root, the exact named branch and HEAD equal
 to `identity.parent`. Run `node --experimental-strip-types` with this skill's
 `scripts/verify-input.ts` and the exact assignment JSON path as separate arguments.
