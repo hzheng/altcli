@@ -4,6 +4,7 @@ import { FINISH_HOLDING } from '../contracts/projects';
 import type { FinishOutcome, FinishPreview, Project, ProjectWorktree, TaskFinish, WorktreeDiscardPreview, WorktreeRemovalPreview } from '../contracts/projects';
 import type { WorkspaceDiscovery } from '../contracts/workflow';
 import { api, HttpError } from '../client/api';
+import { focusNotice } from '../client/notices';
 import { useTildify } from '../client/home';
 import { StatusIcon } from './Hint';
 
@@ -19,9 +20,9 @@ const OUTCOMES: { value: FinishOutcome; label: string }[] = [
 /** Finish branch: close the tmux sessions AltCLI launched for this task worktree without typing in a terminal, then optionally remove
  * or discard it through the existing confirmed operations. Each step shows fresh evidence and needs its own confirmation; nothing
  * is merged, retried or run automatically. */
-export function FinishBranch({ project, tree, token, disabled, noticeId, onChanged, viewEpoch }: {
-  project: Project; tree: ProjectWorktree; token: string; disabled: boolean; onChanged: (notice: string) => Promise<void>; viewEpoch?: number;
-  /** ID of the shared notice explaining why Finish branch is disabled; WorktreeActions shows it once. */
+export function FinishBranch({ project, tree, token, disabled, disabledReason, noticeId, onChanged, viewEpoch }: {
+  project: Project; tree: ProjectWorktree; token: string; disabled: boolean; disabledReason?: string; onChanged: (notice: string) => Promise<void>; viewEpoch?: number;
+  /** ID of the shared notice explaining why Finish branch cannot proceed; WorktreeActions shows it once. */
   noticeId?: string;
 }) {
   const [preview, setPreview] = useState<FinishPreview | null>(null), [outcome, setOutcome] = useState<FinishOutcome>('close'), [stopActive, setStopActive] = useState(false);
@@ -36,8 +37,15 @@ export function FinishBranch({ project, tree, token, disabled, noticeId, onChang
     setBusy(true); setError('');
     try { return await work(); } catch (caught) { setError(caught instanceof Error ? caught.message : fallback); return undefined; } finally { setBusy(false); }
   }
-  const check = () => act(async () => { setPreview(null); setGitPreview(null); setStopActive(false); setOutcome('close');
-    setPreview(await api<FinishPreview>(token, 'projects/worktrees/finish/preview', { body: { projectId: project.id, worktreeId: tree.id } })); }, 'Finish branch check failed.');
+  const check = () => {
+    const blocker = busy ? 'Checking or applying this operation. Wait for it to finish.'
+      : lost ? 'The Finish branch response was lost. Inspect its record before doing anything else; do not resend.'
+      : holding ? `Finish branch is ${holding.status.replace('_', ' ')}. ${holding.message} Inspect or complete it below.`
+      : disabled ? disabledReason || 'These actions are unavailable. Recheck the worktree.' : '';
+    if (blocker) { setError(focusNotice(blocker, noticeId) ? '' : blocker); return; }
+    return act(async () => { setPreview(null); setGitPreview(null); setStopActive(false); setOutcome('close');
+      setPreview(await api<FinishPreview>(token, 'projects/worktrees/finish/preview', { body: { projectId: project.id, worktreeId: tree.id } })); }, 'Finish branch check failed.');
+  };
   async function confirm() {
     if (!preview) return;
     setBusy(true); setError('');
@@ -75,7 +83,7 @@ export function FinishBranch({ project, tree, token, disabled, noticeId, onChang
     || (preview.active && !stopActive ? 'Some sessions may have unfinished work or background processes: confirm stopping them anyway.' : '')
     || (outcome === 'close' && !closable.length ? 'There are no app-launched sessions to close.' : '');
   return <div className="create-worktree finish-branch">
-    {!holding && <button type="button" className="quiet" aria-label={`Finish ${name}`} aria-describedby={disabled ? noticeId : undefined} disabled={disabled || busy || !!lost || !!holding} onClick={() => void check()}>Finish branch</button>}
+    <button type="button" className="quiet" aria-label={`Finish ${name}`} aria-describedby={disabled ? noticeId : undefined} onClick={() => void check()}>Finish branch</button>
     {preview && <div className="notice" role="region" aria-label={`Finish ${name}`}>
       <p><strong>Finish {preview.branch}</strong>: close the tmux sessions AltCLI launched for <span className="mono">{tilde(preview.worktree.root)}</span>. Sessions you opened yourself are never closed.</p>
       {preview.sessions.length ? <ul className="finish-sessions" aria-label="App-launched sessions">{preview.sessions.map((s) => <li key={s.sessionId}>

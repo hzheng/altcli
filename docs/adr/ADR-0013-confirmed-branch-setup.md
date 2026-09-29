@@ -215,10 +215,10 @@ them. Final tree/parent/cleanliness verification and uncertain-owner handling
 remain mandatory. Clean-worktree removal can use the verified batch history only
 when its latest source endpoint equals the current task HEAD.
 
-The UI shows a visible, accessible explanation whenever squash is disabled,
+The UI shows a visible, accessible explanation whenever squash is blocked,
 including host read-only mode, a pending request, discovery errors, detached
 HEAD, run/delivery ownership, unresolved worktree operations, stale previews and
-invalid messages. Removal and Discard disable only for hard blocks (read-only
+invalid messages. Removal and Discard explain hard blocks on click (read-only
 host, a request in flight, unreadable discovery or worktree state, a pending
 operation); a known occupant, run or delivery owner is shown as a hint beside
 them and the click still runs the server preview, whose exact refusal (pane
@@ -227,6 +227,16 @@ inside the checkout, dirty files, no integration evidence) is then displayed
 Git checks remain authoritative and their rejection messages appear beside the
 preview controls. Selecting another SHA clears the old preview and message
 consent; the browser never starts a batch automatically.
+
+All eight Main/Branch entry buttons stay enabled: Squash, Update, Rebase, Reset,
+Rename, Finish branch, Check removal and Discard. Clicking while blocked shows
+the current reason, including the owning run's explanation and the Console →
+Control access recovery path. A pending or unknown response is explained without
+sending another request or replacing the saved request to inspect. Finish branch
+stays visible while its operation is held. Preview and confirmation gates still apply.
+When the explanation is already displayed, a blocked click focuses that notice
+instead of adding a duplicate under the action. Repeated clicks across actions
+reuse the same shared notice.
 
 The preview carries a consent digest of every pinned field (project/worktree
 identities, branch, HEAD, selected endpoint, previous squash, target ref and HEAD, batch base, commit list, merged
