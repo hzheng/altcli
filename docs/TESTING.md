@@ -72,6 +72,51 @@ Application checks include broker admission, restart, duplicate and checkpoint
 fixtures; browser tests distinguish mock rendering from actual tmux behavior.
 See [the protocol](TERMINAL-PROTOCOL.md).
 
+### Direct-input and concurrent-writer probe
+
+`npm --prefix web run probe:terminal:writers` uses a private tmux socket, two raw
+byte-reader fixtures, the real ControlPlane/SQLite/broker/PTY path and Chromium
+running the installed xterm. Only target lookup is injected because the readers
+are not coding agents. Its socket bridge is in-process; receipt latency excludes
+HTTP/WSS, Next, network delay and final display latency.
+
+The probe compares 1, 2, 4 and 8 native observers with the same number of writers,
+balanced across two sessions within the four-client session cap. It reports Node
+and browser RSS/CPU, native process CPU, attachment counts/RSS, native inspection
+counts, output volume, first-input time and keyboard/paste receipt p95. The Node
+process also hosts the Playwright driver. CPU samples last 1.2 seconds and native
+CPU uses process-time counters, so these are local regression measurements, not
+deployment sizing. It separately exercises captured-only promotion, application
+cursor/paste modes, concurrent input into the same pane, a slow/disconnected
+consumer and 100 full open/promote/stop/close cycles. Descriptor counts, native
+clients and browser terminals must return to their steady counts. Heap samples
+use awaited major GC; allocator RSS alone is not a live-object leak diagnosis.
+
+At equal native-client counts, compare incremental Node RSS with the larger of
+16 MiB and 20% of observer RSS, idle host CPU with a five-percentage-point increase,
+and input receipt p95 with a 20 ms increase over one writer at that client count.
+The idle local first-input target is below one second. Record absolute browser
+costs, sustained-output behavior and any failed gate as well as these deltas.
+
+The pinned node-pty 1.1.0 remains the latest official stable release as checked on
+2026-09-29. On macOS every spawn leaks three descriptors
+([upstream report](https://github.com/microsoft/node-pty/issues/907)): a spare
+`/dev/ptmx` master, the parent's copy of the slave and its exit thread's kqueue.
+Full-cycle testing reproduced `posix_spawnp failed` before cycle 100; merely
+checking that tmux clients exited did not detect that leak. Dependency upgrades are
+restricted to official stable releases, so `web/src/server/tmux-attach.ts` closes
+exactly those descriptors: pseudo-terminal masters new to that spawn other than
+node-pty's own, the parent's descriptor for the spawned slave device and, after the
+exit has been delivered, the one kqueue whose only event is that client's exit, as
+`/usr/bin/lskq` reports while the client runs. It leaves an unidentified queue open.
+`npm --prefix web run test:native` checks that closed and self-exiting attachments
+return to the steady descriptor count; the churn probe then keeps its descriptors
+flat through 100 cycles. The workaround runs only on macOS with exactly node-pty
+1.1.0: a later release may close and reuse its own descriptors before the exit
+callback. Each stable upgrade must pass both probes before resource acceptance;
+do not extend the cleanup to a new version without auditing its ownership.
+Raising host descriptor limits is not a substitute for that cleanup.
+
 Use a disposable repository and private tmux socket first. Start with a harmless
 read/echo process to check transport, then actual installed Codex and Claude Code.
 Inspect process metadata, output and exact submitted prompt including command

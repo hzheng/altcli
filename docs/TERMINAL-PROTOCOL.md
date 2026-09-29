@@ -10,7 +10,7 @@ Next's process singleton exposes a small gateway through `globalThis`.
 
 ## Connection and output
 
-1. An explicit **Open terminal** action posts a target, dimensions and a page-memory
+1. Mounting a terminal opens observation by posting `protocol: 2`, a target, dimensions and a page-memory
    browser UUID to `/api/v1/terminals`, using the usual bearer and origin checks.
 2. The response contains a ten-second, single-use ticket and connection ID.
    Connect to `/api/v1/terminals/socket`, with no query string, and send
@@ -76,51 +76,59 @@ A session reached by navigation keeps its own lifetime settings. If it uses
 `destroy-unattached`, detaching the browser there (release, close or Lock) can
 destroy it, just as a desktop client leaving it would.
 
-The ⌨️ status in the page heading reports the one server-wide keyboard owner. It is
-informational, including when another browser or checkout owns the keyboard; it never selects
-or transfers ownership. Each native terminal has a ⌨️ **Claim keyboard** tool, right after its
-status badge and hidden while that pane types; its confirmation opens below the tool row. Claiming
-a pane requires explicit confirmation naming the old and new targets and affected runs; it opens
-that pane's observer connection if needed, then requests the grant, creating a fresh writable
-attachment. A pending choice is shown as pending; cancel, Lock, a view change or a newer choice
-before the request is sent sends nothing, and a lost response is reconciled from the server's
-report, never replayed. Moving the keyboard between this browser's panes freezes the old pane's
-input first and uses the broker's serialized transfer, never a client-side release-then-acquire.
-The status reports the server-confirmed live writer, including another browser, or nobody.
-An unresolved record is a separate hold shown in Control access, even when nobody owns the
-keyboard. The grant participates in normal tmux sizing. There is one writer across the
-configured server, and a durable manual barrier holds AltCLI dispatch, setup and
-launch before claim. It does not stop an already computing worker or external
-terminal clients. All current modern runs get whole-run input holds. Legacy runs
-must settle or be deliberately taken over first.
+The ⌨️ status reports the active input connection count and shared automation hold. There is
+no exclusive keyboard owner. Each connected terminal offers an input field, including captured-only
+observation. The first trusted key, IME commit, paste, soft key or mouse-protocol event requests
+`acquire` with an idempotent request ID, exact observer generation and `expectedBootId`.
+Focus, copy/selection, history scrolling and terminal-generated replies never acquire input.
+The pre-grant textarea preserves human intent separately from xterm's mixed `onData` stream.
+Pending intents are bounded at 256 KiB and 2,048 events and tied to the connection and view. After both the
+matching HTTP response and socket writer frame, queued keys/paste use public xterm APIs and the
+new generation's parsed modes. Native attachments advertise the per-client `sync` capability;
+the broker waits for the first synchronized redraw's end before the writer frame (five-second
+limit). This changes no tmux sizing or global option. The byte boundary follows
+[tmux 3.5a’s synchronized-output implementation](https://github.com/tmux/tmux/blob/3.5a/tty.c#L1569);
+xterm 6 supports those sequences. Response/frame order is immaterial; reset alone is insufficient.
+Cancellation, changed view/focus, disconnect or uncertainty drops unsent intents and retains
+any already created manual barrier. No input is replayed into a replacement generation.
 
-**Release keyboard** in Control access is the plain release: it stops admission and drains admitted input.
-**Release and record settled…**, in the same panel, is the separately confirmed strict release; it
-also performs fresh inventory, activity, background-work and checkpoint checks.
-A failed check still releases the keyboard, retaining the barrier and reason.
-Disconnect, Lock, expiry and restart always retain the barrier. Transfer/recovery
-creates a new generation and preserves earlier evidence. No raw terminal bytes
-are stored: only ownership, identities, affected commands, timestamps and counts.
+Writers may coexist in this or another browser, even on one pane. Native tmux interleaving and
+size negotiation still apply. Each connection has one attachment, replaced on promotion or stop;
+no extra persistent service is created. The first writer durably records the all-pane snapshot
+and whole-run holds before input. Later writers join the same healthy period without overwriting
+original checkpoints, snapshots or aggregate byte evidence. Acquisition remains serialized with
+setup, delivery and other keyboard decisions; existing writers have independent input queues.
+Legacy owners still need settlement/takeover. Current modern turns can finish while held but
+cannot dispatch a successor; branch-scoped Stage relay keeps its fault/takeover rule.
 
-Implementation actions in the control pane can combine a checked settled release
-with a new Send, commit or review. This is available only for this browser's
-connected agent terminal, one live manual session, and no affected run checkpoints.
-The readiness checkbox confirms empty prompts and no background writers across
-all host panes and names both the released keyboard and the control recipient.
-The click stops local input and refuses pending input or paste. Its `releaseSettled`
-request includes `expectedRevision` as well as `expectedGeneration`; input after
-confirmation rejects the release. `expectedRevision` is optional for standalone
-settled release and invalid for acquire or plain release. Strict reconciliation
-must succeed before the new request is submitted through ordinary dispatch gates.
-For a combined action, `handoffRequestId` binds settlement to the frozen command.
-The returned manual session revision travels with that command as `keyboardSettlement`.
-The server checks it at admission, before branch setup and immediately before
-delivery. New native lifecycle observations, keyboard changes or a backend restart
-invalidate it. Only the initial command uses this evidence; correlated successors
-use their normal lifecycle gates. A duplicate command still returns its receipt.
-There is no retry on an uncertain release; changed draft, target, activity or view cancels
-the pending send and retains the draft. Other browsers, disconnected/unresolved
-records and held runs retain their separate recovery actions.
+**Stop typing here** and **Stop typing in this browser** in Control access freeze the selected
+local queues and post `/api/v1/terminals/stop` with period ID, boot ID and the exact connection,
+generation and writer revision set. Plain stop accepts subsequent byte revisions, drains admitted
+work and retains the barrier; a replacement generation is always refused. It never stops another
+browser implicitly. Disconnect, expiry, Lock and restart retain the barrier and require inspection
+before new writers join; other existing writers remain live. Metadata contains identities,
+checkpoints, times and byte counts, never raw input. Stopped writer details may be pruned on join;
+the period retains its aggregate counts and initial targets for cleanup checks.
+
+Checked Implementation Send/commit/review can stop all writers in this page when there is one
+healthy period, no affected run checkpoints, and no remote writer. It freezes every local queue
+before sending one batch; pending input/paste refuses the action. `confirmReady: true` requires
+exact aggregate and writer revisions, so bytes admitted after confirmation refuse settlement.
+Strict inventory/activity/background-work/checkpoint checks must succeed before ordinary dispatch.
+A failed check still stops those writers and retains the barrier and reason. The `handoffRequestId`
+binds successful settlement to the exact frozen command; `keyboardSettlement` carries the returned
+period ID/revision through admission, branch setup and delivery checks. New activity, keyboard
+changes or restart invalidate it. A changed draft, target, activity or view cancels dispatch and
+preserves the draft; an uncertain response is never retried. Other browsers and held runs require
+their separate stop/recovery actions. Reconciliation never continues a run.
+
+Schema 18 migrates each legacy period independently, preserving its original IDs, snapshots,
+run references, revisions and byte evidence, with no surviving live grant. Unresolved records
+remain barriers until explicitly reconciled. The original singleton fields are archival metadata;
+`writers` is current authority, `live` is their aggregate and `recoveryRequired` prevents new joins.
+Protocol-2 opens and host-boot checks make older tabs fail closed. Adopt only at a settled restart;
+older servers refuse this schema instead of interpreting concurrent writers as one owner.
+
 Copy-mode and synchronized-input changes revoke Plan and Implementation readiness
 on the state poll, even when workspace discovery has not changed. Clearing the mode
 requires a fresh readiness confirmation.
@@ -165,16 +173,15 @@ and rotation. Alternate-screen wheel-to-arrow translation is suppressed when
 mouse reporting is off. OSC clipboard/title changes are consumed; HTTP(S) links
 require explicit confirmation. Output is never controller instructions or HTML.
 
-Each card's badge is a compact emoji whose accessible name is one of: **Keyboard here** ⌨️,
-**Disconnected** 🔌, **Controlled in another browser** 🔒, **Keyboard in another terminal** ↔️
-(another card of this page), **Manual CLI/shell** ⚠️ (the registered CLI process was replaced,
+Each card's badge is a compact emoji whose accessible name is one of: **Typing enabled** ⌨️,
+**Disconnected** 🔌, **Manual CLI/shell** ⚠️ (the registered CLI process was replaced,
 for example it exited to a shell), **Observing · manual input unresolved** or **held** ⚠️, or
 **Observing** 👁️. Help text (on hover, keyboard focus and tap) says what it means and what to do;
 actionable failures stay visible in the status line. The page's connection indicator works the
 same way (🟢 Connected, 🔴 Not current, ⏳ Connecting); it is not agent activity or readiness. The status
 line shows the actual pane, foreground command and effective window size. If focus
 moved elsewhere while a keyboard grant was pending, the terminal does not take
-focus back; it reports **Keyboard ready for <name>** instead. With native terminals
+focus back; it discards unsent first input and reports the cancellation. With native terminals
 enabled, Settings also shows the server-wide keyboard scope and the terminal limits.
 
 The worktree group row keeps **Agents** immediately left of local **Settings**, including
@@ -213,16 +220,15 @@ The shared Control frame keeps a separate composer for each agent:
   Console shows its action; opening or closing the panel changes nothing.
 
 Terminal tools are icon buttons that keep their full accessible names, with help on hover and
-focus, and a **?** legend that also works by tap: **Claim keyboard** ⌨️ (asks first; second, after
-the status badge), **Open terminal** ▶️ / **Reconnect** 🔄 (observe only), **Captured text** 📄 / **Show terminal** 🖥️, **Expand terminal** ⤢ / **Collapse terminal** ⤡,
-**Screen reader mode** ♿ and, while writing, **Paste text** 📋. **Expand terminal** enlarges the
+focus, and a **?** legend that also works by tap: **Reconnect** 🔄 (observe only), **Captured text** 📄 / **Show terminal** 🖥️, **Expand terminal** ⤢ / **Collapse terminal** ⤡,
+**Screen reader mode** ♿ and **Paste text** 📋. **Expand terminal** enlarges the
 existing surface in the page without opening a new connection or changing keyboard ownership.
 The former visible focus-escape button is gone (September 25 decision); the shortcut and its
 on-focus hint remain. A focus outline identifies the active surface. Snapshot timestamps appear only alongside the captured-text fallback.
 Multiline paste into a terminal without bracketed-paste support requires a
 warning confirmation because newlines can execute immediately; paste above
 16 KiB also requires confirmation. **Paste text** reads the clipboard only on
-that explicit click, under the current keyboard grant. A delayed result is
+that explicit click. A first paste enables input; multiline/large first paste asks before admission. A delayed result is
 discarded if focus, input, view or grant changed. Clipboard denial falls back to
 the keyboard/system Paste action. Accepted text uses xterm's single paste path,
 without an added Enter. No image attachment channel is enabled.

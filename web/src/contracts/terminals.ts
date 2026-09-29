@@ -1,27 +1,41 @@
 import type { PaneIdentity } from './api.ts';
 import type { ProcessRecord } from './workflow.ts';
 export type TerminalTarget = { agentId: string; registrationId: string } | { launchId: string };
-export interface TerminalOpen { target: TerminalTarget; cols: number; rows: number; clientInstanceId: string }
+export interface TerminalOpen { protocol: 2; target: TerminalTarget; cols: number; rows: number; clientInstanceId: string }
 export interface TerminalConnection { connectionId: string; ticket: string; bootId: string; label: string; paneId: string; sessionId: string }
 export interface ManualPane { identity: PaneIdentity; cwd: string; processes: ProcessRecord[]; agent?: boolean; command?: string; dead?: boolean }
+export interface ManualWriter {
+  connectionId: string; clientInstanceId: string; generation: string; target: TerminalTarget;
+  identity: PaneIdentity | null; sessionId: string | null;
+  revision: number; live: boolean; bytes: number; inputMayHaveOccurred: boolean;
+}
 export interface ManualSession {
+  /** The original grant fields are retained for archived records. Current ownership is in writers. */
   id: string; revision: number; bootId: string; clientInstanceId: string; connectionId: string;
   generation: string; target: TerminalTarget; live: boolean; reconciliationRequired: boolean;
   inputMayHaveOccurred: boolean; bytes: number; createdAt: string; updatedAt: string; reason: string;
   panes: ManualPane[]; runs: { id: string; commandId: string; priorStatus: string }[];
+  writers: ManualWriter[]; recoveryRequired: boolean;
+  /** Initial targets ever admitted in this period, including writers that have stopped. */
+  targets: TerminalTarget[];
   humanDecision?: { requestId: string; note: string; at: string };
   settlement?: { requestId: string; nativeRevision: number; keyboardRevision: number };
 }
 export interface KeyboardSettlement { manualSessionId: string; revision: number }
 export interface KeyboardInput {
   requestId: string; action: 'acquire' | 'release' | 'releaseSettled'; expectedGeneration: string;
-  transfer?: boolean; confirmReady?: boolean;
+  expectedBootId: string; confirmReady?: boolean;
   /** For a checked releaseSettled handoff: input since confirmation invalidates the release. */
   expectedRevision?: number;
   /** Exact subsequent command authorized by this checked release. */
   handoffRequestId?: string;
 }
 export interface KeyboardResult { generation: string; manualSession: ManualSession | null; writer: boolean; reason: string }
+export interface KeyboardBatch {
+  requestId: string; expectedBootId: string; manualSessionId: string; expectedRevision: number;
+  writers: { connectionId: string; generation: string; revision: number }[];
+  confirmReady?: boolean; handoffRequestId?: string;
+}
 export type ManualReconcile = { requestId: string; manualSessionId: string; expectedRevision: number } &
   ({ confirmReady: true } | { confirmInspected: true; note: string });
 export type TerminalFrame =

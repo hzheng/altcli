@@ -408,8 +408,8 @@ To launch agents from AltCLI:
    **Reconcile after host inspection…**. Nothing is retried.
 6. Choose **Open console** in the expanded worktree. Discovered agents appear there with their
    terminal views; the ticked agents form the group (use **Recheck** if one is
-   missing). Use the ⌨️ **Claim keyboard** tool at the agent's terminal and confirm the displayed owner/transfer warning to
-   answer prompts. If startup has not exposed a supported agent yet, inspect its
+   missing). Type directly in the terminal input field to answer prompts. Other terminals can keep
+   their own writers; automation stays held until all writers stop and manual input is reconciled. If startup has not exposed a supported agent yet, inspect its
    tmux session on the host. Startup is not readiness.
 
 Use **Clean up…** on a launch card when its tmux pane is dead, its recorded

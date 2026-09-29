@@ -146,13 +146,20 @@ export class ControlPlane {
   private async beginKeyboard(input: TerminalOpen, connectionId: string, generation: string, prior?: ManualSession): Promise<ManualSession> {
     this.assertNativeBoundary();
     const revision = this.nativeRevision;
-    await this.terminalTarget(input.target);
-    const panes = await this.manualSnapshot();
+    const resolved = await this.terminalTarget(input.target);
+    const panes = prior?.panes ?? await this.manualSnapshot();
     const runs = this.ownedRuns();
     const expected = JSON.stringify(runs);
     return this.store.db.transaction(() => {
       this.assertNativeBoundary();
       if (this.nativeObservations || revision !== this.nativeRevision || JSON.stringify(this.ownedRuns()) !== expected) throw new AppError('INPUT_CHANGED', 'Activity changed during keyboard inspection. Recheck.', 409);
+      // Existing writers can type during target inspection. Join the latest aggregate,
+      // never overwrite their byte evidence, revisions or a disconnect with the old copy.
+      if (prior) {
+        prior = this.authority.get(prior.id);
+        if (prior.recoveryRequired || prior.bootId !== this.authority.bootId || !prior.reconciliationRequired)
+          throw new AppError('MANUAL_CHANGED', 'Manual input changed during admission. Inspect the current period.', 409);
+      }
       const known = new Set(prior?.runs.map(r => r.id) ?? []);
       for (const run of runs) if (!known.has(run.id)) {
         const cp = this.interactions.checkpoint(run.id);
@@ -163,7 +170,12 @@ export class ControlPlane {
       }
       const now = new Date().toISOString();
       return this.authority.save({ id: prior?.id ?? randomUUID(), revision: prior?.revision ?? 0, bootId: this.authority.bootId,
-        clientInstanceId: input.clientInstanceId, connectionId, generation, target: input.target, live: true, reconciliationRequired: true,
+        clientInstanceId: prior?.clientInstanceId ?? input.clientInstanceId, connectionId: prior?.connectionId ?? connectionId,
+        generation: prior?.generation ?? generation, target: prior?.target ?? input.target, live: true, reconciliationRequired: true,
+        targets: [...(prior?.targets ?? []), ...(prior?.targets.some(t => isDeepStrictEqual(t, input.target)) ? [] : [input.target])],
+        recoveryRequired: false, writers: [...(prior?.writers ?? []).filter(w => w.live && w.connectionId !== connectionId),
+          { connectionId, clientInstanceId: input.clientInstanceId, generation, target: input.target, identity: resolved.identity, sessionId: resolved.sessionId,
+            revision: 1, live: true, bytes: 0, inputMayHaveOccurred: false }],
         inputMayHaveOccurred: prior?.inputMayHaveOccurred ?? false, bytes: prior?.bytes ?? 0, createdAt: prior?.createdAt ?? now, updatedAt: now,
         reason: 'Keyboard granted; dispatch, setup and launch are held across this server.', panes: prior?.panes ?? panes,
         runs: [...(prior?.runs ?? []), ...runs.filter(r => !known.has(r.id)).map(r => ({ id: r.id, commandId: r.currentCommandId, priorStatus: r.status }))] });
@@ -203,7 +215,7 @@ export class ControlPlane {
       this.assertNativeBoundary();
       if (this.authority.busy || this.authority.pending().some(s => s.live) || this.authority.get(manual.id).revision !== manual.revision || this.nativeObservations || this.nativeRevision !== nativeRevision) throw new AppError('MANUAL_CHANGED', 'New input or activity invalidated reconciliation.', 409);
       // This decision releases only the server barrier. Run holds, checkpoints and faults remain untouched.
-      const settled = { ...manual, reconciliationRequired: false };
+      const settled = { ...manual, reconciliationRequired: false, recoveryRequired: false };
       delete settled.settlement;
       const result = this.authority.save({ ...settled,
         ...('confirmReady' in input && handoffRequestId ? { settlement: { requestId: handoffRequestId, nativeRevision, keyboardRevision: this.authority.revision + 1 } } : {}),

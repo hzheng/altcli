@@ -26,12 +26,12 @@ beforeEach(()=>{directory=mkdtempSync(join(tmpdir(),'altcli-broker-'));store=new
   plane=new ControlPlane(new Controller(loadConfig({ALTCLI_ADAPTER:'mock',ALTCLI_TOKEN:'a'.repeat(64),ALTCLI_DATA_DIR:directory,ALTCLI_ENABLE_TERMINAL:'true',ALTCLI_ENABLE_LEGACY_RELAY:'true',ALTCLI_ENABLE_AGENT_LAUNCH:'true'}),store,new MockAdapter()));});
 afterEach(async()=>{await plane.terminals.shutdown();store.close();rmSync(directory,{recursive:true,force:true});});
 const settle=()=>new Promise(r=>setTimeout(r,10));
-async function connect():Promise<{opened:TerminalConnection;socket:Socket;generation:string}>{const s=(await plane.state()).sessions[0]!;const opened=await plane.terminals.open({target:{agentId:s.id,registrationId:s.registrationId},cols:80,rows:24,clientInstanceId:randomUUID()});const socket=new Socket();plane.terminals.connect(socket as unknown as WebSocket);socket.frame({ticket:opened.ticket});await settle();const reset=socket.frames.find(f=>f.type==='reset');assert.ok(reset?.type==='reset');return {opened,socket,generation:reset.generation};}
-const grant=(c:Awaited<ReturnType<typeof connect>>,transfer=false)=>plane.terminals.keyboard(c.opened.connectionId,{requestId:randomUUID(),expectedGeneration:c.generation,action:'acquire',confirmReady:true,transfer});
+async function connect():Promise<{opened:TerminalConnection;socket:Socket;generation:string}>{const s=(await plane.state()).sessions[0]!;const opened=await plane.terminals.open({protocol:2,target:{agentId:s.id,registrationId:s.registrationId},cols:80,rows:24,clientInstanceId:randomUUID()});const socket=new Socket();plane.terminals.connect(socket as unknown as WebSocket);socket.frame({ticket:opened.ticket});await settle();const reset=socket.frames.find(f=>f.type==='reset');assert.ok(reset?.type==='reset');return {opened,socket,generation:reset.generation};}
+const grant=(c:Awaited<ReturnType<typeof connect>>)=>plane.terminals.keyboard(c.opened.connectionId,{requestId:randomUUID(),expectedBootId:plane.authority.bootId,expectedGeneration:c.generation,action:'acquire'});
 async function settledStart() {
   const c=await connect(),owned=await grant(c);
   const requestId=randomUUID();
-  const released=await plane.terminals.keyboard(c.opened.connectionId,{requestId:randomUUID(),expectedGeneration:owned.generation,expectedRevision:owned.manualSession!.revision,action:'releaseSettled',confirmReady:true,handoffRequestId:requestId});
+  const released=await plane.terminals.keyboard(c.opened.connectionId,{requestId:randomUUID(),expectedBootId:plane.authority.bootId,expectedGeneration:owned.generation,expectedRevision:owned.manualSession!.revision,action:'releaseSettled',confirmReady:true,handoffRequestId:requestId});
   const settled=released.manualSession!;assert.equal(settled.settlement?.requestId,requestId);
   const state=await plane.state(),group=state.groups.find(g=>g.cwd==='/demo/project')!;
   return {c,input:{requestId,groupId:group.id,groupRevision:group.revision,registrations:Object.fromEntries(state.sessions.filter(s=>group.members.includes(s.id)).map(s=>[s.id,s.registrationId])),agentId:'codex',policy:'peer' as const,text:'Checked handoff',confirmReady:true as const,keyboardSettlement:{manualSessionId:settled.id,revision:settled.revision}}};
@@ -59,7 +59,7 @@ test('settlement evidence belongs to one request and duplicate delivery still re
 });
 test('settlement evidence cannot survive another keyboard grant and release',async()=>{
   const {input}=await settledStart(),other=await connect(),owned=await grant(other);
-  await plane.terminals.keyboard(other.opened.connectionId,{requestId:randomUUID(),action:'releaseSettled',expectedGeneration:owned.generation,confirmReady:true});
+  await plane.terminals.keyboard(other.opened.connectionId,{requestId:randomUUID(),action:'releaseSettled',expectedBootId:plane.authority.bootId,expectedGeneration:owned.generation,confirmReady:true});
   assert.equal(plane.authority.blocked,false);
   await assert.rejects(plane.submitStandalone(input),/settlement.*changed/i);
 });
@@ -127,7 +127,7 @@ test('observer input is rejected; only acknowledged same-generation input change
 });
 test('release is durable, blocks new turns before claim, and explicit settled reconciliation never sends',async()=>{
   const c=await connect(), owned=await grant(c);
-  const release={requestId:randomUUID(),expectedGeneration:owned.generation,action:'release'};
+  const release={requestId:randomUUID(),expectedBootId:plane.authority.bootId,expectedGeneration:owned.generation,action:'release'};
   const result=await plane.terminals.keyboard(c.opened.connectionId,release);assert.equal(result.writer,false);assert.equal(plane.authority.blocked,true);
   assert.deepEqual(await plane.terminals.keyboard(c.opened.connectionId,release),result);
   await assert.rejects(plane.submit({requestId:randomUUID(),agentId:'codex',kind:'relay',confirmReady:true}),/Manual terminal input/);assert.equal(plane.workflow.runs().length,0);
@@ -137,28 +137,32 @@ test('release is durable, blocks new turns before claim, and explicit settled re
 test('checked settled release refuses input after confirmation and leaves the keyboard held',async()=>{
   const c=await connect(),owned=await grant(c);
   await plane.terminals.input(c.opened.connectionId,{generation:owned.generation,seq:1,encoding:'utf8',data:'x'});
-  await assert.rejects(plane.terminals.keyboard(c.opened.connectionId,{requestId:randomUUID(),action:'releaseSettled',expectedGeneration:owned.generation,expectedRevision:owned.manualSession!.revision,confirmReady:true}),/Manual input changed/);
+  await assert.rejects(plane.terminals.keyboard(c.opened.connectionId,{requestId:randomUUID(),action:'releaseSettled',expectedBootId:plane.authority.bootId,expectedGeneration:owned.generation,expectedRevision:owned.manualSession!.revision,confirmReady:true}),/Manual input changed/);
   assert.equal(plane.authority.pending()[0]!.live,true);
   assert.equal(plane.workflow.runs().length,0);
 });
 test('checked settled release binds the current writer revision and retains idempotent receipts',async()=>{
   const c=await connect(),owned=await grant(c);
-  const input={requestId:randomUUID(),action:'releaseSettled',expectedGeneration:owned.generation,expectedRevision:owned.manualSession!.revision,confirmReady:true};
+  const input={requestId:randomUUID(),action:'releaseSettled',expectedBootId:plane.authority.bootId,expectedGeneration:owned.generation,expectedRevision:owned.manualSession!.revision,confirmReady:true};
   const result=await plane.terminals.keyboard(c.opened.connectionId,input);
   assert.equal(result.writer,false);assert.equal(result.manualSession!.reconciliationRequired,false);
   assert.deepEqual(await plane.terminals.keyboard(c.opened.connectionId,input),result);
   assert.equal(plane.authority.blocked,false);assert.equal(plane.workflow.runs().length,0);
   await assert.rejects(plane.terminals.input(c.opened.connectionId,{generation:owned.generation,seq:1,encoding:'utf8',data:'x'}));
-  for(const action of ['acquire','release'])await assert.rejects(plane.terminals.keyboard(c.opened.connectionId,{...input,requestId:randomUUID(),expectedGeneration:result.generation,action}),/revision.*settled release/);
+  for(const action of ['acquire','release'])await assert.rejects(plane.terminals.keyboard(c.opened.connectionId,{...input,requestId:randomUUID(),expectedBootId:plane.authority.bootId,expectedGeneration:result.generation,action}),/revision.*settled release/);
   await assert.rejects(plane.terminals.keyboard(c.opened.connectionId,{...input,requestId:randomUUID(),expectedRevision:undefined,handoffRequestId:randomUUID()}),/checked settled release/);
 });
-test('two clients serialize decisions; transfer revokes the old generation and preserves unresolved input',async()=>{
+test('two writers join one original period without revoking or resetting each other',async()=>{
   const first=await connect(),second=await connect();const owner=await grant(first);
   await plane.terminals.input(first.opened.connectionId,{generation:owner.generation,seq:1,encoding:'utf8',data:'x'});
-  await assert.rejects(grant(second),/Confirm transfer/);const transferred=await grant(second,true);
+  const transferred=await grant(second);
   assert.equal(plane.authority.pending().length,1);assert.equal(transferred.manualSession!.bytes,1);
-  await assert.rejects(plane.terminals.input(first.opened.connectionId,{generation:owner.generation,seq:2,encoding:'utf8',data:'y'}));
-  assert.equal(plane.authority.pending()[0]!.connectionId,second.opened.connectionId);
+  await plane.terminals.input(first.opened.connectionId,{generation:owner.generation,seq:2,encoding:'utf8',data:'y'});
+  await plane.terminals.input(second.opened.connectionId,{generation:transferred.generation,seq:1,encoding:'utf8',data:'z'});
+  const period=plane.authority.pending()[0]!;
+  assert.equal(period.id,owner.manualSession!.id);assert.deepEqual(period.panes,owner.manualSession!.panes);
+  assert.equal(period.bytes,3);assert.equal(period.writers.filter(w=>w.live).length,2);
+  assert.equal(period.writers.find(w=>w.connectionId===first.opened.connectionId)!.generation,owner.generation);
 });
 test('restart or disconnect retains the barrier even when terminal feature is disabled',async()=>{
   const c=await connect();await grant(c);c.socket.close();await settle();assert.equal(plane.authority.pending()[0]!.live,false);assert.equal(plane.authority.blocked,true);
@@ -169,9 +173,9 @@ test('human reconciliation requires a bounded inspection note and refuses any li
   const c=await connect(), owned=await grant(c), m=owned.manualSession!;
   const input={requestId:randomUUID(),manualSessionId:m.id,expectedRevision:m.revision,confirmInspected:true as const,note:'Inspected possible prior/background effects.'};
   await assert.rejects(plane.reconcileManual(input),/Release the keyboard/);
-  const unrelated=plane.authority.save({...m,id:randomUUID(),live:false});
+  const unrelated=plane.authority.save({...m,id:randomUUID(),live:false,writers:m.writers.map(w=>({...w,live:false}))});
   await assert.rejects(plane.reconcileManual({...input,manualSessionId:unrelated.id,expectedRevision:unrelated.revision}),/Release the keyboard/);
-  await plane.terminals.keyboard(c.opened.connectionId,{requestId:randomUUID(),expectedGeneration:owned.generation,action:'release'});
+  await plane.terminals.keyboard(c.opened.connectionId,{requestId:randomUUID(),expectedBootId:plane.authority.bootId,expectedGeneration:owned.generation,action:'release'});
   const current={...input,expectedRevision:plane.authority.get(m.id).revision};
   for(const note of ['', ' ', 'x'.repeat(1001), 'line\nbreak'])await assert.rejects(plane.reconcileManual({...current,note}),/Invalid|Record/);
   await assert.rejects(plane.reconcileManual({...current,confirmReady:true}),/Confirm one inspection/);
@@ -180,7 +184,7 @@ test('human reconciliation requires a bounded inspection note and refuses any li
 });
 test('human reconciliation cannot release delivery, setup or launch reservations',async()=>{
   const c=await connect(), owned=await grant(c);
-  await plane.terminals.keyboard(c.opened.connectionId,{requestId:randomUUID(),expectedGeneration:owned.generation,action:'release'});
+  await plane.terminals.keyboard(c.opened.connectionId,{requestId:randomUUID(),expectedBootId:plane.authority.bootId,expectedGeneration:owned.generation,action:'release'});
   const m=plane.authority.pending()[0]!,input={requestId:randomUUID(),manualSessionId:m.id,expectedRevision:m.revision,confirmInspected:true as const,note:'Inspected fixture host.'};
   store.db.prepare('INSERT INTO reservations(repository,active_id) VALUES (?,?)').run('/demo/other',randomUUID());
   await assert.rejects(plane.reconcileManual(input),/delivery, setup or launch is unresolved/);store.db.exec('DELETE FROM reservations');
@@ -207,9 +211,9 @@ test('first-frame tickets are single-use and exact Origin and Host are mandatory
 test('forged credit, input-disabled grants, and conflicting idempotence keys fail closed',async()=>{
   const c=await connect();assert.throws(()=>plane.terminals.processed(c.opened.connectionId,{generation:c.generation,sequence:1,processedBytes:9999}),/acknowledgment/);
   plane.config.inputEnabled=false;await assert.rejects(grant(c),/Input is disabled/);plane.config.inputEnabled=true;
-  const request={requestId:randomUUID(),action:'acquire',expectedGeneration:c.generation,confirmReady:true};
+  const request={requestId:randomUUID(),action:'acquire',expectedBootId:plane.authority.bootId,expectedGeneration:c.generation,confirmReady:true};
   const [a,b]=await Promise.all([plane.terminals.keyboard(c.opened.connectionId,request),plane.terminals.keyboard(c.opened.connectionId,request)]);assert.deepEqual(a,b);assert.equal(plane.authority.pending().length,1);
-  await assert.rejects(plane.terminals.keyboard(c.opened.connectionId,{...request,transfer:true}),/another terminal decision/);
+  await assert.rejects(plane.terminals.keyboard(c.opened.connectionId,{...request,confirmReady:false}),/another terminal decision/);
 });
 test('project entry persists empty mock projects without panes, deduplicates, and respects read-only',async()=>{
   const p=await plane.projects.add({path:'/demo/new'});assert.deepEqual(await plane.projects.add({path:'/demo/new'}),p);
@@ -265,15 +269,15 @@ test('release drains an in-flight identity check and rejects queued input before
   plane.terminals.services.attach=async(_config,target)=>({pid:1,write:()=>{writes++;},resize:()=>{},pause:()=>{},resume:()=>{},close:async()=>{},active:async()=>{if(inspect)await new Promise<void>(r=>{unblock=r;});return {paneId:target.identity.paneId,sessionId:target.sessionId,label:target.label,command:'fixture'};}});
   const c=await connect(), owner=await grant(c);inspect=true;
   const input=plane.terminals.input(c.opened.connectionId,{generation:owner.generation,seq:1,encoding:'utf8',data:'never written'});const rejection=assert.rejects(input,/ended before writing/);
-  await settle();const release=plane.terminals.keyboard(c.opened.connectionId,{requestId:randomUUID(),expectedGeneration:owner.generation,action:'release'});await settle();inspect=false;unblock();await rejection;await release;assert.equal(writes,0);assert.equal(plane.authority.pending()[0]!.inputMayHaveOccurred,false);
+  await settle();const release=plane.terminals.keyboard(c.opened.connectionId,{requestId:randomUUID(),expectedBootId:plane.authority.bootId,expectedGeneration:owner.generation,action:'release'});await settle();inspect=false;unblock();await rejection;await release;assert.equal(writes,0);assert.equal(plane.authority.pending()[0]!.inputMayHaveOccurred,false);
 });
 test('the old PTY exit during observer/writer replacement cannot close the new generation',async()=>{
   let closes=0;
   plane.terminals.services.attach=async(_config,target,_writer,_cols,_rows,_data,exited)=>({pid:1,write:()=>{},resize:()=>{},pause:()=>{},resume:()=>{},close:async()=>{closes++;exited();},active:async()=>({paneId:target.identity.paneId,sessionId:target.sessionId,label:target.label,command:'fixture'})});
   const c=await connect(), owner=await grant(c);assert.equal(c.socket.readyState,1);assert.equal(closes,1);
-  const released=await plane.terminals.keyboard(c.opened.connectionId,{requestId:randomUUID(),expectedGeneration:owner.generation,action:'release'});
+  const released=await plane.terminals.keyboard(c.opened.connectionId,{requestId:randomUUID(),expectedBootId:plane.authority.bootId,expectedGeneration:owner.generation,action:'release'});
   assert.equal(released.writer,false);assert.equal(c.socket.readyState,1);assert.equal(closes,2);
-  await grant({...c,generation:released.generation},true);assert.equal(c.socket.readyState,1);assert.equal(closes,3);
+  await grant({...c,generation:released.generation});assert.equal(c.socket.readyState,1);assert.equal(closes,3);
 });
 test('late observer attachment and old identity-check failure cannot replace or close the writer',async()=>{
   let finishObserver!:()=>void,rejectWatch!:()=>void,attachments=0,oldClosed=0,writes=0,holdWatch=false;
@@ -284,7 +288,7 @@ test('late observer attachment and old identity-check failure cannot replace or 
   const c=await connect(),owner=await grant(c);finishObserver();await settle();assert.equal(oldClosed,1);
   await plane.terminals.input(c.opened.connectionId,{generation:owner.generation,seq:1,encoding:'utf8',data:'x'});assert.equal(writes,1);
   holdWatch=true;for(let n=0;n<150&&!rejectWatch;n++)await settle();assert.ok(rejectWatch,'watcher must have started');
-  const released=await plane.terminals.keyboard(c.opened.connectionId,{requestId:randomUUID(),expectedGeneration:owner.generation,action:'release'});
+  const released=await plane.terminals.keyboard(c.opened.connectionId,{requestId:randomUUID(),expectedBootId:plane.authority.bootId,expectedGeneration:owner.generation,action:'release'});
   holdWatch=false;rejectWatch();await settle();assert.equal(c.socket.readyState,1);assert.equal(released.writer,false);
 });
 test('acknowledgments and heartbeats in flight for a replaced generation are ignored; an unknown generation still closes the connection',async()=>{
@@ -294,4 +298,128 @@ test('acknowledgments and heartbeats in flight for a replaced generation are ign
   await plane.terminals.input(c.opened.connectionId,{generation:owned.generation,seq:1,encoding:'utf8',data:'x'});
   c.socket.frame({type:'heartbeat',generation:randomUUID()});await settle();
   assert.equal(c.socket.readyState,3,'a generation this connection never had still fails closed');
+});
+
+test('simultaneous first grants snapshot once and each connection keeps its own generation',async t=>{
+  const a=await connect(),b=await connect();
+  const boundary=plane as unknown as {manualSnapshot():Promise<import('../src/contracts/terminals.ts').ManualPane[]>};
+  const snapshot=boundary.manualSnapshot.bind(plane);let snapshots=0;
+  t.mock.method(boundary,'manualSnapshot',async()=>{snapshots++;return snapshot();});
+  const [first,second]=await Promise.all([grant(a),grant(b)]);
+  assert.equal(snapshots,1);assert.equal(first.manualSession!.id,second.manualSession!.id);
+  const period=plane.authority.pending()[0]!;assert.equal(period.writers.length,2);
+  assert.deepEqual(period.writers.map(w=>w.generation),[first.generation,second.generation]);
+  await plane.terminals.keyboard(a.opened.connectionId,{requestId:randomUUID(),expectedBootId:plane.authority.bootId,expectedGeneration:first.generation,action:'release'});
+  assert.equal(plane.authority.pending()[0]!.live,true);
+  await plane.terminals.input(b.opened.connectionId,{generation:second.generation,seq:1,encoding:'utf8',data:'still writable'});
+  assert.throws(()=>plane.authority.assertAutomated(),/Manual terminal input/);
+});
+
+test('a join preserves input recorded while its target is inspected',async t=>{
+  const a=await connect(),b=await connect(),first=await grant(a);
+  const begin=plane.terminals.services.begin.bind(plane.terminals.services);
+  let entered!:()=>void,continueJoin!:()=>void;
+  const waiting=new Promise<void>(r=>entered=r),gate=new Promise<void>(r=>continueJoin=r);
+  t.mock.method(plane.terminals.services,'begin',async(...args:Parameters<typeof begin>)=>{entered();await gate;return begin(...args);});
+  const joining=grant(b);await waiting;
+  await plane.terminals.input(a.opened.connectionId,{generation:first.generation,seq:1,encoding:'utf8',data:'during join'});
+  const before=plane.authority.pending()[0]!;continueJoin();await joining;
+  const after=plane.authority.pending()[0]!;
+  assert.equal(after.bytes,before.bytes);assert.equal(after.writers[0]!.bytes,before.writers[0]!.bytes);
+  assert.equal(after.writers[0]!.revision,before.writers[0]!.revision);assert.ok(after.revision>before.revision);
+});
+
+test('a disconnected writer retains recovery without revoking an unaffected writer or allowing a fresh grant',async()=>{
+  const a=await connect(),b=await connect(),c=await connect();await grant(a);const second=await grant(b);
+  a.socket.close();await settle();
+  await plane.terminals.input(b.opened.connectionId,{generation:second.generation,seq:1,encoding:'utf8',data:'safe existing connection'});
+  await assert.rejects(grant(c),/needs inspection/);
+  assert.equal(plane.authority.pending()[0]!.recoveryRequired,true);
+  assert.equal(plane.authority.pending()[0]!.writers.filter(w=>w.live).length,1);
+});
+
+test('batch handoff binds the full exact writer set, refuses stale input and returns one command-bound receipt',async()=>{
+  const a=await connect(),b=await connect(),first=await grant(a),second=await grant(b);
+  const m=plane.authority.pending()[0]!,command=randomUUID();
+  const input={requestId:randomUUID(),expectedBootId:plane.authority.bootId,manualSessionId:m.id,expectedRevision:m.revision,
+    writers:m.writers.map(w=>({connectionId:w.connectionId,generation:w.generation,revision:w.revision})),confirmReady:true,handoffRequestId:command};
+  await assert.rejects(plane.terminals.stop({...input,writers:input.writers.slice(0,1)}),/other writers/);
+  assert.equal(plane.authority.pending()[0]!.writers.filter(w=>w.live).length,2);
+  await plane.terminals.input(b.opened.connectionId,{generation:second.generation,seq:1,encoding:'utf8',data:'new'});
+  await assert.rejects(plane.terminals.stop(input),/writer set or input changed/);
+  const fresh=plane.authority.pending()[0]!;
+  const current={...input,expectedRevision:fresh.revision,writers:fresh.writers.map(w=>({connectionId:w.connectionId,generation:w.generation,revision:w.revision}))};
+  const result=await plane.terminals.stop(current);
+  assert.equal(result.live,false);assert.equal(result.reconciliationRequired,false);assert.equal(result.settlement!.requestId,command);
+  assert.equal(plane.authority.blocked,false);assert.deepEqual(await plane.terminals.stop(current),result);
+  await assert.rejects(plane.terminals.input(a.opened.connectionId,{generation:first.generation,seq:1,encoding:'utf8',data:'revoked'}));
+});
+
+test('version 17 migration preserves separate original records and requires recovery with no surviving grants',async()=>{
+  const c=await connect(),owned=await grant(c),legacy={...owned.manualSession!};
+  await plane.terminals.shutdown();
+  const value:Record<string,unknown>={...legacy,live:true,inputMayHaveOccurred:true,bytes:17};delete value.writers;delete value.recoveryRequired;
+  store.db.prepare('UPDATE keyboard_sessions SET value=? WHERE id=?').run(JSON.stringify(value),legacy.id);
+  const settled={...value,id:randomUUID(),live:false,reconciliationRequired:false,bytes:9};
+  store.db.prepare('INSERT INTO keyboard_sessions(id,value) VALUES (?,?)').run(settled.id,JSON.stringify(settled));
+  const older={...value,id:randomUUID(),live:false,bytes:3};
+  store.db.prepare('INSERT INTO keyboard_sessions(id,value) VALUES (?,?)').run(older.id,JSON.stringify(older));
+  store.db.pragma('user_version = 17');const config=plane.config;store.close();store=new Store(directory);
+  plane=new ControlPlane(new Controller(config,store,new MockAdapter()));
+  assert.equal(store.db.pragma('user_version',{simple:true}),18);
+  const periods=plane.authority.pending();assert.equal(periods.length,2);
+  const archived=plane.authority.get(settled.id);assert.equal(archived.reconciliationRequired,false);assert.equal(archived.recoveryRequired,false);assert.equal(archived.revision,legacy.revision);assert.deepEqual(archived.panes,legacy.panes);
+  for(const period of periods){assert.equal(period.live,false);assert.equal(period.recoveryRequired,true);assert.equal(period.writers[0]!.live,false);assert.deepEqual(period.panes,legacy.panes);}
+  assert.equal(periods.find(m=>m.id===legacy.id)!.bytes,17);assert.equal(periods.find(m=>m.id===older.id)!.bytes,3);
+  await assert.rejects(plane.terminals.open({target:legacy.target,clientInstanceId:randomUUID(),cols:80,rows:24}),/Reload/);
+  const next=await connect();await assert.rejects(grant(next),/earlier manual sessions/);
+  const first=periods[0]!;await plane.reconcileManual({requestId:randomUUID(),manualSessionId:first.id,expectedRevision:first.revision,confirmReady:true});
+  assert.equal(plane.authority.blocked,true);
+});
+
+test('plain stop accepts intervening bytes while preserving the other writer and original snapshot',async()=>{
+  const a=await connect(),b=await connect(),first=await grant(a),second=await grant(b),m=plane.authority.pending()[0]!;
+  const w=m.writers.find(w=>w.connectionId===a.opened.connectionId)!;
+  await plane.terminals.input(b.opened.connectionId,{generation:second.generation,seq:1,encoding:'utf8',data:'peer'});
+  const stopped=await plane.terminals.stop({requestId:randomUUID(),expectedBootId:plane.authority.bootId,manualSessionId:m.id,expectedRevision:m.revision,writers:[{connectionId:w.connectionId,generation:w.generation,revision:w.revision}]});
+  assert.equal(stopped.bytes,4);assert.deepEqual(stopped.panes,m.panes);assert.equal(stopped.writers.filter(w=>w.live).length,1);
+  assert.equal(stopped.reconciliationRequired,true);assert.equal(stopped.recoveryRequired,false);
+  await assert.rejects(plane.terminals.input(a.opened.connectionId,{generation:first.generation,seq:1,encoding:'utf8',data:'stopped'}));
+  await plane.terminals.input(b.opened.connectionId,{generation:second.generation,seq:2,encoding:'utf8',data:'still live'});
+});
+test('writer-ready waits for the native redraw; failure retains the barrier and closes the attachment',async()=>{
+  let ready!:()=>void,fail!:(error:Error)=>void,closed=0;
+  plane.terminals.services.attach=async(_config,target,writer)=>({pid:1,ready:writer?new Promise<void>((resolve,reject)=>{ready=resolve;fail=reject;}):undefined,
+    write:()=>{},resize:()=>{},pause:()=>{},resume:()=>{},close:async()=>{closed++;},active:async()=>({paneId:target.identity.paneId,sessionId:target.sessionId,label:target.label,command:'fixture'})});
+  const a=await connect(),pending=grant(a);await settle();
+  assert.equal(a.socket.frames.some(f=>f.type==='keyboard'&&f.writer),false);
+  const reset=a.socket.frames.filter(f=>f.type==='reset').at(-1)!;assert.equal(reset.type,'reset');
+  await assert.rejects(plane.terminals.input(a.opened.connectionId,{generation:reset.generation,seq:1,encoding:'utf8',data:'too soon'}),/no available keyboard/);
+  ready();await pending;
+  const b=await connect(),failed=grant(b),rejected=assert.rejects(failed,/redraw failed/);await settle();fail(Error('redraw failed'));await rejected;
+  assert.equal(b.socket.readyState,3);assert.equal(plane.authority.pending()[0]!.recoveryRequired,true);assert.ok(closed>=2);
+  assert.equal(plane.authority.pending()[0]!.writers.filter(w=>w.live).length,1);
+});
+
+test('a stalled writer queue neither blocks another writer nor lets checked stop overtake pending input',async()=>{
+  let writers=0,pause=false,unblock!:()=>void;
+  plane.terminals.services.attach=async(_config,target,writer)=>{const first=writer&&++writers===1;return {pid:1,write:()=>{},resize:()=>{},pause:()=>{},resume:()=>{},close:async()=>{},active:async()=>{if(first&&pause)await new Promise<void>(r=>unblock=r);return {paneId:target.identity.paneId,sessionId:target.sessionId,label:target.label,command:'fixture'};}};};
+  const a=await connect(),b=await connect(),first=await grant(a),second=await grant(b);pause=true;
+  const pending=plane.terminals.input(a.opened.connectionId,{generation:first.generation,seq:1,encoding:'utf8',data:'a'}),rejected=assert.rejects(pending,/ended before writing/);await settle();
+  await plane.terminals.input(b.opened.connectionId,{generation:second.generation,seq:1,encoding:'utf8',data:'b'});
+  const m=plane.authority.pending()[0]!,w=m.writers.find(w=>w.connectionId===a.opened.connectionId)!;
+  const input={requestId:randomUUID(),expectedBootId:plane.authority.bootId,manualSessionId:m.id,expectedRevision:m.revision,writers:[{connectionId:w.connectionId,generation:w.generation,revision:w.revision}]};
+  await assert.rejects(plane.terminals.stop({...input,confirmReady:true}),/input is still pending/);
+  const stopping=plane.terminals.stop(input);await settle();pause=false;unblock();await rejected;await stopping;
+  assert.equal(plane.authority.pending()[0]!.bytes,1);assert.equal(plane.authority.pending()[0]!.writers.filter(w=>w.live).length,1);
+});
+
+test('a partial batch stop failure retains recovery and never permits another implicit grant',async()=>{
+  const a=await connect(),b=await connect();await grant(a);await grant(b);
+  plane.terminals.services.attach=async()=>{throw Error('replacement failed');};
+  const m=plane.authority.pending()[0]!;
+  await assert.rejects(plane.terminals.stop({requestId:randomUUID(),expectedBootId:plane.authority.bootId,manualSessionId:m.id,expectedRevision:m.revision,
+    writers:m.writers.map(w=>({connectionId:w.connectionId,generation:w.generation,revision:w.revision}))}),/replacement failed/);
+  assert.equal(plane.authority.pending()[0]!.live,false);assert.equal(plane.authority.pending()[0]!.recoveryRequired,true);assert.equal(plane.authority.blocked,true);
+  delete plane.terminals.services.attach;const next=await connect();await assert.rejects(grant(next),/Earlier input needs inspection/);
 });

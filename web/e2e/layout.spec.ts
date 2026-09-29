@@ -1,7 +1,7 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import type { Group, ImplementationStart, StandaloneStart } from '../src/contracts/implementation';
 import type { WorkflowState } from '../src/contracts/workflow';
-import { backToControl, expandWorktree, editSettings, expand, openAccess, openCard, pane, readiness, showSurface } from './ui';
+import { observationTransport, backToControl, expandWorktree, editSettings, expand, openAccess, openCard, pane, readiness, showSurface } from './ui';
 const headers = { Authorization: `Bearer ${'a'.repeat(64)}` };
 async function post(request: APIRequestContext, path: string, data: unknown) {
   const response = await request.post(`/api/v1/${path}`, { headers, data }); expect(response.ok()).toBe(true); return response.json();
@@ -42,7 +42,7 @@ function mutations(page: Page) {
   const sent: string[] = [];
   page.on('request', (outgoing) => {
     const path = new URL(outgoing.url()).pathname;
-    if (outgoing.method() !== 'GET' && !path.endsWith('/implementation/preview')) sent.push(`${outgoing.method()} ${path}`);
+    if (outgoing.method() !== 'GET' && !observationTransport(outgoing.url()) && !path.endsWith('/implementation/preview')) sent.push(`${outgoing.method()} ${path}`);
   });
   return sent;
 }
@@ -58,7 +58,7 @@ test('a typed instruction explains the disabled Send and readiness enables it wi
   await expect(hint).toContainText('in Control access');
   await expect(hint).toContainText('Ready for implementation');
   await expect(send).toHaveAccessibleDescription(/in Control access/);
-  await expect(page.locator('.page-heading').getByRole('img', { name: 'Keyboard: nobody', exact: true })).toBeVisible();
+  await expect(page.locator('.page-heading').getByRole('img', { name: 'Input: 0 active', exact: true })).toBeVisible();
   await page.screenshot({ path: info.outputPath('disabled-send-hint.png'), fullPage: true });
   await draft.fill('   '); await expect(hint).toHaveCount(0);
   await draft.fill('Explain the change.');
@@ -74,13 +74,13 @@ test('a typed instruction explains the disabled Send and readiness enables it wi
   await ready.check(); await access.getByRole('button', { name: 'Return to action', exact: true }).click();
   await expect(send).toBeEnabled(); await expect(hint).toHaveCount(0); await expect(ready).toBeChecked();
   await expect(draft).toHaveValue('Explain the change.');
-  await expect(page.locator('.page-heading').getByRole('img', { name: 'Keyboard: nobody', exact: true })).toBeVisible();
+  await expect(page.locator('.page-heading').getByRole('img', { name: 'Input: 0 active', exact: true })).toBeVisible();
   expect(sent).toEqual([]);
 });
 test('the page heading row holds the one Control access entry, then the keyboard status, then connection status', async ({ page }, info) => {
   await unlock(page);
   const heading = page.locator('.page-heading'), entry = heading.getByRole('button', { name: /^Control access · / });
-  const keyboard = heading.getByRole('img', { name: /^Keyboard: / });
+  const keyboard = heading.getByRole('img', { name: /^Input: / });
   await expect(entry).toBeVisible(); await expect(keyboard).toBeVisible();
   // One global status entry; the implementation readiness hint can also open this same panel.
   await expect(page.locator('.topbar .access-entry')).toHaveCount(0);
@@ -105,10 +105,10 @@ test('the Agent selector switches the shown terminal and Control together and ke
   for (const [name, other] of [['Codex', 'Claude'], ['Claude', 'Codex']] as const) {
     await agents.getByRole('button', { name, exact: true }).click(); await showSurface(page, 'Terminal');
     await expect(agents.getByRole('button', { name, exact: true })).toHaveAttribute('aria-pressed', 'true');
-    await expect(page.getByLabel(`${name} output`)).toBeVisible(); await expect(page.getByLabel(`${other} output`)).toBeHidden();
+    await expect(page.getByLabel(`${name} native output`)).toBeVisible(); await expect(page.getByLabel(`${other} native output`)).toBeHidden();
     // The same selection is the Control recipient; the switch shows Control in place of the terminals.
     const section = await openCard(page, name);
-    await expect(page.getByLabel(`${name} output`)).toBeHidden();
+    await expect(page.getByLabel(`${name} native output`)).toBeHidden();
     await expect(control.locator('.control-heading h2')).toHaveText(`Control · ${name}`);
     await section.getByLabel(`Instruction for ${name}`).fill(`${name} draft`);
   }
@@ -479,6 +479,7 @@ test('terminal captures are taller, grow with the window, and stand apart from s
   expect(await background(stage)).not.toBe(await background(page.getByRole('region', { name: 'Implementation settings' })));
   for (const name of ['Codex', 'Claude']) {
     await stage.getByRole('navigation', { name: 'Agent' }).getByRole('button', { name, exact: true }).click(); await showSurface(page, 'Terminal');
+    await page.getByRole('region',{name:`${name} terminal`,exact:true}).getByRole('button',{name:'Captured text',exact:true}).click();
     expect(await height(name), `${name} capture at 1440×900`).toBeGreaterThanOrEqual(252);
     const actions = await openCard(page, name);
     expect(await background(page.getByLabel(`${name} output`))).not.toBe(await background(actions));
@@ -556,7 +557,7 @@ test('the console starts on a working agent; in Focus the terminal and Control f
   await openGroup(page, group); await page.getByRole('button', { name: 'Focus', exact: true }).click();
   const sent = mutations(page);
   const agents = page.getByRole('navigation', { name: 'Agent' });
-  await expect(agents.getByRole('button', { name: 'Claude', exact: true })).toHaveAttribute('aria-pressed', 'true'); await expect(page.getByLabel('Claude output')).toBeVisible();
+  await expect(agents.getByRole('button', { name: 'Claude', exact: true })).toHaveAttribute('aria-pressed', 'true'); await expect(page.getByLabel('Claude native output')).toBeVisible();
   await expect(page.locator('.control-heading h2')).toHaveText('Control · Claude');
   // No click was made: Codex starting work shows its terminal and retargets Control, on whichever surface is shown.
   await showSurface(page, 'Control'); await expect(page.getByRole('group', { name: 'Pane layout' })).toBeVisible();
@@ -565,7 +566,7 @@ test('the console starts on a working agent; in Focus the terminal and Control f
   await expect(page.locator('.control-heading h2')).toHaveText('Control · Codex');
   await expect(page.getByRole('group', { name: 'Terminal or Control' }).getByRole('button', { name: 'Control', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await showSurface(page, 'Terminal');
-  await expect(page.getByLabel('Codex output')).toBeVisible(); await expect(page.getByLabel('Claude output')).toBeHidden();
+  await expect(page.getByLabel('Codex native output')).toBeVisible(); await expect(page.getByLabel('Claude native output')).toBeHidden();
   // A click holds until the working agent changes again.
   await agents.getByRole('button', { name: 'Claude', exact: true }).click(); await page.getByRole('button', { name: 'Recheck', exact: true }).click();
   await expect(pane(page, 'Codex').locator('.pane-status .state')).toHaveText('working');
@@ -587,7 +588,7 @@ test('Focus follows a new worker while its peer remains busy, and a completion d
   working = ['codex','claude']; await page.getByRole('button', { name: 'Recheck', exact: true }).click();
   await expect(agents.getByRole('button', { name: 'Claude', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('.control-heading h2')).toHaveText('Control · Claude');
-  await showSurface(page, 'Terminal'); await expect(page.getByLabel('Claude output')).toBeVisible();
+  await showSurface(page, 'Terminal'); await expect(page.getByLabel('Claude native output')).toBeVisible();
   await agents.getByRole('button', { name: 'Codex', exact: true }).click();
   working = ['claude']; await page.getByRole('button', { name: 'Recheck', exact: true }).click();
   await expect(pane(page, 'Codex').locator('.pane-status .state')).toHaveText('idle');
@@ -626,7 +627,7 @@ test('an accepted command from Control shows the recipient terminal again; a ref
   await expect(surface.getByRole('button', { name: 'Control', exact: true })).toHaveAttribute('aria-pressed', 'true');
   status = 'delivered'; await ready.check(); await codex.getByRole('button', { name: 'Send Codex', exact: true }).click();
   await expect(surface.getByRole('button', { name: 'Terminal', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByLabel('Codex output')).toBeVisible(); await expect(page.locator('section#altcli-control')).toHaveAttribute('hidden', '');
+  await expect(page.getByLabel('Codex native output')).toBeVisible(); await expect(page.locator('section#altcli-control')).toHaveAttribute('hidden', '');
 });
 test('Agents sits left of local Settings, including Stage relay, and lists this checkout with home paths as ~', async ({ page, request }, info) => {
   const group = await post(request, 'groups', { name: 'Agents tab', members: ['codex','claude'] });
@@ -672,7 +673,7 @@ test('the console has no horizontal overflow at phone widths', async ({ page, re
   }
   // The single visible capture is taller than the former fixed 320 px phone height.
   await showSurface(page, 'Terminal');
-  expect(await page.getByLabel('Codex output').evaluate((el) => el.clientHeight)).toBeGreaterThan(320);
+  expect(await page.getByLabel('Codex native output').evaluate((el) => el.clientHeight)).toBeGreaterThan(320);
   await page.screenshot({ path: info.outputPath('console-320.png'), fullPage: true });
 });
 

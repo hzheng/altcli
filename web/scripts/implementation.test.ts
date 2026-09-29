@@ -78,8 +78,8 @@ const run = (id: string) => plane.workflow.run(id)!;
 
 async function keyboardStart() {
   const input=request();const session=store.sessions().find(s=>s.id==='codex') as ManagedSession;
-  const manual=await plane.terminals.services.begin({target:{agentId:session.id,registrationId:session.registrationId},clientInstanceId:randomUUID(),cols:80,rows:24},randomUUID(),randomUUID());
-  const released=plane.authority.release(manual.id,'Fixture release');
+  const manual=await plane.terminals.services.begin({protocol:2,target:{agentId:session.id,registrationId:session.registrationId},clientInstanceId:randomUUID(),cols:80,rows:24},randomUUID(),randomUUID());
+  const released=plane.authority.release(manual.id,manual.writers[0]!.connectionId,'Fixture release');
   const settled=await plane.reconcileManual({requestId:randomUUID(),manualSessionId:manual.id,expectedRevision:released.revision,confirmReady:true},input.requestId);
   return {...input,keyboardSettlement:{manualSessionId:manual.id,revision:settled.revision}};
 }
@@ -613,7 +613,7 @@ test('v4 migration preserves historical pair IDs and creates versioned groups', 
   store.db.prepare('DELETE FROM groups').run(); store.db.pragma('user_version = 4'); store.close();
   store = new Store(join(directory, 'metadata'));
   assert.equal(store.groups()[0]!.id, group.id); assert.equal(store.groups()[0]!.legacyPairId, group.id);
-  assert.deepEqual(store.groups()[0]!.members, ['codex', 'claude']); assert.equal(store.db.pragma('user_version', { simple: true }), 17);
+  assert.deepEqual(store.groups()[0]!.members, ['codex', 'claude']); assert.equal(store.db.pragma('user_version', { simple: true }), 18);
 });
 test('a relay note reaches only the peer\'s review assignment and needs a relay', async () => {
   const input = request({ reviewNote: 'Please check the retry path first.' }); await plane.submitImplementation(input);
@@ -1727,11 +1727,11 @@ async function takeNativeKeyboard() {
     close() { if (this.readyState !== 1) return; this.readyState = 3; this.emit('close'); }
     terminate() { this.close(); }
   }
-  const opened = await plane.terminals.open({ target: { agentId: session.id, registrationId: session.registrationId }, cols: 80, rows: 24, clientInstanceId: randomUUID() });
+  const opened = await plane.terminals.open({protocol:2, target: { agentId: session.id, registrationId: session.registrationId }, cols: 80, rows: 24, clientInstanceId: randomUUID() });
   const socket = new Socket(); plane.terminals.connect(socket as unknown as import('ws').WebSocket);
   socket.emit('message', Buffer.from(JSON.stringify({ ticket: opened.ticket })), false);
   for (let n = 0; n < 50 && !socket.generation; n++) await new Promise(r => setTimeout(r, 5));
-  const result = await plane.terminals.keyboard(opened.connectionId, { requestId: randomUUID(), action: 'acquire', expectedGeneration: socket.generation, confirmReady: true });
+  const result = await plane.terminals.keyboard(opened.connectionId, { requestId: randomUUID(), action: 'acquire', expectedBootId:plane.authority.bootId,expectedGeneration: socket.generation, confirmReady: true });
   return { opened, result };
 }
 test('native keyboard holds a running implementation completion once; release does not dispatch its saved successor', async () => {
@@ -1740,7 +1740,7 @@ test('native keyboard holds a running implementation completion once; release do
   assert.equal(run(input.requestId).interaction?.origin, 'keyboard');
   publish(input.requestId, true); await complete(input.requestId); await complete(input.requestId);
   assert.equal(run(input.requestId).status, 'paused'); assert.equal(run(input.requestId).interaction?.disposition, 'automatic'); assert.equal(sent.length, 1);
-  const released = await plane.terminals.keyboard(keyboard.opened.connectionId, { requestId: randomUUID(), action: 'releaseSettled', expectedGeneration: keyboard.result.generation, confirmReady: true });
+  const released = await plane.terminals.keyboard(keyboard.opened.connectionId, { requestId: randomUUID(), action: 'releaseSettled', expectedBootId:plane.authority.bootId,expectedGeneration: keyboard.result.generation, confirmReady: true });
   assert.equal(released.manualSession?.reconciliationRequired, false, released.reason); assert.equal(sent.length, 1);
   await plane.reconcileCheckpoint(checkpointDecision(input.requestId)); assert.equal(sent.length, 2);
   await plane.terminals.shutdown();
@@ -1759,7 +1759,7 @@ test('a Claude completion under a keyboard hold captures its checkpoint once the
   adapter.trees.set('claude', []);
   await waitFor(() => !!plane.interactions.checkpoint(input.requestId));
   assert.equal(plane.interactions.checkpoint(input.requestId)!.kind, 'interaction'); assert.equal(sent.length, 1);
-  const released = await plane.terminals.keyboard(keyboard.opened.connectionId, { requestId: randomUUID(), action: 'releaseSettled', expectedGeneration: keyboard.result.generation, confirmReady: true });
+  const released = await plane.terminals.keyboard(keyboard.opened.connectionId, { requestId: randomUUID(), action: 'releaseSettled', expectedBootId:plane.authority.bootId,expectedGeneration: keyboard.result.generation, confirmReady: true });
   assert.equal(released.manualSession?.reconciliationRequired, false, released.reason);
   await plane.reconcileCheckpoint(checkpointDecision(input.requestId)); assert.equal(sent.length, 2);
   await plane.terminals.shutdown();
@@ -1790,7 +1790,7 @@ test('native keyboard preserves a waiting checkpoint rather than recapturing int
   assert.equal(plane.interactions.checkpoint(input.requestId)!.fingerprint, checkpoint.fingerprint);
   assert.equal(run(input.requestId).interaction?.disposition, 'waiting');
   appendFileSync(join(root, 'app.txt'), 'manual edit\n');
-  const released = await plane.terminals.keyboard(keyboard.opened.connectionId, { requestId: randomUUID(), action: 'releaseSettled', expectedGeneration: keyboard.result.generation, confirmReady: true });
+  const released = await plane.terminals.keyboard(keyboard.opened.connectionId, { requestId: randomUUID(), action: 'releaseSettled', expectedBootId:plane.authority.bootId,expectedGeneration: keyboard.result.generation, confirmReady: true });
   assert.equal(released.manualSession?.reconciliationRequired, true); assert.match(released.reason, /changed/); assert.equal(sent.length, 2);
   await assert.rejects(plane.reconcileCheckpoint(checkpointDecision(input.requestId, 'restore')), /Manual terminal input/);
   plane.interactions.invalidate(input.requestId, 'Fixture checkpoint requires takeover.');

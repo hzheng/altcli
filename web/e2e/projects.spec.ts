@@ -1,7 +1,7 @@
 import { expect, test, type Page, type APIRequestContext } from '@playwright/test';
 import type { WorkspaceDiscovery, WorkflowState } from '../src/contracts/workflow';
 import type { DirectoryListing, FinishPreview, ProjectWorktree, TaskFinish, WorktreeCreateInput, WorktreeCreation, WorktreeDiscard, WorktreePreview } from '../src/contracts/projects';
-import { expandAgents, expandWorktree } from './ui';
+import { observationTransport, expandAgents, expandWorktree } from './ui';
 
 const token = 'a'.repeat(64); // test fixture only
 const headers = { Authorization: `Bearer ${token}` };
@@ -49,7 +49,7 @@ test('worktrees fill one column, put the main checkout first and toggle independ
   const inventory = await fixture(page, request); const project = inventory.projects![0]!;
   const main = project.worktrees[0]!;
   project.worktrees = [tree('/home/fixture/tasks/login', 'feature/login'), main, tree('/home/fixture/tasks/fix', 'fix/issue')];
-  const writes: string[] = []; page.on('request', r => { if (r.method() !== 'GET') writes.push(r.url()); });
+  const writes: string[] = []; page.on('request', r => { if (r.method() !== 'GET' && !observationTransport(r.url())) writes.push(r.url()); });
   await page.getByRole('button', { name: 'Recheck', exact: true }).click();
   const list = page.getByRole('list', { name: 'Available worktrees' }), cards = list.locator(':scope > li');
   const summary = (card: typeof cards) => card.locator(':scope > details > summary');
@@ -99,7 +99,7 @@ test('worktree tabs separate agents and branch actions, remember selection and k
   await page.getByRole('button', { name: 'Recheck', exact: true }).click();
   const cards = page.getByRole('list', { name: 'Available worktrees' }).locator(':scope > li');
   const card = (name: string) => cards.filter({ has: page.locator('summary', { hasText: `/home/fixture/tasks/${name}` }) });
-  const writes: string[] = []; page.on('request', request => { if (request.method() !== 'GET') writes.push(request.url()); });
+  const writes: string[] = []; page.on('request', request => { if (request.method() !== 'GET' && !observationTransport(request.url())) writes.push(request.url()); });
   for (const name of ['login', 'inspect']) {
     await expandWorktree(page, name === 'login' ? 'feature/login' : name);
     const tabs = card(name).getByRole('tablist');
@@ -142,7 +142,7 @@ test('the Branch tab shows Main and Branch action groups in view, with forms bel
   await page.getByRole('tablist', { name: 'Worktree feature/finished sections', exact: true }).getByRole('tab', { name: 'Branch', exact: true }).click();
   const mainItems = page.getByRole('group', { name: 'Main actions for feature/finished', exact: true });
   const branchItems = page.getByRole('group', { name: 'Branch actions for feature/finished', exact: true });
-  const writes: string[] = []; page.on('request', r => { if (r.method() !== 'GET') writes.push(r.url()); });
+  const writes: string[] = []; page.on('request', r => { if (r.method() !== 'GET' && !observationTransport(r.url())) writes.push(r.url()); });
   // No dropdowns: every action is visible in its labelled group.
   await expect(mainItems.getByRole('heading', { name: 'Main', exact: true })).toBeVisible();
   await expect(mainItems.getByRole('button')).toHaveText(['Squash into main', 'Update from main', 'Rebase onto main', 'Reset to main']);
@@ -221,7 +221,7 @@ test('Launch agents here scrolls to an offscreen form, including a collapsed wor
   const form = page.getByRole('region', { name: 'Launch agents in /home/fixture/.altcli/project/feature/login', exact: true });
   const heading = form.getByRole('heading', { name: 'Launch agents in feature/login', exact: true });
   await expect(summary).not.toBeInViewport();
-  const writes: string[] = []; page.on('request', r => { if (r.method() !== 'GET') writes.push(r.url()); });
+  const writes: string[] = []; page.on('request', r => { if (r.method() !== 'GET' && !observationTransport(r.url())) writes.push(r.url()); });
   await shortcut.click(); await expect(heading).toBeInViewport();
   const tabs = summary.locator('xpath=ancestor::li[1]').getByRole('tablist');
   await tabs.getByRole('tab', { name: 'Branch', exact: true }).click(); await expect(form).not.toBeVisible();

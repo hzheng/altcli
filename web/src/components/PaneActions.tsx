@@ -147,7 +147,7 @@ export function PaneActions(p: PaneActionsProps) {
   const stateKey = JSON.stringify(['pane', agent.id, agent.registrationId, group.id, group.revision, registrations, instances, p.agentsKey, git ?? null, p.workspaceError,
     s.consent, after, p.state.legacyEnabled, handoffOnly, snapshot.consent, review.consent, p.runMark, p.recheck]);
   const manual = p.keyboardHandoff?.manual;
-  const key = JSON.stringify([stateKey, manual ? [manual.id, manual.connectionId, manual.generation, manual.revision, text, note, context] : null]);
+  const key = JSON.stringify([stateKey, manual ? [manual.id, manual.writers, manual.revision, text, note, context] : null]);
   // A release changes keyboard state itself; everything else the click authorized must stay exact while it waits.
   const intent = JSON.stringify([stateKey, p.state.activities, p.token, p.viewEpoch, text, note, context]);
   const intentRef = useRef({ key: intent, revision: 0 });

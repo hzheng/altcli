@@ -28,7 +28,7 @@ try {
   const opened = [];
   for(let n=0;n<6;n++) {
     const target = state.sessions[n % state.sessions.length];
-    const result = await request('terminals', {target:{agentId:target.id,registrationId:target.registrationId},cols:80,rows:24,clientInstanceId:crypto.randomUUID()});
+    const result = await request('terminals', {protocol:2,target:{agentId:target.id,registrationId:target.registrationId},cols:80,rows:24,clientInstanceId:crypto.randomUUID()});
     assert.equal(result.status,200,JSON.stringify(result)); opened.push(result.data);
     const ws = new WebSocket(origin.replace('http:','ws:')+'/api/v1/terminals/socket',{origin}); sockets.push(ws);
     await new Promise((done,fail) => {const timer=setTimeout(()=>fail(Error('Missing reset; '+log)),15000); ws.on('error',fail); ws.once('open',()=>ws.send(JSON.stringify({ticket:result.data.ticket}))); ws.on('message',bytes=>{const f=JSON.parse(bytes); if(f.type==='reset'){result.generation=f.generation;clearTimeout(timer);done();} if(f.type==='out') ws.send(JSON.stringify({type:'processed',generation:f.generation,sequence:f.sequence,processedBytes:f.bytes}));});});

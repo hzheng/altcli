@@ -380,6 +380,8 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
 /* Native terminal owns its rows; hidden cards must not send zero-size resizes. */
 .xterm-mount { height: 26rem; min-width: 0; padding: .5rem; background: #101719; }
 .xterm-mount[hidden] { display: none; }
+.terminal-entry { display: block; width: calc(100% - 1rem); margin: .5rem; min-height: 44px; resize: none; font-family: var(--font-mono), monospace; }
+.terminal-entry[hidden] { display: none; }
 .terminal-tools, .terminal-keys { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; padding: .5rem; }
 .native-terminal { min-width: 0; }
 .native-terminal.expanded .xterm-mount { height: 80svh; }

@@ -71,3 +71,9 @@ export const openController = openAccess;
 export async function handOff(card: Locator, mode: 'commit' | 'commit_relay') {
   await card.getByLabel(/^Instruction for /).fill(''); await card.getByLabel('After send').selectOption(mode);
 }
+
+/** Viewing may open/resize/close observation transports. Grants, byte input, stop,
+ * reconciliation and every workflow mutation remain visible to navigation tests. */
+export function observationTransport(url: string) {
+  return /^\/api\/v1\/terminals(?:\/[a-f0-9-]+\/(?:resize|close))?$/.test(new URL(url).pathname);
+}

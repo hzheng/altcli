@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import type { ManualSession } from '../contracts/terminals.ts';
+import type { ManualSession, ManualWriter } from '../contracts/terminals.ts';
 import { AppError } from '../core/errors.ts';
 import type { Store } from './store.ts';
 /** Shared admission counters plus durable barriers; no live writer never implies safe automation. */
@@ -13,7 +13,9 @@ export class InputAuthority {
   private acquiring = false;
   constructor(store: Store) {
     this.store = store;
-    for (const s of this.sessions()) if (s.live) this.save({ ...s, live: false, reconciliationRequired: true, reason: 'Host restarted; inspect and reconcile manual input.' });
+    for (const s of this.sessions()) if (s.live || s.reconciliationRequired) this.save({ ...s, live: false,
+      writers: s.writers.map(w => ({ ...w, live: false })), recoveryRequired: true,
+      reconciliationRequired: true, reason: 'Host restarted; inspect and reconcile manual input.' });
   }
   sessions(): ManualSession[] { return (this.store.db.prepare('SELECT value FROM keyboard_sessions ORDER BY rowid').all() as { value: string }[]).map(r => JSON.parse(r.value)); }
   pending(): ManualSession[] { return this.sessions().filter(s => s.reconciliationRequired || s.live); }
@@ -31,8 +33,13 @@ export class InputAuthority {
     this.acquiring = true;
     try { return await work(); } finally { this.acquiring = false; }
   }
+  /** Draining/closing is manual work too; no settled check can overtake it. */
+  async draining<T>(work: () => Promise<T>): Promise<T> {
+    this.operations++;
+    try { return await work(); } finally { this.operations--; }
+  }
   save(session: ManualSession): ManualSession {
-    const next = { ...session, revision: session.revision + 1, updatedAt: new Date().toISOString() };
+    const next = { ...session, live: session.writers.some(w => w.live), revision: session.revision + 1, updatedAt: new Date().toISOString() };
     this.store.db.prepare('INSERT INTO keyboard_sessions(id,value) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(next.id, JSON.stringify(next));
     this.revision++;
     return next;
@@ -42,12 +49,27 @@ export class InputAuthority {
     if (!session) throw new AppError('MANUAL_CHANGED', 'This manual input record is unavailable.', 409);
     return session;
   }
-  markInput(id: string, bytes: number): void {
-    const s = this.get(id);
-    if (!s.live) throw new AppError('KEYBOARD_REVOKED', 'Keyboard authority ended. No input was sent.', 409);
-    this.save({ ...s, inputMayHaveOccurred: true, bytes: s.bytes + bytes });
+  writer(id: string, connectionId: string): ManualWriter {
+    const writer = this.get(id).writers.find(w => w.connectionId === connectionId);
+    if (!writer) throw new AppError('KEYBOARD_REVOKED', 'This writer record is unavailable.', 409);
+    return writer;
   }
-  release(id: string, reason: string): ManualSession { return this.save({ ...this.get(id), live: false, reconciliationRequired: true, reason }); }
+  updateWriter(id: string, connectionId: string, patch: Partial<ManualWriter>): ManualSession {
+    const s = this.get(id), writer = this.writer(id, connectionId);
+    return this.save({ ...s, writers: s.writers.map(w => w.connectionId === connectionId ? { ...writer, ...patch, revision: writer.revision + 1 } : w) });
+  }
+  markInput(id: string, connectionId: string, generation: string, bytes: number): void {
+    const s = this.get(id);
+    const writer = this.writer(id, connectionId);
+    if (!writer.live || writer.generation !== generation) throw new AppError('KEYBOARD_REVOKED', 'Keyboard authority ended. No input was sent.', 409);
+    this.save({ ...s, inputMayHaveOccurred: true, bytes: s.bytes + bytes, writers: s.writers.map(w => w.connectionId === connectionId
+      ? { ...w, revision: w.revision + 1, inputMayHaveOccurred: true, bytes: w.bytes + bytes } : w) });
+  }
+  release(id: string, connectionId: string, reason: string, uncertain = false): ManualSession {
+    const s = this.get(id);
+    return this.save({ ...s, writers: s.writers.map(w => w.connectionId === connectionId ? { ...w, live: false, revision: w.revision + 1 } : w),
+      reconciliationRequired: true, recoveryRequired: s.recoveryRequired || uncertain, reason });
+  }
   duplicate<T>(id: string, input: unknown): T | undefined {
     const row = this.store.db.prepare('SELECT value FROM terminal_decisions WHERE id=?').get(id) as { value: string } | undefined;
     if (!row) return;

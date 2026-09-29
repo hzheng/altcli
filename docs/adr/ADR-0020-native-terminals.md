@@ -10,7 +10,8 @@ raw bytes, terminal sizing and tmux navigation.
 Observation defaults read-only. The human approved captured-text fallback wherever
 native observation could resize workers after the tmux 3.5a probe exposed the
 all-clients-ignored sizing behavior. Do not change discovered/global options.
-Writable input requires the one server-wide keyboard authority. Persist its
+Writable input uses per-connection grants under one server-wide manual-input barrier.
+The September 29 amendment below supersedes the earlier single-writer controls. Persist its
 manual barrier and affected whole-run checkpoint holds before input is possible.
 Release/disconnect/restart are not reconciliation or continuation. Never persist
 raw keystrokes or replay uncertain input. Legacy owners retain their existing
@@ -112,6 +113,37 @@ reported with what already happened, and nothing is retried. Takeover still neve
 worker or claims success. Checkpoint and blocked-handoff continuation and **Mark <agent> Ready**
 are single clicks whose text states what they attest; each action keeps its one readiness check.
 Runs in other worktrees keep their own holds.
+
+September 29 amendment (approved direct-input plan): remove Claim/Take keyboard and transfer.
+Only the first trusted human key, composition commit, paste, soft key or mouse-protocol input
+admits a writer. Observation, focus, selection, scrolling history and terminal-generated replies
+never admit one. A separate real textarea captures pre-grant text/IME; public xterm APIs encode
+queued keys and paste after the writer generation is ready. Both the correlated HTTP result and
+socket writer frame are required; reset alone grants nothing. Bound pending intents to the exact
+connection, host boot and view, discard them on cancellation, and never replay uncertain input.
+Captured-only observation keeps this entry field without changing tmux sizing policies.
+
+Keep one backend and at most one persistent attachment per connection, with the existing eight
+host/four session limits. Multiple browsers, tabs and terminals may type, even at the same pane;
+native tmux interleaving and sizing apply. Show the actual destination and effective window size.
+The first writer takes the original all-pane snapshot and whole-run holds once. Later writers
+join that period without recapturing checkpoints or weakening the global automation barrier.
+Disconnect/restart retains evidence and requires inspection before any new admission; another
+already live writer can continue. No inactivity timeout transfers input or settles the period.
+
+Stop typing here and Stop typing in this browser name exact connection generations and retain
+the barrier. A checked Send freezes the complete local writer set, refuses pending input,
+remote writers, recovery or affected checkpoints, then strictly reconciles with exact
+period/writer revisions. Any intervening input invalidates that confirmation. The existing
+command-bound settlement checks remain in force through delivery. This does not resume held
+runs. A plain stop may accept newer byte revisions because it only removes authority; it never
+accepts a replacement generation.
+
+Schema 18 preserves each legacy period's ID, original snapshot, run references, revisions and
+byte evidence separately, revokes all old grants and retains recovery. Version-2 terminal opens
+and explicit host-boot checks refuse old tabs. Roll out only at a settled backend restart. Native
+and browser evidence is recorded with this proposal; physical Safari/IME, remote transport and
+installed-provider acceptance remain separate release gates.
 
 See
 [the protocol](../TERMINAL-PROTOCOL.md) for limits, recovery and deployment checks.

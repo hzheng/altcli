@@ -37,7 +37,7 @@ async function barrier(): Promise<ManualSession> {
   const now = new Date().toISOString();
   return plane.authority.save({ id: randomUUID(), revision: 0, bootId: plane.authority.bootId, clientInstanceId: randomUUID(), connectionId: randomUUID(),
     generation: randomUUID(), target: { launchId: randomUUID() }, live: false, reconciliationRequired: true, inputMayHaveOccurred: true, bytes: 1,
-    createdAt: now, updatedAt: now, reason: 'Released recovery fixture', runs: [], panes });
+    writers: [], targets: [], recoveryRequired: true, createdAt: now, updatedAt: now, reason: 'Released recovery fixture', runs: [], panes });
 }
 const strict = (m: ManualSession) => ({ requestId: randomUUID(), manualSessionId: m.id, expectedRevision: m.revision, confirmReady: true as const });
 const human = (m: ManualSession) => ({ requestId: randomUUID(), manualSessionId: m.id, expectedRevision: m.revision, confirmInspected: true as const, note: 'Inspected private fixture server and possible prior/background effects.' });
@@ -56,7 +56,8 @@ test('private tmux: a disappearing pane survives restart and flags-off until an 
   await assert.rejects(plane.reconcileManual(strict(m)), /Pane identities changed/); held();
   await plane.terminals.shutdown(); plane = new ControlPlane(new Controller(plane.config, store, new TmuxAdapter(run)));
   assert.equal(plane.config.terminalEnabled, false); held();
-  const input = human(m), result = await plane.reconcileManual(input);
+  await assert.rejects(plane.reconcileManual(human(m)), /current manual input record/);
+  const input = human(plane.authority.get(m.id)), result = await plane.reconcileManual(input);
   assert.deepEqual(result.humanDecision?.note, input.note); assert.match(result.reason, /possible prior and background effects/);
   assert.deepEqual(await plane.reconcileManual(input), result); assert.equal(plane.authority.blocked, false);
   await assert.rejects(plane.reconcileManual({ ...input, note: 'Changed decision' }), /another terminal decision/);

@@ -40,7 +40,8 @@ operating documents under [docs/history/2026-09-16-pre-hardening](docs/history/2
 
 [ADR-0020](docs/adr/ADR-0020-native-terminals.md) and
 [ADR-0021](docs/adr/ADR-0021-project-entry-and-agent-launch.md) describe the approved
-terminal/launch direction and captured-text fallback. Their implementation is a
+terminal/launch direction and captured-text fallback. ADR-0020’s September 29 amendment
+adds direct input and independent connection writers under the existing global manual barrier. Their implementation is a
 proposal behind host flags that setup enables (a missing flag means off);
 installed-host acceptance is recorded separately.
 

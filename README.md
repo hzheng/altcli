@@ -13,10 +13,14 @@ Native iOS and a third AI supervisor remain deferred.
 `node scripts/setup.mjs` writes `ALTCLI_ENABLE_TERMINAL=true` and
 `ALTCLI_ENABLE_AGENT_LAUNCH=true` into a new `web/.env.local`; a missing line means
 off, so add them to an older file. With the host flags enabled,
-Console's **Open terminal** observes a card; the ⌨️ **Claim keyboard** tool at that terminal grants the
-one server-wide writer after confirmation naming the current owner and holds AltCLI dispatch/setup/launch. Automatically sized tmux windows
-use captured observation to avoid resizing workers. Release and reconciliation
-are explicit; held workflow checkpoints need their own review.
+Console observes terminals automatically. Type, paste or use a terminal soft key to enable
+input there; there is no Claim keyboard dialog. Several terminals and browsers can write
+independently, including to the same pane (where native input can interleave). The first input
+holds AltCLI dispatch/setup/launch across the tmux server. Focus and observation grant nothing.
+Automatically sized tmux windows use captured observation to avoid resizing workers;
+the input field still opens a normal native writer. **Stop typing here** or **Stop typing in
+this browser** in Control access stops the selected writers. Reconciliation and held workflow
+checkpoint review remain explicit.
 
 One **Agent** selector above the terminals chooses both the terminal shown and the
 active Control recipient. **Parallel** shows every agent's controls side by side on wide
@@ -31,8 +35,7 @@ committed work; global Settings hold console preferences and host configuration.
 keyboard release, manual-input recovery, pause and takeover, other recovery and
 each action's readiness check. Implementation readiness hints offer **Go to Control access**
 to focus the checkbox; **Return to action** goes back to the composer. The ⌨️ status to its right reports the
-server-wide keyboard owner, beside connection status; claim it with the ⌨️ tool at the terminal
-where you want to type. Taking control is one confirmation after a list of what to notice; for
+active input connection count and whether automation is held, beside connection status. Taking control is one confirmation after a list of what to notice; for
 earlier manual input its fixed acknowledgement is recorded as the decision note. Projects adds a project by its main/default starting checkout,
 typed or found with **Browse…**, even with no tmux panes. Settings (Console preferences
 first, then Host configuration) edits executable/argument profiles; **Launch agents…**

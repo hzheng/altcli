@@ -19,7 +19,7 @@ describe('controlItems', () => {
     expect(held.summary).toBe('system · manual input unresolved · 2 affected runs');
     expect(held.items.map((item) => [item.id, item.scope])).toEqual([['keyboard', 'server'], ['manual', 'server'], ['scope', 'server'], ['workflow', 'checkout']]);
     expect(held.items.find((item) => item.id === 'scope')!.text).toContain('/demo/other');
-    expect(held.items.find((item) => item.id === 'keyboard')).toMatchObject({ takeControl: false, text: expect.stringContaining('claim it with ⌨️ at a terminal') });
+    expect(held.items.find((item) => item.id === 'keyboard')).toMatchObject({ takeControl: false, text: expect.stringContaining('Other terminals can also type') });
     // Taking control clears earlier manual input by accepting its possible effects, and says so.
     expect(held.items.find((item) => item.id === 'manual')).toMatchObject({ takeControl: true, text: expect.stringContaining('may have run commands') });
   });

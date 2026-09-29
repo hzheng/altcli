@@ -99,12 +99,12 @@ test('a lost kill result retains ownership across restart; inspection never retr
 test('a run owner and a keyboard record involving this pane block cleanup', async () => {
   guard = () => { throw Error('A run owns this checkout.'); };
   assert.match((await service.previewCleanup(item.id)).blockers.join(' '), /run owns/); guard = () => {};
-  store.db.prepare('INSERT INTO keyboard_sessions(id,value) VALUES(?,?)').run('keyboard', JSON.stringify({ id: 'keyboard', live: true, target: {launchId:item.id}, panes: [{ identity: item.identity }] }));
+  store.db.prepare('INSERT INTO keyboard_sessions(id,value) VALUES(?,?)').run('keyboard', JSON.stringify({ id: 'keyboard', live: true, target: {launchId:item.id}, targets: [{launchId:item.id}], panes: [{ identity: item.identity }] }));
   assert.match((await service.previewCleanup(item.id)).blockers.join(' '), /keyboard|manual/i);
   assert.deepEqual(killed, []);
 });
 test('another keyboard can stay active: its inventory and reconciliation barrier are preserved', async () => {
-  const manual = { id: 'other', live: true, reconciliationRequired: true, target: {launchId:randomUUID()}, panes: [{identity:item.identity}] };
+  const manual = { id: 'other', live: true, reconciliationRequired: true, target: {launchId:randomUUID()}, targets: [{launchId:randomUUID()}], panes: [{identity:item.identity}] };
   store.db.prepare('INSERT INTO keyboard_sessions(id,value) VALUES(?,?)').run(manual.id, JSON.stringify(manual));
   assert.ok((await service.confirmCleanup(item.id, await confirm())).closed);
   assert.deepEqual(authority.pending(), [manual]);

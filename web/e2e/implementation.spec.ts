@@ -1,7 +1,7 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import type { GitChange, Group, ImplementationStart, StandaloneStart } from '../src/contracts/implementation';
 import type { WorkflowState } from '../src/contracts/workflow';
-import { expandWorktree, editSettings, expand, handOff, openCard, openController, pane, readiness, openAccess, takeControl, showSurface, backToControl } from './ui';
+import { observationTransport, expandWorktree, editSettings, expand, handOff, openCard, openController, pane, readiness, openAccess, takeControl, showSurface, backToControl } from './ui';
 const headers = { Authorization: `Bearer ${'a'.repeat(64)}` };
 async function post(request: APIRequestContext, path: string, data: unknown) {
   const response = await request.post(`/api/v1/${path}`, { headers, data }); expect(response.ok()).toBe(true); return response.json();
@@ -823,7 +823,7 @@ test('a finished human objection explains disabled input beside its check and re
     }
     await route.fulfill({ json: data });
   });
-  const writes: string[] = []; page.on('request', request => { if (request.method() === 'POST') writes.push(new URL(request.url()).pathname); });
+  const writes: string[] = []; page.on('request', request => { if (request.method() === 'POST' && !observationTransport(request.url())) writes.push(new URL(request.url()).pathname); });
   await openGroup(page, group); await openCard(page, 'Claude'); const access = await openAccess(page);
   const update = page.getByRole('region', { name: 'Input for Claude', exact: true });
   await update.getByLabel('Add detail for Claude').fill('Use normal Git status behavior.');

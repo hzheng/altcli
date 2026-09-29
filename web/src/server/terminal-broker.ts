@@ -3,7 +3,7 @@ import type { RawData, WebSocket } from 'ws';
 const rawBuffer = (data: RawData): Buffer => Array.isArray(data) ? Buffer.concat(data) : Buffer.from(data as ArrayBuffer);
 import type { KeyboardResult, ManualReconcile, ManualSession, TerminalConnection, TerminalFrame, TerminalOpen, TerminalTarget } from '../contracts/terminals.ts';
 import { TERMINAL_LIMITS as L } from '../contracts/terminals.ts';
-import { parseKeyboard, parseNativeInput, parseTerminalOpen, terminalFields, terminalNumber, terminalSize, terminalText } from '../core/terminal-validation.ts';
+import { parseKeyboard, parseKeyboardBatch, parseNativeInput, parseTerminalOpen, terminalFields, terminalNumber, terminalSize, terminalText } from '../core/terminal-validation.ts';
 import { AppError, messageOf } from '../core/errors.ts';
 import type { Config } from './config.ts';
 import { InputAuthority } from './input-authority.ts';
@@ -123,6 +123,11 @@ export class TerminalBroker implements TerminalGateway {
       () => { if (c.generation === generation && !c.closed) void this.close(c.id, 'Attached client exited; inspect manual input.'); });
     if (c.closed || c.generation !== generation) { await attachment.close(); return; }
     c.attachment = attachment;
+    if (writer && attachment.ready) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try { await Promise.race([attachment.ready, new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new AppError('TERMINAL_NOT_READY', 'The native screen did not become ready. Inspect manual input before reconnecting.', 409)), 5000); })]); }
+      finally { clearTimeout(timer); }
+    }
   }
   private output(c: Connection, bytes: Buffer) {
     if (c.closed) return;
@@ -172,7 +177,7 @@ export class TerminalBroker implements TerminalGateway {
       if (input.seq !== c.inputSeq + 1) throw new AppError('INPUT_SEQUENCE', 'Input sequence gap. Nothing was replayed.', 409);
       await c.attachment?.active();
       if (!c.writer || c.closed || !c.attachment) throw new AppError('KEYBOARD_REVOKED', 'Keyboard authority ended before writing.', 409);
-      this.authority.markInput(c.manualId, bytes.length);
+      this.authority.markInput(c.manualId, c.id, c.generation, bytes.length);
       try { c.attachment.write(bytes); }
       catch { void this.close(c.id, 'Input may have occurred. Inspect it; never resend.'); throw new AppError('INPUT_UNCERTAIN', 'Input may have occurred. Inspect it; never resend.', 409); }
       c.inputSeq = input.seq; c.receipts.set(input.seq, digest);
@@ -192,11 +197,19 @@ export class TerminalBroker implements TerminalGateway {
       c.input.cols = size.cols; c.input.rows = size.rows; c.attachment?.resize(size.cols, size.rows);
     } finally {c.resizing=false;}
   }
-  private async endWriter(c: Connection, reason: string, observe: boolean): Promise<void> {
-    c.writer = false;
-    if (c.manualId && this.authority.get(c.manualId).live && this.authority.get(c.manualId).connectionId === c.id) this.authority.release(c.manualId, reason);
-    await c.tail.catch(() => {});
-    if (observe && !c.closed) await this.startAttachment(c, false);
+  private async endWriter(c: Connection, reason: string, observe: boolean, uncertain = false): Promise<void> {
+    await this.authority.draining(async () => {
+      c.writer = false;
+      const wasLive = c.manualId && this.authority.get(c.manualId).writers.some(w => w.connectionId === c.id && w.live);
+      if (wasLive) this.authority.release(c.manualId!, c.id, reason, uncertain);
+      try {
+        await c.tail.catch(() => {});
+        if (observe && !c.closed) await this.startAttachment(c, false);
+      } catch (error) {
+        if (wasLive) this.authority.release(c.manualId!, c.id, `Typing stopped but attachment replacement failed. ${messageOf(error)}`, true);
+        throw error;
+      }
+    });
   }
   async keyboard(id: string, value: unknown): Promise<KeyboardResult> {
     const work = this.decisionTail.catch(() => {}).then(() => this.keyboardDecision(id, value));
@@ -204,6 +217,7 @@ export class TerminalBroker implements TerminalGateway {
   }
   private async keyboardDecision(id: string, value: unknown): Promise<KeyboardResult> {
     const input = parseKeyboard(value), request = { connectionId: id, ...input };
+    if (input.expectedBootId !== this.authority.bootId) throw new AppError('TERMINAL_CHANGED', 'The host restarted. Reconnect as an observer.', 409);
     const prior = this.authority.duplicate<KeyboardResult>(input.requestId, request); if (prior) return prior;
     const c = this.current(id, input.expectedGeneration);
     if (input.action === 'acquire') {
@@ -211,25 +225,26 @@ export class TerminalBroker implements TerminalGateway {
       return this.authority.acquire(async () => {
         const pending = this.authority.pending();
         if (pending.length > 1) throw new AppError('MANUAL_CHANGED', 'Reconcile earlier manual sessions first.', 409);
-        if (pending.length && !input.transfer) throw new AppError('KEYBOARD_HELD', 'Keyboard or unresolved manual input already exists. Confirm transfer/recovery.', 409);
         const owner = pending[0];
-        if (owner?.live) { const old = this.connections.get(owner.connectionId); if (old) await this.endWriter(old, 'Keyboard transferred; prior input still requires reconciliation.', true); }
+        if (owner?.recoveryRequired || owner && owner.bootId !== this.authority.bootId) throw new AppError('MANUAL_CHANGED', 'Earlier input needs inspection. Stop the writers and reconcile it in Control access first.', 409);
+        if (c.writer) throw new AppError('KEYBOARD_HELD', 'This connection is already writable.', 409);
         this.current(id); const generation = randomUUID();
         const record = await this.services.begin(c.input, c.id, generation, owner && this.authority.get(owner.id));
         c.manualId = record.id;
         try {
           this.enabled(true); this.current(id); await this.startAttachment(c, true); this.enabled(true); this.current(id);
           c.writer = true; c.lastRenew = Date.now();
-          const saved = this.authority.save({ ...this.authority.get(record.id), generation: c.generation });
+          const saved = this.authority.updateWriter(record.id, c.id, { generation: c.generation });
           const result = { generation: c.generation, manualSession: saved, writer: true, reason: 'Keyboard here; dispatch, setup and launch are held across this server.' };
           this.emit(c, { type: 'keyboard', generation: c.generation, manualSessionId: record.id, writer: true, reason: result.reason });
           this.authority.decide(input.requestId, request, result); return result;
-        } catch (error) { this.authority.release(record.id, 'Keyboard setup did not settle; inspect before automating.'); throw error; }
+        } catch (error) { this.authority.release(record.id, c.id, 'Keyboard setup did not settle; inspect before automating.', true); await this.close(c.id, 'Input setup did not settle; inspect before reconnecting.'); throw error; }
       });
     }
     if (input.expectedRevision !== undefined) {
       const manual = c.manualId ? this.authority.get(c.manualId) : null;
-      if (!c.writer || !manual?.live || manual.connectionId !== c.id || manual.generation !== c.generation || manual.revision !== input.expectedRevision)
+      const writer = manual?.writers.find(w => w.connectionId === c.id);
+      if (!c.writer || !writer?.live || writer.generation !== c.generation || manual?.revision !== input.expectedRevision)
         throw new AppError('MANUAL_CHANGED', 'Manual input changed. Inspect the terminal and confirm readiness again.', 409);
     }
     await this.endWriter(c, 'Keyboard released; manual input requires reconciliation.', true);
@@ -243,10 +258,43 @@ export class TerminalBroker implements TerminalGateway {
     this.emit(c, { type: 'keyboard', generation: c.generation, manualSessionId: manual?.id ?? null, writer: false, reason });
     this.authority.decide(input.requestId, request, result); return result;
   }
+  async stop(value: unknown): Promise<ManualSession> {
+    const work = this.decisionTail.catch(() => {}).then(async () => {
+      const input = parseKeyboardBatch(value);
+      if (input.expectedBootId !== this.authority.bootId) throw new AppError('TERMINAL_CHANGED', 'The host restarted. Inspect manual input.', 409);
+      const prior = this.authority.duplicate<ManualSession>(input.requestId, input); if (prior) return prior;
+      let manual = this.authority.get(input.manualSessionId);
+      // A plain stop only removes authority and retains all input evidence. Bytes from
+      // this or another writer may advance the period since the last UI poll. Settlement
+      // additionally requires the exact inspected revision, since it can release the hold.
+      if (manual.revision < input.expectedRevision || input.confirmReady && manual.revision !== input.expectedRevision)
+        throw new AppError('MANUAL_CHANGED', 'The writer set or input changed. Inspect and choose again.', 409);
+      const selected = input.writers.map(w => {
+        const c = this.current(w.connectionId, w.generation), saved = manual.writers.find(x => x.connectionId === c.id);
+        if (!c.writer || c.manualId !== manual.id || !saved?.live || saved.revision < w.revision || input.confirmReady && saved.revision !== w.revision || saved.generation !== w.generation)
+          throw new AppError('MANUAL_CHANGED', 'A selected writer changed. Nothing was stopped.', 409);
+        if (input.confirmReady && c.pendingBytes) throw new AppError('INPUT_BUSY', 'Terminal input is still pending. Nothing was stopped.', 409);
+        return c;
+      });
+      if (input.handoffRequestId && (manual.runs.length || manual.recoveryRequired || manual.writers.some(w => w.live && !selected.some(c => c.id === w.connectionId))))
+        throw new AppError('MANUAL_CHANGED', 'Stop other writers and review affected checkpoints in Control access first.', 409);
+      // Freeze the complete set before the first await; subsequent input frames cannot slip between releases.
+      for (const c of selected) c.writer = false;
+      await Promise.all(selected.map(c => this.endWriter(c, 'Typing stopped; manual input still requires reconciliation.', true)));
+      manual = this.authority.get(manual.id);
+      if (input.confirmReady) {
+        try { manual = await this.services.reconcile({ requestId: randomUUID(), manualSessionId: manual.id, expectedRevision: manual.revision, confirmReady: true }, input.handoffRequestId); }
+        catch (error) { manual = this.authority.save({ ...this.authority.get(manual.id), reason: `Typing stopped; barrier retained. ${messageOf(error)}` }); }
+      }
+      for (const c of selected) this.emit(c, { type: 'keyboard', generation: c.generation, manualSessionId: manual.id, writer: false, reason: manual.reason });
+      this.authority.decide(input.requestId, input, manual); return manual;
+    });
+    this.decisionTail = work; return work;
+  }
   async close(id: string, reason = 'Terminal closed; reconcile manual input.'): Promise<void> {
     const c = this.connections.get(id); if (!c || c.closed) return;
     this.emit(c, { type: 'closed', reason }); c.closed = true; c.ticket = null;
-    await this.endWriter(c, reason, false);
+    await this.endWriter(c, reason, false, true);
     const child = c.attachment; c.attachment = undefined; await child?.close();
     c.ws?.close(); c.queued = []; c.receipts.clear(); this.connections.delete(id);
   }

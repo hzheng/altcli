@@ -218,11 +218,11 @@ export class LaunchService {
     this.guard(item.worktree);this.projects.assertWorktreeReady(item.worktree.root,true);
     if(item.status==='applying'||this.authority.busy)throw new AppError('LAUNCH_BUSY','Wait for the in-flight operation to settle.',409);
     const identity=item.identity??item.placeholder;
-    const targetsPane=this.authority.pending().some(m=>{
-      if('launchId' in m.target)return m.target.launchId===item.id;
-      const agentId=m.target.agentId;
+    const targetsPane=this.authority.pending().some(m=>m.targets.some(target=>{
+      if('launchId' in target)return target.launchId===item.id;
+      const agentId=target.agentId;
       return this.store.sessions().some(s=>s.id===agentId&&s.identity.paneId===identity?.paneId&&s.identity.socketPath===identity.socketPath);
-    });
+    }));
     if(targetsPane)
       throw new AppError('LAUNCH_BUSY','Release and reconcile the keyboard record involving this pane first.',409);
     const reservation=this.store.db.prepare('SELECT launch_id FROM launch_reservations WHERE index_path=?').get(item.worktree.indexPath) as {launch_id:string}|undefined;

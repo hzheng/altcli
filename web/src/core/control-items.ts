@@ -11,9 +11,9 @@ export interface ControlItem {
   text: string;
 }
 export interface ControlInput {
-  /** The one server-wide keyboard as the server reports it, or null when nobody holds it. */
+  /** Aggregate server-reported writers, or null when no manual period exists. */
   keyboard: { kind: 'this-browser' | 'this-browser-elsewhere' | 'other-browser' | 'unresolved'; label: string } | null;
-  /** Manual-input records: a live one is the current keyboard; the rest need reconciliation. */
+  /** Manual-input records: a live period has one or more writers; stopped periods need reconciliation. */
   manual: { live: boolean; runs: number }[];
   /** This checkout's owned run, if any. */
   run: { status: string } | null;
@@ -37,7 +37,7 @@ export function controlItems(input: ControlInput): ControlSummary {
   const k = input.keyboard;
   const unresolved = input.manual.filter((m) => !m.live);
   if (k?.kind === 'this-browser') add('keyboard', 'server', false, false, `You type in ${k.label} in this browser. AltCLI dispatch, setup and launch wait until you release it below; a Send that offers the keyboard handoff releases it first.`);
-  else if (k && k.kind !== 'unresolved') add('keyboard', 'server', true, false, `The keyboard is held in ${k.label}. To type, claim it with ⌨️ at a terminal after checking with its user; AltCLI dispatch waits until it is released.`);
+  else if (k && k.kind !== 'unresolved') add('keyboard', 'server', true, false, `Input is active in ${k.label}. Other terminals can also type; automation waits until every writer is stopped and manual input is reconciled.`);
   if (unresolved.length) add('manual', 'server', true, true, `Earlier manual terminal input (${unresolved.length === 1 ? 'one record' : `${unresolved.length} records`}) may have run commands or left background work that AltCLI cannot see. Taking control records that you accept this and lifts the server-wide hold.`);
   if ((k || input.manual.length) && input.otherWorktrees.length) add('scope', 'server', false, false, `This server-wide hold also affects runs in ${list(input.otherWorktrees)}.`);
   const status = input.run?.status;

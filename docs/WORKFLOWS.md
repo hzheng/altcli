@@ -386,17 +386,17 @@ lists what to notice before you take control and then asks once: **Take control�
 checkout's controller run, clears an uncertain-request warning, releases an older delivery hold
 and records your decision on earlier manual input, stopping at the first refusal. Its global entry
 sits in the page heading's status row; it also holds keyboard release, pause, one-click checkpoint
-or handoff continuation, **Mark <agent> Ready**, and each action's readiness check. **Open terminal** is
-observation; the ⌨️ **Claim keyboard** tool at a native terminal requires confirmation naming the
-current owner and holds dispatch/setup/launch across the configured tmux server. The ⌨️ status to
-the right of the Control access entry reports that server-wide owner without selecting one. Claiming does not interrupt workers already
-computing. **Release keyboard** in Control access releases the keyboard; use **Release and record settled** after inspecting
-all panes. Failed checks,
-disconnect, Lock and restart retain a durable manual barrier. Then review each
-valid saved workflow checkpoint explicitly. Faulted/originally paused runs need
-existing deliberate takeover; they do not become resumable through keyboard input.
+or handoff continuation, **Mark <agent> Ready**, and each action's readiness check. Terminal
+observation opens automatically. Typing directly enables that connection; several terminals and
+browsers can write independently under one server-wide automation barrier. Focus grants nothing.
+The heading reports active input connections. **Stop typing here** and **Stop typing in this
+browser** stop exact local writers while retaining the manual barrier. Checked Send can stop and
+strictly settle the complete local set only with no remote writers or affected checkpoints.
+Disconnect, Lock and restart require inspection before another writer joins. Reconciliation and
+each original workflow checkpoint review remain explicit; faulted/originally paused runs need
+existing takeover. Input does not interrupt an already computing worker.
 
-Send does not require claiming the native keyboard. After an instruction is entered,
+Control Send does not require opening a native writer. After an instruction is entered,
 a disabled Send shows its current blocker beside the button. When readiness is the
 remaining gate, **Go to Control access** beside the hint opens that panel and focuses the
 visibly labelled **Ready for implementation** checkbox without checking it. **Return to action**

@@ -88,6 +88,10 @@ Human-approved plan decisions recorded in [ADR-0014](adr/ADR-0014-commit-relay-a
 
 [ADR-0019](adr/ADR-0019-terminal-input-and-checkpoints.md) defines manual literal input and the whole-run checkpoint. Native input acknowledgments, permission-dialog semantics, portable capability/version records, safe automatic consumption of queued prompts, and autonomous app control remain deferred. Prompt equality, recent history and a pending reservation cannot resolve native attribution. Installed-provider compatibility must be observed; the manual controls do not certify same-turn steering or dialog semantics.
 
+The approved September 29 direct-input plan permits concurrent connection writers under the
+existing global manual barrier (ADR-0020). Worktree-scoped automation, idle release, extra
+terminal services and pane-directed input remain outside this change.
+
 ## Native transport implementation evidence
 
 The approved WebSocket alternative replaces the HTTP-stream candidate after its

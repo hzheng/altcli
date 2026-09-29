@@ -1,6 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import type { WorkflowState, HookEvent, WorkspaceDiscovery } from '../src/contracts/workflow';
-import { expandAgents, expandWorktree, editSettings, expand, openCard, openController, pane, readiness, openAccess, takeControl, showSurface, backToControl } from './ui';
+import { observationTransport, expandAgents, expandWorktree, editSettings, expand, openCard, openController, pane, readiness, openAccess, takeControl, showSurface, backToControl } from './ui';
 const TOKEN = 'a'.repeat(64);
 const headers = { Authorization: `Bearer ${TOKEN}` };
 test.describe.configure({ mode: 'serial' });
@@ -81,7 +81,7 @@ test('Console switches projects and worktrees without writes, keeps drafts and r
   await expect(projects.getByRole('option', { name: 'empty — no agents', exact: true })).toHaveAttribute('disabled');
   const card = await openCard(page, 'Codex'); await card.getByLabel('Instruction for Codex').fill('Keep this project draft');
   await (await readiness(page)).check();
-  const writes: string[] = []; page.on('request', r => { if (r.method() !== 'GET') writes.push(r.url()); });
+  const writes: string[] = []; page.on('request', r => { if (r.method() !== 'GET' && !observationTransport(r.url())) writes.push(r.url()); });
   await trees.selectOption(linked.id);
   await expect(context).toContainText(linked.path); await expect(page.getByRole('heading', { name: 'No eligible agents here yet' })).toBeVisible();
   await expect(page.getByLabel('Instruction for Codex')).toHaveCount(0);
@@ -92,6 +92,7 @@ test('Console switches projects and worktrees without writes, keeps drafts and r
   await projects.selectOption(project.id); await expect(trees).toHaveValue(main.id);
   await expect(card.getByLabel('Instruction for Codex')).toHaveValue('Keep this project draft');
   await expect((await readiness(page))).not.toBeChecked(); expect(writes).toEqual([]);
+  expect((await state(request)).manualSessions??[]).toEqual([]);
   await page.reload(); await page.getByLabel('Host access token').fill(TOKEN); await page.getByRole('button', { name: 'Open console' }).click();
   await expect(trees).toHaveValue(main.id);
 });
@@ -104,7 +105,7 @@ test('Console keeps the project when the selected worktree disappears, including
   await unlock(page, TOKEN, false);
   const projects = page.getByRole('combobox', { name: 'Switch project' }), trees = page.getByRole('combobox', { name: 'Switch worktree' });
   await trees.selectOption(linked.id);
-  const writes: string[] = []; page.on('request', r => { if (r.method() !== 'GET') writes.push(r.url()); });
+  const writes: string[] = []; page.on('request', r => { if (r.method() !== 'GET' && !observationTransport(r.url())) writes.push(r.url()); });
   // No retained operation record: the browser must remember the canonical project independently of the worktree path.
   project.worktrees = [main];
   await page.locator('.context-bar').getByRole('button', { name: 'Recheck', exact: true }).click();
@@ -141,7 +142,7 @@ test('Console project switching leaves an active run intact', async ({ page, req
   const before = await state(request), projects = page.getByRole('combobox', { name: 'Switch project' });
   await expect(projects).not.toHaveValue('');
   const original = await projects.inputValue();
-  const writes: string[] = []; page.on('request', r => { if (r.method() !== 'GET') writes.push(r.url()); });
+  const writes: string[] = []; page.on('request', r => { if (r.method() !== 'GET' && !observationTransport(r.url())) writes.push(r.url()); });
   await projects.selectOption({ label: 'other' }); await expect(page.locator('.context-bar')).toContainText('/demo/other');
   await projects.selectOption(original); await expect(page.locator('.context-bar')).toContainText('/demo/project');
   const after = await state(request); expect(after.commands).toEqual(before.commands);
@@ -278,7 +279,7 @@ test('workspace cards automatically group two eligible agents; selection is read
   const context = page.locator('.context-bar');
   await expect(context).toContainText('/demo/project'); await expect(context).toContainText('Branch main'); await expect(context).toContainText('Codex ⇄ Claude Code');
   await showSurface(page, 'Terminal');
-  await expect(page.getByLabel('Codex output', { exact: true })).toBeVisible(); await expect(page.getByLabel('Claude Code output')).toHaveCount(1);
+  await expect(page.getByLabel('Codex native output', { exact: true })).toBeVisible(); await expect(page.getByLabel('Claude Code native output')).toHaveCount(1);
 });
 test('unregistered agents are immediately usable; inline name saves on Enter and blur, Escape cancels', async ({ page, request }, info) => {
   await unlock(page); await openTab(page, 'Projects');
@@ -298,7 +299,7 @@ test('unregistered agents are immediately usable; inline name saves on Enter and
   expect((await state(request)).sessions.find((session) => session.id === original.id)).toEqual({ ...original, label: 'Renamed Codex' });
   await page.screenshot({ path: info.outputPath('workspace-inline-name.png'), fullPage: true });
   await openTab(page, 'Console');
-  await expect(page.getByLabel('Renamed Codex output')).toBeVisible(); await expect(page.getByLabel('Codex output', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('Renamed Codex native output')).toBeVisible(); await expect(page.getByLabel('Codex native output', { exact: true })).toHaveCount(0);
 });
 test('the group in use narrows the console to its members', async ({ page, request }) => {
   await post(request, 'pairs', { name: 'Main review', sessions: ['codex', 'claude'] });
@@ -308,8 +309,8 @@ test('the group in use narrows the console to its members', async ({ page, reque
   await expect(page.getByLabel('Workspace group members')).toHaveText('Codex ⇄ Claude Code');
   await openTab(page, 'Console');
   await expect(page.locator('.context-bar')).toContainText('Main review'); await expect(page.locator('.context-bar')).toContainText('Codex ⇄ Claude Code');
-  await expect(page.getByLabel('Codex output', { exact: true })).toHaveCount(1); await expect(page.getByLabel('Claude Code output')).toHaveCount(1);
-  await expect(page.getByLabel('Other Codex output')).toHaveCount(0);
+  await expect(page.getByLabel('Codex native output', { exact: true })).toHaveCount(1); await expect(page.getByLabel('Claude Code native output')).toHaveCount(1);
+  await expect(page.getByLabel('Other Codex native output')).toHaveCount(0);
   await expect(page.getByLabel('Auto-relay', { exact: true })).toBeVisible();
   const ready = (await readiness(page, 'Ready to send')); await ready.check();
   const codex = (await state(request)).sessions.find((session) => session.id === 'codex')!;
@@ -326,7 +327,7 @@ test('a workspace with one registered eligible agent automatically forms a solo 
   await expect(workspace(page, 'other').getByRole('checkbox')).toHaveCount(2);
   await openTab(page, 'Console');
   await expect(page.locator('.context-bar')).toContainText('Other Codex');
-  await expect(page.getByLabel('Other Codex output')).toHaveCount(1); await expect(page.getByLabel('Codex output', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('Other Codex native output')).toHaveCount(1); await expect(page.getByLabel('Codex native output', { exact: true })).toHaveCount(0);
   await editSettings(page); await expect(page.getByLabel('Collaboration', { exact: true })).toHaveValue('solo');
   await expect(page.getByRole('button', { name: 'Relay Claude', exact: true })).toHaveCount(0);
 });
@@ -637,7 +638,7 @@ test('a finished run of forgotten agents leaves the Status headline but stays in
   await expect(status).not.toHaveAttribute('open', /.*/);
   // Forgetting the agents does not delete the run; the same live panes come back as new discovered identities.
   await post(request, 'workspaces/reset', { repository: '/demo/project', confirmReady: true }); await showSurface(page, 'Terminal');
-  await expect(page.getByLabel('demo output').first()).toBeVisible(); await expect(page.locator('.context-bar')).toContainText('/demo/project');
+  await expect(page.getByLabel('demo native output').first()).toBeVisible(); await expect(page.locator('.context-bar')).toContainText('/demo/project');
   await expect(status).toHaveCount(0); await expect(page.locator('details.latest-run')).toHaveCount(0);
   await expand(page, 'Command history');
   await expect(page.locator('details.history')).toContainText('relay');
@@ -663,7 +664,7 @@ test('reset clears saved names and selection without hiding live agents or touch
   expect(after.panes.find((pane) => pane.identity.paneId === '%3')!.registeredAs).toBeNull();
   await detail.getByLabel('Name for Codex %3').fill('Fresh Codex'); await detail.getByLabel('Name for Codex %3').press('Enter');
   await expect(page.locator('.feedback[role="status"]:visible')).toContainText('Renamed "demo" to "Fresh Codex"');
-  await openTab(page, 'Console'); await expect(page.getByLabel('Fresh Codex output')).toBeVisible();
+  await openTab(page, 'Console'); await expect(page.getByLabel('Fresh Codex native output')).toBeVisible();
 });
 test('checkboxes save solo, pair and larger groups without silently truncating selection', async ({ page, request }, info) => {
   await post(request, 'sessions', { paneId: '%3', label: 'Third' });
@@ -721,7 +722,7 @@ test('two live agents can be changed to solo or an empty selection through real 
   await expect(detail).toContainText('Solo · 1 agent');
   await openTab(page, 'Console'); await editSettings(page);
   await expect(page.getByLabel('Collaboration', { exact: true })).toHaveValue('solo');
-  await expect(page.getByLabel('Claude Code output')).toHaveCount(0);
+  await expect(page.getByLabel('Claude Code native output')).toHaveCount(0);
   await openTab(page, 'Projects'); await detail.getByLabel('Include Codex', { exact: true }).uncheck();
   await expect(detail).toContainText('Select at least one agent before starting.');
   await openTab(page, 'Console');
@@ -745,16 +746,16 @@ test('with no saved registrations a workspace opens directly into a usable read-
   await expect(page.locator('summary').filter({ hasText: '/demo/project' })).toContainText('Main checkout · main');
   await expandWorktree(page, 'project'); await page.getByRole('button', { name: 'Open project', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Agent console', exact: true })).toBeVisible();
-  await expect(page.getByLabel('demo output').first()).toBeVisible();
+  await expect(page.getByLabel('demo native output').first()).toBeVisible();
   // The existing narrow-screen layout shows only the active pane, even with Parallel selected.
   await page.getByRole('navigation', { name: 'Agent' }).getByRole('button', { name: 'demo', exact: true }).nth(1).click();
-  await expect(page.getByLabel('demo output').last()).toBeVisible();
+  await expect(page.getByLabel('demo native output').last()).toBeVisible();
   const after = await state(request); expect(after.panes.every((pane) => !pane.registeredAs)).toBe(true);
   expect(after.executions).toEqual([]);
 });
 test('wrong token cannot read agent output', async ({ page }) => {
   await unlock(page, 'b'.repeat(64)); await expect(page.getByRole('alert').filter({ hasText: /access token/ })).toBeVisible();
-  await expect(page.getByLabel('Codex output')).toHaveCount(0);
+  await expect(page.getByLabel('Codex native output')).toHaveCount(0);
 });
 
 test('the stale-agent warning offers a confirmed workspace reset when no run owns the checkout', async ({ page, request }, info) => {

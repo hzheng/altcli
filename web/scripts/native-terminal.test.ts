@@ -1,7 +1,7 @@
 /** M0 native probes on private sockets. Tokens are dummy fixtures; unsafe native observation uses captured fallback. */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createRunner, inspectPane } from '../src/server/adapters/tmux.ts';
@@ -116,6 +116,29 @@ test('private tmux: observer isolation, native bytes, resize, exact client ident
     await run(['set-option', '-t', target.sessionId, 'destroy-unattached', 'off']);
     await desktop.close(); desktop = undefined;
   } finally { await writer?.close(); await observer?.close(); await desktop?.close(); await run(['kill-server']).catch(() => {}); await rm(dir, { recursive: true, force: true }); }
+});
+
+// node-pty 1.1.0 on macOS leaks a spare master, the slave copy and the exit watcher's kqueue per spawn.
+test('private tmux: closed and self-exiting attachments return descriptors to their steady count', async () => {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), 'altcli-attach-cycles-')));
+  const config = loadConfig({ ALTCLI_TOKEN: 'a'.repeat(64), ALTCLI_DATA_DIR: join(dir, 'data'), ALTCLI_TMUX_SOCKET: join(dir, 't.sock') });
+  const run = createRunner(config.tmuxBin, config.tmuxSocket);
+  try {
+    await run(['-f', '/dev/null', 'new-session', '-d', '-s', 'cycles', '-x', '80', '-y', '24', '/bin/sleep', '600']);
+    const target = await inspectAttach(config, (await inspectPane(run, '%0')).identity);
+    const cycle = async (detach: boolean) => {
+      let exited!: () => void; const gone = new Promise<void>(resolve => { exited = resolve; });
+      const attachment = await attachTmux(config, target, true, 80, 24, () => {}, () => exited());
+      await attachment.ready;
+      if (detach) { await run(['detach-client', '-s', target.sessionId]); await gone; } else await attachment.close();
+    };
+    const descriptors = async () => { await delay(100); return (await readdir('/dev/fd')).length; };
+    await cycle(false); await cycle(true);
+    const steady = await descriptors();
+    for (let n = 0; n < 20; n++) await cycle(n % 2 === 1);
+    assert.equal(await descriptors(), steady);
+    assert.equal((await run(['list-clients'])).trim(), '');
+  } finally { await run(['kill-server']).catch(() => {}); await rm(dir, { recursive: true, force: true }); }
 });
 
 test('private tmux: a writer follows deliberate session navigation; observers never follow and a lost target closes', async () => {

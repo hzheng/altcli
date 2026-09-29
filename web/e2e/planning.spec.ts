@@ -4,7 +4,7 @@ import type { Group, ImplementationRun } from '../src/contracts/implementation';
 import type { PlanDecision, PlanStart } from '../src/contracts/planning';
 import type { RelayRun, WorkflowState } from '../src/contracts/workflow';
 import { newPlanning } from '../src/server/planning-state';
-import { expandWorktree, editSettings, openController, readiness } from './ui';
+import { observationTransport, expandWorktree, editSettings, openController, readiness } from './ui';
 const headers = { Authorization: `Bearer ${'a'.repeat(64)}` };
 async function post(request: APIRequestContext, path: string, data: unknown) {
   const response = await request.post(`/api/v1/${path}`, { headers, data }); expect(response.ok()).toBe(true); return response.json();
@@ -179,7 +179,7 @@ test('the phase selector follows the run into Implementation once, keeps a later
   current = implementing;
   await expect(implementationButton).toHaveAttribute('aria-pressed', 'true'); await expect(surface).toBeVisible();
   // Following the phase is view state only: it sends nothing, and a later deliberate choice is not overridden by polling.
-  const posts: string[] = []; page.on('request', (r) => { if (r.method() !== 'GET') posts.push(r.url()); });
+  const posts: string[] = []; page.on('request', (r) => { if (r.method() !== 'GET' && !observationTransport(r.url())) posts.push(r.url()); });
   await planButton.click(); await page.waitForTimeout(4500);
   await expect(planButton).toHaveAttribute('aria-pressed', 'true'); expect(posts).toEqual([]);
   // The run's actual phase decides the layout, so the Implementation run keeps its Terminal/Control frame.

@@ -14,7 +14,7 @@ import { PlanningProgress } from './PlanningProgress';
 import { PaneActions } from './PaneActions';
 import { LaunchProfiles } from './LaunchProfiles';
 import { NativeTerminal, type NativeTerminalHandle } from './NativeTerminal';
-import { useKeyboardControls, keyboardOwnerOf } from './KeyboardSelector';
+import { useKeyboardControls, keyboardOwnerOf, stopTerminalWriters } from './KeyboardSelector';
 import { StatusIcon } from './Hint';
 import { PlanSetup } from './PlanSetup';
 import { CheckpointControls, InteractionComposer } from './InteractionControls';
@@ -321,20 +321,23 @@ export function Console() {
   const manualHeld = !!state?.manualSessions?.length;
   // Distinguishes a live keyboard elsewhere from an unresolved record for the terminal badges.
   const liveManual = state?.manualSessions?.find((m) => m.live);
-  const keyboardHolder = liveManual ? liveManual.clientInstanceId === clientInstanceId ? 'this-browser' as const : 'other-browser' as const : manualHeld ? 'unresolved' as const : null;
-  const keyboardTarget = liveManual?.target;
-  const keyboardAgent = keyboardTarget && 'agentId' in keyboardTarget ? visible.find(s => s.id === keyboardTarget.agentId && s.registrationId === keyboardTarget.registrationId) : undefined;
-  const keyboardHandoff = liveManual && state?.manualSessions?.length === 1 && liveManual.clientInstanceId === clientInstanceId && !liveManual.runs.length && keyboardAgent ? {
-    manual: liveManual, label: keyboardAgent.label, release: async (requestId: string) => {
-      const terminal = terminals.current.get(keyboardAgent.id);
-      if (!terminal) throw Error('The keyboard terminal is no longer connected. Inspect manual input before sending.');
-      return terminal.releaseForSend(liveManual, requestId);
+  const keyboardHolder = !liveManual && manualHeld ? 'unresolved' as const : null;
+  const writers = (state?.manualSessions ?? []).flatMap(m => m.writers.filter(w => w.live));
+  const describeTerminal = (target: import('../contracts/terminals').TerminalTarget) => 'agentId' in target
+    ? state?.sessions.find(s => s.id === target.agentId && s.registrationId === target.registrationId)?.label ?? 'terminal' : 'launched terminal';
+  const writerHandle = (writer: import('../contracts/terminals').ManualWriter) => [...terminals.current.values()].find(h => h.matches(writer));
+  const keyboardHandoff = liveManual && state?.manualSessions?.length === 1 && !liveManual.recoveryRequired && !liveManual.runs.length && writers.length &&
+    writers.every(w => w.clientInstanceId === clientInstanceId && writerHandle(w)) ? {
+    manual: liveManual, label: writers.map(w => describeTerminal(w.target)).join(', '), release: async (requestId: string) => {
+      const result = await stopTerminalWriters(token, liveManual, writers, writerHandle, true, requestId);
+      if (result.id !== liveManual.id || result.live || result.reconciliationRequired || result.settlement?.requestId !== requestId)
+        throw Error(result.reason || 'Manual input could not be settled. Inspect before sending.');
+      return { manualSessionId: result.id, revision: result.revision };
     },
   } : undefined;
-  // The one server-wide keyboard as the server reports it, independent of the selected checkout.
-  const keyboardOwner = keyboardOwnerOf(state?.manualSessions, clientInstanceId, () => keyboardAgent && { key: keyboardAgent.id, label: keyboardAgent.label },
-    (target) => 'agentId' in target ? state?.sessions.find((s) => s.id === target.agentId && s.registrationId === target.registrationId)?.label : undefined);
-  const affectedRuns = (state?.runs ?? []).filter((r) => ['running','waiting','paused'].includes(r.status)).map((r) => `${r.id} · ${r.status}`);
+  // The shared manual-input hold as the server reports it, independent of the selected checkout.
+  const keyboardOwner = keyboardOwnerOf(state?.manualSessions, clientInstanceId, target => 'agentId' in target && visible.some(s => s.id === target.agentId)
+    ? { key: target.agentId, label: describeTerminal(target) } : undefined, describeTerminal);
   const dispatchReason = identityBlockedReason
     || (groupInputBlock ? `${groupInputBlock.label}: ${inputBlocks.get(groupInputBlock.id)}` : '') || (stale ? 'The console is not current. Wait for it to reconnect.' : '')
     || (setupHeld ? 'A worktree operation is applying or uncertain. Reconcile it in Projects before starting work.' : '')
@@ -372,8 +375,8 @@ export function Console() {
   const returnToAction = () => { controlPane.current?.focus(); (controlPane.current?.querySelector('.control-agent.active') ?? controlPane.current)?.scrollIntoView({ block: 'nearest' }); };
   // A card's terminal is on screen in the Console; Focus and phone widths show only the selected one.
   const inView = (id: string) => tab === 'console' && showTerminals && (id === displayed || (layout === 'parallel' && !narrow));
-  const keyboard = useKeyboardControls({ owner: keyboardOwner, affected: affectedRuns, disabled: !token || busy || stale || !state?.inputEnabled || !config?.terminalEnabled,
-    viewEpoch, refresh, options: visible.filter((s) => s.registrationId).map((s) => ({ key: s.id, label: s.label, inView: inView(s.id) })),
+  const keyboard = useKeyboardControls({ sessions: state?.manualSessions ?? [], clientInstanceId, token, describe: describeTerminal, disabled: !token || busy || stale || !config?.terminalEnabled,
+    refresh, options: visible.filter((s) => s.registrationId).map((s) => ({ key: s.id, label: s.label, inView: inView(s.id) })),
     handle: (key) => terminals.current.get(key), onShow: showAgentTerminal });
   const unknownActivity = projectSessions.filter((s) => state?.activities?.find((a) => a.agentId === s.id)?.state === 'unknown');
   const otherWorktrees = [...new Set((state?.manualSessions ?? []).flatMap((m) => m.runs)
@@ -546,12 +549,12 @@ export function Console() {
     : stale ? <StatusIcon icon="🔴" label="Not current" align="end" help={`Not current: ${error || 'no update for more than 10 seconds'}. Last update ${lastUpdate}. Actions that depend on current state stay disabled until the console reconnects.`} />
     : <StatusIcon icon="🟢" label="Connected" align="end" help={`Connected to the host. Last update ${lastUpdate}; the console refreshes every 2 seconds.`} />}</div>;
   const keyboardLabel = !keyboardOwner || keyboardOwner.kind === 'unresolved' ? 'nobody' : keyboardOwner.kind === 'this-browser' ? `${keyboardOwner.label} (this browser)` : keyboardOwner.label;
-  // The global Control access entry, then the server-wide keyboard owner, then connection status: on every tab.
+  // The global Control access entry, then the active input count, then connection status: on every tab.
   const headingStatus = <div className="heading-status">
     {state && <button type="button" ref={accessEntry} className={`quiet access-entry${access.attention ? ' attention' : ''}`} aria-expanded={accessOpen} aria-controls="control-access"
       onClick={() => accessOpen ? closeAccess() : openAccess()}>{access.attention && <span aria-hidden="true">⚠ </span>}Control access · {access.summary}{access.attention && <span className="sr-only"> (action needed)</span>}</button>}
-    {state && (config?.terminalEnabled || manualHeld) && <StatusIcon icon="⌨️" label={`Keyboard: ${keyboardLabel}`} align="end"
-      help={`Server-wide keyboard: ${keyboardLabel}. ${stale ? 'This is the last reported owner; the console is not current. ' : ''}Claim it with ⌨️ at the terminal where you want to type. Release and reconciliation are in Control access.`} />}
+    {state && (config?.terminalEnabled || manualHeld) && <StatusIcon icon="⌨️" label={`Input: ${writers.length} active${manualHeld ? ' · automation held' : ''}`} align="end"
+      help={`${keyboardLabel}. ${stale ? 'This is the last reported state; the console is not current. ' : ''}Type directly in terminals. Stop typing and reconcile manual input in Control access.`} />}
     {connection}
   </div>;
   const actionable = !!pair && members.length <= 2;
@@ -595,7 +598,7 @@ export function Console() {
       : <div className="page-heading compact"><h1>Agent console</h1>{headingStatus}</div>}
     {error && <div className="notice error" role="alert">{tilde(error)} <button onClick={() => void refresh()}>Refresh</button></div>}
     {state && <>
-      {/* The one Control access panel: workflow takeover, recovery and action readiness appear here once. Keyboard claims stay at their terminals. It sits outside the
+      {/* The one Control access panel: workflow takeover, recovery and action readiness appear here once. Typing starts directly at each terminal. It sits outside the
           tab and surface guards, so recovery stays reachable on any tab and with no agents. Opening or closing it changes nothing. */}
       <section id="control-access" ref={accessPanel} tabIndex={-1} className="panel control-access" aria-label="Control access" hidden={!accessOpen}>
         <div className="section-heading"><h2>Control access</h2><button type="button" className="quiet" onClick={closeAccess}>Close</button></div>
@@ -744,7 +747,7 @@ export function Console() {
         {/* Outside Plan this is one frame: the switch shows the terminals or Control, and the hidden surface stays mounted. */}
         <div className={`workbench${merged ? ` merged ${surface}` : controlPlacement === 'side' ? ' side' : ''}`}>
         <div className="terminal-stage" ref={stage}>
-        <div className="target-row"><h2 className="stage-title"><span aria-hidden="true">🖥️</span> {config?.terminalEnabled ? <>Native terminals <span className="stage-cue">native CLI · claim keyboard at a terminal{merged ? '' : ' · controls below'}</span></> : <>Live terminals <span className="stage-cue">captured output{merged ? '' : ' · controls below'}</span></>}</h2>
+        <div className="target-row"><h2 className="stage-title"><span aria-hidden="true">🖥️</span> {config?.terminalEnabled ? <>Native terminals <span className="stage-cue">native CLI · type directly in terminals{merged ? '' : ' · controls below'}</span></> : <>Live terminals <span className="stage-cue">captured output{merged ? '' : ' · controls below'}</span></>}</h2>
           {/* The one agent selector: the shown terminal and the Control recipient together. It never selects the keyboard writer. */}
           <div className="stage-target"><span className="target-caption">Agent</span><nav className="agent-tabs" aria-label="Agent">{visible.map((s) => <button key={s.id} className={s.id === displayed ? 'selected' : ''} aria-pressed={s.id === displayed} onClick={() => select(s.id)}>
             <Icon badge={statuses.get(s.id)?.badge ?? 'unknown'} />{s.label}</button>)}</nav></div>
@@ -788,7 +791,7 @@ export function Console() {
               {activity?.state === 'unknown' && <span className="muted">Reset status in Control access.</span>}</div>
             {inputBlocks.has(s.id) && <p className="notice" role="status">{inputBlocks.get(s.id)}</p>}
             {visibleOutcome?.outcome && <div className={`outcome ${visibleOutcome.outcome}`}>{visibleOutcome.outcome}: {visibleOutcome.reason}</div>}
-            {config?.terminalEnabled && s.registrationId ? <NativeTerminal ref={handle => {if(handle)terminals.current.set(s.id,handle);else terminals.current.delete(s.id);}} token={token} target={{agentId:s.id,registrationId:s.registrationId}} clientInstanceId={clientInstanceId} viewEpoch={viewEpoch} label={s.label} capturedAt={snapshot?.capturedAt} keyboardButton={keyboard.claimButton(s.id)} keyboardControl={keyboard.claimControl(s.id)}
+            {config?.terminalEnabled && s.registrationId ? <NativeTerminal ref={handle => {if(handle)terminals.current.set(s.id,handle);else terminals.current.delete(s.id);}} token={token} target={{agentId:s.id,registrationId:s.registrationId}} clientInstanceId={clientInstanceId} viewEpoch={viewKey} label={s.label} capturedAt={snapshot?.capturedAt} inputEnabled={state.inputEnabled}
               holder={keyboardHolder} cliChanged={state.instances.find((i) => i.agentId === s.id)?.status === 'replaced'} held={manualHeld} refresh={refresh} fallback={<Output label={`${s.label} output`} memoryKey={`scroll:${ws}:${s.id}`} text={(snapshot?.status === 'unavailable' ? snapshot.error : snapshot?.text) || 'Waiting for a capture'} />} /> : <Output label={`${s.label} output`} memoryKey={`scroll:${ws}:${s.id}`} text={(snapshot?.status === 'unavailable' ? snapshot.error : snapshot?.text) || 'Waiting for a capture'} />}
             {/* A tmux-style status line: the boundary between the capture above and any command section below. */}
             <div className="pane-footer"><span className="mono">{s.identity.paneId}</span><span>{(!config?.terminalEnabled || !s.registrationId) && snapshot ? `Captured ${new Date(snapshot.capturedAt).toLocaleTimeString()}` : ''}</span></div>
@@ -892,7 +895,7 @@ export function Console() {
             ['Native terminals', config.terminalEnabled ? 'enabled' : 'disabled', 'ALTCLI_ENABLE_TERMINAL', 'false'],
             ['Agent launch', config.launchEnabled ? 'enabled' : 'disabled', 'ALTCLI_ENABLE_AGENT_LAUNCH', 'false'],
             ...(config.terminalEnabled ? [
-              ['Keyboard scope', 'One browser writer per tmux server; AltCLI dispatch, setup and launch stay held until release and reconciliation', '', 'server-wide'],
+              ['Keyboard scope', 'Independent terminal writers; AltCLI dispatch, setup and launch stay held across the tmux server until stop and reconciliation', '', 'server-wide'],
               ['Terminal limits', `${TERMINAL_LIMITS.hostConnections} connections per host, ${TERMINAL_LIMITS.sessionConnections} per session; ${TERMINAL_LIMITS.inputFrame / 1024} KiB input frames, 256 KiB paste; ${TERMINAL_LIMITS.outputHigh / 1024 / 1024} MiB output credit; ${TERMINAL_LIMITS.ticketMs / 1000} s ticket, ${TERMINAL_LIMITS.leaseMs / 1000} s heartbeat lease`, '', 'fixed'],
             ] : []),
             ['Console input', config.inputEnabled ? 'enabled' : 'read-only', 'ALTCLI_ENABLE_INPUT', 'true'],
@@ -910,7 +913,7 @@ export function Console() {
       <section className="panel about" aria-label="How this works">
         <div className="section-heading"><h2>How this works</h2></div>
         <p>AltCLI is a host-resident console for coding agents running in tmux panes. You can start CLIs yourself or explicitly preview and confirm profile launches when the host enables that feature. The console coordinates their turns.</p>
-        <p>The Agent selector above the terminals chooses both the terminal shown and the Control pane's recipient; it starts on a working agent. In <strong>Focus</strong> it then follows whichever agent starts working, for the terminal and Control alike; in <strong>Parallel</strong> all agent controls appear side by side on wide screens and stacked on phones, with separate drafts. Selecting a card activates its readiness check and clears the previous confirmation. Outside Plan, the <strong>Terminal / Control</strong> switch shows one or the other in the same frame, and an accepted command from Control switches back to the terminals. Plan setup addresses the whole group and keeps its own section. The worktree group's <strong>Agents</strong> toggle, beside its local <strong>Settings</strong> toggle, shows agent status. Local Settings remain available in Stage relay; they configure Plan and committed work. <strong>Control access</strong>, at the top of every page, is the one place to take control: keyboard release, manual-input recovery, the controller, other recovery and each action’s readiness check. The keyboard emoji beside it reports the server-wide owner; claim the keyboard at the terminal where you want to type. Send delivers an instruction; After send can add one handoff commit, or a commit and one review by the named peer. Current changes snapshots work as it stands, and Committed review asks this agent to review a committed range. Every action names its recipients and needs a fresh readiness confirmation.</p>
+        <p>The Agent selector above the terminals chooses both the terminal shown and the Control pane's recipient; it starts on a working agent. In <strong>Focus</strong> it then follows whichever agent starts working, for the terminal and Control alike; in <strong>Parallel</strong> all agent controls appear side by side on wide screens and stacked on phones, with separate drafts. Selecting a card activates its readiness check and clears the previous confirmation. Outside Plan, the <strong>Terminal / Control</strong> switch shows one or the other in the same frame, and an accepted command from Control switches back to the terminals. Plan setup addresses the whole group and keeps its own section. The worktree group's <strong>Agents</strong> toggle, beside its local <strong>Settings</strong> toggle, shows agent status. Local Settings remain available in Stage relay; they configure Plan and committed work. <strong>Control access</strong>, at the top of every page, is the one place to take control: keyboard release, manual-input recovery, the controller, other recovery and each action’s readiness check. The keyboard emoji reports active input connections and the shared automation hold. Type directly in terminals; each remains writable when you focus another. Send delivers an instruction; After send can add one handoff commit, or a commit and one review by the named peer. Current changes snapshots work as it stands, and Committed review asks this agent to review a committed range. Every action names its recipients and needs a fresh readiness confirmation.</p>
         <p>The server owns every run, validates and deduplicates correlated completions, and pauses on unknown background work. No effect in this page sends commands. A completed chain is not final task acceptance.</p>
         <p>Viewing another worktree never changes a running relay. Pause a run before manual terminal takeover. Locking this view or disconnecting your phone does not interrupt workers.</p>
         <p className="fine">Plan produces documents and an approval checkpoint; Implementation runs committed handoffs on a task branch. Integration branches are starting points only. The detailed design lives in the repository’s README, docs/WORKFLOWS.md and the ADRs.</p>
