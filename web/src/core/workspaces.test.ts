@@ -1,7 +1,7 @@
 import { beforeEach, expect, test } from "vitest";
 import type { PaneState, SessionRegistration } from "../contracts/api";
 import type { WorktreeIdentity } from "../contracts/workflow";
-import { classifyAgent, groupWorkspaces, type DirectoryInspection } from "./workspaces";
+import { classifyAgent, groupName, groupWorkspaces, type DirectoryInspection } from "./workspaces";
 const socketPath = "/tmp/tmux-test";
 let counter = 0;
 beforeEach(() => { counter = 0; });
@@ -88,4 +88,10 @@ test("default names use the tmux session while pane identities and saved names s
   expect(first.identity.paneId).not.toBe(second.identity.paneId);
   expect(classifyAgent({ ...first, location: "renamed:1.1" }, []).label).toBe("renamed");
   expect(classifyAgent({ ...first, location: "" }, []).label).toBe("Codex %0");
+});
+test("a linked task worktree's group follows its branch after a rename; other checkouts keep their directory name", () => {
+  const linked = { root: "/home/u/.altcli/app/feature/ui1", gitDir: "/repo/.git/worktrees/ui1", indexPath: "/repo/.git/worktrees/ui1/index" };
+  expect(groupName({ cwd: linked.root, worktree: linked, branch: "feature/ui2" })).toBe("ui2");
+  expect(groupName({ cwd: linked.root, worktree: linked, branch: null })).toBe("ui1");
+  expect(groupName({ cwd: "/repo", worktree: worktree("/repo"), branch: "feature/other" })).toBe("repo");
 });

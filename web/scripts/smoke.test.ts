@@ -13,7 +13,7 @@ import { ENTER_SETTLE_MS, inputArgs, inspectPane, listPanes, createRunner, TmuxA
 import { MockAdapter, mockPanes, mockSessions } from "../src/server/adapters/mock.ts";
 import { jsonBody } from "../src/server/http.ts";
 import { isWithin } from "../src/server/paths.ts";
-import { isCodexHelper, processesForPane } from "../src/server/processes.ts";
+import { hostProcessesForPane, isCodexHelper, processesForPane } from "../src/server/processes.ts";
 import type { PaneState, SessionRegistration } from "../src/contracts/api.ts";
 const id = "d2007c18-13e5-48d3-85e5-1f5b73c804f2";
 const token = "a".repeat(64);
@@ -119,6 +119,31 @@ test("pane process evidence retains tty-attached work after its parent exits", (
     assert.deepEqual(processesForPane(detached, "10"), [{ pid: "20", command: "codex" }]);
   }
 });
+test('host pane evidence identifies the backend PID and retains every process outside its launch chain', () => {
+  const rows = [
+    { pid: '10', ppid: '1', tty: 'host', command: '-zsh' },
+    { pid: '20', ppid: '10', tty: 'host', command: 'npm run start' },
+    { pid: '30', ppid: '20', tty: 'host', command: 'node' },
+  ];
+  assert.deepEqual(hostProcessesForPane(rows, '10', '30', '20')?.writers, []);
+  assert.deepEqual(hostProcessesForPane([{ ...rows[2]!, ppid: '1' }], '30', '30', '30')?.writers, []);
+  assert.equal(hostProcessesForPane(rows, '10', '999', '20'), null, 'another node process cannot impersonate the backend');
+  assert.equal(hostProcessesForPane(rows, '999', '30', '20'), null, 'missing pane');
+  assert.equal(hostProcessesForPane(rows.slice(1), '10', '30', '20'), null, 'broken ancestry');
+  assert.equal(hostProcessesForPane(rows.map(p => p.pid === '20' ? { ...p, ppid: '30' } : p), '10', '30', '20'), null, 'cyclic ancestry');
+  for (const foreground of [null, '99']) assert.throws(() => hostProcessesForPane(rows, '10', '30', foreground), /not verified/);
+  for (const command of ['codex', 'claude', 'node', 'npm run build']) {
+    assert.throws(() => hostProcessesForPane(rows.map(p => p.pid === '20' ? { ...p, command } : p), '10', '30', '20'), /not verified/);
+  }
+  for (const ppid of ['10', '20', '30', '1']) for (const command of ['node', 'ps', 'codex-code-mode-host', '/usr/bin/caffeinate']) {
+    const writer = { pid: '40', ppid, tty: 'host', command };
+    assert.deepEqual(hostProcessesForPane([...rows, writer], '10', '30', '20')?.writers, [{ pid: '40', command }]);
+    assert.deepEqual(hostProcessesForPane([...rows, writer], '10', '30', '20')?.backendChildren, ppid === '30' ? ['40'] : []);
+  }
+  const detached = { pid: '40', ppid: '30', tty: '??', command: 'node' };
+  assert.deepEqual(hostProcessesForPane([...rows, detached], '10', '30', '20')?.writers, [{ pid: '40', command: 'node' }]);
+  assert.deepEqual(hostProcessesForPane([...rows, detached], '10', '30', '20')?.backendChildren, ['40']);
+});
 test('persistent browser REPL infrastructure is excluded but its task workers remain visible', () => {
   const app = '/Applications/ChatGPT.app/Contents/Resources';
   const codex = `${app}/codex`; const node = `${app}/cua_node/bin/node`;
@@ -161,16 +186,18 @@ test("a multi-line prompt is delivered as one bracketed paste, then Enter; a sin
   const directory = await mkdtemp(join(tmpdir(), "altcli-smoke-"));
   try {
     const calls: { args: string[]; input?: string }[] = [];
-    const run = async (args: string[], input?: string) => { calls.push({ args, input }); return args[0] === "display-message" ? `%1\t11\t22\t123\t/tmp/tmux-test\tcodex\t${directory}\t0\t0\t0\n` : ""; };
+    const footer = "\n\n  model · ~/repo\n  ? for shortcuts\n"; // Codex: its composer, one blank row, then a footer
+    let screen = `› [Pasted text #1 +1 lines]${footer}`; // what the CLI shows in its input area before Enter
+    const run = async (args: string[], input?: string) => { calls.push({ args, input }); return args[0] === "display-message" ? `%1\t11\t22\t123\t/tmp/tmux-test\tcodex\t${directory}\t0\t0\t0\n` : args[0] === "capture-pane" ? screen : ""; };
     const testSession = { ...session, repository: directory };
     await new TmuxAdapter(run).send(testSession, "line one; $(x)\nline two");
-    assert.deepEqual(calls.map((c) => c.args[0]), ["display-message", "load-buffer", "paste-buffer", "display-message", "send-keys"]);
+    assert.deepEqual(calls.map((c) => c.args[0]), ["display-message", "load-buffer", "paste-buffer", "display-message", "capture-pane", "send-keys"]);
     const [, load, paste] = calls; const name = load!.args[2]!;
     assert.deepEqual(load!.args, ["load-buffer", "-b", name, "-"]); assert.equal(load!.input, "line one; $(x)\nline two");
     assert.deepEqual(paste!.args, ["paste-buffer", "-p", "-d", "-b", name, "-t", "%1"]);
     assert.deepEqual(calls.at(-1)!.args, ["send-keys", "-t", "%1", "Enter"]);
-    calls.length = 0; await new TmuxAdapter(run).send(testSession, "one line");
-    assert.deepEqual(calls.map((c) => c.args[0]), ["display-message", "send-keys", "display-message", "send-keys"]);
+    calls.length = 0; screen = `› one line${footer}`; await new TmuxAdapter(run).send(testSession, "one line");
+    assert.deepEqual(calls.map((c) => c.args[0]), ["display-message", "send-keys", "display-message", "capture-pane", "send-keys"]);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 test("hex transport preserves punctuation, semicolons and Unicode literally", () => {
@@ -273,11 +300,32 @@ test("tmux send revalidates and sends text, waits out Codex's paste window, then
   try {
     const calls: { args: string[]; at: number }[] = [];
     const testSession = { ...session, repository: directory };
-    const run = async (args: string[]) => { calls.push({ args, at: performance.now() }); return args[0] === "display-message" ? `%1\t11\t22\t123\t/tmp/tmux-test\tcodex\t${directory}\t0\t0\t0\n` : ""; };
+    const run = async (args: string[]) => { calls.push({ args, at: performance.now() });
+      return args[0] === "display-message" ? `%1\t11\t22\t123\t/tmp/tmux-test\tcodex\t${directory}\t0\t0\t0\n` : args[0] === "capture-pane" ? "› relay\n\n  model · ~/repo\n  ? for shortcuts\n" : ""; };
     await new TmuxAdapter(run).send(testSession, "relay");
-    assert.deepEqual(calls.map((call) => call.args[0]), ["display-message", "send-keys", "display-message", "send-keys"]);
+    assert.deepEqual(calls.map((call) => call.args[0]), ["display-message", "send-keys", "display-message", "capture-pane", "send-keys"]);
     assert.deepEqual(calls.at(-1)!.args, ["send-keys", "-t", "%1", "Enter"]);
-    assert.ok(calls[3]!.at - calls[1]!.at >= ENTER_SETTLE_MS - 5, "Enter must not follow the text inside Codex's 120 ms paste-suppression window");
+    assert.ok(calls.at(-1)!.at - calls[1]!.at >= ENTER_SETTLE_MS - 5, "Enter must not follow the text inside Codex's 120 ms paste-suppression window");
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+test("tmux send submits only an input line holding just the command; otherwise it submits nothing and erases only its own typing", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "altcli-smoke-"));
+  try {
+    const calls: string[][] = []; let screen = "";
+    const run = async (args: string[]) => { calls.push(args);
+      return args[0] === "display-message" ? `%1\t11\t22\t123\t/tmp/tmux-test\tcodex\t${directory}\t0\t0\t0\n` : args[0] === "capture-pane" ? screen : ""; };
+    const send = (text: string) => new TmuxAdapter(run).send({ ...session, repository: directory }, text);
+    // Typed next to an unsent draft: erased character by character, never submitted.
+    const footer = "\n\n  model · ~/repo\n  ? for shortcuts\n";
+    screen = `› i meanrelay é${footer}`; await assert.rejects(send("relay é"), /held other text besides this command\. Nothing was submitted and the typed command was erased/);
+    assert.deepEqual(calls.at(-1), ["send-keys", "-N", "7", "-t", "%1", "BSpace"]);
+    // No recognizable input line: nothing is submitted and nothing is erased, since that could delete someone else's text.
+    calls.length = 0; screen = "relay\n"; await assert.rejects(send("relay"), /could not be confirmed to hold only this command\. Nothing was submitted; the command may still be in the input line/);
+    assert.equal(calls.at(-1)![0], "capture-pane");
+    // A paste next to a draft is not backspaced either.
+    calls.length = 0; screen = `› draft[Pasted text #1 +1 lines]${footer}`; await assert.rejects(send("a\nb"), /Nothing was submitted; the command may still be in the input line/);
+    assert.equal(calls.at(-1)![0], "capture-pane");
+    assert.ok(!calls.some((args) => args.includes("Enter")));
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 test("tmux send stops before Enter if foreground ownership changes", async () => {

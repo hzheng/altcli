@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createRunner, inspectPane } from '../src/server/adapters/tmux.ts';
 import { attachTmux, inspectAttach, type Attachment } from './lib/tmux-attach.ts';
 import { loadConfig } from '../src/server/config.ts';
@@ -11,6 +11,47 @@ import { paneProcesses } from '../src/server/processes.ts';
 import { tmuxLiteral } from './lib/terminal-environment.ts';
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
 async function eventually(check: () => Promise<boolean>) { for (let n=0;n<100;n++) { if (await check()) return; await delay(20); } assert.fail('Native condition timed out'); }
+
+for (const launch of ['direct', 'npm'] as const)
+test(`private tmux: exact ${launch} backend process is infrastructure but its child is work`, async () => {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), 'altcli-host-process-')));
+  const socket = join(dir, 't.sock'); const run = createRunner('tmux', socket);
+  const result = join(dir, 'result.json');
+  try {
+    const processes = new URL('../src/server/processes.ts', import.meta.url).href;
+    await writeFile(join(dir, 'fixture.mjs'), `
+      import { execFileSync, spawn } from 'node:child_process';
+      import { writeFileSync } from 'node:fs';
+      import { once } from 'node:events';
+      import { hostPaneProcesses } from ${JSON.stringify(processes)};
+      const root = execFileSync('tmux', ['-S', ${JSON.stringify(socket)}, 'display-message', '-p', '-t', process.env.TMUX_PANE, '#{pane_pid}'], { encoding: 'utf8' }).trim();
+      try {
+        const clear = await hostPaneProcesses(root);
+        const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+        await once(child, 'spawn');
+        const busy = await hostPaneProcesses(root);
+        child.kill(); await once(child, 'exit');
+        const settled = await hostPaneProcesses(root);
+        writeFileSync(${JSON.stringify(result)}, JSON.stringify({ pid: String(process.pid), child: String(child.pid), clear, busy, settled }));
+      } catch (error) { writeFileSync(${JSON.stringify(result)}, JSON.stringify({ error: String(error) })); }
+      setInterval(() => {}, 1000);
+    `);
+    await writeFile(join(dir, 'package.json'), JSON.stringify({ private: true, scripts: { start: 'node --experimental-strip-types fixture.mjs' } }));
+    const args = launch === 'direct' ? [process.execPath, '--experimental-strip-types', join(dir, 'fixture.mjs')]
+      : ['npm', 'run', 'start'];
+    await run(['-f', '/dev/null', 'new-session', '-d', '-s', 'host', '-c', dir, '/usr/bin/env', `PATH=${dirname(process.execPath)}:${process.env.PATH ?? ''}`, ...args]);
+    await eventually(async () => { try { await readFile(result); return true; } catch { return false; } });
+    const evidence = JSON.parse(await readFile(result, 'utf8'));
+    assert.equal(evidence.error, undefined);
+    assert.equal(evidence.clear.lineage[0].pid, evidence.pid);
+    assert.deepEqual(evidence.clear.writers, []);
+    assert.deepEqual(evidence.clear.backendChildren, []);
+    assert.deepEqual(evidence.busy.writers.map((p: { pid: string }) => p.pid), [evidence.child]);
+    assert.deepEqual(evidence.busy.backendChildren, [evidence.child]);
+    assert.deepEqual(evidence.settled, evidence.clear);
+    if (launch === 'npm') assert.ok(evidence.clear.lineage.some((p: { command: string }) => p.command.startsWith('npm')));
+  } finally { await run(['kill-server']).catch(() => {}); await rm(dir, { recursive: true, force: true }); }
+});
 
 // Native observer refusal preserves the worker instead of changing tmux settings.
 test('captured fallback preserves an unattended automatically sized session', async () => {

@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { basename } from "node:path";
 import type { ProcessRecord } from "../contracts/workflow.ts";
 import type { FinishProcess } from "../contracts/projects.ts";
 import { AppError } from "../core/errors.ts";
@@ -6,14 +7,43 @@ export interface ProcessTableRow { pid: string; ppid: string; tty: string; comma
 /** One `ps` read of the host process table: pid, parent pid, controlling terminal and executable. */
 function processTable(): Promise<ProcessTableRow[]> {
   return new Promise((resolve, reject) => {
-    execFile("ps", ["-axo", "pid=,ppid=,tty=,comm="], { encoding: "utf8", timeout: 5000, maxBuffer: 4 * 1024 * 1024, shell: false }, (error, stdout) => {
+    const probe = execFile("ps", ["-axo", "pid=,ppid=,tty=,comm="], { encoding: "utf8", timeout: 5000, maxBuffer: 4 * 1024 * 1024, shell: false }, (error, stdout) => {
       if (error) return reject(new AppError("PS_FAILED", "Could not read the host process table.", 409));
       resolve(stdout.split("\n").flatMap((line) => {
         const match = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.*\S)\s*$/.exec(line);
-        return match ? [{ pid: match[1]!, ppid: match[2]!, tty: match[3]!, command: match[4]! }] : [];
+        // Only this completed inspection is exempt, never other children of the server or other ps processes.
+        return match && match[1] !== String(probe.pid) ? [{ pid: match[1]!, ppid: match[2]!, tty: match[3]!, command: match[4]! }] : [];
       }));
     });
   });
+}
+export interface HostPaneEvidence { foregroundPid: string; lineage: ProcessRecord[]; writers: ProcessRecord[]; backendChildren: string[] }
+/** Prove that this pane contains the running backend itself, not merely a process named node. Only its shell/npm
+ * launch chain is infrastructure. Agent ancestors, host children, siblings and reparented tty work remain blockers. */
+export function hostProcessesForPane(rows: ProcessTableRow[], rootPid: string, hostPid: string, foreground: string | null): HostPaneEvidence | null {
+  const lineage: ProcessTableRow[] = []; const seen = new Set<string>();
+  let pid = hostPid;
+  while (!seen.has(pid)) {
+    const row = rows.find(p => p.pid === pid);
+    if (!row) return null;
+    seen.add(pid); lineage.push(row);
+    if (pid === rootPid) break;
+    pid = row.ppid;
+  }
+  if (lineage.at(-1)?.pid !== rootPid) return null;
+  if (!foreground || !seen.has(foreground) || lineage.slice(1).some(p =>
+    !/^(?:-?(?:sh|bash|zsh|fish|dash|ksh|tcsh|csh)|npm(?: run (?:start|dev))?)$/.test(basename(p.command)))) {
+    throw new AppError('PS_FAILED', 'The AltCLI host launch chain or foreground process is not verified.', 409);
+  }
+  const members = paneMembers(rows, rootPid)!;
+  const record = ({ pid, command }: ProcessTableRow): ProcessRecord => ({ pid, command });
+  return { foregroundPid: foreground, lineage: lineage.map(record), writers: rows.filter(p => members.has(p.pid) && !seen.has(p.pid)).map(record),
+    backendChildren: rows.filter(p => p.ppid === hostPid).map(p => p.pid) };
+}
+/** Sequential reads ensure the foreground probe has exited before scanning for surviving host-pane work. */
+export async function hostPaneProcesses(rootPid: string): Promise<HostPaneEvidence | null> {
+  const foreground = await foregroundPid(rootPid);
+  return hostProcessesForPane(await processTable(), rootPid, String(process.pid), foreground);
 }
 /** Arguments are used transiently to identify CLI infrastructure, never returned or persisted. */
 function processArguments(): Promise<Map<string, string>> {

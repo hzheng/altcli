@@ -20,6 +20,12 @@ export function classifyAgent(pane: PaneState & { location: string }, sessions: 
     observable: !pane.dead && (kind === 'codex' || kind === 'claude'), reason,
     label: registered?.label ?? (tmuxName || `${name} ${pane.identity.paneId}`), registeredAs: registered?.id ?? null };
 }
+const lastPart = (path: string) => path.split("/").filter(Boolean).pop() ?? path;
+/** A linked task worktree's group is named after its branch, which a confirmed rename can change; other checkouts use their directory. */
+export function groupName(workspace: Pick<Workspace, "branch" | "cwd" | "worktree">): string {
+  const linked = /\/worktrees\/[^/]+\/?$/.test(workspace.worktree.gitDir);
+  return (linked && workspace.branch ? lastPart(workspace.branch) : lastPart(workspace.cwd)).slice(0, 40);
+}
 const indexKey = (w: WorktreeIdentity) => `${w.root}\0${w.gitDir}\0${w.indexPath}`;
 /** Group live panes into workspace cards by canonical cwd on one tmux server. Only a worktree's root directory is a workspace:
  * panes in a subdirectory, outside Git, or that could not be inspected are reported rather than guessed. All eligible agents are

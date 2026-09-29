@@ -43,7 +43,27 @@ delivery is established. No uncertain delivery is replayed.
 ### Correlation, not guesses
 
 A unique command marker is appended to the dispatched prompt. Its exact echoed
-text must also match; leftover input with a valid marker is still rejected. Claude's
+text must also match; leftover input with a valid marker is still rejected. Since
+September 28, 2026 the tmux transport also checks before pressing Enter: it captures
+the pane after typing and reads the whole input area, from the last row starting
+with the CLI's prompt symbol in column 0 (followed by any space, including Claude
+Code's no-break space) through its indented continuation rows. Claude Code's area
+ends at the row identical to the full rule above it; Codex ends its composer with
+the last blank row above a footer of at most three rows at the bottom of the pane.
+Layout cells are recognized only in column 0, where draft text never is: an indented
+rule or box edge, and any border-looking character, is draft content, and only
+whitespace is ignored when comparing. Blank rows inside the area are draft text,
+never its end. An area whose end cannot be found that way, or another layout such
+as the older boxed one, is refused. This assumes Codex keeps drawing a blank row and
+a footer under its composer. It submits only when that area holds exactly the
+command, with no blank rows beyond the command's own empty lines (or, for a
+multi-line paste, just one paste token), so text
+before the command, after the cursor or containing a prompt-like character blocks
+submission. A typed command visible next to other text is erased character by
+character; a paste or an unreadable layout is left untouched, since backspacing
+there could delete someone else's text. Either way nothing is submitted and the
+delivery is recorded uncertain with that reason: an unknown layout is never taken
+as an empty draft. Nothing clears or edits text a person typed. Claude's
 UserPromptSubmit hook records a source-turn ID for the specific command and sends
 an acknowledgment: the CLI's native `prompt_id` (Claude Code 2.1.196 or later),
 which the matching Stop carries too, so a Stop that closes another prompt, such as

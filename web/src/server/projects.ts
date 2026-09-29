@@ -46,6 +46,9 @@ function gitWith(args: string[], options: { input?: string; env?: Record<string,
   });
 }
 const short = (sha: string) => sha.slice(0, 12);
+/** App-launched tmux sessions named after a branch, with their names for the new branch; they follow a confirmed branch rename. */
+export type SessionRenames = (worktreeId: string, branch: string, newBranch: string) => Promise<{ from: string; to: string }[]>;
+const SESSION_RENAME = 'tmux rename-session -t ';
 /** What an update confirmation consents to: every pinned preview field except the per-preview request ID. */
 const updateConsent = (preview: Omit<WorktreeUpdatePreview, 'requestId' | 'consent'>) => createHash('sha256').update(JSON.stringify(canonical(preview))).digest('hex');
 /** The Git operation a worktree is in the middle of (a stopped merge, rebase, cherry-pick, revert or bisect), or null. */
@@ -944,8 +947,9 @@ export class ProjectCatalog {
     } catch { /* Missing evidence retains ownership. */ }
     return operation;
   }
-  /** Read-only: renaming this task branch in place. Uncommitted work is pinned by fingerprint and carried unchanged. */
-  async previewRename(raw: WorktreeRenameInput): Promise<WorktreeRenamePreview> {
+  /** Read-only: renaming this task branch in place. Uncommitted work is pinned by fingerprint and carried unchanged. `sessions` names the
+   * app-launched tmux sessions that follow the branch; their renames are part of the confirmed commands. */
+  async previewRename(raw: WorktreeRenameInput, sessions?: SessionRenames): Promise<WorktreeRenamePreview> {
     const input = parseRenamePreview(raw);
     if (this.config.mode === 'mock') throw new AppError('MOCK_WORKTREE', 'Simulated panes cannot rename real Git branches.', 409);
     const { tree, primary } = await this.taskWorktree(input.projectId, input.worktreeId, 'renamed');
@@ -964,8 +968,10 @@ export class ProjectCatalog {
     if (state.branch !== tree.branch || state.head !== tree.head) throw new AppError('WORKTREE_CHANGED', 'The task worktree changed during inspection. Recheck.', 409);
     const names = this.branchNames(input.projectId, input.worktreeId, tree.branch);
     const checkpoints = this.store.worktreeIntegrations().filter((op) => op.status === 'integrated' && !op.retired && op.input.projectId === input.projectId && op.input.worktreeId === input.worktreeId && names.has(op.input.branch)).length;
+    const renames = await sessions?.(input.worktreeId, tree.branch, input.newBranch) ?? [];
+    if (renames.length > 9) throw new AppError('RENAME_SESSIONS', `${renames.length} app-launched tmux sessions are named after ${tree.branch}; close some, then preview again.`, 409);
     return { ...input, requestId: randomUUID(), worktree: tree.identity, branch: tree.branch, head: tree.head, fingerprint: await worktreeFingerprint(tree.path),
-      dirty: !state.clean, checkpoints, commands: [`git -C ${tree.path} branch -m ${tree.branch} ${input.newBranch}`] };
+      dirty: !state.clean, checkpoints, commands: [`git -C ${tree.path} branch -m ${tree.branch} ${input.newBranch}`, ...renames.map((r) => `${SESSION_RENAME}${r.from} ${r.to}`)] };
   }
   private renameFinish(operation: WorktreeRename, status: WorktreeRename['status'], message: string): WorktreeRename {
     const updated = { ...operation, status, message, updatedAt: new Date().toISOString() };
@@ -980,8 +986,10 @@ export class ProjectCatalog {
         && sameWorktree(await resolveWorktree(root), input.worktree);
     } catch { return false; }
   }
-  /** One confirmed `git branch -m`. The whole preview, including the content fingerprint, must still hold immediately before it. */
-  async rename(raw: WorktreeRenameConfirm, guard: (worktree: WorktreeIdentity) => Promise<void>): Promise<WorktreeRename> {
+  /** One confirmed `git branch -m`. The whole preview, including the content fingerprint, must still hold immediately before it.
+   * `follow` then applies the confirmed session renames; its outcome is reported and never makes the verified Git rename uncertain. */
+  async rename(raw: WorktreeRenameConfirm, guard: (worktree: WorktreeIdentity) => Promise<void>, sessions?: SessionRenames,
+    follow?: (input: WorktreeRenameConfirm, renames: { from: string; to: string }[]) => Promise<string>): Promise<WorktreeRename> {
     const input = parseRename(raw);
     if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'The host has disabled Git setup and terminal input.', 403);
     const existing = this.store.worktreeRenames().find((op) => op.input.requestId === input.requestId);
@@ -998,7 +1006,7 @@ export class ProjectCatalog {
       if (this.store.indexOwned(input.worktree.indexPath) || this.store.activeFor(input.worktree.root)) throw new AppError('WORKTREE_BUSY', 'A run or unresolved delivery owns this worktree. Let it finish or take over first.', 409);
       this.store.saveProject(project); this.store.saveWorktreeRename(operation);
     }).immediate();
-    const unchanged = async () => isDeepStrictEqual({ ...await this.previewRename({ projectId: input.projectId, worktreeId: input.worktreeId, newBranch: input.newBranch }), requestId: input.requestId, confirm: true }, input);
+    const unchanged = async () => isDeepStrictEqual({ ...await this.previewRename({ projectId: input.projectId, worktreeId: input.worktreeId, newBranch: input.newBranch }, sessions), requestId: input.requestId, confirm: true }, input);
     let attempted = false;
     try {
       if (!await unchanged()) throw new AppError('WORKTREE_CHANGED', 'The branch, its commit or the uncommitted work changed. Preview and confirm again.', 409);
@@ -1008,7 +1016,9 @@ export class ProjectCatalog {
       attempted = true;
       await git(['-C', input.worktree.root, '-c', 'core.hooksPath=/dev/null', 'branch', '-m', input.branch, input.newBranch]);
       if (!await this.renamedExactly(operation)) throw new Error('Rename verification failed.');
-      return this.renameFinish(operation, 'renamed', `Renamed ${input.branch} to ${input.newBranch}. The directory, files, agents and tmux session names are unchanged${input.checkpoints ? '; squash batches continue from the recorded boundary' : ''}.`);
+      const renames = input.commands.filter((command) => command.startsWith(SESSION_RENAME)).map((command) => { const [from, to] = command.slice(SESSION_RENAME.length).split(' '); return { from: from!, to: to! }; });
+      const followed = follow ? await follow(input, renames).catch((error) => ` Session renames were not attempted: ${messageOf(error)}`) : '';
+      return this.renameFinish(operation, 'renamed', `Renamed ${input.branch} to ${input.newBranch}. The directory and files are unchanged${input.checkpoints ? '; squash batches continue from the recorded boundary' : ''}.${followed}`);
     } catch (error) {
       return this.renameFinish(operation, attempted ? 'uncertain' : 'failed', attempted
         ? `The rename or its verification is uncertain. ${messageOf(error)} Inspect the branches in ${input.worktree.root}; nothing is retried.` : messageOf(error));

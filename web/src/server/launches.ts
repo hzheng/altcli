@@ -181,6 +181,36 @@ export class LaunchService {
     if(!isDeepStrictEqual(pane.identity,identity)||ids.join('\t')!==[item.sessionId,item.windowId,item.id].join('\t')||pane.cwd!==item.worktree.root)throw new AppError('LAUNCH_CHANGED','The recorded launch identity, marker or directory changed. Nothing was adopted.',409);
     return pane;
   }
+  /** Read-only: open sessions this app launched in a worktree under the name it gives `branch`, with the name each takes for `newBranch`.
+   * A session renamed by hand, gone or being cleaned up keeps its name. A confirmed branch rename lists these as its tmux commands. */
+  async plannedRenames(worktreeId:string,branch:string,newBranch:string):Promise<{from:string;to:string}[]> {
+    const items=this.batches().flatMap(b=>b.items).filter(i=>i.worktreeId===worktreeId&&!i.closed&&!i.cleanup&&i.sessionId&&i.identity);
+    if(!items.length)return [];
+    const live=await this.sessionNames(),taken=new Set([...live,...this.heldNames()]),planned:{from:string;to:string}[]=[];
+    for(const item of items){
+      const base=`${slug(item.profile.label)}-${slug(branch)}`;
+      if(!live.has(item.sessionName)||(item.sessionName!==base&&!new RegExp(`^${base}-\\d+$`).test(item.sessionName)))continue;
+      const to=uniqueSessionName(`${slug(item.profile.label)}-${slug(newBranch)}`,taken);
+      if(to!==item.sessionName){taken.add(to);planned.push({from:item.sessionName,to});}
+    }
+    return planned;
+  }
+  /** Renames each confirmed session only while it is still this worktree's verified launched session under the confirmed name. Never retried. */
+  async renameSessions(worktreeId:string,confirmed:{from:string;to:string}[]):Promise<{renamed:{from:string;to:string;identity:NonNullable<LaunchInstance['identity']>}[];failed:string[]}> {
+    const run=terminalRunner(this.config),renamed:{from:string;to:string;identity:NonNullable<LaunchInstance['identity']>}[]=[],failed:string[]=[];
+    for(const r of confirmed){
+      try{
+        const found=this.batches().flatMap(batch=>batch.items.map(item=>({batch,item}))).find(({item})=>item.worktreeId===worktreeId&&!item.closed&&!item.cleanup&&item.sessionName===r.from);
+        if(!found)throw new Error('its launch record changed');
+        const pane=await this.verify(found.item);
+        const current=(await run(['display-message','-p','-t',found.item.sessionId!,'#{session_name}'])).trimEnd();
+        if(current!==r.from)throw new Error(`it is now named ${current}`);
+        await run(['rename-session','-t',found.item.sessionId!,r.to]);
+        this.update(found.batch,found.item,{sessionName:r.to});renamed.push({...r,identity:pane.identity});
+      }catch(e){failed.push(`${r.from} (${messageOf(e)})`);}
+    }
+    return {renamed,failed};
+  }
   /** Records that a confirmed Finish branch closed this launch's session. History is kept; the launch is never a target again. */
   retire(id:string,finishId:string):void {const {batch,item}=this.lookup(id);if(!item.closed)this.update(batch,item,{closed:{finishId,at:new Date().toISOString()}});}
   private cleanupGate(item: LaunchInstance) {

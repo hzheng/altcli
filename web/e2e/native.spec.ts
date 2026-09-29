@@ -53,7 +53,7 @@ test('keyboard status only reports ownership and each terminal claims locally',a
   await expect(claim).toHaveText('⌨️');await expect(claim).toHaveClass(/\bicon-button\b/);
   await claim.click();
   const confirm=terminal.getByRole('region',{name:'Confirm keyboard'});
-  await expect(confirm).toContainText('Codex');expect((await state(request)).manualSessions??[]).toHaveLength(0);
+  await expect(confirm).toContainText('Codex');await expect(confirm).toContainText('text left there makes the controller refuse its next command to that agent');expect((await state(request)).manualSessions??[]).toHaveLength(0);
   await confirm.getByRole('button',{name:'Confirm keyboard',exact:true}).click();
   await expect(page.locator('.page-heading').getByRole('img',{name:'Keyboard: Codex (this browser)',exact:true})).toBeVisible();
   await expect(badge(terminal,'Keyboard here')).toBeVisible();

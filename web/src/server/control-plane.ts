@@ -16,7 +16,7 @@ import { isCodexHelper } from './processes.ts';
 import { discoverWorkspaces, mockCheckout } from './workspaces.ts';
 import type { BranchState, CommitAssignment, Group, GroupInput, GroupSelection, ImplementationRun, ImplementationStart, PolicyChange, PublicationResult, ReviewPreviewInput, StandaloneStart } from '../contracts/implementation.ts';
 import { archiveCommit, assertClean, assertLogPath, assertWorktreeInput, branchState, checkoutHead, gitRead, createConsentedBranch, integrationNames, isAncestor, previewCommittedRange, readPublication, taskBaseline, stageRelayEligibility, validateExistingLog, validateNewBranch, validateReviewRange } from './commit-handoff.ts';
-import { classifyAgent } from '../core/workspaces.ts';
+import { classifyAgent, groupName } from '../core/workspaces.ts';
 import { sessionNamesOf } from '../core/session-names.ts';
 import { listDirectory } from './directories.ts';
 import { FinishCoordinator, tmuxFinishHost } from './finish.ts';
@@ -24,7 +24,7 @@ import { messageOf } from '../core/errors.ts';
 import type { PlanCapture, PlanDecision, PlanningAssignment, PlanStart } from '../contracts/planning.ts';
 import { newPlanning, planAgreed } from './planning-state.ts';
 import { assertPlanArtifacts, assertPlanBaseline, capturePlanResult, planRoot } from './planning-documents.ts';
-import { ProjectCatalog } from './projects.ts';
+import { ProjectCatalog, type SessionRenames } from './projects.ts';
 import { installedInside } from './cli-install.ts';
 import { AgentActivityTracker } from './agent-activity.ts';
 import type { WorktreeCreateInput, WorktreeDiscardConfirm, WorktreeDiscardFinish, WorktreeDiscardInput, WorktreeIntegrateRequest, WorktreeIntegrationInput, WorktreePreviewInput, WorktreeRemovalInput, WorktreeRemoveInput, WorktreeRenameConfirm, WorktreeRenameInput, WorktreeUpdateInput, WorktreeUpdateRequest } from '../contracts/projects.ts';
@@ -335,10 +335,23 @@ export class ControlPlane {
     }
     if (this.workflow.owner(worktree.indexPath) || this.store.activeFor(worktree.root)) throw new AppError('WORKTREE_BUSY', `A run or unresolved delivery owns this worktree, including a paused run bound to its current commits. Let it finish or take over before the ${action.toLowerCase()}.`, 409);
   }
-  /** Every pane in the checkouts, including subdirectories and unselected agents, must be a verified CLI with settled native turn
-   * evidence or an idle shell, with a fresh process scan showing no task processes. Native idle/ready alone is only turn evidence. */
+  /** Every pane must be a settled CLI, idle shell or the verified AltCLI host launch chain, with fresh process evidence
+   * excluding surviving work. Native idle/ready alone is only turn evidence; host children are still work. */
   private async settledWriters(trees: NonNullable<ManagedSession['worktree']>[], revision: number, code: string, requirement: string): Promise<void> {
     const unknown = (detail = 'Current activity or process evidence is unavailable or changed.') => new AppError(code, `${requirement} ${detail} Inspect the panes and stop background work, then Recheck.`, 409);
+    const hostProcesses = async (panePid: string) => {
+      const initial = await this.adapter.hostProcesses(panePid);
+      let current = initial;
+      const deadline = performance.now() + 500;
+      // Concurrent state/discovery reads spawn short-lived git/tmux/ps children. Wait for a clear scan, never exempt
+      // them by executable name. Persistent children and processes outside the backend still block the operation.
+      while (current?.writers.length && current.writers.every(p => current!.backendChildren.includes(p.pid)) && performance.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 25));
+        current = await this.adapter.hostProcesses(panePid);
+        if (!current || current.foregroundPid !== initial!.foregroundPid || !isDeepStrictEqual(current.lineage, initial!.lineage)) throw unknown();
+      }
+      return current;
+    };
     const inventory = async () => {
       const result = [];
       for (const pane of await this.adapter.listPanes()) {
@@ -352,21 +365,23 @@ export class ControlPlane {
       if (this.nativeObservations || revision !== this.nativeRevision) throw unknown();
       const panes = await inventory();
       for (const { pane, cwd, tree } of panes) {
+        const host = await hostProcesses(pane.identity.panePid);
         const agent = classifyAgent({ ...pane, inMode: false, synchronized: false }, []);
         const shell = /^(sh|bash|zsh|fish|dash|ksh|tcsh|csh)$/.test(pane.command);
-        if (pane.dead || (!shell && (!agent.eligible || (agent.kind !== 'codex' && agent.kind !== 'claude')))) throw unknown(`Pane ${pane.identity.paneId} (${pane.command}) is not a supported agent or shell.`);
+        if (pane.dead || (!host && !shell && (!agent.eligible || (agent.kind !== 'codex' && agent.kind !== 'claude')))) throw unknown(`Pane ${pane.identity.paneId} (${pane.command}) is not a supported agent or shell.`);
         const session: ManagedSession = { id: pane.identity.paneId, label: agent.label, agentType: agent.kind === 'codex' || agent.kind === 'claude' ? agent.kind : 'other', identity: pane.identity,
           expectedCommand: pane.command, repository: tree.root, cwd, worktree: tree, registrationId: '', relayPrompt: '', registeredAt: '' };
         session.cliPid = await this.adapter.foreground(session);
         if (!session.cliPid || !sameWorktree(await resolveWorktree(cwd), tree)) throw unknown();
-        if (shell ? session.cliPid !== pane.identity.panePid : !this.activity.settledForGit(session)) throw unknown(`Pane ${pane.identity.paneId} (${pane.command}) has no settled foreground activity evidence.`);
-        const processes = await this.adapter.processes(session);
-        if (session.cliPid !== pane.identity.panePid && !processes.some(p => p.pid === session.cliPid)) throw unknown();
-        const writer = processes.find(p => p.pid !== session.cliPid && !(session.agentType === 'codex' && isCodexHelper(p.command)));
+        if (host ? session.cliPid !== host.foregroundPid : shell ? session.cliPid !== pane.identity.panePid : !this.activity.settledForGit(session)) throw unknown(`Pane ${pane.identity.paneId} (${pane.command}) has no settled foreground activity evidence.`);
+        const processes = host ? host.writers : await this.adapter.processes(session);
+        if (!host && session.cliPid !== pane.identity.panePid && !processes.some(p => p.pid === session.cliPid)) throw unknown();
+        const writer = host ? processes[0] : processes.find(p => p.pid !== session.cliPid && !(session.agentType === 'codex' && isCodexHelper(p.command)));
         if (writer) throw unknown(`Pane ${pane.identity.paneId} has process ${writer.pid} (${writer.command}) still running.`);
         const current = await this.adapter.inspect(pane.identity.paneId);
         if (!isDeepStrictEqual(current.identity, pane.identity) || current.dead || current.command !== pane.command
           || await realpath(current.cwd) !== cwd || await this.adapter.foreground(session) !== session.cliPid) throw unknown();
+        if (host && !isDeepStrictEqual(await hostProcesses(pane.identity.panePid), host)) throw unknown();
       }
       const scope = (rows: typeof panes) => rows.map(({ pane, cwd }) => [pane.identity, cwd, pane.command, pane.dead]);
       if (!isDeepStrictEqual(scope(await inventory()), scope(panes)) || this.nativeObservations || revision !== this.nativeRevision) throw unknown();
@@ -401,14 +416,29 @@ export class ControlPlane {
   async reconcileUpdate(requestId: string) {
     return this.projects.reconcileUpdate(requestId, (worktree) => this.changeGuard(worktree, 'Update'));
   }
+  private readonly sessionRenames: SessionRenames = (worktreeId, branch, newBranch) => this.launches.plannedRenames(worktreeId, branch, newBranch);
   async previewRename(input: WorktreeRenameInput) {
     await this.workspaces();
-    const preview = await this.projects.previewRename(input);
+    const preview = await this.projects.previewRename(input, this.sessionRenames);
     await this.changeGuard(preview.worktree, 'Rename'); return preview;
   }
   async renameWorktree(input: WorktreeRenameConfirm) { return this.authority.automated(() => this.renameWorktreeAdmitted(input)); }
   private async renameWorktreeAdmitted(input: WorktreeRenameConfirm) {
-    await this.workspaces(); return this.projects.rename(input, (worktree) => this.changeGuard(worktree, 'Rename'));
+    await this.workspaces();
+    return this.projects.rename(input, (worktree) => this.changeGuard(worktree, 'Rename'), this.sessionRenames, (confirmed, renames) => this.followBranchRename(confirmed, renames));
+  }
+  /** After a verified branch rename: the confirmed app-launched sessions take their new names, agent names still showing an old session name
+   * follow it, and a saved group named after the old branch takes the new one. A name the user chose and the directory stay. */
+  private async followBranchRename(input: WorktreeRenameConfirm, renames: { from: string; to: string }[]): Promise<string> {
+    const { renamed, failed } = await this.launches.renameSessions(input.worktreeId, renames);
+    const last = (branch: string) => branch.split('/').pop()!;
+    this.store.db.transaction(() => {
+      for (const r of renamed) for (const session of this.store.sessions()) {
+        if (isDeepStrictEqual(session.identity, r.identity) && session.label === r.from && !this.store.sessions().some((other) => other.label === r.to)) this.store.saveSession({ ...session, label: r.to });
+      }
+      for (const group of this.store.groups()) if (group.repository === input.worktree.root && group.name === last(input.branch)) { this.store.removeGroup(group.id); this.store.saveGroup({ ...group, name: last(input.newBranch) }); }
+    }).immediate();
+    return `${renamed.length ? ` Renamed tmux session${renamed.length === 1 ? '' : 's'} ${renamed.map((r) => `${r.from} → ${r.to}`).join(', ')}; agent names that matched followed.` : ''}${failed.length ? ` Not renamed: ${failed.join('; ')}. Nothing was retried.` : ''}`;
   }
   async reconcileRename(requestId: string) { return this.projects.reconcileRename(requestId); }
   async previewDiscard(input: WorktreeDiscardInput) {
@@ -505,7 +535,7 @@ export class ControlPlane {
       const id = stored?.id ?? `workspace-${createHash('sha256').update(signature).digest('hex').slice(0, 20)}`;
       const revision = stored && isDeepStrictEqual(stored.members, members) ? stored.revision
         : 1 + Number.parseInt(createHash('sha256').update(JSON.stringify([id, stored?.revision ?? 0, members])).digest('hex').slice(0, 12), 16);
-      return { id, name: stored?.name ?? basename(workspace.cwd).slice(0, 40), repository: workspace.worktree.root,
+      return { id, name: stored?.name ?? groupName(workspace), repository: workspace.worktree.root,
         cwd: workspace.cwd, members, revision, createdAt: stored?.createdAt ?? sessions.find((session) => members.includes(session.id))?.registeredAt ?? '1970-01-01T00:00:00.000Z', legacyPairId: stored?.legacyPairId ?? null };
     });
   }
@@ -1094,6 +1124,8 @@ export class ControlPlane {
       turn && input.event === 'turn_complete' ? await this.stageObservation(turn) : null);
     if (turn) this.deferClaudeHook(turn, input, receipt);
     if (turn) { await this.captureCheckpoint(turn.runId); await this.pump(turn.runId); }
+    // A held run's checkpoint needs settled activity from every checkout agent; later evidence from any of them may complete it.
+    for (const held of this.ownedRuns()) if (held.id !== turn?.runId && held.interaction?.active && !held.interaction.fault && held.interaction.disposition) await this.captureCheckpoint(held.id);
     return receipt;
   }
   private deferClaudeHook(turn: Execution, input: HookEvent, receipt: HookReceipt): void {
@@ -1118,7 +1150,8 @@ export class ControlPlane {
         await new Promise(resolve => setTimeout(resolve, 50));
         if (!this.store.db.open) return;
         const run = this.workflow.run(runId);
-        if (!run || !['running', 'waiting'].includes(run.status) || this.workflow.owner(run.lockKey) !== runId) return;
+        // A keyboard hold pauses the run at its validated disposition; its checkpoint still waits for this Stop hook to exit.
+        if (!run || !['running', 'waiting', 'paused'].includes(run.status) || this.workflow.owner(run.lockKey) !== runId) return;
         const pane = await this.adapter.inspect(member.identity.paneId);
         // Observing exit cannot type into the pane; copy mode or synchronized input must not turn a scrolled pane into a pause.
         assertIdentity(member, { ...pane, inMode: false, synchronized: false });

@@ -1,6 +1,7 @@
 import type { AgentId, PaneState, SessionRegistration } from "../../contracts/api.ts";
 import { AppError } from "../../core/errors.ts";
 import type { ProcessRecord } from "../../contracts/workflow.ts";
+import type { HostPaneEvidence } from "../processes.ts";
 import type { ListedPane, TerminalAdapter } from "./terminal.ts";
 const IDENTITY = { panePid: "10", serverPid: "20", serverStarted: "100", socketPath: "/tmp/altcli-mock" };
 /** Simulated tmux server: two coding CLIs already registered by default, a shell to demonstrate refusal, and a spare CLI to register. */
@@ -39,6 +40,7 @@ export class MockAdapter implements TerminalAdapter {
     this.output.set(session.id, `${await this.capture(session)}${text}\n\n[MOCK] Input received. No review or code change was performed.\n> `);
   }
   async processes(session: SessionRegistration): Promise<ProcessRecord[]> { return [...(this.trees.get(session.id) ?? [])]; }
+  async hostProcesses(_panePid: string): Promise<HostPaneEvidence | null> { return null; }
   async press(session: SessionRegistration, key: 'Enter' | 'Escape'): Promise<void> {
     this.output.set(session.id, `${await this.capture(session)}\n[MOCK key: ${key}]\n`);
   }

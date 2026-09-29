@@ -148,10 +148,11 @@ export class WorkflowStore {
   /** Called in the interaction reservation transaction, before any terminal side effect. */
   beginKeyboard(id: string): void {
     const run = this.run(id)!;
-    if (!run.implementation && !run.planning && !run.standalone) throw new AppError('LEGACY_OWNED', 'Settle or take over the legacy staging run before native input.', 409);
+    if (!run.implementation && !run.planning && !run.standalone && !run.stage) throw new AppError('LEGACY_OWNED', `Settle or take over the pre-upgrade staging run on ${run.repository} before native input.`, 409);
     const turn = this.execution(run.currentCommandId);
     if (run.status === 'running' && turn?.status !== 'delivered') throw new AppError('DELIVERY_PENDING', 'Wait for the current delivery before taking keyboard.', 409);
-    const fault = run.status === 'paused' || run.pauseRequested || run.interaction?.fault === true;
+    // Stage relay has no validated checkpoint to review, so keyboard input faults it: it continues only through takeover.
+    const fault = !!run.stage || run.status === 'paused' || run.pauseRequested || run.interaction?.fault === true;
     run.interaction = { revision: (run.interaction?.revision ?? 0) + 1, active: true, fault, origin: 'keyboard',
       ...(run.status === 'waiting' ? { disposition: 'waiting' as const } : {}) };
     if (run.status === 'waiting') { run.status = 'paused'; run.reason = 'Manual keyboard input holds this validated checkpoint.'; }
@@ -390,6 +391,7 @@ export class WorkflowStore {
       return done(run.reason, event);
     }
     if (run.pauseRequested || run.status === 'paused') { this.stop(run, 'Turn finished; run remains paused until human takeover.'); return done(run.reason, event); }
+    if (run.stage && run.interaction?.active) { this.stop(run, 'Turn finished while keyboard input held this Stage relay; nothing more was scheduled. Inspect the agents and take over.'); return done(run.reason, event); }
     // Stage relay stays on the branch and commit it was confirmed on: a moved or unreadable checkout schedules and releases nothing.
     if (!run.standalone && !run.stage) { this.stop(run, 'This staging run predates branch-scoped Stage relay: its completion is recorded, but nothing more is dispatched. Inspect the agents and take over.'); return done(run.reason, event); }
     if (run.stage && (stage?.branch !== run.stage.branch || stage.head !== run.stage.head)) {

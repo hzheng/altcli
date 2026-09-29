@@ -3668,3 +3668,239 @@ The existing Rename browser scenario passed on desktop and iPhone (2 cases); the
 build and type checking passed. No broad test suite ran. The local host was restarted with
 no controller delivery active and serves the new warning. No live branch was renamed.
 The read-only rename preview for the checkout containing pane %10 returned HTTP 200.
+
+## 2026-09-28 — three deferred bugs: branch-rename names, held relay recovery, Stage relay keyboard block
+
+From `main/scratch/BUGS-2026-09-28.md`:
+
+- **bug0.** A confirmed branch rename now lists, in the preview's commands, a `tmux rename-session`
+  for each open session AltCLI launched in the worktree under the name it gives the old branch. After the
+  verified `git branch -m`, each session is renamed only while it is still that launch's verified session
+  under that name, and its launch record follows. A saved agent name equal to the old session name follows
+  it; a chosen name stays. A saved group named after the old branch takes the new name, and a linked
+  worktree's default group name now comes from its branch. The directory is unchanged. Session renames
+  are reported, never retried, and cannot make the Git rename uncertain.
+- **bug1.** The Claude Stop-hook wait returned early for a paused run, so a keyboard-held run whose
+  Claude completion was validated never captured its checkpoint. It now also waits for paused runs, and
+  any later lifecycle event retries capture for held runs lacking one, for example when an unknown peer
+  settles. Console shows every member of a paused relay as paused (a working member keeps its native
+  state). A held run without a checkpoint names the unsettled agents and points to takeover.
+- **bug2.** Branch-scoped Stage relay runs were treated as pre-upgrade legacy owners, so any keyboard claim
+  on the host failed with `LEGACY_OWNED`. They now take a faulted hold: the current turn may finish but
+  schedules nothing, and the run continues only through takeover. A pre-upgrade staging run still
+  refuses native input, now naming its checkout. ADR-0020, ADR-0013, SETUP and SECURITY describe the
+  changes.
+
+Checks on Node 24.12.0:
+
+- New regressions: the Stage relay keyboard hold and pre-upgrade refusal, the held Claude
+  checkpoint after the Stop hook exits, a held checkpoint completed by an unknown peer's later
+  evidence, and the rename name follow-up (implementation tests, real Git and SQLite, simulated terminals);
+  a private-tmux test that renames only the app-launched session and its record; and a group-name unit
+  test. The Stage keyboard test failed before the fix with the reported `LEGACY_OWNED` error, and both
+  held-checkpoint tests failed before theirs (the first timed out waiting for the checkpoint). The rename
+  tests were not run against the previous code.
+- `./scripts/check.sh` passed: 32 hook/setup, 44 smoke, 493 workflow and 87 unit tests, type checking and
+  the production build. `npm run test:native` passed all 17 private-tmux cases.
+- Playwright `console.spec.ts` and `projects.spec.ts` passed 138 desktop and iPhone cases, including a
+  new held-relay badge and missing-checkpoint case, the paused-idle badge case updated from `idle` to the
+  pause, and the rename preview wording. The full browser suite was not run.
+
+No live host, run, keyboard, tmux session or branch was changed. The already renamed `feature/ui2`
+worktree keeps its `*-feature-ui1` session and agent names until a new rename or a manual change.
+
+## 2026-09-28 — leftover input can no longer be submitted with a controller command
+
+Text left in an agent's input line was typed in front of a controller command and submitted with
+it; the exact prompt echo check then correctly refused the turn, but only after the agent ran the
+altered prompt. The tmux transport now checks before submitting a single-line command. It captures
+the pane after typing and compares only visible characters, ignoring whitespace, wrapping and box
+drawing. The command ends with its unique correlation marker, so earlier prompts in the scrollback
+never match. If other text sits between the CLI's prompt symbol (`>`, `›` or `❯`) and the command,
+the transport sends one `BSpace` per typed character (erasing only its own text), never presses
+Enter, and fails the send. The delivery is recorded uncertain with that reason and the run pauses.
+A command it cannot locate on screen (a collapsed paste, an unfamiliar layout) is submitted as
+before and left to the echo check. Nothing clears or edits text a person typed. The keyboard
+confirmation now warns that text left in an agent's input line makes the controller refuse its next
+command there. Typing into a participant pane is not blocked: the keyboard stays available during a
+relay as ADR-0019/0020 require, and a direct `tmux attach` cannot be blocked. ADR-0011 records the
+check.
+
+Checks on Node 24.12.0:
+
+- Unit tests for the detector cover boxed, wrapped and plain Claude/Codex-style lines, leftover
+  across a wrap, scrollback holding the same opening words, a collapsed paste and a layout without a
+  prompt symbol. A fake-runner smoke test checks Enter is never sent and the erase count is in
+  characters. The private-tmux test drives a raw-mode prompt fixture: leftover `i mean` blocks
+  submission and leaves exactly `> i mean`; after it is cleared the same command is submitted. That
+  test failed on the previous adapter ("Missing expected rejection"). Two smoke tests that pin the
+  transport's command order now expect the `capture-pane` before Enter.
+- `./scripts/check.sh` passed: 32 hook/setup, 45 smoke, 493 workflow and 90 unit tests, type
+  checking and the production build. `npm run test:terminal` passed both private-tmux cases.
+- Playwright `native.spec.ts` ran 94 desktop and iPhone cases: 68 passed, including the keyboard
+  confirmation with the new warning, and 26 failed. All 26 fail the same way: the Control region
+  holds two `After send` selects (Codex and Claude action cards), so the tests' unscoped
+  `getByLabel('After send')` violates strict mode in 13 Send & commit and readiness cases on each
+  viewport. The same case still failed with the `Console.tsx` from before `0d41656`, so this
+  predates `0d41656` and this change; it was not changed here. The full browser suite was not run.
+
+No live host, run, keyboard or session was changed.
+
+## 2026-09-28 — pre-submit input check reads the whole input area (review findings)
+
+The peer reviewer reproduced two submissions the first check allowed on a private tmux editable prompt:
+a draft with the cursor moved to its start (the command landed in front of it), and a draft ending
+in `>` (taken as the prompt symbol). The transport now reads the whole input area from the capture:
+the last row with a prompt symbol (`>`, `›`, `❯`) in column 0, and its indented continuation rows up
+to Claude Code's rule or Codex's blank row, as captured from Claude Code 2.1.283 and Codex panes on
+this host. It submits only when that area holds exactly the command, or, for a multi-line paste,
+just one paste token. Text before the command, after the cursor, or containing a prompt-like
+character blocks submission, and so does a draft of spaces. A typed command visible next to other
+text is erased character by character; a paste or an unreadable layout is left untouched. In every
+refusal nothing is submitted and the delivery is recorded uncertain: an unknown layout is never
+treated as an empty draft (fail closed). ADR-0011 records the rule.
+
+- Unit tests use the observed Claude and Codex layouts (plain, wrapped, boxed), both reproductions, a
+  draft of spaces, scrollback holding an earlier command, paste tokens alone and beside a draft, and
+  unfamiliar layouts. Fake-runner smoke tests cover submission after the screen check and the three
+  refusal outcomes: erased, not erased, and not erased for a paste.
+- The private-tmux tests now share one editable prompt fixture (cursor, Ctrl-A/Ctrl-E, Backspace,
+  bracketed paste) that also records raw bytes. The byte test's exact byte expectation is unchanged.
+  The leftover test covers a draft with the cursor at its end, at its start, and a draft ending in
+  `>`; each leaves exactly the draft, then the cleared line submits the command. With the previous
+  detector a scratch copy of that test (accepting either refusal message) failed at the
+  cursor-at-start case with "Missing expected rejection", i.e. the command was submitted. The byte
+  test also showed the fail-closed path: sent before the fixture drew its prompt, a keystroke was
+  refused, so the harness now waits for the prompt as a real CLI would show it.
+- `./scripts/check.sh` passed on Node 24.12.0: 32 hook/setup, 45 smoke, 493 workflow and 91 unit
+  tests, type checking and the production build. `npm run test:terminal` passed both private-tmux
+  cases. No UI changed, so no browser tests were run.
+
+Not verified: delivery into a live Claude Code or Codex pane. Their layouts were read from captures,
+not typed into, since both are participants on this host. A future CLI that renders the input area
+differently would be refused rather than misread.
+
+## 2026-09-28 — input-area boundaries keep blank draft rows (second review)
+
+The peer reviewer showed that a blank row ended the input area early. A command typed in front of
+a draft starting with two empty lines was submitted with that draft, and a multi-line command
+containing an empty line was refused. The area's end now depends on the layout:
+
+- Claude Code rules it off above and below.
+- The older boxed layout closes it with `╰`.
+- Codex ends its composer with the last blank row above a footer of at most three rows.
+
+Blank rows inside are draft text. An area whose end cannot be found this way is refused. A second
+defect surfaced while checking the live layouts: Claude Code 2.1.283 follows `❯` with a no-break
+space, which the previous pattern did not accept. Every Claude delivery would then have been
+refused as unreadable. The prompt row now accepts any whitespace after the symbol.
+
+- Unit tests use the captured layouts: plain, wrapped and boxed; blank rows inside a multi-line
+  command and inside a draft after the command in both layouts; both earlier reproductions; a
+  draft of spaces; paste tokens; a missing closing rule; no blank row or a block too tall for a
+  footer; and unfamiliar layouts. Smoke screens now include Codex's blank row and footer.
+- The private-tmux fixture now keeps newlines received in a bracketed paste. It draws either
+  Claude's layout (rules, `❯` and no-break space, footer) or Codex's (`›`, dim placeholder, blank
+  row, two-row footer) and writes its exact draft to a file. For each layout the test leaves four
+  drafts in place: `i mean` with the cursor at its end and at its start, `compare a >`, and two
+  empty lines then `old instructions` with the cursor at its start. Each is refused with the draft
+  byte-for-byte intact. Then `first\n\nsecond` and the correlated command are submitted as sent.
+  Against the previous detector the Codex run submitted the blank-row draft ("Missing expected
+  rejection") and the Claude run refused its first case as unreadable. The byte test still passes
+  unchanged.
+- `./scripts/check.sh` passed on Node 24.12.0: 32 hook/setup, 45 smoke, 493 workflow and 92 unit
+  tests, type checking and the production build. `npm run test:terminal` passed all three
+  private-tmux cases. No UI changed; no browser tests were run.
+
+Still not verified by typing into a live Claude Code or Codex pane. The Codex rule assumes its blank
+row and short footer stay under the composer; without them a draft could not be told from a footer.
+A stronger follow-up for a human decision: both CLIs already run the AltCLI `UserPromptSubmit` hook,
+and Claude Code's hook can block a prompt. Refusing a marked prompt that differs from its delivered
+text there would stop the agent from ever running it, without reading the screen. It needs a hook
+protocol change, confirmation that Codex honours a block, and reinstalled hooks.
+
+## 2026-09-28 — input-area boundaries only in column 0 (third review)
+
+The peer reviewer showed that border-looking draft text was misread in Claude Code's layout. An
+indented draft line `───` or `╰ copied box` was taken as the closing boundary, because indentation
+was trimmed before matching. In both layouts a literal `│` in the draft vanished, because
+comparison removed border characters everywhere. In each case the command was submitted with the
+draft. Now:
+
+- Layout cells are recognized only in column 0, where draft rows never start.
+- Claude Code's area ends at the row identical to the full rule above it.
+- Codex's composer still ends at the last blank row above its short footer.
+- The older boxed layout is no longer recognized and is refused.
+- Comparison ignores only whitespace, so any other character in the draft counts.
+- The area may hold no more blank rows than the command's own empty lines, so empty lines left
+  after the cursor also block submission.
+
+- Unit tests add, for both layouts, indented `───` and `╰` draft rows, literal `│` and `─` suffixes
+  and trailing empty lines (all mixed), plus a closing rule of a different width and the boxed layout
+  (unreadable).
+- The private-tmux loop now also leaves `\n───\nold instructions`, `\n╰ copied box\nold
+  instructions`, `│` and `\n\n` as drafts with the cursor at their start. In both layouts each is
+  refused with the draft byte-for-byte intact and nothing submitted. Against the previous detector
+  the Claude run submitted the `───` draft and the Codex run the `│` draft ("Missing expected
+  rejection").
+- `./scripts/check.sh` passed on Node 24.12.0: 32 hook/setup, 45 smoke, 493 workflow and 93 unit
+  tests, type checking and the production build. `npm run test:terminal` passed all three
+  private-tmux cases. No UI changed; no browser tests were run.
+
+The earlier limits still apply: no delivery was typed into a live Claude Code or Codex pane, and the
+Codex rule assumes its blank row and short footer. Blocking a mismatched marked prompt in the
+`UserPromptSubmit` hook remains the recommended screen-independent follow-up for a human decision.
+
+## 2026-09-28 — recognize the running AltCLI host during squash
+
+The integration writer guard rejected the backend's own `node` pane in the main checkout. Squash
+now proves the exact running backend PID and its shell/npm launch ancestry before exempting that
+chain. Other processes, including backend children and reparented work on the same terminal, still
+block it. Missing or changed process evidence refuses the operation. Pane identity, native activity,
+checkout ownership and occupied-worktree removal checks remain in force.
+
+- The real-Git/SQLite regression reproduced the original unsupported-node rejection before the fix.
+  All 11 focused shell, host and sleep-helper integration cases passed afterward. Their pane and
+  lifecycle evidence is simulated; host cases cover clear evidence, another writer, failed process
+  inspection, a writer appearing during inspection and pane respawn. The clear case verifies repeated
+  checks through commit and that a host pane still blocks removal.
+- The process-graph smoke regression passed: another Node PID, missing/cyclic ancestry, unknown
+  foreground, agent/non-launcher ancestors, descendants, siblings and reparented tty processes.
+- Two private-tmux native probes passed, launching an actual Node fixture directly and via `npm run
+  start`. Each identifies itself without counting its inspection subprocess, rejects an additional
+  live Node child and returns to clear evidence after that child exits. These are process-inspection
+  probes, not a squash against the user's repositories or the running production backend.
+- A read-only check of the existing server's process table matched its Node → npm → shell chain
+  and found no other processes in that pane at inspection time.
+- `./scripts/check.sh` passed on Node 24.12.0: 32 hook/setup, 46 smoke, 498 workflow and 93 unit
+  tests, type checking and the production build. The two native probes above ran separately.
+
+The running production server still uses the main checkout. This source change has not been
+deployed or used to integrate or remove a user worktree. No browser behavior changed.
+
+## 2026-09-28 — wait for short-lived backend inspection children during squash
+
+The reviewer found that concurrent state/discovery requests could leave a short-lived Git, tmux
+or ps child visible in the backend pane. Even a read-only child appearing after staging made the
+squash uncertain. The new real-Git regression reproduced that exact staged-but-uncommitted result
+against `4dece66` before the repair.
+
+Both host scans in each guard now wait up to 500 ms for direct backend children to finish, sampling
+every 25 ms. The process table proves direct parentage; names never grant an exemption. A clear
+scan is still required. Persistent children and any process outside those direct children refuse
+the operation. Lost evidence or changed foreground/launch ancestry fails immediately during the
+wait; pane identity, lifecycle revision and ownership checks still apply afterward. A legitimate
+inspection that outlives the bound can still block squash; this does not assume it is safe.
+
+- The first 11 focused host/integration tests passed after the repair, including a short-lived
+  child appearing after staging, a persistent child, a non-child process, lost host/process
+  evidence and native activity during the wait. These use real Git/SQLite and a real concurrent
+  child lifetime, with simulated pane metadata and PID ancestry.
+- The process-graph regression passed with direct-child classification asserted for descendants,
+  siblings, reparented tty processes and a detached child.
+- Both private-tmux direct/npm probes passed with real process-table proof that only the backend's
+  direct child is marked as eligible for waiting. The live production server was not restarted or
+  used for a squash; deployment remains outstanding.
+- `./scripts/check.sh` passed on Node 24.12.0: 32 hook/setup, 46 smoke, 505 workflow and 93 unit
+  tests, type checking and the production build. This includes the additional transient-child case
+  appearing only in the second post-staging host scan. No UI changed; no browser tests were run.

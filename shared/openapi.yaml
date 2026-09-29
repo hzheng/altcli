@@ -2016,7 +2016,7 @@ components:
         fingerprint: {type: string, pattern: '^[0-9a-f]{64}$', description: Digest of HEAD, index entries, unstaged content and untracked file contents; uncommitted work is carried unchanged.}
         dirty: {type: boolean}
         checkpoints: {type: integer, minimum: 0, description: Recorded squash batches whose boundary carries over to the new name.}
-        commands: {type: array, maxItems: 10, items: {type: string}}
+        commands: {type: array, maxItems: 10, items: {type: string}, description: 'The Git rename, then tmux rename-session for each app-launched session named after the old branch; confirmation authorizes exactly these.'}
     WorktreeRenameConfirm:
       allOf:
       - $ref: '#/components/schemas/WorktreeRenamePreview'

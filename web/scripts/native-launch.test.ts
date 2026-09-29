@@ -191,3 +191,30 @@ test('private tmux: Finish branch closes only the proven launched session by ID 
     assert.equal(cleared.status, 'done', cleared.message);
   } finally { if (childPid) try { process.kill(childPid, 'SIGKILL'); } catch { /* already gone */ } await run(['kill-server']).catch(() => {}); store.close(); await rm(directory, { recursive: true, force: true }); }
 });
+test('private tmux: a confirmed branch rename also renames the app-launched session named after it, never the user\'s own', async () => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'altcli-rename-'))), root = join(directory, 'repo'), task = join(directory, 'ui1'); await mkdir(root);
+  const git = (...args: string[]) => execFileSync('git', ['-C', root, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args], { stdio: 'ignore' });
+  git('init', '-b', 'main'); await writeFile(join(root, 'base'), 'fixture'); git('add', 'base'); git('commit', '-m', 'fixture'); git('worktree', 'add', '-b', 'feature/ui1', task);
+  const config = loadConfig({ ALTCLI_TOKEN: 'a'.repeat(64), ALTCLI_DATA_DIR: join(directory, 'data'), ALTCLI_TMUX_SOCKET: join(directory, 't.sock'), ALTCLI_ENABLE_AGENT_LAUNCH: 'true' });
+  const run = createRunner('tmux', config.tmuxSocket), store = new Store(config.dataDir), authority = new InputAuthority(store), catalog = new ProjectCatalog(store, config);
+  const launches = new LaunchService(config, store, catalog, authority, () => {}, async () => sessionNamesOf(await listPanes(run)));
+  const planner = (id: string, branch: string, next: string) => launches.plannedRenames(id, branch, next);
+  try {
+    await run(['-f', '/dev/null', 'new-session', '-d', '-s', 'mine-feature-ui1', '-c', task, '/bin/sleep', '300']);
+    const project = await catalog.add({ path: root }), tree = (await catalog.discover([], []))[0]!.worktrees.find((w) => w.path === task)!;
+    const profile = (await launches.profile({ label: 'CC', executable: process.execPath, args: ['-e', 'setTimeout(()=>{},300000)'], adapterHint: 'manual', enabled: true }))!;
+    const preview = await launches.preview({ projectId: project.id, items: [{ worktreeId: tree.id, profileId: profile.id, count: 1 }] });
+    const item = (await launches.confirm({ requestId: preview.requestId, previewDigest: preview.digest, confirm: true })).items[0]!;
+    assert.equal(item.sessionName, 'CC-feature-ui1');
+    await launches.reconcile(item.id, { requestId: randomUUID(), confirmInspected: true, note: 'Fixture program inspected on the private server.' });
+    const rename = await catalog.previewRename({ projectId: project.id, worktreeId: tree.id, newBranch: 'feature/ui2' }, planner);
+    assert.deepEqual(rename.commands, [`git -C ${task} branch -m feature/ui1 feature/ui2`, 'tmux rename-session -t CC-feature-ui1 CC-feature-ui2']);
+    const result = await catalog.rename({ ...rename, confirm: true }, async () => {}, planner,
+      async (input, renames) => { const outcome = await launches.renameSessions(input.worktreeId, renames); return ` ${outcome.renamed.map((r) => r.to).join(',')}|${outcome.failed.join(';')}`; });
+    assert.equal(result.status, 'renamed', result.message); assert.match(result.message, / CC-feature-ui2\|$/);
+    assert.deepEqual((await run(['list-sessions', '-F', '#{session_name}'])).trim().split('\n').sort(), ['CC-feature-ui2', 'mine-feature-ui1']);
+    assert.equal(launches.batches()[0]!.items[0]!.sessionName, 'CC-feature-ui2');
+    // Renamed once, the session is no longer named after any branch it could follow again.
+    assert.deepEqual(await planner(tree.id, 'feature/ui1', 'feature/ui3'), []);
+  } finally { await run(['kill-server']).catch(() => {}); store.close(); await rm(directory, { recursive: true, force: true }); }
+});

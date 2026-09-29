@@ -19,6 +19,7 @@ import { assertIdentity } from '../src/core/policy.ts';
 import type { SessionRegistration } from '../src/contracts/api.ts';
 import { codexCompletion, codexStartState } from '../../hooks/protocol.mjs';
 import type { Group, HandoffEntry, ImplementationStart } from '../src/contracts/implementation.ts';
+import type { WorktreeRenameConfirm } from '../src/contracts/projects.ts';
 import type { HookEvent, ManagedSession, StartInput } from '../src/contracts/workflow.ts';
 
 // Real Git and SQLite in disposable directories; terminal delivery and lifecycle evidence are simulated.
@@ -576,6 +577,37 @@ test('a staging run from before branch-scoped Stage relay records its completion
   assert.equal(plane.workflow.execution(input.requestId)!.status, 'finished');
   assert.equal(run(input.requestId).status, 'paused'); assert.match(run(input.requestId).reason, /predates branch-scoped Stage relay/);
   assert.equal(sent.length, 1); assert.equal(plane.workflow.owner(legacy.lockKey), input.requestId);
+});
+test('a running Stage relay no longer blocks keyboard claims: it takes a faulted hold and its finished turn schedules nothing', async () => {
+  git('switch', 'main'); const input = stageStart({ autoContinue: true }); await plane.submit(input);
+  const keyboard = await takeNativeKeyboard();
+  assert.equal(keyboard.result.writer, true);
+  assert.deepEqual(run(input.requestId).interaction, { revision: 1, active: true, fault: true, origin: 'keyboard' });
+  await complete(input.requestId, { outcome: 'accept_and_improve' });
+  assert.equal(plane.workflow.execution(input.requestId)!.status, 'finished');
+  assert.equal(run(input.requestId).status, 'paused'); assert.match(run(input.requestId).reason, /keyboard input held this Stage relay; nothing more was scheduled/);
+  assert.equal(run(input.requestId).currentCommandId, input.requestId); assert.equal(sent.length, 1);
+  assert.equal(plane.workflow.owner(run(input.requestId).lockKey), input.requestId);
+  await plane.terminals.shutdown();
+});
+test('a pre-upgrade staging run still refuses native input and names its checkout', async () => {
+  git('switch', 'main'); const input = stageStart(); await plane.submit(input);
+  const legacy = run(input.requestId); delete legacy.stage;
+  store.db.prepare('UPDATE workflow_runs SET value=? WHERE id=?').run(JSON.stringify(legacy), legacy.id);
+  await assert.rejects(takeNativeKeyboard(), new RegExp(`pre-upgrade staging run on ${root} before native input`));
+  assert.equal(run(input.requestId).interaction, undefined); assert.deepEqual(plane.authority.pending(), []);
+  await plane.terminals.shutdown();
+});
+test('after a verified branch rename, default agent names and a group named after the old branch follow; a chosen name stays', async () => {
+  const codex = store.sessions().find((s) => s.id === 'codex') as ManagedSession, claude = store.sessions().find((s) => s.id === 'claude') as ManagedSession;
+  store.saveSession({ ...codex, label: 'CX-feature-ui1' }); store.saveSession({ ...claude, label: 'My Claude' });
+  store.saveGroup({ ...group, id: 'ui1', name: 'ui1' });
+  plane.launches.renameSessions = async () => ({ renamed: [{ from: 'CX-feature-ui1', to: 'CX-feature-ui2', identity: codex.identity }, { from: 'CC-feature-ui1', to: 'CC-feature-ui2', identity: claude.identity }],
+    failed: ['CC-feature-ui1-2 (it is now named manual)'] });
+  const message: string = await plane['followBranchRename']({ worktreeId: 'w', worktree: { root }, branch: 'feature/ui1', newBranch: 'feature/ui2' } as WorktreeRenameConfirm, []);
+  assert.equal(store.sessions().find((s) => s.id === 'codex')!.label, 'CX-feature-ui2'); assert.equal(store.sessions().find((s) => s.id === 'claude')!.label, 'My Claude');
+  assert.equal(store.groups().find((g) => g.id === 'ui1')!.name, 'ui2'); assert.equal(store.groups().find((g) => g.id === group.id)!.name, 'Implementation');
+  assert.equal(message, ' Renamed tmux sessions CX-feature-ui1 → CX-feature-ui2, CC-feature-ui1 → CC-feature-ui2; agent names that matched followed. Not renamed: CC-feature-ui1-2 (it is now named manual). Nothing was retried.');
 });
 test('v4 migration preserves historical pair IDs and creates versioned groups', () => {
   store.db.prepare('DELETE FROM groups').run(); store.db.pragma('user_version = 4'); store.close();
@@ -1712,6 +1744,43 @@ test('native keyboard holds a running implementation completion once; release do
   assert.equal(released.manualSession?.reconciliationRequired, false, released.reason); assert.equal(sent.length, 1);
   await plane.reconcileCheckpoint(checkpointDecision(input.requestId)); assert.equal(sent.length, 2);
   await plane.terminals.shutdown();
+});
+async function waitFor(check: () => boolean, timeout = 3000) {
+  const deadline = Date.now() + timeout;
+  while (!check()) { assert.ok(Date.now() < deadline, 'timed out waiting for the controller'); await new Promise(resolve => setTimeout(resolve, 10)); }
+}
+test('a Claude completion under a keyboard hold captures its checkpoint once the Stop hook exits', async () => {
+  checkpointPanes(); const input = request({ agentId: 'claude' }); await plane.submitImplementation(input);
+  const keyboard = await takeNativeKeyboard();
+  adapter.trees.set('claude', [{ pid: '900', command: 'node' }]);
+  publish(input.requestId, true); await complete(input.requestId, { reporterPid: '900', completionSequence: 1 });
+  assert.equal(run(input.requestId).status, 'paused'); assert.equal(run(input.requestId).interaction?.disposition, 'automatic');
+  assert.equal(plane.interactions.checkpoint(input.requestId), undefined); // the reporting Stop hook is still running
+  adapter.trees.set('claude', []);
+  await waitFor(() => !!plane.interactions.checkpoint(input.requestId));
+  assert.equal(plane.interactions.checkpoint(input.requestId)!.kind, 'interaction'); assert.equal(sent.length, 1);
+  const released = await plane.terminals.keyboard(keyboard.opened.connectionId, { requestId: randomUUID(), action: 'releaseSettled', expectedGeneration: keyboard.result.generation, confirmReady: true });
+  assert.equal(released.manualSession?.reconciliationRequired, false, released.reason);
+  await plane.reconcileCheckpoint(checkpointDecision(input.requestId)); assert.equal(sent.length, 2);
+  await plane.terminals.shutdown();
+});
+test('a held checkpoint waits for an unknown peer to settle and is captured by its later lifecycle evidence', async () => {
+  checkpointPanes(); adapter.foreground = async s => String(100 + Number(s.identity.paneId.slice(1)));
+  plane = new ControlPlane(new Controller({ ...config(), mode: 'tmux' }, store, adapter));
+  const started = (id: string) => { const s = store.sessions().find(x => x.id === id) as ManagedSession;
+    return plane.recordEvent({ event: 'session_started', source: s.agentType as 'codex' | 'claude', sessionId: `session-${s.id}`, identity: s.identity, paneId: s.identity.paneId,
+      socketPath: s.identity.socketPath, cliPid: s.cliPid!, startedAt: new Date().toISOString() }); };
+  await started('claude'); // Codex has no activity evidence yet, as after a backend restart.
+  const input = request({ agentId: 'claude' }); await plane.submitImplementation(input);
+  plane.workflow.beginKeyboard(input.requestId);
+  adapter.trees.set('claude', [{ pid: '900', command: 'node' }]);
+  publish(input.requestId, true); await complete(input.requestId, { reporterPid: '900', completionSequence: 1 });
+  adapter.trees.set('claude', []);
+  await waitFor(() => !plane['completingHooks'].has(input.requestId));
+  assert.equal(run(input.requestId).status, 'paused'); assert.equal(run(input.requestId).interaction?.disposition, 'automatic');
+  assert.equal(plane.interactions.checkpoint(input.requestId), undefined); assert.equal(sent.length, 1);
+  await started('codex');
+  assert.equal(plane.interactions.checkpoint(input.requestId)?.kind, 'interaction'); assert.equal(sent.length, 1);
 });
 test('native keyboard preserves a waiting checkpoint rather than recapturing intervening edits', async () => {
   checkpointPanes(); const input = request({ autoContinue: false }); await plane.submitImplementation(input); publish(input.requestId, true); await complete(input.requestId);

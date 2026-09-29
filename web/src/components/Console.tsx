@@ -48,6 +48,10 @@ function statusOf(agent: SessionRegistration, run: RelayRun | undefined, state: 
     if (controller.badge === 'waiting' && waitingOnPeer && (activity.state === 'idle' || activity.state === 'ready')) {
       return { ...controller, detail: `${controller.detail} ${activity.detail}` };
     }
+    // A settled terminal does not show that its relay is paused; a working one keeps its native state, since pause does not interrupt it.
+    if (run?.status === 'paused' && run.participants.some((p) => p.id === agent.id) && (activity.state === 'idle' || activity.state === 'ready')) {
+      return { ...controller, detail: `${controller.detail} ${activity.detail}` };
+    }
     const ownership = run?.participants.some((p) => p.id === agent.id) && ['running', 'paused', 'waiting'].includes(run.status)
       ? `The controller is ${run.status === 'paused' ? 'paused but still holds' : run.status === 'waiting' ? 'waiting for you and still holds' : 'driving'} this agent's turns.${run.status === 'paused' ? ' Pause does not interrupt the worker.' : ''}` : 'Not driven by the controller.';
     return { badge: activity.state, detail: `${activity.detail} ${ownership}`, when: activity.updatedAt };
@@ -74,6 +78,7 @@ function controllerStatusOf(agent: SessionRegistration, run: RelayRun | undefine
     return { badge: 'sending', detail: `Being sent ${task}`, when: null };
   }
   if (active) {
+    if (run.status === 'paused') return { badge: 'attention', detail: `Controller paused; nothing is being sent to this agent. ${run.reason}`, when: run.updatedAt };
     const current = state.executions.find((e) => e.commandId === run.currentCommandId);
     const busy = run.participants.find((p) => p.id === current?.agentId);
     if (run.planning && !run.implementation) return { badge: 'waiting', detail: `Plan: ${busy?.label ?? 'another planner'} has the only active document grant.`, when: run.updatedAt };
@@ -641,6 +646,10 @@ export function Console() {
             {run.status === 'waiting' && run.implementation && <RunPolicy key={`${run.id}:${run.implementation.revision}`} token={token} run={run} disabled={busy || stale} onChanged={refresh} onMessage={setMessage} />}
             {/* Letting the controller continue is the alternative to taking control above. */}
             {run.status === 'paused' && state.checkpoints?.filter((cp) => cp.runId === run.id && cp.commandId === run.currentCommandId).map((cp) => <CheckpointControls key={`${cp.runId}:${cp.revision}`} token={token} checkpoint={cp} disabled={busy || stale || !state.inputEnabled} refresh={refresh} />)}
+            {run.status === 'paused' && run.interaction?.active && !run.interaction.fault && run.interaction.disposition && !state.checkpoints?.some((cp) => cp.runId === run.id && cp.commandId === run.currentCommandId) && (() => {
+              const unsettled = run.participants.filter((p) => !['idle', 'ready'].includes(state.activities?.find((a) => a.agentId === p.id)?.state ?? 'unknown')).map((p) => p.label);
+              return <p className="notice" role="status">No input checkpoint to review yet. It is saved once every agent in this checkout reports settled activity{unsettled.length ? ` (not yet: ${unsettled.join(', ')})` : ''}. Status reset is unavailable while the controller holds this checkout, so if an agent's activity stays unknown, take control above.</p>;
+            })()}
           </section>)}
           {latestRun && !owned.some((r) => r.id === latestRun.id) && <details className="panel latest-run" open={latestOpen} onToggle={(e) => setLatestOpen(e.currentTarget.open)}>
             <summary><h2>Last command the controller drove</h2><span className={`badge ${latestRun.status === 'stopped' ? 'warning' : ''}`}>{latestRun.status === 'stopped' ? 'CONTROL RETURNED TO YOU' : latestRun.status.toUpperCase()} · {latestRun.automaticTurns}/{latestRun.turnLimit} automatic turns</span></summary>

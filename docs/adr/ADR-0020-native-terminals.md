@@ -14,7 +14,14 @@ Writable input requires the one server-wide keyboard authority. Persist its
 manual barrier and affected whole-run checkpoint holds before input is possible.
 Release/disconnect/restart are not reconciliation or continuation. Never persist
 raw keystrokes or replay uncertain input. Legacy owners retain their existing
-settlement/takeover boundary.
+settlement/takeover boundary. September 28 update: branch-scoped Stage relay runs are not legacy owners, so
+they no longer block keyboard acquisition server-wide. They take a faulted hold: the current turn may finish
+but schedules nothing, and the run continues only through takeover. A pre-upgrade staging run still refuses
+native input and names its checkout. A held Implementation or Plan run's checkpoint is captured after the
+completing Claude Stop hook exits, and again on later lifecycle evidence, once every checkout agent reports
+settled activity; until then the controller card says which agents are unsettled and that takeover is the
+recovery. Members of a paused relay show the pause rather than an idle or waiting-for-partner badge; a
+working member keeps its native state.
 
 A writer's deliberate tmux session navigation is followed and labelled; it never
 changes the workflow target, and the server-wide hold already covers it. Observers

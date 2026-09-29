@@ -6,9 +6,10 @@ import type { PaneState, SessionRegistration } from "../../contracts/api.ts";
 import { AppError } from "../../core/errors.ts";
 import { assertIdentity } from "../../core/policy.ts";
 import { paneId as validPaneId, promptText, singleLine } from "../../core/validation.ts";
+import { inputAfterTyping } from "../../core/prompt-leftover.ts";
 import type { ProcessRecord } from "../../contracts/workflow.ts";
 import type { ListedPane, TerminalAdapter } from "./terminal.ts";
-import { foregroundPid, paneProcesses } from "../processes.ts";
+import { foregroundPid, hostPaneProcesses, paneProcesses } from "../processes.ts";
 /** `input`, when given, is written to tmux's stdin (only `load-buffer -` reads it). */
 export type Runner = (args: string[], input?: string) => Promise<string>;
 export function createRunner(binary = "tmux", socket?: string): Runner {
@@ -89,6 +90,18 @@ export class TmuxAdapter implements TerminalAdapter {
     // Do not submit text if the CLI exited while characters were being delivered.
     // This narrows but cannot eliminate the terminal check/use race.
     await this.preflight(session);
+    // Text someone left in the input area would be submitted with the command and change what the agent is asked. Submit only when the
+    // input area visibly holds just this command. Otherwise nothing is submitted: a typed line that shows up next to other text is
+    // erased character by character (the cursor sits right after it); a paste or an unreadable layout is left as it is, since
+    // backspacing there could delete someone else's text.
+    const found = inputAfterTyping(await this.run(["capture-pane", "-p", "-t", validPaneId(session.identity.paneId)]), text);
+    if (found !== "only") {
+      const erase = found === "mixed" && !text.includes("\n");
+      if (erase) await this.run(["send-keys", "-N", String(Array.from(text).length), "-t", validPaneId(session.identity.paneId), "BSpace"]);
+      throw new AppError(found === "mixed" ? "LEFTOVER_INPUT" : "INPUT_UNVERIFIED", `${found === "mixed" ? "The agent's input line held other text besides this command."
+        : "The agent's input line could not be confirmed to hold only this command."} Nothing was submitted${erase ? " and the typed command was erased; the other text is still there"
+        : "; the command may still be in the input line"}. Clear it in the terminal, take control, then start again.`, 409);
+    }
     await this.run(["send-keys", "-t", session.identity.paneId, "Enter"]);
   }
   async processes(session: SessionRegistration): Promise<ProcessRecord[]> {
@@ -103,4 +116,5 @@ export class TmuxAdapter implements TerminalAdapter {
     await this.run(['send-keys', '-t', validPaneId(session.identity.paneId), key]);
   }
   foreground(session: SessionRegistration): Promise<string | null> { return foregroundPid(session.identity.panePid); }
+  hostProcesses(panePid: string) { return hostPaneProcesses(panePid); }
 }

@@ -1,5 +1,6 @@
 import type { PaneState, SessionRegistration } from "../../contracts/api.ts";
 import type { ProcessRecord } from "../../contracts/workflow.ts";
+import type { HostPaneEvidence } from "../processes.ts";
 export type ListedPane = PaneState & { location: string };
 export interface TerminalAdapter {
   /** Every pane on the configured tmux server, read-only, so a human can choose one to register. */
@@ -14,6 +15,8 @@ export interface TerminalAdapter {
   press(session: SessionRegistration, key: 'Enter' | 'Escape'): Promise<void>;
   /** Live processes under or attached to the pane, read-only, as current background-work evidence. */
   processes(session: SessionRegistration): Promise<ProcessRecord[]>;
+  /** Exact backend PID and launch ancestry, with every other process retained as work; null for other panes. */
+  hostProcesses(panePid: string): Promise<HostPaneEvidence | null>;
   /** Pid of the process in the foreground of the pane right now; null when unknown. Cheap enough for every state read. */
   foreground(session: SessionRegistration): Promise<string | null>;
 }

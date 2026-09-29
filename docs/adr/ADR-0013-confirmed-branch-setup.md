@@ -152,6 +152,16 @@ clear background report. A shell pane is permitted only when its root shell is t
 process and no task processes remain under or attached to its terminal. Claude's exact bounded
 `caffeinate -i -t 300` sleep-prevention helper is excluded using transient argument evidence; children
 and other invocations remain work. Pane identity, occupancy and lifecycle changes during inspection refuse it.
+AltCLI's own server pane is also permitted when fresh PID ancestry proves it contains the running backend,
+with only shell/npm launch ancestors and a foreground process on that chain. A process named `node` alone
+is insufficient. Every other descendant or terminal-attached process, including backend children, remains
+work; only the exact completed `ps` inspection is omitted. When all remaining processes are direct children
+of the verified backend, each guard scan waits up to 500 ms for a clear scan, rechecking every 25 ms. This
+lets concurrent state/discovery inspection subprocesses exit; no process is exempted by its command name.
+Persistent children, descendants beyond those direct children and other terminal-attached processes still
+refuse squash. The host chain and writer scan are checked twice; unreadable evidence, a changed foreground
+or a changed launch chain refuses squash even during the wait. This exception does not permit worktree removal while
+the server or any other pane is inside it.
 These checks repeat before staging and before committing. A failure after staging keeps the operation
 uncertain. Exact parent/tree/cleanliness verification establishes completion; later activity cannot turn
 that verified squash back into an uncertain operation. Read-only inspection checks settled writers before
@@ -491,7 +501,14 @@ the published-copy refusal when history is rewritten, verification and uncertain
   block Rename; its explicit confirmation accepts the warning about concurrent Git work and the old name.
 - **Narrowed refusals.** A rename changes no file, so sparse checkout, submodules, installed hook or skill
   links and the host's own checkout are not refused. Hidden index flags and stopped Git operations are.
-- **Unchanged.** The directory, tmux session names and launch records.
+- **Names that follow (September 28, 2026 user revision).** Open tmux sessions AltCLI launched in the worktree
+  whose name is still the one it gives the old branch (profile and branch, with any uniqueness number) are
+  listed in the preview's commands as `tmux rename-session` and renamed after the verified Git rename, each
+  only while it is still that launch's verified session under that name; its launch record follows. A saved
+  agent name equal to its session's old name follows it; a chosen name stays. A saved group named after the
+  old branch's last segment takes the new one, and a linked worktree's default group name comes from its
+  branch. Session renames are reported, never retried, and never make the Git rename uncertain.
+- **Unchanged.** The directory, and tmux sessions the user created or renamed by hand.
 - **Squash batches.** Their boundaries follow verified rename records instead of the branch name alone.
 
 **Move directory.**

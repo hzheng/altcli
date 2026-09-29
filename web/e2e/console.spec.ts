@@ -421,7 +421,7 @@ test('native inactive agents wait for their relay turn and return to idle after 
   await page.getByRole('button', { name: 'Recheck', exact: true }).click();
   await expect(badge('Codex')).toHaveText('idle'); await expect(badge('Claude Code')).toHaveText('idle');
 });
-test('a finished response displays idle while background-work safety keeps the controller paused', async ({ page, request }) => {
+test('a finished response under a controller paused for background-work safety shows the pause with its idle activity', async ({ page, request }) => {
   const pair = await post(request, 'pairs', { name: 'Background safety', sessions: ['codex', 'claude'] });
   let activity: 'working' | 'idle' = 'working';
   // Native CLI evidence is simulated here; server integration tests exercise the lifecycle tracker and process gates.
@@ -444,7 +444,7 @@ test('a finished response displays idle while background-work safety keeps the c
     paneId: session.identity.paneId, socketPath: session.identity.socketPath, identity: session.identity,
     sessionId: 'background-service-session', sourceTurnId: `turn-${id}`, settled: true, backgroundState: 'active' });
   activity = 'idle'; await page.getByRole('button', { name: 'Recheck', exact: true }).click();
-  await expect(row.locator('.state')).toHaveText('idle'); await expect(row).toContainText('paused but still holds');
+  await expect(row.locator('.state')).toHaveText('attention'); await expect(row).toContainText('Controller paused'); await expect(row).toContainText('Native turn is idle.');
   await openController(page); await expect(page.getByRole('region', { name: 'Who controls the agents' })).toContainText(/background work/i);
   const run = (await state(request)).runs.find((r) => r.id === id)!;
   expect(run.status).toBe('paused'); expect(run.currentCommandId).toBe(id);
@@ -454,6 +454,31 @@ test('a finished response displays idle while background-work safety keeps the c
   await expect(access.getByRole('button', { name: 'Mark Claude Code Ready', exact: true })).toHaveCount(0);
   await expect(access.getByRole('list', { name: 'What to notice' })).toContainText('may still be working');
   await expect(access.getByRole('button', { name: 'Take control…', exact: true })).toBeEnabled();
+});
+test('every member of a keyboard-held relay shows the pause, and a missing checkpoint points to takeover', async ({ page, request }) => {
+  const pair = await post(request, 'pairs', { name: 'Held relay', sessions: ['codex', 'claude'] });
+  const id = crypto.randomUUID();
+  await post(request, 'commands', { requestId: id, agentId: 'codex', kind: 'instruction', text: 'Held work', handoff: true, confirmReady: true, pairId: pair.id });
+  // The keyboard hold and native activity are simulated; server tests exercise the hold, the Stop-hook wait and checkpoint capture.
+  await page.route('**/api/v1/state', async (route) => {
+    const response = await route.fetch(); const data: WorkflowState = await response.json();
+    data.runs = data.runs.map((r) => r.id === id ? { ...r, status: 'paused', reason: 'Original turn validated. Review the terminal input before continuing.',
+      interaction: { revision: 1, active: true, fault: false, origin: 'keyboard', disposition: 'automatic' } } : r);
+    data.executions = data.executions.map((e) => e.commandId === id ? { ...e, status: 'finished' } : e);
+    data.activities = [{ agentId: 'codex', state: 'idle', updatedAt: new Date().toISOString(), detail: 'Native turn is idle.' },
+      { agentId: 'claude', state: 'unknown', updatedAt: null, detail: 'No current lifecycle evidence.' }];
+    data.checkpoints = [];
+    await route.fulfill({ json: data });
+  });
+  await unlock(page, TOKEN, false);
+  const codex = pane(page, 'Codex').locator('.pane-status'), claude = pane(page, 'Claude Code').locator('.pane-status');
+  await expect(codex.locator('.state')).toHaveText('attention'); await expect(codex).toContainText('Controller paused'); await expect(codex).toContainText('Native turn is idle.');
+  await expect(claude.locator('.state')).toHaveText('attention'); await expect(claude).toContainText('nothing is being sent to this agent');
+  await expect(claude).not.toContainText('Waiting for Codex to finish');
+  await openController(page);
+  const card = page.getByRole('region', { name: 'Who controls the agents' });
+  await expect(card).toContainText('No input checkpoint to review yet'); await expect(card).toContainText('(not yet: Claude Code)');
+  await expect(page.getByRole('button', { name: 'Take control…', exact: true })).toBeEnabled();
 });
 test('takeover does not claim a still-running worker is idle and late completion cannot revive ownership', async ({ page, request }) => {
   let activity: 'ready' | 'working' | 'idle' | 'unknown' = 'unknown';

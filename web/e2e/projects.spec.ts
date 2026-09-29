@@ -461,7 +461,8 @@ test('Rename previews the unchanged directory and uncommitted work, and editing 
   await page.route('**/api/v1/projects/worktrees/rename/preview', (route) => {
     const body = route.request().postDataJSON() as { newBranch: string }; previews.push(body);
     return route.fulfill({ json: { projectId: project.id, worktreeId: target.id, newBranch: body.newBranch, requestId: crypto.randomUUID(), worktree: target.identity, branch: 'feature/finished',
-      head: target.head, fingerprint: '1'.repeat(64), dirty: true, checkpoints: 1, commands: [`git -C /home/fixture/tasks/finished branch -m feature/finished ${body.newBranch}`] } });
+      head: target.head, fingerprint: '1'.repeat(64), dirty: true, checkpoints: 1, commands: [`git -C /home/fixture/tasks/finished branch -m feature/finished ${body.newBranch}`,
+        ...(body.newBranch === 'feature/next' ? ['tmux rename-session -t CC-feature-finished CC-feature-next'] : [])] } });
   });
   await page.route('**/api/v1/projects/worktrees/rename', (route) => {
     posted.push(route.request().postDataJSON());
@@ -477,8 +478,11 @@ test('Rename previews the unchanged directory and uncommitted work, and editing 
   await expect(region).toContainText('including your uncommitted changes'); await expect(region).toContainText('1 recorded squash batch carries over');
   await expect(region).toContainText('Make sure agents are not running Git commands in this branch directory.');
   await expect(region).toContainText('Running agents are not stopped and may still refer to the old branch name.');
+  await expect(region).toContainText('No tmux session AltCLI launched here is named after the old branch, so session names stay the same.');
   await field.fill('feature/next'); await expect(region).toHaveCount(0); expect(posted).toEqual([]); // editing the name revokes the preview
   await page.getByRole('button', { name: 'Preview rename', exact: true }).click();
+  await expect(region).toContainText('The tmux sessions AltCLI launched here under the old branch name are renamed as listed below');
+  await expect(region).toContainText('tmux rename-session -t CC-feature-finished CC-feature-next');
   await page.getByRole('button', { name: 'Confirm rename', exact: true }).click();
   await expect(notice(page, 'Renamed feature/finished to feature/next.')).toBeVisible();
   expect(previews.map((p) => p.newBranch)).toEqual(['feature/draft', 'feature/next']);

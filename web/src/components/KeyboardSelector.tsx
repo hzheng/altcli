@@ -104,7 +104,7 @@ export function useKeyboardControls({ options, handle, owner, affected, disabled
           : ask.owner.kind === 'this-browser' ? `Move the keyboard from ${ask.owner.label} to ${labelOf(key)}. Nothing typed in ${ask.owner.label} moves with it, and its manual input still needs reconciliation.`
           : ask.owner.kind === 'unresolved' ? `Recover the keyboard for ${labelOf(key)}. Earlier manual input is unresolved and still needs reconciliation.`
           : `Transfer the keyboard from ${ask.owner.label} to ${labelOf(key)}. Check with its user first. Typing there stops, and its manual input still needs reconciliation.`}
-          {' '}Dispatch, setup and launch are held until manual input is reconciled. Terminal input can run commands and tmux shortcuts on this host.</p>
+          {' '}Dispatch, setup and launch are held until manual input is reconciled. Terminal input can run commands and tmux shortcuts on this host. Submit or clear anything you type in an agent's input line: text left there makes the controller refuse its next command to that agent.</p>
         {affected.length > 0 && <ul aria-label="Affected runs">{affected.map((run) => <li key={run}>{run}</li>)}</ul>}
         <button type="button" disabled={off} onClick={() => void acquire(ask)}>Confirm keyboard</button><button type="button" onClick={() => setAsking(null)}>Cancel</button>
       </div>}

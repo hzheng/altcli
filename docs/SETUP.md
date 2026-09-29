@@ -215,7 +215,9 @@ Both menus open on hover or click, work with keyboard and touch, and stay visibl
 Rename changes the task branch name in place, uncommitted work included. All of them refuse published branches
 when history would change, since the app never pushes. Controller ownership still prevents overlapping
 operations. Rename also proceeds on warned confirmation without agent-evidence checks; avoid concurrent
-Git commands and tell agents the new branch name afterwards.
+Git commands and tell agents the new branch name afterwards. The directory stays; tmux sessions AltCLI
+launched there under the old branch name are renamed as the preview lists, and agent and group names
+that still show the old name follow.
 
 Dirty or unavailable workspaces remain readable, but Plan and Implementation
 starts are disabled until the index and nonignored worktree are clean. The console

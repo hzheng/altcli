@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { beforeEach, afterEach, test } from 'node:test';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import { once } from 'node:events';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync, existsSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -14,7 +15,7 @@ import { MockAdapter, mockPanes, mockSessions } from '../src/server/adapters/moc
 import { Controller } from '../src/server/controller.ts';
 import { ControlPlane } from '../src/server/control-plane.ts';
 import { assertClean, branchState } from '../src/server/commit-handoff.ts';
-import { processesForPane } from '../src/server/processes.ts';
+import { hostProcessesForPane, processesForPane } from '../src/server/processes.ts';
 import type { ListedPane } from '../src/server/adapters/terminal.ts';
 import { parseDiscard, parseIntegrate, parseWorktreeCreate, parseWorktreePreview } from '../src/core/project-validation.ts';
 import { jsonBody } from '../src/server/http.ts';
@@ -439,6 +440,77 @@ test(`squash checks ${mode} shell process evidence`, async () => {
   if (mode !== 'idle') { await assert.rejects(plane.previewIntegration(target), { code: 'INTEGRATION_WRITERS' }); return; }
   const result = await plane.integrateWorktree(confirmSquash(await plane.previewIntegration(target)));
   assert.equal(result.status, 'integrated', result.message);
+});
+for (const mode of ['clear', 'writer', 'unavailable', 'changed', 'respawned'] as const)
+test(`squash checks ${mode} evidence for the exact AltCLI host pane`, async () => {
+  const { target, request } = await taskFixture(); const { plane, adapter, panes } = await squashPlane();
+  const host = { ...mockPanes()[2]!, cwd: root, command: 'node', identity: { ...mockPanes()[2]!.identity, panePid: '500' } };
+  panes.push(host);
+  adapter.foreground = async session => session.identity.paneId === host.identity.paneId ? '600' : '100';
+  const evidence = { foregroundPid: '600', lineage: [{ pid: '700', command: 'node' }, { pid: '600', command: 'npm run start' }, { pid: '500', command: '-zsh' }], writers: [] as { pid: string; command: string }[], backendChildren: [] as string[] };
+  let scans = 0;
+  adapter.hostProcesses = async pid => {
+    if (pid !== '500') return null;
+    scans++;
+    if (mode === 'unavailable') throw new Error('ps failed');
+    if (mode === 'respawned') host.identity = { ...host.identity, panePid: '501' };
+    return { ...evidence, writers: mode === 'writer' || (mode === 'changed' && scans > 1) ? [{ pid: '800', command: 'node' }] : [] };
+  };
+  if (mode !== 'clear') { await assert.rejects(plane.previewIntegration(target), { code: 'INTEGRATION_WRITERS' }); return; }
+  const preview = await plane.previewIntegration(target);
+  assert.ok(scans >= 2, 'host evidence is checked again before accepting the pane');
+  const result = await plane.integrateWorktree(confirmSquash(preview));
+  assert.equal(result.status, 'integrated', result.message);
+  assert.ok(scans >= 8, 'the host is checked at preview, confirmation, staging and commit');
+  host.cwd = request.path;
+  await assert.rejects(plane.previewRemoval(target), { code: 'WORKTREE_IN_USE' });
+});
+for (const mode of ['transient', 'transient recheck', 'persistent', 'non-child', 'changed host', 'unavailable', 'native activity'] as const)
+test(`squash checks a ${mode} backend process after staging`, async () => {
+  const { target } = await taskFixture(); const { plane, adapter, panes, started } = await squashPlane();
+  const host = { ...mockPanes()[2]!, cwd: root, command: 'node', identity: { ...mockPanes()[2]!.identity, panePid: '500' } };
+  panes.push(host);
+  adapter.foreground = async session => session.identity.paneId === host.identity.paneId ? '600' : '100';
+  const rows = [
+    { pid: '500', ppid: '1', tty: 'fixture', command: '-zsh' },
+    { pid: '600', ppid: '500', tty: 'fixture', command: 'npm run start' },
+    { pid: '700', ppid: '600', tty: 'fixture', command: 'node' },
+  ];
+  let child: ChildProcess | undefined; let observed = false; let rechecked = false; let stagedReads = 0;
+  adapter.hostProcesses = async pid => {
+    if (pid !== '500') return null;
+    if (!child && git(root, 'diff', '--cached', '--name-only') && ++stagedReads >= (mode === 'transient recheck' ? 2 : 1)) {
+      // Real concurrent child lifetime; pane/PID ancestry is simulated like the other squash fixtures.
+      child = spawn(process.execPath, ['-e', mode === 'persistent' ? 'setInterval(() => {}, 1000)' : 'setTimeout(() => {}, 150)'], { stdio: 'ignore' });
+      await once(child, 'spawn');
+    }
+    if (observed) {
+      rechecked = true;
+      if (mode === 'unavailable') throw new Error('ps failed during wait');
+      if (mode === 'changed host') return null;
+      if (mode === 'native activity') await started();
+    }
+    const live = child && child.exitCode === null;
+    if (live) observed = true;
+    return hostProcessesForPane([...rows, ...(live ? [{ pid: String(child!.pid), ppid: mode === 'non-child' ? '500' : '700', tty: 'fixture', command: 'node' }] : [])], '500', '700', '600');
+  };
+  try {
+    const preview = await plane.previewIntegration(target);
+    const result = await plane.integrateWorktree(confirmSquash(preview));
+    assert.ok(observed, 'a live concurrent process was first observed after staging');
+    const transient = mode === 'transient' || mode === 'transient recheck';
+    assert.equal(result.status, transient ? 'integrated' : 'uncertain', result.message);
+    if (transient) {
+      assert.ok(rechecked, 'waited for the concurrent child to exit');
+      assert.equal(git(root, 'diff', '--cached', '--name-only'), '');
+      assert.equal(plane.projects.projectHeld(target.projectId), false);
+    } else {
+      assert.equal(git(root, 'rev-parse', 'HEAD'), preview.targetHead);
+      assert.ok(git(root, 'diff', '--cached', '--name-only'));
+      assert.equal(plane.projects.projectHeld(target.projectId), true);
+      assert.equal(rechecked, mode !== 'non-child', 'only backend children get a bounded recheck');
+    }
+  } finally { if (child && child.exitCode === null) { child.kill(); await once(child, 'exit'); } }
 });
 test('squash accepts Claude sleep prevention but still refuses a task under that helper', async () => {
   const { target } = await taskFixture(); const { plane, adapter, panes, settle } = await squashPlane();
