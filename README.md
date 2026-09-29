@@ -74,7 +74,12 @@ The alignment actions update its branch after a squash, rebase it onto
 main, or reset it to main, each with a preview and one confirmation. Update and Rebase warn about
 active editing and manual conflict resolution; Reset warns about losing uncommitted tracked work.
 Agent activity evidence does not block alignment or a confirmed branch rename. **Branch** groups Rename branch, Finish branch,
-Check removal and Discard. Both menus stay visible while forms open below them and support hover, click and keyboard. Moving the directory is accepted design, not yet implemented.
+Check removal and Discard. Each worktree has **Agents** and **Branch** tabs, with **Open console**
+at the right of the tab row. Agents contains names, membership, **Launch agents…** and launch status,
+including empty worktrees. Branch shows the Main and Branch groups with every action button in view; a
+preview or form opens below its group's buttons. Each worktree remembers
+its selected tab; switching tabs keeps drafts and pending results but revokes previews.
+Moving the directory is accepted design, not yet implemented.
 
 Use [ROADMAP](ROADMAP.md#migration-and-implementation-sequence) for rollout, [OPEN-DECISIONS](docs/OPEN-DECISIONS.md) for unresolved choices, and [DESIGN-MIGRATION](docs/DESIGN-MIGRATION.md) to locate the content formerly held in the standalone collaboration draft. The draft is no longer a required document.
 

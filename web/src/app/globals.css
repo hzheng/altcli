@@ -140,28 +140,30 @@ details.advanced[open] summary { margin-bottom:12px; }
 .workspace-cards.worktree-cards { grid-template-columns:minmax(0,1fr); }
 .worktree-cards summary { cursor:pointer; list-style:none; }
 .worktree-cards summary::-webkit-details-marker { display:none; }
-/* Every worktree's trigger buttons share one wrapping row; reasons, opened forms and launch cards follow it at full width. */
-.worktree-controls { display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:0 16px 14px; }
-.worktree-controls .worktree-actions, .worktree-controls .worktree-actions > div:not(.worktree-menu), .worktree-controls > .launch-agents { display:contents; }
-.worktree-controls .worktree-actions > div:not(.worktree-menu) > :not(button), .worktree-controls > .launch-agents > :not(button) { order:1; flex-basis:100%; min-width:0; }
-.worktree-controls .worktree-actions > div > .fine { margin:4px 0 0; }
-/* Launch status belongs beside Agents & group, above the menus and their action forms. */
-.worktree-controls > .launch-agents > .worktree-agent-status { order:-1; margin-bottom:6px; }
+/* Per-worktree tabs share a row with Open console, which applies to either panel. */
+.worktree-cards .workspace-title strong { min-width:0; overflow-wrap:anywhere; }
+.worktree-tab-bar { display:flex; align-items:center; gap:12px; margin:0 16px; padding-bottom:10px; border-bottom:1px solid var(--line); }
+.worktree-tab-bar [role="tablist"] { display:flex; gap:4px; }
+.worktree-tab-bar button { padding:7px 10px; font-size:12px; white-space:nowrap; }
+.worktree-tab-bar > button { margin-left:auto; }
+.worktree-tab-bar [role="tab"] { background:transparent; border-color:transparent; }
+.worktree-tab-bar [role="tab"][aria-selected="true"] { background:#293b33; border-color:#537144; color:var(--accent); }
+.worktree-tab-panel { padding:14px 16px; min-width:0; }
+.worktree-tab-panel[hidden] { display:none; }
+/* The Branch tab: labelled groups; each group's buttons share one wrapping row, and reasons and opened forms follow it at full width. */
+.worktree-actions { display:grid; gap:12px; }
+.worktree-actions > .fine { margin:0; }
+.branch-group { min-width:0; padding:12px; border:1px solid var(--line); border-radius:8px; }
+.branch-group > h3 { margin:0 0 2px; font-size:12px; font-weight:650; letter-spacing:.6px; text-transform:uppercase; color:var(--muted); }
+.branch-group > .fine { margin:0 0 10px; }
+.branch-group-actions { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+.branch-group-actions > div { display:contents; }
+.branch-group-actions > div > :not(button) { order:1; flex-basis:100%; min-width:0; }
+.branch-group-actions > div > .fine { margin:4px 0 0; }
+/* Launch controls, forms and status belong inside the Agents tab. */
+.workspace-detail .launch-agents { display:flex; flex-direction:column; align-items:flex-start; gap:12px; padding:0; margin-bottom:14px; }
+.workspace-detail .launch-agents > :not(button) { width:100%; min-width:0; }
 .worktree-agent-status > h3 { margin:0 0 8px; font-size:12px; color:var(--muted); }
-.worktree-menu { position:relative; }
-.worktree-menu-list { position:absolute; left:0; top:100%; z-index:40; display:grid; width:190px; padding:4px;
-  background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:0 8px 20px rgba(0,0,0,.45); }
-.worktree-menu-branch .worktree-menu-list { left:auto; right:0; }
-.worktree-menu-list[hidden] { display:none; }
-.worktree-menu-item { display:contents; }
-.worktree-menu-list button { width:100%; border:0; border-radius:5px; background:transparent; text-align:left; padding:10px; font-weight:500; }
-.worktree-menu-list button:hover:not(:disabled), .worktree-menu-list button:focus-visible { background:#293b33; }
-/* Each worktree card's own Agents & group editor, between its summary and its action row. */
-.worktree-cards .workspace-detail { margin:0 16px 12px; padding-top:10px; border-top:1px solid var(--line); }
-.worktree-cards .workspace-detail > summary { font-size:12px; color:var(--muted); overflow-wrap:anywhere; }
-.worktree-cards .workspace-detail > summary::before { content:"▸ "; color:var(--accent); }
-.worktree-cards .workspace-detail[open] > summary::before { content:"▾ "; }
-.worktree-cards .workspace-detail > section { margin-top:12px; }
 .create-worktree { margin-top:20px; }
 .worktrees-heading { flex-wrap:wrap; }
 .worktrees-heading > div:first-child { margin-right:auto; }
@@ -196,7 +198,7 @@ button.danger { border-color:#64453e; color:#f1bbb0; }
 .group-actions { display:flex; gap:6px; }
 .group-actions button { font-size:11px; padding:6px 10px; }
 .group-form { border-top:1px dashed var(--line); padding-top:14px; }
-.workspace-detail section > .muted { font-size:12px; margin-bottom:12px; overflow-wrap:anywhere; }
+.workspace-detail > .muted { font-size:12px; margin-bottom:12px; overflow-wrap:anywhere; }
 details.skipped { margin-top:14px; font-size:12px; color:var(--muted); }
 details.skipped summary { cursor:pointer; list-style:none; }
 details.skipped summary::before { content:"▸ "; color:var(--accent); }

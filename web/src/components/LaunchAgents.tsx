@@ -17,7 +17,7 @@ export function LaunchAgents({token,projectId,tree,sessions,enabled,inputEnabled
     s.identity.paneId===item.identity.paneId&&s.identity.panePid===item.identity.panePid)?.label??item.sessionName;
   const refresh=async()=>{setBatches(await api<LaunchBatch[]>(token,'launches'));};
   useEffect(()=>{if(requested){setOpen(true);void api<LaunchProfile[]>(token,'launch-profiles').then(setProfiles).catch(e=>setError(e.message));}},[requested,token]);
-  // The outer wrapper has display:contents; scroll the rendered form once per explicit request.
+  // The explicit launch shortcut selects Agents before scrolling to its form.
   useEffect(()=>{if(open&&requested&&requested!==scrolledRequest.current){form.current?.scrollIntoView({block:'start'});scrolledRequest.current=requested;}},[open,requested]);
   useEffect(()=>{setPreview(null);},[viewEpoch,tree.head,tree.branch,enabled,held]);
   useEffect(()=>{void refresh().catch(e=>setError(e.message));},[token]);

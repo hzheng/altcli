@@ -254,9 +254,10 @@ test('workspace cards automatically group two eligible agents; selection is read
   const cards = page.getByRole('list', { name: 'Available worktrees' }).getByRole('listitem');
   await expect(cards).toHaveCount(1);
   const other = cards.filter({ hasText: '/demo/other' }); const project = cards.filter({ hasText: '/demo/project' });
-  await expect(project).toContainText('2 AGENTS'); await expect(project).toContainText('Branch: main'); await expect(project).toContainText('Codex, Claude Code');
+  await expect(project).toContainText('2 AGENTS'); await expect(project).toContainText('Main checkout · main');
+  await expect(project.locator(':scope > details > summary .muted')).toHaveCount(0);
   await page.getByRole('button', { name: 'Project other', exact: true }).click();
-  await expect(other).toContainText('1 AGENTS'); await expect(other).toContainText('zsh %2, demo');
+  await expect(other).toContainText('1 AGENTS'); await expect(other.locator(':scope > details > summary .muted')).toHaveCount(0);
   await editWorkspace(page, 'other');
   await expect(workspace(page, 'other')).toContainText('"zsh" is a shell or generic interpreter');
   await expect(workspace(page, 'other')).toContainText('Solo · 1 agent');
@@ -741,7 +742,7 @@ test('with no saved registrations a workspace opens directly into a usable read-
   await openTab(page, 'Projects');
   await expect(page.getByRole('list', { name: 'Available projects' }).getByRole('listitem')).toHaveCount(2);
   await page.getByRole('button', { name: 'Project project', exact: true }).click();
-  await expect(page.locator('summary').filter({ hasText: '/demo/project' })).toContainText('Branch: main');
+  await expect(page.locator('summary').filter({ hasText: '/demo/project' })).toContainText('Main checkout · main');
   await expandWorktree(page, 'project'); await page.getByRole('button', { name: 'Open project', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Agent console', exact: true })).toBeVisible();
   await expect(page.getByLabel('demo output').first()).toBeVisible();

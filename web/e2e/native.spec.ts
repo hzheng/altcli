@@ -1,6 +1,6 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import type { WorkflowState } from '../src/contracts/workflow';
-import { backToControl, expandAgents, expandWorktree, openAccess, openCard, pane, readiness, showSurface } from './ui';
+import { backToControl, expandAgents, openAccess, openCard, pane, readiness, showSurface } from './ui';
 const headers={Authorization:`Bearer ${'a'.repeat(64)}`};
 async function state(request:APIRequestContext):Promise<WorkflowState>{return (await request.get('/api/v1/state',{headers})).json();}
 async function post(request:APIRequestContext,path:string,data:unknown){const r=await request.post(`/api/v1/${path}`,{headers,data});expect(r.ok(),await r.text()).toBe(true);return r.json();}
@@ -344,7 +344,7 @@ test('repository entry, literal profile editor, preview and explicit duplicate-p
   await expect(profiles.getByLabel('Argument 1',{exact:true})).toHaveValue('--no-daemon');
   await sections.getByRole('button',{name:'Projects',exact:true}).click();await page.getByLabel('Main/default starting checkout').fill(`/demo/native-${info.project.name}`);await page.getByRole('button',{name:'Add project',exact:true}).click();
   await page.getByRole('button',{name:`Project native-${info.project.name}`,exact:true}).click();
-  const trees=page.getByRole('region',{name:`Project worktrees native-${info.project.name}`});await expandWorktree(page,`native-${info.project.name}`);await trees.getByRole('button',{name:'Launch agents…'}).click();
+  const trees=page.getByRole('region',{name:`Project worktrees native-${info.project.name}`});await expandAgents(page,`native-${info.project.name}`);await trees.getByRole('button',{name:'Launch agents…'}).click();
   const add=trees.getByRole('button',{name:'Add agent',exact:true});
   await add.click();await expect(trees.getByRole('combobox')).toHaveCount(1);await expect(trees.getByRole('spinbutton')).toHaveCount(0);
   const saved=await (await request.get('/api/v1/launch-profiles',{headers})).json();const profile=saved.find((p:{label:string})=>p.label===label);
@@ -678,7 +678,7 @@ test('a Codex profile without --no-daemon is flagged in the row, the editor and 
     // The launch preview warns before any session starts; nothing is launched here.
     await sections.getByRole('button',{name:'Projects',exact:true}).click();await page.getByLabel('Main/default starting checkout').fill(`/demo/nodaemon-${info.project.name}`);await page.getByRole('button',{name:'Add project',exact:true}).click();
     await page.getByRole('button',{name:`Project nodaemon-${info.project.name}`,exact:true}).click();
-    const trees=page.getByRole('region',{name:`Project worktrees nodaemon-${info.project.name}`});await expandWorktree(page,`nodaemon-${info.project.name}`);await trees.getByRole('button',{name:'Launch agents…'}).click();
+    const trees=page.getByRole('region',{name:`Project worktrees nodaemon-${info.project.name}`});await expandAgents(page,`nodaemon-${info.project.name}`);await trees.getByRole('button',{name:'Launch agents…'}).click();
     await trees.getByRole('button',{name:'Add agent',exact:true}).click();await trees.getByLabel('Agent 1 profile').selectOption(created.id);await trees.getByRole('button',{name:'Preview launch'}).click();
     await expect(trees.getByRole('status').filter({hasText:`Profile ${label} runs Codex without --no-daemon`})).toBeVisible();
     await sections.getByRole('button',{name:'Settings',exact:true}).click();
@@ -703,7 +703,7 @@ test('a Codex-hinted shell profile keeps its arguments and offers manual verific
     const sections=page.getByRole('navigation',{name:'Sections'});
     await sections.getByRole('button',{name:'Projects',exact:true}).click();await page.getByLabel('Main/default starting checkout').fill(`/demo/codex-shell-${info.project.name}`);await page.getByRole('button',{name:'Add project',exact:true}).click();
     await page.getByRole('button',{name:`Project codex-shell-${info.project.name}`,exact:true}).click();
-    const trees=page.getByRole('region',{name:`Project worktrees codex-shell-${info.project.name}`});await expandWorktree(page,`codex-shell-${info.project.name}`);await trees.getByRole('button',{name:'Launch agents…'}).click();
+    const trees=page.getByRole('region',{name:`Project worktrees codex-shell-${info.project.name}`});await expandAgents(page,`codex-shell-${info.project.name}`);await trees.getByRole('button',{name:'Launch agents…'}).click();
     await trees.getByRole('button',{name:'Add agent',exact:true}).click();await trees.getByLabel('Agent 1 profile').selectOption(created.id);await trees.getByRole('button',{name:'Preview launch'}).click();
     await expect(trees.getByRole('status').filter({hasText:`Profile ${label} uses a shell or wrapper`})).toBeVisible();
     await expect(trees.getByText('runs Codex without --no-daemon',{exact:false})).toHaveCount(0);
@@ -743,7 +743,7 @@ test('launch status refresh shows checking, unchanged results, changes and failu
     await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
     await page.getByRole('navigation',{name:'Sections'}).getByRole('button',{name:'Projects',exact:true}).click();
     await page.getByRole('button',{name:`Project ${name}`,exact:true}).click();
-    await expandWorktree(page,name);
+    await expandAgents(page,name);
     const card=page.getByRole('group',{name:`Launch ${item.sessionName}`,exact:true});
     const sibling=page.getByRole('group',{name:`Launch ${other.sessionName}`,exact:true});
     const check=card.getByRole('button',{name:'Refresh launch status',exact:true});
@@ -751,13 +751,13 @@ test('launch status refresh shows checking, unchanged results, changes and failu
     const statuses=page.getByRole('region',{name:`Agent status in ${tree.path}`,exact:true});
     const statusBox=(await statuses.boundingBox())!;
     const controls=page.getByRole('button',{name:`Open ${name}`,exact:true});
-    expect(statusBox.y+statusBox.height).toBeLessThanOrEqual((await controls.boundingBox())!.y);
-    const agents=page.locator('.workspace-detail > summary').filter({hasText:'Agents & group'}).filter({visible:true});
+    const controlsBox=(await controls.boundingBox())!;expect(controlsBox.y+controlsBox.height).toBeLessThanOrEqual(statusBox.y);
+    const agents=page.getByRole('tab',{name:'Agents',exact:true}).filter({visible:true});
     const agentsBox=(await agents.boundingBox())!;expect(agentsBox.y+agentsBox.height).toBeLessThanOrEqual(statusBox.y);
     const checkBox=(await check.boundingBox())!,cleanupBox=(await card.getByRole('button',{name:'Clean up…',exact:true}).boundingBox())!;
     expect(Math.abs(checkBox.y+checkBox.height/2-cleanupBox.y-cleanupBox.height/2)).toBeLessThanOrEqual(1);
     expect(cleanupBox.x).toBeGreaterThanOrEqual(checkBox.x+checkBox.width);
-    await check.click();await expect(card.getByRole('status')).toHaveText('Checking launch status…');
+    await card.scrollIntoViewIfNeeded();await check.click();await expect(card.getByRole('status')).toHaveText('Checking launch status…');
     await expect(card.getByRole('button',{name:'Checking…',exact:true})).toBeDisabled();await expect(sibling.getByRole('status')).toHaveCount(0);
     release();await expect(card.getByRole('status')).toContainText('running (unchanged)');
     await expect(card.getByRole('status')).toContainText('Checked at');await expect(card.getByRole('status')).toContainText(item.message);
@@ -827,7 +827,7 @@ for(const scenario of ['dead','missing','live','lost'] as const)test(`launch cle
   await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
   await page.getByRole('navigation',{name:'Sections'}).getByRole('button',{name:'Projects',exact:true}).click();
   await page.getByRole('button',{name:`Project ${name}`,exact:true}).click();
-  await expandWorktree(page, name); await page.getByRole('button',{name:`Open ${name}`,exact:true}).click();
+  await expandAgents(page, name); await page.getByRole('button',{name:`Open ${name}`,exact:true}).click();
   const removedPane=page.locator(`article[aria-label="${removed.label} pane"]`),keptPane=page.locator(`article[aria-label="${kept.label} pane"]`);
   await expect(removedPane).toHaveCount(1);await expect(keptPane).toHaveCount(1);
   await page.getByRole('navigation',{name:'Agent'}).getByRole('button',{name:removed.label,exact:true}).click();

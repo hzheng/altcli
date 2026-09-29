@@ -1,5 +1,5 @@
 'use client';
-import { useRef, useState } from 'react';
+import { useId, useRef, useState, type ReactNode } from 'react';
 import type { SessionRegistration } from '../contracts/api';
 import type { Group } from '../contracts/implementation';
 import type { ManagedSession, RelayRun, Workspace, WorkspaceDiscovery, WorkspaceResetResult } from '../contracts/workflow';
@@ -12,6 +12,7 @@ import { CreateWorktree } from './CreateWorktree';
 import { AddProject } from './DirectoryPicker';
 export const nameOf = (path: string) => path.split('/').filter(Boolean).pop() ?? path;
 export const workspaceKey = (w: Workspace) => `${w.socketPath}\0${w.cwd}`;
+type WorktreeTab = 'agents' | 'branch';
 interface Props {
   token: string; disabled: boolean;
   launchEnabled?: boolean; manualHeld?: boolean;
@@ -34,6 +35,9 @@ export function Workspaces(props: Props) {
   const [launchRequest, setLaunchRequest] = useState<{treeId:string; nonce:number}|null>(null);
   const [directoryRoot, setDirectoryRoot] = useState<string | null>(null);
   const [expandedWorktrees, setExpandedWorktrees] = useState<Record<string, boolean>>({});
+  const [worktreeTabs, setWorktreeTabs] = useState<Record<string, { tab: WorktreeTab; revision: number }>>({});
+  const selectTab = (id: string, tab: WorktreeTab) => setWorktreeTabs(previous => (previous[id]?.tab ?? 'agents') === tab ? previous
+    : { ...previous, [id]: { tab, revision: (previous[id]?.revision ?? 0) + 1 } });
   const tilde = useTildify();
   const workspaces = discovery?.workspaces ?? [];
   const projects = discovery?.projects ?? [];
@@ -59,7 +63,7 @@ export function Workspaces(props: Props) {
     </section>
     {project && <section className="panel workspaces" aria-label={`Project worktrees ${project.name}`}>
       <div className="section-heading worktrees-heading"><div><p className="eyebrow">{project.name}</p><h2>Worktrees</h2></div>
-      <CreateWorktree onLaunch={props.launchEnabled ? path => {const tree=project.worktrees.find(t=>t.path===path);if(tree){setDirectoryRoot(path);setExpandedWorktrees(previous=>({...previous,[tree.id]:true}));setLaunchRequest({treeId:tree.id,nonce:Date.now()});}} : undefined} key={project.id} project={project} token={props.token} disabled={props.disabled || !props.inputEnabled || !!discoveryError || !!project.error} onChanged={props.onChanged} viewEpoch={props.viewEpoch} />
+      <CreateWorktree onLaunch={props.launchEnabled ? path => {const tree=project.worktrees.find(t=>t.path===path);if(tree){setDirectoryRoot(path);setExpandedWorktrees(previous=>({...previous,[tree.id]:true}));selectTab(tree.id,'agents');setLaunchRequest({treeId:tree.id,nonce:Date.now()});}} : undefined} key={project.id} project={project} token={props.token} disabled={props.disabled || !props.inputEnabled || !!discoveryError || !!project.error} onChanged={props.onChanged} viewEpoch={props.viewEpoch} />
       </div>
       <p className="muted">Each worktree has an independent execution lock. Only agents started in a worktree's root directory belong to it.</p>
       {project.error && <p className="notice error" role="alert">{tilde(project.error)}</p>}
@@ -77,37 +81,70 @@ export function Workspaces(props: Props) {
         const squashReason = hardReason || ownerReason;
         const occupied = agents.length ? `${agents.map((a) => a.label).join(', ')} ${agents.length === 1 ? 'is' : 'are'} still in this worktree; the server refuses removal while a pane is inside it. Finish branch closes sessions AltCLI launched; close or move other panes yourself, then Recheck.` : '';
         const selected = (directoryRoot ?? selectedRoot) === tree.path;
+        const name = !tree.main && tree.branch ? tree.branch : nameOf(tree.path);
+        const title = tree.branch ?? `${name} · detached HEAD`;
         const expanded = expandedWorktrees[tree.id] ?? false;
-        return <li key={tree.id} className={selected ? 'selected' : ''}><details open={expanded} onToggle={event => {
-          const next = event.currentTarget.open;
-          setExpandedWorktrees(previous => previous[tree.id] === next ? previous : { ...previous, [tree.id]: next });
-        }}>
-          <summary className="workspace-card" aria-label={`Worktree ${nameOf(tree.path)}`}>
-          <span className="workspace-title"><strong><span aria-hidden="true">{expanded ? '▾' : '▸'} </span>{tree.main ? 'Main checkout' : nameOf(tree.path)}</strong><span className="badge">{agents.filter((a) => a.eligible).length} AGENTS</span></span>
+        const tab = worktreeTabs[tree.id]?.tab ?? 'agents';
+        const viewEpoch = (props.viewEpoch ?? 0) + (worktreeTabs[tree.id]?.revision ?? 0);
+        const setExpanded = (next: boolean) => setExpandedWorktrees(previous => previous[tree.id] === next ? previous : { ...previous, [tree.id]: next });
+        return <WorktreeCard key={tree.id} name={name} selected={selected} expanded={expanded} onToggle={setExpanded}
+          tab={tab} onTab={next => selectTab(tree.id, next)}
+          title={<span className="workspace-title"><strong><span aria-hidden="true">{expanded ? '▾' : '▸'} </span>{tree.main ? `Main checkout · ${title}` : title}</strong><span className="badge">{agents.filter((a) => a.eligible).length} AGENTS</span></span>}
+          metadata={<>
           <span className="mono cwd" title={tree.path}>{tilde(tree.path)}</span>
-          <span>Branch: <span className="mono">{tree.branch ?? 'detached HEAD'}</span></span>
-          <span className="muted">{tree.error ? tilde(tree.error) : (run ? `${run.implementation ? 'Implementation' : run.planning ? 'Plan' : run.standalone ? 'Send' : 'Stage relay'} · ${run.status}` : agents.length ? agents.map((a) => a.label).join(', ') : 'No agents · start coding CLIs here, then Recheck')}</span>
-        </summary>{workspace && <WorkspaceDetail key={workspaceKey(workspace)} workspace={workspace} {...props} />}<div className="worktree-controls"><button type="button" className="quiet" aria-pressed={selected} aria-label={`Open ${nameOf(tree.path)}`} onClick={() => {
-          setDirectoryRoot(tree.path);
-          if (workspace) onSelectWorkspace(workspace); else onSelectWorktree(tree);
-        }}>Open console</button>
-          <LaunchAgents requested={launchRequest?.treeId === tree.id ? launchRequest.nonce : 0} token={props.token} projectId={project.id} tree={tree} sessions={props.sessions} enabled={props.launchEnabled === true && props.inputEnabled} inputEnabled={props.inputEnabled} held={props.manualHeld === true} onChanged={props.onChanged} viewEpoch={props.viewEpoch} busy={props.disabled}/>
-          {!tree.main && <WorktreeActions project={project} tree={tree} token={props.token}
+          {(tree.error || run || !agents.length) && <span className="muted">{tree.error ? tilde(tree.error) : (run ? `${run.implementation ? 'Implementation' : run.planning ? 'Plan' : run.standalone ? 'Send' : 'Stage relay'} · ${run.status}` : 'No agents · start coding CLIs here, then Recheck')}</span>}
+          </>}
+          openConsole={<button type="button" className="quiet" aria-pressed={selected} aria-label={`Open ${name}`} onClick={() => {
+            setDirectoryRoot(tree.path);
+            if (workspace) onSelectWorkspace(workspace); else onSelectWorktree(tree);
+          }}>Open console</button>}
+          agents={<WorkspaceDetail workspace={workspace} tree={tree} {...props}>
+            <LaunchAgents requested={launchRequest?.treeId === tree.id ? launchRequest.nonce : 0} token={props.token} projectId={project.id} tree={tree} sessions={props.sessions} enabled={props.launchEnabled === true && props.inputEnabled} inputEnabled={props.inputEnabled} held={props.manualHeld === true} onChanged={props.onChanged} viewEpoch={viewEpoch} busy={props.disabled}/>
+          </WorkspaceDetail>}
+          branch={tree.main ? <p className="muted">This is the main checkout. Manage and integrate task branches from their worktrees.</p> : <WorktreeActions project={project} tree={tree} token={props.token}
           disabled={!!squashReason} disabledReason={squashReason} deletionReason={hardReason} deletionHint={ownerReason || occupied}
-          onChanged={props.onChanged} viewEpoch={props.viewEpoch} />}</div></details></li>;
+          onChanged={props.onChanged} viewEpoch={viewEpoch} />} />;
       })}</ul>
       <LifecycleResults project={project} token={props.token} onChanged={props.onChanged} />
     </section>}
   </>;
 }
+/** Panels stay mounted so drafts and uncertain requests survive tab changes. */
+function WorktreeCard({ name, selected, expanded, onToggle, title, metadata, tab, onTab, openConsole, agents, branch }: {
+  name: string; selected: boolean; expanded: boolean; onToggle: (open: boolean) => void;
+  title: ReactNode; metadata: ReactNode; tab: WorktreeTab; onTab: (tab: WorktreeTab) => void;
+  openConsole: ReactNode; agents: ReactNode; branch: ReactNode;
+}) {
+  const id = useId();
+  return <li className={selected ? 'selected' : ''}><details open={expanded} onToggle={event => onToggle(event.currentTarget.open)}>
+    <summary className="workspace-card" aria-label={`Worktree ${name}`}>
+      {title}{metadata}
+    </summary>
+    <div className="worktree-tab-bar">
+      <div role="tablist" aria-label={`Worktree ${name} sections`}>
+        {(['agents', 'branch'] as const).map(value => <button key={value} type="button" role="tab" id={`${id}-${value}-tab`}
+          aria-selected={tab === value} aria-controls={`${id}-${value}-panel`} tabIndex={tab === value ? 0 : -1}
+          onClick={() => onTab(value)} onKeyDown={event => {
+            if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+            event.preventDefault();
+            const next = event.key === 'Home' ? 'agents' : event.key === 'End' ? 'branch' : value === 'agents' ? 'branch' : 'agents';
+            onTab(next); document.getElementById(`${id}-${next}-tab`)?.focus();
+          }}>{value === 'agents' ? 'Agents' : 'Branch'}</button>)}
+      </div>
+      {openConsole}
+    </div>
+    <div className="worktree-tab-panel" role="tabpanel" id={`${id}-agents-panel`} aria-labelledby={`${id}-agents-tab`} hidden={tab !== 'agents'}>{agents}</div>
+    <div className="worktree-tab-panel" role="tabpanel" id={`${id}-branch-panel`} aria-labelledby={`${id}-branch-tab`} hidden={tab !== 'branch'}>{branch}</div>
+  </details></li>;
+}
 /** Agents and groups of one workspace. Keyed by workspace so form drafts never carry over to another card. */
-function WorkspaceDetail({ workspace, token, disabled, sessions, pairs, lockedRepositories, onChanged }: Props & { workspace: Workspace }) {
+function WorkspaceDetail({ workspace, tree, children, token, disabled, sessions, pairs, lockedRepositories, onChanged }: Props & { workspace?: Workspace; tree: ProjectWorktree; children: ReactNode }) {
   const [resetting, setResetting] = useState(false);
   const [pendingMembers, setPendingMembers] = useState<string[] | null>(null);
   const [busy, setBusy] = useState(false); const [error, setError] = useState('');
-  const root = workspace.worktree.root;
+  const root = tree.path; const cwd = workspace?.cwd ?? root;
   const locked = disabled || busy || lockedRepositories.includes(root);
-  const groups = pairs.filter((p) => p.repository === root && (!p.cwd || p.cwd === workspace.cwd));
+  const groups = pairs.filter((p) => p.repository === root && (!p.cwd || p.cwd === cwd));
   const group = groups[0];
   // Reset covers the whole checkout, including agents named from another directory of it.
   const named = sessions.filter((s) => s.repository === root);
@@ -132,11 +169,12 @@ function WorkspaceDetail({ workspace, token, disabled, sessions, pairs, lockedRe
   const reset = () => act(async () => {
     const result = await api<WorkspaceResetResult>(token, 'workspaces/reset', { body: { repository: root, confirmReady: true } });
     setResetting(false);
-    return `Reset ${nameOf(workspace.cwd)}: cleared ${result.sessions.length} saved name(s) and ${result.groups.length} group setting(s). Live agents are rediscovered; history is kept.`;
+    return `Reset ${nameOf(cwd)}: cleared ${result.sessions.length} saved name(s) and ${result.groups.length} group setting(s). Live agents are rediscovered; history is kept.`;
   });
   // Every worktree card carries its own editor, whether or not Console currently shows that worktree.
-  return <details className="workspace-detail"><summary>Agents &amp; group · {selected.length ? selected.map(labelOf).join(' ⇄ ') : 'no members selected'}</summary>
-    <section aria-label={`Workspace ${nameOf(workspace.cwd)}`}>
+  return <section className="workspace-detail" aria-label={`Workspace ${nameOf(cwd)}`}>
+    {children}
+    {workspace && <>
     {lockedRepositories.includes(root) && <p className="notice">A run or setup operation owns this worktree. Reconcile it before changing agents or groups.</p>}
     <div className="table-scroll"><table><thead><tr><th>Agent</th><th>Name</th><th>Process</th><th>Pane</th><th>Eligibility</th></tr></thead>
       <tbody>{workspace.agents.map((a) => {
@@ -155,10 +193,10 @@ function WorkspaceDetail({ workspace, token, disabled, sessions, pairs, lockedRe
     <p aria-label="Workspace group members">{selected.length ? selected.map(labelOf).join(' ⇄ ') : 'Select at least one agent before starting.'}</p>
     {error && <p className="notice error" role="alert">{error}</p>}
     {resetting ? <div className="notice">Reset saved names and group selection on this checkout? Live agents will appear with their default names. Running CLIs and command history are not touched.
-      <button type="button" disabled={locked} aria-label={`Confirm reset ${nameOf(workspace.cwd)}`} onClick={() => void reset()}>Reset</button><button type="button" onClick={() => setResetting(false)}>Keep</button></div>
-      : <button type="button" className="quiet" disabled={locked || !named.length} aria-label={`Reset ${nameOf(workspace.cwd)}`} onClick={() => setResetting(true)}>Reset…</button>}
-    </section>
-  </details>;
+      <button type="button" disabled={locked} aria-label={`Confirm reset ${nameOf(cwd)}`} onClick={() => void reset()}>Reset</button><button type="button" onClick={() => setResetting(false)}>Keep</button></div>
+      : <button type="button" className="quiet" disabled={locked || !named.length} aria-label={`Reset ${nameOf(cwd)}`} onClick={() => setResetting(true)}>Reset…</button>}
+    </>}
+    </section>;
 }
 function AgentName({ session, agent, disabled, onSave }: { session: ManagedSession; agent: string; disabled: boolean; onSave: (session: ManagedSession, label: string) => Promise<void> }) {
   const [name, setName] = useState(session.label); const cancel = useRef(false);

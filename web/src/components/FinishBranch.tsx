@@ -6,7 +6,6 @@ import type { WorkspaceDiscovery } from '../contracts/workflow';
 import { api, HttpError } from '../client/api';
 import { useTildify } from '../client/home';
 import { StatusIcon } from './Hint';
-import { WorktreeMenuItem, type WorktreeMenuSlot } from './WorktreeMenu';
 
 const short = (sha: string | null) => sha ? sha.slice(0, 12) : 'unknown';
 const refName = (ref: string | null) => ref ? ref.replace('refs/heads/', '') : 'main';
@@ -20,11 +19,10 @@ const OUTCOMES: { value: FinishOutcome; label: string }[] = [
 /** Finish branch: close the tmux sessions AltCLI launched for this task worktree without typing in a terminal, then optionally remove
  * or discard it through the existing confirmed operations. Each step shows fresh evidence and needs its own confirmation; nothing
  * is merged, retried or run automatically. */
-export function FinishBranch({ project, tree, token, disabled, noticeId, onChanged, viewEpoch, menu }: {
+export function FinishBranch({ project, tree, token, disabled, noticeId, onChanged, viewEpoch }: {
   project: Project; tree: ProjectWorktree; token: string; disabled: boolean; onChanged: (notice: string) => Promise<void>; viewEpoch?: number;
   /** ID of the shared notice explaining why Finish branch is disabled; WorktreeActions shows it once. */
   noticeId?: string;
-  menu?: WorktreeMenuSlot;
 }) {
   const [preview, setPreview] = useState<FinishPreview | null>(null), [outcome, setOutcome] = useState<FinishOutcome>('close'), [stopActive, setStopActive] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [lost, setLost] = useState<string | null>(null), [note, setNote] = useState(''), [inspected, setInspected] = useState(false);
@@ -77,7 +75,7 @@ export function FinishBranch({ project, tree, token, disabled, noticeId, onChang
     || (preview.active && !stopActive ? 'Some sessions may have unfinished work or background processes: confirm stopping them anyway.' : '')
     || (outcome === 'close' && !closable.length ? 'There are no app-launched sessions to close.' : '');
   return <div className="create-worktree finish-branch">
-    {(menu || (!preview && !holding)) && <WorktreeMenuItem menu={menu}><button type="button" className="quiet" aria-label={`Finish ${name}`} aria-describedby={disabled ? noticeId : undefined} disabled={disabled || busy || !!lost || !!holding} onClick={() => void check()}>Finish branch</button></WorktreeMenuItem>}
+    {!holding && <button type="button" className="quiet" aria-label={`Finish ${name}`} aria-describedby={disabled ? noticeId : undefined} disabled={disabled || busy || !!lost || !!holding} onClick={() => void check()}>Finish branch</button>}
     {preview && <div className="notice" role="region" aria-label={`Finish ${name}`}>
       <p><strong>Finish {preview.branch}</strong>: close the tmux sessions AltCLI launched for <span className="mono">{tilde(preview.worktree.root)}</span>. Sessions you opened yourself are never closed.</p>
       {preview.sessions.length ? <ul className="finish-sessions" aria-label="App-launched sessions">{preview.sessions.map((s) => <li key={s.sessionId}>

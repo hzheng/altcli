@@ -7,10 +7,8 @@ import { MAX_MESSAGE_JSON_BYTES, messageJsonBytes } from '../core/squash-message
 import { SquashAdvice } from './SquashAdvice';
 import { FinishBranch } from './FinishBranch';
 import { FINISH_HOLDING } from '../contracts/projects';
-import { WorktreeMenu, WorktreeMenuItem, type WorktreeMenuSlot } from './WorktreeMenu';
 
 interface ActionProps { project: Project; tree: ProjectWorktree; token: string; disabled: boolean; disabledReason?: string; onChanged: (notice: string) => Promise<void>;
-  menu?: WorktreeMenuSlot;
   /** Increases whenever the view changes; hiding a confirmation revokes it. */
   viewEpoch?: number;
   /** ID of the shared blocker or hint that WorktreeActions shows once for this action. */
@@ -27,27 +25,32 @@ const refName = (ref: string) => ref.replace('refs/heads/', '');
  * Deletion actions disable only for hard blocks (read-only host, a request in flight, unreadable state); a known soft blocker is shown as a hint
  * and the click still runs the server preview, whose exact refusal (pane inside, dirty files, not integrated) is then displayed.
  * Blockers and hints shared by several actions are shown once below them; each action refers to its notice by ID. */
+/** The Branch tab: two labelled groups whose buttons stay in view. Each action's preview or form opens below its group's buttons. */
 export function WorktreeActions(props: ActionProps & { deletionReason?: string; deletionHint?: string }) {
-  const baseId = useId(); const held = isHeld(props.project);
-  const [openMenu, setOpenMenu] = useState<'main' | 'branch' | null>(null);
-  useEffect(() => { setOpenMenu(null); }, [props.viewEpoch]);
+  const baseId = useId(); const held = isHeld(props.project); const name = nameFor(props.tree);
   const heldReason = held ? 'A worktree operation is applying, uncertain or waiting (Finish branch). Inspect or complete it first.' : '';
   const squashBlock = props.disabled ? props.disabledReason || 'These actions are unavailable. Recheck the worktree.' : heldReason;
   const deletionBlock = props.deletionReason || heldReason; const hint = deletionBlock ? '' : props.deletionHint ?? '';
   const notices = [...new Set([squashBlock, deletionBlock, hint].filter(Boolean))];
   const idOf = (text: string) => text ? `${baseId}-${notices.indexOf(text)}` : undefined;
   return <div className="worktree-actions">
-    <WorktreeMenu label="Main" name={nameFor(props.tree)} open={openMenu === 'main'} onOpen={() => setOpenMenu('main')} onClose={() => setOpenMenu(null)}>{menu => <>
-      <IntegrateWorktree {...props} menu={menu} noticeId={idOf(squashBlock)} />
-      <AlignWorktree {...props} menu={menu} noticeId={idOf(squashBlock)} />
-    </>}</WorktreeMenu>
-    <WorktreeMenu label="Branch" name={nameFor(props.tree)} open={openMenu === 'branch'} onOpen={() => setOpenMenu('branch')} onClose={() => setOpenMenu(null)}>{menu => <>
-      <RenameBranch {...props} menu={menu} noticeId={idOf(squashBlock)} />
-      <FinishBranch {...props} menu={menu} disabled={!!props.deletionReason} noticeId={idOf(props.deletionReason ?? '')} />
-      <RemoveWorktree {...props} menu={menu} disabled={!!props.deletionReason} noticeId={idOf(deletionBlock || hint)} />
-      <DiscardWorktree {...props} menu={menu} disabled={!!props.deletionReason} noticeId={idOf(deletionBlock || hint)} />
-    </>}</WorktreeMenu>
-    {notices.map((text, index) => <div key={text}><p className="fine" id={`${baseId}-${index}`} role="status">{text}</p></div>)}
+    {notices.map((text, index) => <p key={text} className="fine" id={`${baseId}-${index}`} role="status">{text}</p>)}
+    <section className="branch-group" role="group" aria-label={`Main actions for ${name}`}>
+      <h3>Main</h3><p className="fine">Squash this branch into main, or bring main into this branch.</p>
+      <div className="branch-group-actions">
+        <IntegrateWorktree {...props} noticeId={idOf(squashBlock)} />
+        <AlignWorktree {...props} noticeId={idOf(squashBlock)} />
+      </div>
+    </section>
+    <section className="branch-group" role="group" aria-label={`Branch actions for ${name}`}>
+      <h3>Branch</h3><p className="fine">Rename this branch, or finish it and remove its worktree.</p>
+      <div className="branch-group-actions">
+        <RenameBranch {...props} noticeId={idOf(squashBlock)} />
+        <FinishBranch {...props} disabled={!!props.deletionReason} noticeId={idOf(props.deletionReason ?? '')} />
+        <RemoveWorktree {...props} disabled={!!props.deletionReason} noticeId={idOf(deletionBlock || hint)} />
+        <DiscardWorktree {...props} disabled={!!props.deletionReason} noticeId={idOf(deletionBlock || hint)} />
+      </div>
+    </section>
   </div>;
 }
 /** Reasons that concern only one action; shared blockers are explained by its notice. */
@@ -57,7 +60,7 @@ const localReason = (unknown: boolean, busy: boolean, what: string) =>
 const describedBy = (...ids: (string | false | undefined)[]) => ids.filter(Boolean).join(' ') || undefined;
 
 /** One squash commit on the integration branch, made in the checkout that has it checked out. The task worktree is untouched. */
-export function IntegrateWorktree({ project, tree, token, disabled, noticeId, onChanged, menu }: ActionProps) {
+export function IntegrateWorktree({ project, tree, token, disabled, noticeId, onChanged }: ActionProps) {
   const tilde = useTildify();
   const [preview, setPreview] = useState<WorktreeIntegrationPreview | null>(null); const [message, setMessage] = useState('');
   const [choosing, setChoosing] = useState(false); const [through, setThrough] = useState('');
@@ -102,7 +105,7 @@ export function IntegrateWorktree({ project, tree, token, disabled, noticeId, on
     finally { setBusy(false); }
   }
   return <div className="create-worktree">
-    <WorktreeMenuItem menu={menu}><button type="button" className="quiet" aria-label={`Squash ${name} into main`} aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={blocked || !!blockedReason} onClick={() => void inspect()}>Squash into main</button></WorktreeMenuItem>
+    <button type="button" className="quiet" aria-label={`Squash ${name} into main`} aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={blocked || !!blockedReason} onClick={() => void inspect()}>Squash into main</button>
     {reason && <p className="fine" id={`${controlId}-reason`} role="status">{reason}</p>}
     {choosing && <div className="notice">
       <label>Squash through commit<input aria-label="Squash through commit" placeholder="Leave empty for HEAD, or paste a SHA" list={`${controlId}-commits`} value={through} disabled={busy || unknown}
@@ -151,7 +154,7 @@ function alignSummary(preview: WorktreeUpdatePreview): string {
 }
 /** Align the task branch with main in place, so the directory, its ignored environment and the agents are reused: update after a
  * squash, rebase, or reset. Each previews its exact steps; a rewritten branch keeps its old tip under refs/altcli/preserved. */
-export function AlignWorktree({ project, tree, token, disabled, noticeId, onChanged, viewEpoch, menu }: ActionProps) {
+export function AlignWorktree({ project, tree, token, disabled, noticeId, onChanged, viewEpoch }: ActionProps) {
   const [mode, setMode] = useState<WorktreeUpdateMode>('update');
   const [preview, setPreview] = useState<WorktreeUpdatePreview | null>(null); const [previewEpoch, setPreviewEpoch] = useState(viewEpoch);
   // A view change revokes confirmation, but keeps the request ID available to inspect an unknown result.
@@ -191,9 +194,9 @@ export function AlignWorktree({ project, tree, token, disabled, noticeId, onChan
   }
   const target = preview ? refName(preview.targetRef) : 'main'; const lost = preview?.lost;
   return <div className="create-worktree">
-    <WorktreeMenuItem menu={menu}>{(['update', 'rebase', 'reset'] as const).map((option) =>
+    {(['update', 'rebase', 'reset'] as const).map((option) =>
       <button key={option} type="button" className={`quiet${option === 'reset' ? ' danger' : ''}`} aria-label={ALIGN[option].aria(name)} title={ALIGN[option].about}
-        aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={blocked || !!blockedReason} onClick={() => void inspect(option)}>{ALIGN[option].label.replace('…', '')}</button>)}</WorktreeMenuItem>
+        aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={blocked || !!blockedReason} onClick={() => void inspect(option)}>{ALIGN[option].label.replace('…', '')}</button>)}
     {reason && <p className="fine" id={`${controlId}-reason`} role="status">{reason}</p>}
     {preview && <div className="notice" role="region" aria-label={ALIGN[preview.mode].region(name)}>
       <p><strong>{alignSummary(preview)}</strong></p>
@@ -225,7 +228,7 @@ export function AlignWorktree({ project, tree, token, disabled, noticeId, onChan
 }
 
 /** Rename the task branch in place: files and the directory are unchanged; app-launched sessions named after the branch follow it. */
-export function RenameBranch({ project, tree, token, disabled, noticeId, onChanged, viewEpoch, menu }: ActionProps) {
+export function RenameBranch({ project, tree, token, disabled, noticeId, onChanged, viewEpoch }: ActionProps) {
   const tilde = useTildify();
   const [editing, setEditing] = useState(false); const [newBranch, setNewBranch] = useState('');
   const [preview, setPreview] = useState<WorktreeRenamePreview | null>(null);
@@ -268,7 +271,7 @@ export function RenameBranch({ project, tree, token, disabled, noticeId, onChang
     finally { setBusy(false); }
   }
   return <div className="create-worktree">
-    <WorktreeMenuItem menu={menu}><button type="button" className="quiet" aria-label={`Rename branch ${name}`} aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={blocked || !!blockedReason} onClick={() => { setEditing(true); if (!editing) setNewBranch(tree.branch ?? ''); }}>Rename branch</button></WorktreeMenuItem>
+    <button type="button" className="quiet" aria-label={`Rename branch ${name}`} aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={blocked || !!blockedReason} onClick={() => { setEditing(true); if (!editing) setNewBranch(tree.branch ?? ''); }}>Rename branch</button>
     {reason && <p className="fine" id={`${controlId}-reason`} role="status">{reason}</p>}
     {editing && <div className="notice">
       <label>New branch name<input aria-label="New branch name" value={newBranch} maxLength={150} disabled={busy || unknown} onChange={(event) => { setNewBranch(event.target.value); setPreview(null); setError(''); }} /></label>
@@ -290,7 +293,7 @@ export function RenameBranch({ project, tree, token, disabled, noticeId, onChang
 }
 
 /** Deletion always requires a fresh server preview and explicit confirmation. */
-export function RemoveWorktree({ project, tree, token, disabled, noticeId, onChanged, menu }: ActionProps) {
+export function RemoveWorktree({ project, tree, token, disabled, noticeId, onChanged }: ActionProps) {
   const tilde = useTildify();
   const [preview, setPreview] = useState<WorktreeRemovalPreview | null>(null);
   const [busy, setBusy] = useState(false); const [error, setError] = useState('');
@@ -326,7 +329,7 @@ export function RemoveWorktree({ project, tree, token, disabled, noticeId, onCha
     finally { setBusy(false); }
   }
   return <div className="create-worktree">
-    <WorktreeMenuItem menu={menu}><button type="button" className="quiet" aria-label={`Check removal of ${name}`} aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={disabled || held || !!reason} onClick={() => void inspect()}>Check removal</button></WorktreeMenuItem>
+    <button type="button" className="quiet" aria-label={`Check removal of ${name}`} aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={disabled || held || !!reason} onClick={() => void inspect()}>Check removal</button>
     {reason && <p className="fine" id={`${controlId}-reason`} role="status">{reason}</p>}
     {preview && <div className="notice" role="region" aria-label={`Remove ${name}`}>
       <p>{preview.integratedBy === 'squash' ? 'Squash integration verified' : 'Merged ancestry verified'} in <span className="mono">{refName(preview.targetRef)}</span> at <span className="mono">{short(preview.integratedCommit)}</span>.</p>
@@ -342,7 +345,7 @@ export function RemoveWorktree({ project, tree, token, disabled, noticeId, onCha
 }
 
 /** Forced deletion of the worktree and its branch without integration evidence: the branch name must be typed to confirm. */
-export function DiscardWorktree({ project, tree, token, disabled, noticeId, onChanged, viewEpoch, menu }: ActionProps) {
+export function DiscardWorktree({ project, tree, token, disabled, noticeId, onChanged, viewEpoch }: ActionProps) {
   const tilde = useTildify();
   const [preview, setPreview] = useState<WorktreeDiscardPreview | null>(null); const [typed, setTyped] = useState('');
   // The typed branch name is the confirmation: hiding the view clears it, while the preview stays for re-checking.
@@ -380,7 +383,7 @@ export function DiscardWorktree({ project, tree, token, disabled, noticeId, onCh
     finally { setBusy(false); }
   }
   return <div className="create-worktree">
-    <WorktreeMenuItem menu={menu}><button type="button" className="quiet danger" aria-label={`Discard ${name}`} aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={disabled || held || !!reason} onClick={() => void inspect()}>Discard</button></WorktreeMenuItem>
+    <button type="button" className="quiet danger" aria-label={`Discard ${name}`} aria-describedby={describedBy(noticeId, reason && `${controlId}-reason`)} disabled={disabled || held || !!reason} onClick={() => void inspect()}>Discard</button>
     {reason && <p className="fine" id={`${controlId}-reason`} role="status">{reason}</p>}
     {preview && <div className="notice error" role="region" aria-label={`Discard ${name}`}>
       <p><strong>Discard {preview.branch}?</strong> This deletes the directory <span className="mono">{tilde(preview.worktree.root)}</span>, including ignored files, and deletes the branch <span className="mono">{preview.branch}</span> at <span className="mono">{short(preview.head)}</span>. It does not check that anything was integrated.</p>

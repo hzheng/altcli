@@ -114,13 +114,16 @@ current backend process. Prepare dependencies and agent sessions yourself;
 AltCLI does not clone repositories, move agents or configure environments.
 
 In **Projects**, select a project. Worktrees fill one column with the main checkout
-first. Click a worktree heading to expand or collapse its controls; each starts
-collapsed and keeps your choice when you Recheck. Choose **Open console** inside
-the worktree to open its console.
+first. Click a worktree title to expand or collapse its card. Under its title and
+directory, **Agents** and **Branch** tabs share a row with **Open console** at the far right.
+Agents is selected initially; each worktree remembers its tab across Recheck, collapse and
+project selection. Switching tabs keeps drafts and pending results but revokes previews.
 **Create task worktree** sits beside the Worktrees heading; its form opens below
 that row, above the worktree list.
-Each worktree card has its own **Agents & group** disclosure for names and
-members, whichever worktree Console shows. Start agents in the worktree's root
+The **Agents** tab contains names, members, launch status and **Launch agents…**, including empty
+worktrees. The **Branch** tab shows the **Main** and **Branch** action groups, every button in view,
+with each preview or form opening below its group's buttons.
+Start agents in the worktree's root
 directory: a pane in a subdirectory is listed under panes not in a discovered
 workspace instead.
 Selection is shown by its border/background, not a separate Selected button.
@@ -189,7 +192,7 @@ the main checkout first). Only a
 read-only host, a request in flight or unreadable state disables them. All three
 record a durable result; an uncertain one is inspected, never retried.
 
-The persistent **Main** menu groups **Squash into main** and the three ways to reuse a prepared
+The **Main** group holds **Squash into main** and the three ways to reuse a prepared
 task worktree. The latter move the branch onto local main/default in place, keeping the
 directory, ignored files such as dependencies, and the agents. Choose one of:
 
@@ -210,8 +213,8 @@ missing activity evidence or running agent processes do not block it, and agents
 A rewritten
 branch keeps its old tip under `refs/altcli/preserved/`, which you delete yourself
 when no longer needed. Uncommitted changes discarded by a reset cannot be
-recovered. Give agents fresh instructions afterwards. The **Branch** menu groups **Rename branch**, **Finish branch**, **Check removal** and **Discard**.
-Both menus open on hover or click, work with keyboard and touch, and stay visible above opened forms.
+recovered. Give agents fresh instructions afterwards. The **Branch** group holds **Rename branch**, **Finish branch**, **Check removal** and **Discard**.
+Both groups stay in view above the forms they open.
 Rename changes the task branch name in place, uncommitted work included. All of them refuse published branches
 when history would change, since the app never pushes. Controller ownership still prevents overlapping
 operations. Rename also proceeds on warned confirmation without agent-evidence checks; avoid concurrent
@@ -389,7 +392,7 @@ To launch agents from AltCLI:
    name and the adapter hint. Add literal arguments with **Add argument**, keep
    **Enabled** checked, and choose **Save profile**. The executable is a name found
    on PATH or an absolute path; there is no shell parsing, and saving runs nothing.
-3. In **Projects**, choose **Launch agents…** beside **Open console** on the checkout's card (empty/new
+3. In **Projects**, select **Agents** and choose **Launch agents…** on the checkout's card (empty/new
    worktrees included; **Create task worktree** can open it for the new one).
    **Add agent** adds one profile selector for one session. Add another agent for
    each additional CLI (up to six); **Remove agent** removes that entry.

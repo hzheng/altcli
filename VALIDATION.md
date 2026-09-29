@@ -3904,3 +3904,79 @@ inspection that outlives the bound can still block squash; this does not assume 
 - `./scripts/check.sh` passed on Node 24.12.0: 32 hook/setup, 46 smoke, 505 workflow and 93 unit
   tests, type checking and the production build. This includes the additional transient-child case
   appearing only in the second post-staging host scan. No UI changed; no browser tests were run.
+
+## 2026-09-28 — worktree titles follow branch renames
+
+Task-worktree disclosure titles and accessibility labels use the full current branch name.
+The duplicate Branch row is removed; main-checkout and detached-HEAD information appears in the
+title. The displayed directory stays unchanged.
+
+- The existing Rename browser case now refreshes the branch while retaining the directory and
+  checks the new title and Open console label. Both desktop and iPhone cases passed (2 tests).
+  An initial anchored filter selected no tests; the corrected filter ran these cases.
+- `npm run build` passed, including TypeScript checking. No broad suite ran.
+- A read-only live browser check timed out before reaching Projects; live rendering is unverified.
+  The running server was not restarted; an existing relay still owns a checkout.
+- After the full-name/row-removal revision, the focused Rename and project-navigation browser
+  cases passed on desktop and iPhone (4 tests), as did `npm run typecheck`. Existing selectors
+  were updated to the full branch labels. No broad suite or further live check ran.
+- Removed the duplicate agent-name row from the worktree header; names remain in Agents & group.
+  Error, run-status and empty-worktree notices remain. The existing workspace-card browser case
+  passed on desktop and iPhone (2 tests); no broader checks ran for this presentation change.
+
+## 2026-09-28 — worktree actions in the header, launch inside Agents & group
+
+Open console, Main and Branch now sit beside the full branch title, wrapping on phones. They stay
+available while the card is collapsed; selecting a menu action opens its form below. Launch agents,
+its form and status cards live inside Agents & group, including empty worktrees. The explicit
+Launch agents here shortcut opens both disclosures and scrolls to the form.
+
+- Five focused browser scenarios passed on desktop and iPhone across targeted runs (10 cases):
+  independent disclosures, header layout, mouse/keyboard menus and retained drafts, the launch
+  shortcut, and launch-status feedback. The native-named status case uses the mock backend.
+- Existing test build directories served a stale stylesheet. Fresh temporary build directories
+  verified the new CSS; phone spacing and the test's scroll preparation were corrected. Temporary
+  configuration/builds and their generated TypeScript include entries were removed afterward.
+- `npm run typecheck` passed after cleanup.
+- No broad suite, backend changes, production rebuild or live-server restart was performed.
+
+## 2026-09-28 — Agents and Branch tabs per worktree
+
+Replaces the nested Agents & group disclosure and header actions with Agents/Branch tabs below the
+branch title and directory. Open console sits at the far right of that row. Agents is the initial
+tab; selections are remembered per worktree. Both panels stay mounted to preserve drafts and
+uncertain requests, while changing tabs revokes previews. The explicit launch shortcut selects Agents.
+
+- Eight focused desktop/iPhone browser cases passed: layout, independent remembered selections and
+  keyboard tab navigation; the launch shortcut from a collapsed Branch tab; rename preview revocation
+  with draft preservation; and inspection of a lost rename response after tab/view changes without retry.
+- Checked the desktop and phone screenshots. `npm run typecheck` passed after temporary test builds,
+  configuration and their generated TypeScript include entries were removed.
+- Used fresh isolated test build directories to avoid the previously observed stale stylesheet cache.
+  No broad suite, production rebuild or live-server restart ran.
+
+## 2026-09-28 — Branch tab shows its actions instead of two dropdowns
+
+The Branch tab now shows labelled **Main** and **Branch** groups with every action button in view.
+Each preview or form opens below its group's buttons. The shared blockers and hints are shown
+once, above the groups. The dropdown component and its menu plumbing were removed, and the action
+components render their triggers inline.
+
+- `npm run typecheck` passed.
+- `e2e/projects.spec.ts` on desktop: 33 of 35 passed on the first run. The failures were the
+  tab-layout case, which still expected the two dropdown triggers and was updated, and the
+  occupant-hint case, which asserted the Branch-tab hint before showing that tab. That case was
+  reordered. The latter ordering problem was already in the incoming change. The updated cases
+  and the new Branch-group case then passed on desktop and iPhone.
+  The new case failed once on desktop before passing, likely from a stale stylesheet in the
+  existing test build.
+- No broad suite ran.
+
+Review follow-up: removing the menu exposed the old inline-only condition that hid **Finish
+branch** as soon as its preview opened. Its trigger now stays in the action row while the
+preview is shown, so the row stays stable and a fresh preview remains directly reachable.
+The existing Finish branch browser scenario now asserts that the trigger remains visible
+above the preview. The nine incoming files were staged first; this correction, its assertions
+and this note remain unstaged. Source and diff inspection only: no tests, type checks or build
+were run during this review, following the user's request to defer testing. The reviewed
+patch was screened for secrets; none found.

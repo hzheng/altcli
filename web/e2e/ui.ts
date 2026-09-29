@@ -7,13 +7,13 @@ export async function expand(scope: Page | Locator, summary: string | RegExp) {
 /** Opens a worktree's controls while preserving an already expanded card and its form state. */
 export async function expandWorktree(page: Page, name: string) {
   const toggle = page.getByLabel(`Worktree ${name}`, { exact: true });
-  if (!await toggle.evaluate(element => (element.parentElement as HTMLDetailsElement).open)) await toggle.click();
+  if (!await toggle.evaluate(element => (element.parentElement as HTMLDetailsElement).open)) await toggle.locator('.workspace-title').click();
 }
-/** Opens a worktree card and its own Agents & group editor, preserving either disclosure when it is already open. */
+/** Opens a worktree card and selects its Agents tab. */
 export async function expandAgents(page: Page, name: string) {
   await expandWorktree(page, name);
   const card = page.getByRole('list', { name: 'Available worktrees' }).getByRole('listitem').filter({ has: page.getByLabel(`Worktree ${name}`, { exact: true }) });
-  await expand(card, 'Agents & group');
+  await card.getByRole('tab', { name: 'Agents', exact: true }).click();
 }
 /** On main or the default branch Implementation's Control starts on Stage relay; chooses Send options, whose branch-specific actions
  * and next-run settings the helpers below address. Elsewhere, and in Plan, there is no Relay mode and nothing changes. */
