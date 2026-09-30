@@ -1,8 +1,117 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import type { GitChange, Group, ImplementationStart, StandaloneStart } from '../src/contracts/implementation';
 import type { WorkflowState } from '../src/contracts/workflow';
+import type { ManualSession } from '../src/contracts/terminals';
 import { observationTransport, expandWorktree, editSettings, expand, handOff, openCard, openController, pane, readiness, openAccess, takeControl, showSurface, backToControl } from './ui';
 const headers = { Authorization: `Bearer ${'a'.repeat(64)}` };
+
+/** UI fixture for a validated proposal held by input elsewhere; actual publication and checkpoint checks live in implementation.test.ts. */
+async function heldHandoff(page: Page, request: APIRequestContext) {
+  const group: Group = await post(request, 'groups', { name: 'Held handoff', members: ['codex', 'claude'] });
+  const state: WorkflowState = await (await request.get('/api/v1/state', { headers })).json();
+  const id = crypto.randomUUID(), head = 'a'.repeat(40), sha = 'b'.repeat(40), now = new Date().toISOString();
+  const registrations = Object.fromEntries(state.sessions.filter(s => group.members.includes(s.id)).map(s => [s.id, s.registrationId!]));
+  await post(request, 'instructions', { requestId: id, groupId: group.id, groupRevision: group.revision, registrations,
+    agentId: 'claude', text: 'Revise the proposal.', policy: 'peer', confirmReady: true });
+  await post(request, 'runs', { runId: id, action: 'pause' });
+  const target = { agentId: 'codex', registrationId: registrations.codex! };
+  const manual: ManualSession = { id: crypto.randomUUID(), revision: 4, bootId: crypto.randomUUID(), clientInstanceId: crypto.randomUUID(),
+    connectionId: crypto.randomUUID(), generation: crypto.randomUUID(), target, targets: [target], live: true, reconciliationRequired: true,
+    recoveryRequired: false, inputMayHaveOccurred: true, bytes: 7, createdAt: now, updatedAt: now, reason: 'Keyboard used elsewhere.',
+    panes: [], runs: [{ id, commandId: id, priorStatus: 'running' }], writers: [] };
+  manual.writers = [{ connectionId: manual.connectionId, clientInstanceId: manual.clientInstanceId, generation: manual.generation,
+    target, identity: null, sessionId: null, revision: 2, live: true, bytes: 7, inputMayHaveOccurred: true }];
+  const fixture = { manual: true, checkpoint: true, continued: false, checkpointRevision: 1 };
+  await page.route('**/api/v1/state', async route => {
+    const response = await route.fetch(); const data: WorkflowState = await response.json(); const run = data.runs.find(r => r.id === id)!;
+    const turn = data.executions.find(t => t.commandId === id)!;
+    turn.status = 'finished'; delete run.standalone;
+    run.status = 'paused'; run.pauseRequested = false; run.autoContinue = true;
+    run.reason = 'Original turn validated. Review the terminal input before continuing.';
+    run.interaction = { revision: 1, active: true, fault: false, origin: 'keyboard', disposition: 'automatic' };
+    const proposal: ImplementationStart = { requestId: id, groupId: group.id, groupRevision: group.revision, registrations,
+      agentId: 'claude', kind: 'work', text: 'Revise the proposal.', handoff: true, policy: 'peer', autoContinue: true, turnLimit: 20,
+      branch: { branch: 'task/held', head }, confirmReady: true };
+    run.implementation = { group, phase: 'implementation', handoff: 'commit', policy: 'peer', workerId: null, revision: 1,
+      cwd: run.repository, worktree: { root: run.repository, gitDir: `${run.repository}/.git`, indexPath: `${run.repository}/.git/index` },
+      branch: 'task/held', consent: proposal.branch, setup: 'ready', logPath: null, request: proposal, turn: 3,
+      taskBaseSha: head, acceptedSha: head, candidateSha: sha, candidateAuthor: 'claude', expectedParentSha: sha, findings: null,
+      next: { agentId: 'codex', action: 'review_and_improve', text: 'Review the candidate.', handoff: true },
+      latestPublication: { sha, projectChanged: true, entry: { schema: 1, phase: 'implementation', runId: id, commandId: id,
+        turn: 3, policyRevision: 1, action: 'work', agentId: 'claude', registrationId: registrations.claude!, parent: head, base: head,
+        reviewBase: null, reviewHead: null, model: 'fixture', decision: null, reason: null, needsHuman: false,
+        summary: 'Fixed all three image findings.', checks: ['Synthetic regression checks passed.'] } } };
+    data.manualSessions = fixture.manual ? [manual] : [];
+    data.checkpoints = fixture.checkpoint ? [{ runId: id, commandId: id, revision: fixture.checkpointRevision, kind: 'interaction',
+      capturedAt: now, fingerprint: 'fixture', branch: 'task/held', result: sha, sessions: run.participants, processes: {}, external: {}, fault: false, reason: null }] : [];
+    data.activities = run.participants.map(p => ({ agentId: p.id, state: 'idle', updatedAt: now, detail: 'Native turn is idle.' }));
+    if (fixture.continued) { run.status = 'running'; run.implementation.next = null; run.interaction.active = false; data.checkpoints = []; }
+    await route.fulfill({ json: data });
+  });
+  const writes: string[] = [];
+  page.on('request', r => { if (r.method() === 'POST' && !observationTransport(r.url())) writes.push(new URL(r.url()).pathname); });
+  await page.route('**/api/v1/terminals/stop', async route => {
+    const body = route.request().postDataJSON(); expect(body.manualSessionId).toBe(manual.id);
+    manual.live = false; manual.revision++; manual.writers = manual.writers.map(w => ({ ...w, live: false, revision: w.revision + 1 }));
+    await route.fulfill({ json: manual });
+  });
+  await page.route('**/api/v1/terminals/reconcile', async route => {
+    expect(route.request().postDataJSON()).toMatchObject({ manualSessionId: manual.id, expectedRevision: manual.revision, confirmInspected: true });
+    fixture.manual = false; await route.fulfill({ json: { ...manual, reconciliationRequired: false } });
+  });
+  await page.route('**/api/v1/checkpoints', async route => {
+    expect(route.request().postDataJSON()).toMatchObject({ runId: id, commandId: id, expectedRevision: fixture.checkpointRevision, action: 'review_input', confirmReady: true });
+    fixture.continued = true; await route.fulfill({ json: { ok: true } });
+  });
+  await openGroup(page, group);
+  return { fixture, writes };
+}
+
+test('a held peer result names the queued reviewer and continues its checkpoint without takeover', async ({ page, request }) => {
+  const { fixture, writes } = await heldHandoff(page, request);
+  await expect(page.getByText('Result received; Codex’s review is paused.')).toBeVisible();
+  await page.getByRole('button', { name: 'Inspect queued handoff' }).click();
+  const result = page.getByLabel('Published handoff result', { exact: true });
+  await expect(result).toContainText('Latest validated result from Claude'); await expect(result).toContainText('commit bbbbbbbbbbbb');
+  await result.locator('summary').click(); await expect(result).toContainText('Fixed all three image findings.');
+  const queued = page.getByRole('status', { name: 'Queued handoff' });
+  await expect(queued).toContainText('Queued: review by Codex'); await expect(queued).toContainText('even when typing in another checkout');
+  await expect(queued).toContainText('Take control ends this run');
+  const checkpoint = page.getByRole('region', { name: 'Input checkpoint' });
+  await expect(checkpoint.getByRole('list', { name: 'Consequences of continuing' })).toContainText('Typing stops');
+  await expect(checkpoint).toContainText('This controller run is kept'); expect(writes).toEqual([]);
+  await checkpoint.getByRole('button', { name: 'Review input and continue' }).click();
+  await expect.poll(() => fixture.continued).toBe(true);
+  expect(writes).toEqual(['/api/v1/terminals/stop', '/api/v1/terminals/reconcile', '/api/v1/checkpoints']);
+});
+
+test('a refused manual-input decision leaves the queued review untouched', async ({ page, request }) => {
+  const { fixture, writes } = await heldHandoff(page, request);
+  await page.route('**/api/v1/terminals/reconcile', route => route.fulfill({ status: 409, json: { error: { code: 'MANUAL_CHANGED', message: 'Another writer changed.' } } }));
+  await page.getByRole('button', { name: 'Inspect queued handoff' }).click();
+  const checkpoint = page.getByRole('region', { name: 'Input checkpoint' });
+  await checkpoint.getByRole('button', { name: 'Review input and continue' }).click();
+  await expect(checkpoint).toContainText('Another writer changed.');
+  expect(fixture.continued).toBe(false); expect(writes).toEqual(['/api/v1/terminals/stop', '/api/v1/terminals/reconcile']);
+});
+
+test('leaving and returning while manual input is reconciled cancels the queued continuation', async ({ page, request }) => {
+  const { fixture, writes } = await heldHandoff(page, request);
+  let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/v1/terminals/reconcile', async route => { await held; fixture.manual = false; await route.fulfill({ json: { ok: true } }); });
+  await page.getByRole('button', { name: 'Inspect queued handoff' }).click();
+  const checkpoint = page.getByRole('region', { name: 'Input checkpoint' });
+  await checkpoint.getByRole('button', { name: 'Review input and continue' }).click();
+  try {
+    await expect.poll(() => writes.length).toBe(2);
+    const tabs = page.getByRole('navigation', { name: 'Sections' });
+    await tabs.getByRole('button', { name: 'Projects', exact: true }).click();
+    await tabs.getByRole('button', { name: 'Console', exact: true }).click();
+  } finally { release(); }
+  await expect(checkpoint).toContainText('checkpoint or view changed');
+  expect(fixture.continued).toBe(false); expect(writes).toEqual(['/api/v1/terminals/stop', '/api/v1/terminals/reconcile']);
+});
+
 async function post(request: APIRequestContext, path: string, data: unknown) {
   const response = await request.post(`/api/v1/${path}`, { headers, data }); expect(response.ok()).toBe(true); return response.json();
 }

@@ -43,6 +43,16 @@ source acknowledgment/session identity, unknown background state, delivery races
 long-running work beyond history limits, budget, restart and human takeover. Git
 identity tests create disposable repositories, subdirectories and linked worktrees.
 
+Image attachment tests use synthetic images and isolated data directories. `web/src/server/image-structure.test.ts`
+covers the PNG/JPEG structural rules; `web/scripts/attachments.test.ts` covers authentication before
+allocation, limits, time bounds, quotas under concurrency, symlink/hard-link/containment refusal,
+idempotent retries, delete/pin races, draft expiry and restart recovery, and the broker's exact
+bracketed reference, destination and CLI rechecks, receipts, revocation and uncertain writes;
+implementation and planning tests cover the manifest prompt, pinned descriptors reaching workers,
+reviewers, planners and the frozen plan, and a changed file pausing dispatch. `web/e2e/images.spec.ts`
+exercises paste, picker, Display refusal, mixed clipboards, Insert, Remove, Send and a Plan brief with
+browser-encoded images; synthetic clipboard events prove the handlers only.
+
 Browser tests cover explicit readiness, registration, pair selection, server
 progression with a locked page, multiple views, pause/takeover, uncertainty and
 unauthorized reads. Assertions use explicit correlated hook fixtures; they do not
@@ -130,8 +140,7 @@ Git delta review remain required after a relay chain ends.
 
 ### Terminal and launch release checklist
 
-Image attachment acceptance is deferred by the owner's September 24 scope
-decision. For the remaining terminal/launch release, record each demonstration
+Image attachments (M4A/M4B) have their own rows below. For the remaining terminal/launch release, record each demonstration
 against the source revision and installed Node/tmux/CLI/browser versions. Leave
 an unexecuted row open; a mock result cannot fill an installed-host row.
 
@@ -143,6 +152,9 @@ an unexecuted row open; a mock result cannot fill an installed-host row.
 | Mobile and concurrent access | Use a physical iPhone Safari and a desktop together. Check English/Chinese IME, emoji, multiline paste, screen-reader mode, touch modifiers, expansion, rotation, keyboard visibility, two-client exclusion and focus routing. Chromium phone emulation is only layout/interaction evidence. |
 | Remote path | On the intended private HTTPS/WSS origin, check upgrades, proxy buffering, output load, network switching and reconnect. Record input latency and verify no input replay or automatic workflow continuation. |
 | Settled restart and rollback | With no active delivery, restart the backend and confirm original workers survive, old tickets fail and manual/launch uncertainty remains. Disable flags and verify captures and explicit reconciliation remain available; do not clear ownership rows. |
+| Image insertion (per provider) | In a disposable checkout on a private socket, paste a real screenshot and choose Insert in each supported CLI. Record whether the reference becomes an image token, then submit manually and record image-specific output and any permission prompt. Repeat after the writer navigates away and back, after the CLI exits to a shell, and with text already typed; none may insert elsewhere or submit. A probe on September 29 covered the first part for Claude Code 2.1.285 and Codex 0.159.0; the rest is open. |
+| Control images | Send, committed work with a peer review, and a one- and two-planner Plan with an image, using installed agents: each recipient reports image-specific content; hook prompt echoes match the manifest or skill prompts; a changed file pauses the next dispatch. |
+| Mobile images | Physical iPhone Safari: photo-library picker (record the returned type), clipboard image paste where offered, a denied clipboard and an unsupported format. Desktop Safari and Chrome: screenshot paste and a mixed image-and-text copy. |
 | Finish branch | In a disposable linked worktree on a private socket, launch two installed CLIs, split one session, and open a session of your own there. Finish branch must list both launched sessions with their processes, leave yours running, require the stop acknowledgement while one is working, close only the launched ones by ID, report a detached background process as a survivor, and hand over to removal or discard only after a fresh confirmation. Repeat with a paused run (takeover before the Git step) and with a backend restart mid-close (uncertain, inspection only). |
 
 `web/e2e/native.spec.ts` exercises the real mock API and xterm renderer, including

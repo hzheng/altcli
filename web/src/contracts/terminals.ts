@@ -46,6 +46,9 @@ export type TerminalFrame =
   | { type: 'hb' }
   | { type: 'closed'; reason: string };
 export interface NativeInput { generation: string; seq: number; encoding: 'utf8' | 'binary'; data: string }
+/** One explicit image insertion in the same ordered input lane: the server derives the verified reference from the attachment and
+ * writes it once, without Enter, only if the writer still shows the expected pane in the expected session on this boot. */
+export interface NativeImageInput { generation: string; seq: number; image: { attachmentId: string; bootId: string; paneId: string; sessionId: string } }
 export const TERMINAL_LIMITS = {
   hostConnections: 8, sessionConnections: 4, outputFrame: 16 * 1024, outputHigh: 1024 * 1024,
   outputLow: 256 * 1024, inputFrame: 4096, inputQueue: 256 * 1024,

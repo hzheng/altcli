@@ -22,6 +22,7 @@ import { parsePlan, parsePlanDecision } from '../src/core/planning-validation.ts
 import type { Group } from '../src/contracts/implementation.ts';
 import type { PlanDecision, PlanResult, PlanStart, PlanningAssignment } from '../src/contracts/planning.ts';
 import type { HookEvent, ManagedSession } from '../src/contracts/workflow.ts';
+import { png, upload } from './lib/images.ts';
 
 // Real disposable Git/SQLite/files, fake terminal delivery and correlated lifecycle evidence.
 let directory: string; let root: string; let store: Store; let adapter: MockAdapter; let plane: ControlPlane; let group: Group; let sent: string[];
@@ -498,7 +499,7 @@ test('checkpoint restart preserves captured text, roster, endorsements and owner
 test('v5 upgrade preserves stored runs and groups and marks phase-aware data as incompatible with older schedulers', async () => {
   const input = request(); await plane.submitPlan(input); const saved = run(input.requestId); const groups = store.groups();
   store.db.pragma('user_version = 5'); store.close(); store = new Store(join(directory, 'metadata'));
-  assert.equal(store.db.pragma('user_version', { simple: true }), 18); assert.deepEqual(store.groups(), groups);
+  assert.equal(store.db.pragma('user_version', { simple: true }), 19); assert.deepEqual(store.groups(), groups);
   const record = store.db.prepare('SELECT value FROM workflow_runs WHERE id=?').get(input.requestId) as { value: string };
   assert.deepEqual(JSON.parse(record.value), saved);
 });
@@ -574,4 +575,30 @@ test('restoring a waiting Plan sends nothing and blocks even an already pending 
   const approve = decision(input.requestId, { branch: { branch: 'task/fixture', head: input.baseline.head } });
   await assert.rejects(plane.decidePlan(approve, 'automatic'), /not preauthorized/); assert.equal(sent.length, 1);
   await plane.decidePlan(approve); assert.ok(run(input.requestId).implementation); assert.equal(sent.length, 2);
+});
+
+test('shared brief images reach every planner and a text-only revision, are frozen with the plan, and reach the approved implementation', async () => {
+  const image = await plane.attachments.upload(upload(root, png()));
+  const input = request({ attachments: [image.id] });
+  await plane.submitPlan(input);
+  const planning: string[] = [];
+  while (run(input.requestId).status === 'running') { const command = run(input.requestId).currentCommandId; planning.push(command); publish(command); await complete(command); }
+  assert.equal(run(input.requestId).status, 'waiting'); assert.ok(planning.length >= 3);
+  const frozen = run(input.requestId).attachments!;
+  assert.deepEqual(frozen.map((a) => [a.id, a.sha256]), [[image.id, image.sha256]]);
+  for (const id of planning) assert.deepEqual(assignment(id).attachments, frozen);
+  assert.equal(assignment(planning[0]!).drafts, undefined, 'independent drafts still withhold peers');
+  // Request changes stays text-only: the brief revision changes, the image set does not.
+  await plane.decidePlan(decision(input.requestId, { action: 'changes', text: 'Also cover the empty state.', agentId: 'codex' }));
+  const revise = run(input.requestId).currentCommandId;
+  assert.equal(assignment(revise).identity.action, 'revise'); assert.deepEqual(assignment(revise).attachments, frozen);
+  publish(revise); await complete(revise);
+  while (run(input.requestId).status === 'running') { const command = run(input.requestId).currentCommandId; publish(command); await complete(command); }
+  await plane.decidePlan(decision(input.requestId));
+  const r = run(input.requestId);
+  assert.ok(r.implementation); assert.deepEqual(r.planning!.frozen!.attachments, frozen);
+  const work = JSON.parse(readFileSync(join(plane.workflow.assignmentDirectory, `${r.currentCommandId}.json`), 'utf8'));
+  assert.deepEqual(work.attachments, frozen); assert.deepEqual(work.frozenPlan.attachments, frozen);
+  assert.ok(sent.every((text) => !text.includes(frozen[0]!.path)), 'no image path is typed into a correlated prompt');
+  await assert.rejects(plane.attachments.remove(image.id), /may already have been used/);
 });

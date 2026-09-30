@@ -2,8 +2,10 @@
 import { useEffect, useLayoutEffect, useImperativeHandle, useRef, useState, type ReactNode, type Ref } from 'react';
 import type { Terminal } from '@xterm/xterm';
 import type { TerminalConnection, TerminalFrame, TerminalTarget, KeyboardResult, ManualWriter } from '../contracts/terminals';
-import { api } from '../client/api';
+import { api, HttpError } from '../client/api';
+import { clipboardImages, type ImageItem } from '../client/attachments';
 import { HelpTip, IconButton, StatusIcon } from './Hint';
+import { AttachImageButton, AttachmentTray, IMAGE_LIMIT_NOTE, pasteImages, useImageTray } from './AttachmentTray';
 
 /** A writer stopped locally before an explicit stop; it may be restored only if nothing changed since. */
 export interface FrozenWriter { readonly connection: object; readonly generation: string; readonly frames: number }
@@ -31,11 +33,20 @@ const TOOL_HELP = [
   ['⤢', 'Expand / ⤡ Collapse terminal', 'enlarge within the page without reconnecting or changing the mode'],
   ['♿', 'Screen reader mode', 'expose output to assistive technology; turn it off if a software keyboard cannot type'],
   ['📋', 'Paste text', 'paste clipboard text in Terminal mode. Ctrl+Shift+Esc leaves terminal focus'],
+  ['🖼️', 'Attach image', 'paste or choose PNG or JPEG images in Terminal mode. They upload to this host; Insert adds one image reference to the prompt, never Enter'],
 ] as const;
+/** One queued input event: terminal bytes, or one explicit image insertion that the server turns into a verified reference. */
+type Queued = { bytes: Uint8Array; start: boolean; image?: undefined } | { image: { key: string; attachmentId: string }; start: true; bytes?: undefined };
+/** Refused by the server before anything was written: the image stays ready for a later, deliberate Insert. */
+class ImageRefused extends Error {}
 /** Native bytes stay local. Only the Terminal toggle begins input; output, focus and clicks in Display mode never do. */
-export function NativeTerminal({ ref, token, target, clientInstanceId, label, fallback, capturedAt, held, holder, cliChanged = false, refresh, viewEpoch = 0, inputEnabled = true }: {
+export function NativeTerminal({ ref, token, target, clientInstanceId, label, fallback, capturedAt, held, holder, cliChanged = false, refresh, viewEpoch = 0, inputEnabled = true, workspace, imagesSupported = false }: {
   ref?: Ref<NativeTerminalHandle>;
   token: string; target: TerminalTarget; clientInstanceId: string; label: string; fallback: ReactNode;
+  /** Canonical worktree root of this pane's workspace; images uploaded here belong to it. */
+  workspace?: string;
+  /** Image insertion is verified for this registered CLI (Claude Code or Codex). */
+  imagesSupported?: boolean;
   capturedAt?: string; held: boolean; refresh: () => Promise<void>; viewEpoch?: string | number;
   /** Describes a shared manual-input hold independently of this terminal's writer. */
   holder?: 'other-browser' | 'this-browser' | 'unresolved' | null;
@@ -46,7 +57,7 @@ export function NativeTerminal({ ref, token, target, clientInstanceId, label, fa
 }) {
   const mount = useRef<HTMLDivElement>(null), terminal = useRef<Terminal | null>(null), root = useRef<HTMLElement>(null);
   // One input event may span several 4 KiB chunks; `start` marks each event's first chunk. `failed` makes the next toggle reconnect first.
-  const live = useRef<{ id: string; bootId: string; generation: string; writer: boolean; ready: boolean; failed: boolean; seq: number; queue: { bytes: Uint8Array; start: boolean }[]; bytes: number; sending: boolean; draining: Promise<void> | null; ws: WebSocket } | null>(null);
+  const live = useRef<{ id: string; bootId: string; paneId: string; sessionId: string; generation: string; writer: boolean; ready: boolean; failed: boolean; seq: number; queue: Queued[]; bytes: number; sending: boolean; draining: Promise<void> | null; ws: WebSocket } | null>(null);
   const [connected, setConnected] = useState(false), [native, setNative] = useState(false), [writer, setWriter] = useState(false);
   const [capture, setCapture] = useState(false), [notice, setNotice] = useState('Open a terminal to observe this pane.'), [active, setActive] = useState('');
   const [busy, setBusy] = useState(false), [epoch, setEpoch] = useState(1);
@@ -66,15 +77,27 @@ export function NativeTerminal({ ref, token, target, clientInstanceId, label, fa
   const [pasting, setPasting] = useState(false);
   const transientRevision = useRef(0);
   const enabled = useRef(inputEnabled); enabled.current = inputEnabled;
+  const viewEpochRef = useRef(viewEpoch); viewEpochRef.current = viewEpoch;
+  /** The picker is bound to the connection, generation, view and target at the click; a change before files return discards them. */
+  const pickerIntent = useRef<{ connection: object; generation: string; view: string | number; target: string } | null>(null);
   const refit = useRef<(() => void) | null>(null);
   const modifiers = useRef({ctrl:false,alt:false}); const [modifierState,setModifierState] = useState(modifiers.current);
+  // This card's images, remembered per exact target in page memory. Uploading never inserts, grants input or moves focus.
+  const targetMemory = JSON.stringify(target);
+  const images = useImageTray(token, workspace ?? '', `native-images:${targetMemory}`);
+  const imagesRef = useRef(images); imagesRef.current = images;
+  // The writer navigated tmux away from the original pane or session: images are not inserted until it returns.
+  const [navigated, setNavigated] = useState(false);
+  /** Image insertions dropped before they were sent return to Ready; nothing was written for them. */
+  function unsentImages(items: Queued[]) { for (const item of items) if (item.image) imagesRef.current.setStatus(item.image.key, 'ready'); }
   function clearModifiers() { modifiers.current = {ctrl:false,alt:false}; setModifierState(modifiers.current); }
   // Drops only events not yet started. Finishing a partly sent event keeps a large bracketed paste from being truncated.
   function clearTransient() {
     clearModifiers(); transientRevision.current++;
     const c=live.current; if(!c)return;
     const next=c.queue.findIndex(item=>item.start); if(next<0)return;
-    c.queue=c.queue.slice(0,next); c.bytes=c.queue.reduce((n,item)=>n+item.bytes.length,0);
+    unsentImages(c.queue.slice(next));
+    c.queue=c.queue.slice(0,next); c.bytes=c.queue.reduce((n,item)=>n+(item.bytes?.length??0),0);
   }
   useLayoutEffect(() => { clearTransient(); }, [viewEpoch]);
   useEffect(() => { if(!expanded)clearTransient();else clearModifiers(); refit.current?.(); }, [expanded]);
@@ -92,6 +115,7 @@ export function NativeTerminal({ ref, token, target, clientInstanceId, label, fa
   }
   function loseInput(reason: string, c = live.current, generation = c?.generation) {
     if (!c || live.current !== c || c.generation !== generation) return;
+    unsentImages(c.queue);
     c.writer = c.ready = false; c.failed = true; c.queue = []; c.bytes = 0; c.ws.close(); busyRef.current = false; setBusy(false);
     if (terminal.current) terminal.current.options.disableStdin = true;
     clearModifiers(); setWriter(false); setNotice(`${reason} Toggle Terminal to reconnect.`); void refreshRef.current();
@@ -103,12 +127,26 @@ export function NativeTerminal({ ref, token, target, clientInstanceId, label, fa
     c.draining = (async () => {
       try {
         while (c.writer && c.generation === generation && c.queue.length && live.current === c) {
-          const { bytes } = c.queue.shift()!; c.bytes -= bytes.length;
+          const item = c.queue.shift()!;
+          if (item.image) {
+            const { key, attachmentId } = item.image; const seq = ++c.seq;
+            try {
+              const receipt = await api<{generation: string; seq: number}>(token, `terminals/${c.id}/input`, { body: { generation, seq, image: { attachmentId, bootId: c.bootId, paneId: c.paneId, sessionId: c.sessionId } } });
+              if (receipt.generation !== generation || receipt.seq !== seq) throw Error('Input receipt changed.');
+              imagesRef.current.setStatus(key, 'inserted');
+            } catch (error) {
+              // A server refusal before writing is definite; a lost response or a failed write is not, and is never resent.
+              if (error instanceof HttpError && error.status < 500 && error.code !== 'INPUT_UNCERTAIN') { imagesRef.current.setStatus(key, 'ready', error.message); throw new ImageRefused(error.message); }
+              imagesRef.current.setStatus(key, 'uncertain'); throw error;
+            }
+            continue;
+          }
+          const { bytes } = item; c.bytes -= bytes.length;
           const data = btoa(String.fromCharCode(...bytes)); const seq = ++c.seq;
           const receipt = await api<{generation: string; seq: number}>(token, `terminals/${c.id}/input`, { body: { generation, seq, encoding: 'binary', data } });
           if (receipt.generation !== generation || receipt.seq !== seq) throw Error('Input receipt changed.');
         }
-      } catch { loseInput('Input may have occurred. Inspect the terminal; nothing is resent.', c, generation); }
+      } catch (error) { loseInput(error instanceof ImageRefused ? `${error.message}` : 'Input may have occurred. Inspect the terminal; nothing is resent.', c, generation); }
       finally { if (c.generation === generation) { c.sending = false; c.draining = null; } }
     })();
     return c.draining;
@@ -138,6 +176,26 @@ export function NativeTerminal({ ref, token, target, clientInstanceId, label, fa
     return !(multiline||large)||window.confirm(multiline
       ? 'This terminal is not using bracketed paste. Newlines can execute commands immediately. Paste these lines?'
       : 'Paste more than 16 KiB into this terminal? The foreground program controls how pasted text is handled.');
+  }
+  /** Attaches pasted or chosen images to this card's tray, only in Terminal mode on a visible card; nothing is uploaded otherwise. */
+  function attachImages(files: File[]) {
+    const c = live.current;
+    if (!enabled.current || !c?.ready || !root.current?.getClientRects().length) { setNotice('Switch this terminal to Terminal mode to attach images. Nothing was uploaded.'); return; }
+    if (!imagesSupported || !workspace) { setNotice('Image insertion is verified only for registered Claude Code and Codex terminals. Nothing was uploaded.'); return; }
+    const problems = imagesRef.current.add(files);
+    setNotice(problems.length ? `${problems.join(' ')}` : 'Image attached below. Choose Insert to add its reference to the prompt; nothing is inserted or submitted automatically.');
+  }
+  /** Why Insert is unavailable now, or empty. The server repeats every check before writing. */
+  const insertBlocked = !writer ? 'Switch to Terminal to insert an image.' : cliChanged ? 'The registered CLI in this pane was replaced. Inspect the pane; images are not inserted.'
+    : navigated ? 'This terminal shows another pane or session. Return to the original pane to insert.' : busy ? 'Wait for the current input decision.' : '';
+  /** One explicit insertion, frozen to this connection, generation and sequence, queued behind nothing: typed input must finish first. */
+  function insertImage(item: ImageItem) {
+    const c = live.current;
+    if (insertBlocked || !c?.ready || !c.writer || !item.receipt || !root.current?.getClientRects().length) { setNotice(insertBlocked || 'Switch to Terminal to insert an image.'); return; }
+    if (c.queue.length || c.sending) { setNotice('Wait for typed input to finish sending, then insert the image.'); return; }
+    clearModifiers(); imagesRef.current.setStatus(item.key, 'inserting');
+    c.queue.push({ image: { key: item.key, attachmentId: item.receipt.id }, start: true }); void drain();
+    terminal.current?.focus();
   }
   async function pasteText() {
     const c=live.current;if(!c||pasting||!enabled.current)return;
@@ -246,7 +304,7 @@ export function NativeTerminal({ ref, token, target, clientInstanceId, label, fa
       const opened = await api<TerminalConnection>(token, 'terminals', {body:{protocol:2,target:JSON.parse(targetKey),clientInstanceId,cols:term.cols,rows:term.rows}});
       id = opened.connectionId; if (disposed) { close(); return; }
       ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/v1/terminals/socket`);
-      const connection = {id,bootId:opened.bootId,generation:'',writer:false,ready:false,failed:false,seq:0,queue:[] as {bytes:Uint8Array;start:boolean}[],bytes:0,sending:false,draining:null as Promise<void> | null,ws}; live.current = connection;
+      const connection = {id,bootId:opened.bootId,paneId:opened.paneId,sessionId:opened.sessionId,generation:'',writer:false,ready:false,failed:false,seq:0,queue:[] as Queued[],bytes:0,sending:false,draining:null as Promise<void> | null,ws}; live.current = connection;
       ws.onopen = () => ws!.send(JSON.stringify({ticket:opened.ticket}));
       ws.onmessage = event => {
         if (disposed || live.current !== connection) return;
@@ -276,12 +334,12 @@ export function NativeTerminal({ ref, token, target, clientInstanceId, label, fa
             if (generationSeen.current?.generation === f.generation && generationSeen.current.writer === f.writer) generationSeen.current.resolve();
             setNotice(f.reason);
             void refreshRef.current();
-          } else if (f.type === 'active') setActive(`${f.label} · ${f.paneId} · ${f.command}${f.size ? ` · ${f.size.replace('x', '×')} window` : ''}${f.sessionId !== opened.sessionId ? ' · navigated to another tmux session; the control target is unchanged' : ''}`);
+          } else if (f.type === 'active') { setNavigated(f.sessionId !== opened.sessionId || f.paneId !== opened.paneId); setActive(`${f.label} · ${f.paneId} · ${f.command}${f.size ? ` · ${f.size.replace('x', '×')} window` : ''}${f.sessionId !== opened.sessionId ? ' · navigated to another tmux session; the control target is unchanged' : ''}`); }
           else if(f.type==='closed') {setNotice(`${f.reason} Toggle Terminal to reconnect.`); ws!.close();}
           else if(f.type!=='hb') throw Error('Unsupported frame.');
         } catch { loseInput('Terminal protocol changed.', connection, generation); }
       };
-      ws.onclose = () => { if(disposed) return; connecting.current = false; clearModifiers(); connection.writer=connection.ready=false; connection.failed=true; connection.queue=[]; connection.bytes=0; if(term) term.options.disableStdin=true; setConnected(false); setWriter(false);
+      ws.onclose = () => { if(disposed) return; connecting.current = false; clearModifiers(); connection.writer=connection.ready=false; connection.failed=true; unsentImages(connection.queue); connection.queue=[]; connection.bytes=0; if(term) term.options.disableStdin=true; setConnected(false); setWriter(false);
         connectedRef.current = false; void refreshRef.current(); };
       ws.onerror = () => { if(!disposed) setNotice('Terminal disconnected. Inspect manual input, then toggle Terminal to reconnect.'); };
       heartbeat = setInterval(() => { if (ws?.readyState === WebSocket.OPEN && generation) ws.send(JSON.stringify({type:'heartbeat',generation})); }, 10000);
@@ -315,7 +373,7 @@ export function NativeTerminal({ ref, token, target, clientInstanceId, label, fa
   freeze: (allowPending = false) => {
     const c = live.current; if (!c?.writer) return null;
     if (!c.ready || (!allowPending && (c.sending || c.queue.length || pasting))) throw Error(`Input is still being sent in ${label}. Wait for it to finish, then choose again. Nothing was requested.`);
-    if (allowPending) { c.queue = []; c.bytes = 0; }
+    if (allowPending) { unsentImages(c.queue); c.queue = []; c.bytes = 0; }
     busyRef.current = true; setBusy(true);
     c.writer = c.ready = false; setWriter(false); clearTransient(); if (terminal.current) terminal.current.options.disableStdin = true;
     return { connection: c, generation: c.generation, frames: frames.current };
@@ -332,6 +390,9 @@ export function NativeTerminal({ ref, token, target, clientInstanceId, label, fa
   return <section ref={root} className={`native-terminal${expanded?' expanded':''}`} data-expanded={expanded} aria-label={`${label} terminal`} onBlurCapture={e=>{if(!e.currentTarget.contains(e.relatedTarget))clearTransient();}}
     onPasteCapture={event=>{
       if(!mount.current?.contains(event.target as Node))return;
+      // Image files take a separate upload path; the same paste never also types text. Display mode uploads nothing and asks nothing.
+      if(!live.current?.ready&&clipboardImages(event.clipboardData).images.length){event.preventDefault();event.stopPropagation();setNotice('Switch this terminal to Terminal mode to attach images. Nothing was uploaded.');return;}
+      if(pasteImages(event,attachImages))return;
       const text=event.clipboardData.getData('text/plain');
       if(!allowPaste(text)){event.preventDefault();event.stopPropagation();}else clearModifiers();
     }}>
@@ -342,12 +403,19 @@ export function NativeTerminal({ ref, token, target, clientInstanceId, label, fa
           : 'Display: view only. Press to switch to Terminal and type here. If the connection failed, this reconnects first.'}
         onClick={event=>{if(!event.isTrusted)return;void (writer ? enterDisplay() : enterTerminal());}} />}
       {connected && writer && <IconButton icon="📋" label="Paste text" help="Paste clipboard text into this pane, subject to the paste checks." disabled={capture||!native} aria-disabled={pasting} aria-busy={pasting} onClick={event=>{if(event.isTrusted)void pasteText();}} />}
+      {connected && writer && imagesSupported && <AttachImageButton label="Attach image" icon="🖼️" help="Choose PNG or JPEG images for this pane. They upload to this host; Insert adds one reference to the prompt, never Enter." disabled={capture||!native}
+        onOpen={() => { const c = live.current; if (!c?.ready) return false; pickerIntent.current = { connection: c, generation: c.generation, view: viewEpochRef.current, target: targetMemory }; return true; }}
+        onFiles={files => { const intent = pickerIntent.current; pickerIntent.current = null; const c = live.current;
+          if (!intent || intent.connection !== c || !c?.ready || c.generation !== intent.generation || intent.view !== viewEpochRef.current || intent.target !== targetMemory) { setNotice('The terminal changed while choosing images. Nothing was attached.'); return; }
+          attachImages(files); }} />}
       {!connected && <IconButton icon={epoch ? '🔄' : '▶️'} label={epoch ? 'Reconnect' : 'Open terminal'} help="Watch this pane live. This does not start typing." onClick={() => reset('Reconnecting as observer…', false)} />}
       <IconButton icon={capture ? '🖥️' : '📄'} label={capture ? 'Show terminal' : 'Captured text'} help="A readable, selectable snapshot with its timestamp, not the live terminal." aria-pressed={capture} onClick={()=>setCapture(x=>!x)} />
       <IconButton icon={expanded ? '⤡' : '⤢'} label={expanded ? 'Collapse terminal' : 'Expand terminal'} help="Enlarge within the page. It does not reconnect or change the terminal mode." aria-expanded={expanded} onClick={()=>setExpanded(!expanded)} />
       <IconButton icon="♿" label="Screen reader mode" help="Expose terminal output to assistive technology. Turn it off if a software keyboard cannot type; Captured text is the alternative." aria-pressed={screenReader} onClick={()=>{setScreenReader(!screenReader);if(terminal.current)terminal.current.options.screenReaderMode=!screenReader;}} />
       <HelpTip label="Terminal tools help" help={<>{TOOL_HELP.map(([icon, name, text]) => <span key={name} className="legend-line">{icon} <strong>{name}</strong>: {text}</span>)}</>} /></div>
     {screenReader && <p className="fine">If your keyboard cannot enter text in this mode, turn it off. Captured text is also available for reading.</p>}
+    <AttachmentTray label={`Images for ${label}`} tray={images} onMessage={setNotice} insert={{ onInsert: insertImage, blocked: insertBlocked }} />
+    {images.items.length > 0 && <p className="fine">{IMAGE_LIMIT_NOTE} Images stay on this host; a submitted prompt may send them to the CLI’s provider.</p>}
     <p className="fine" role="status">{notice}{active && ` · ${active}`}{focused && ' · Ctrl+Shift+Esc: leave terminal focus'}</p>
     <div ref={mount} className="xterm-mount" hidden={capture || !native} aria-label={`${label} native output`} onFocus={() => setFocused(true)} onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) { setFocused(false); leaving.current = false; } }} />
     {(capture || !native) && <><p className="fine">{capturedAt ? `Snapshot captured at ${new Date(capturedAt).toLocaleTimeString()}` : 'Snapshot only'}{connected && !native && ' · native observation unavailable'}{writer && !native ? ' · Terminal mode: this pane has no native screen here, switch to Display' : ''}</p>{fallback}</>}

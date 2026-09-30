@@ -37,6 +37,11 @@ and background effects. Refuse it while any keyboard, delivery, setup or launch
 operation remains live or unresolved. Keep every affected run's keyboard hold,
 checkpoint and fault; its review or takeover stays separate. Recovery is available
 even with no remaining agents or with feature flags off.
+The checkpoint's explicit **Review input and continue** action may acknowledge displayed
+manual-input consequences, stop the writers and record the human inspection decision,
+then submit the separate checkpoint review without ending the run. Each operation keeps
+its existing server checks; refusal, uncertainty or a changed checkpoint/view stops the
+sequence. Viewing a queued handoff never resumes it.
 The browser records its fixed acknowledgement wording as that note when the user takes control;
 neither a checkbox nor a typed note is required (September 27 update below).
 
@@ -176,6 +181,23 @@ consent digest covers (ADR-0013). Read-only hosts, stale reads, unconfirmed CLI 
 mode or synchronized input, detached HEAD, unresolved setup and Git refusals remain blockers that
 no acknowledgement clears. Control access stays the reference that explains every hold and keeps
 Take control, stops and recovery; nothing there is required first.
+
+September 29 image attachments (M4A/M4B), from an endorsed Plan: images are file uploads, never terminal
+bytes, base64 input or host clipboard changes. A PNG or JPEG pasted or picked in a Terminal-mode card
+uploads over authenticated HTTP to private storage outside every workspace; the upload types, grants
+and sends nothing. An explicit **Insert** is one image intent in the connection's ordered input lane,
+sharing its generation, sequence, receipts and manual-input evidence. Immediately before the write the
+server rechecks the writer's actual pane and session, the registered Claude Code or Codex process and
+directory, and the image bytes, records the image's use, then writes the single-quoted absolute path as
+one bracketed paste and never Enter; tmux forwards the paste markers only to a program that enabled
+bracketed paste. Refusals before the write are definite; a failed write or lost response is uncertain
+and never resent. This narrows but does not remove tmux's inspection/write race or interleaving with
+other writers, and a reference never establishes that a model read the image. Control reuses uploads
+for plain Send, new committed work and a Plan's shared brief: admission freezes and pins immutable
+descriptors, every later assignment of the run carries them, and plain Send's prompt names an input
+manifest instead of an image path, so exact prompt correlation is unchanged. Images that may have been
+used never expire in this increment; a full quota refuses new uploads. The protocol records which CLI
+versions a probe verified; other CLIs are refused.
 
 See
 [the protocol](../TERMINAL-PROTOCOL.md) for limits, recovery and deployment checks.

@@ -110,7 +110,8 @@ not stop a run. A backend restart pauses owned runs without replaying commands.
 | Unknown evidence | Pause and retain execution ownership; never guess from terminal text or recent history |
 | Human control | Explicit branch/readiness confirmation; normal Next turn at manual waits; pause does not interrupt; takeover requires inspection of all participants |
 | Native terminal and explicit launch | Implemented; setup enables both host flags (a missing flag means off); installed-host/mobile acceptance remains open |
-| Image attachments / native iOS / supervisor | Deferred |
+| Image attachments | Paste or pick PNG/JPEG in a Terminal-mode card, then Insert its host path (never Enter); plain Send, committed work and a Plan brief carry images to Claude Code and Codex. Private host storage; installed-host and device acceptance open |
+| Native iOS / supervisor | Deferred |
 
 **Background-work evidence:** Claude uses `UserPromptSubmit` and the current
 Stop payload, including background-task and cron information when available.
@@ -380,7 +381,13 @@ and says what was already done. Taking control never interrupts an agent or its 
 replays input or claims success, and it is refused, changing nothing, if the controller moved to
 another command meanwhile. **Pause the controller** stays available while it drives (it keeps the
 run and does not send Ctrl-C or stop background jobs), and a paused run's valid checkpoint or
-handoff can continue instead with one click. No command is
+handoff can continue instead with one click. A paused committed handoff shows the
+validated peer result and the next agent queued to review or revise it. Manual terminal
+input holds handoffs across the tmux server, including other checkouts. **Review input
+and continue** lists any remaining manual-input consequences, stops and records that
+input, then reviews the saved checkpoint while keeping the run. A failed step or changed
+checkpoint or view cancels continuation; **Take control** instead ends the run and its
+queued handoff. No command is
 silently retried. Final task-level tests and review remain your responsibility.
 
 Once ownership is released, a restarted CLI in the same pane is

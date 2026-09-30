@@ -17,7 +17,7 @@ export class Store {
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("busy_timeout = 5000");
     const version = this.db.pragma("user_version", { simple: true }) as number;
-    if (version > 18) throw new Error("Unsupported database version. Do not downgrade this store.");
+    if (version > 19) throw new Error("Unsupported database version. Do not downgrade this store.");
     this.db.transaction(() => {
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -42,6 +42,8 @@ export class Store {
         CREATE TABLE IF NOT EXISTS task_finishes (id TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS worktree_updates (id TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS worktree_renames (id TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, request_id TEXT NOT NULL UNIQUE, status TEXT NOT NULL, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS attachment_refs (attachment_id TEXT NOT NULL, kind TEXT NOT NULL, ref_id TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (attachment_id, kind, ref_id));
         CREATE UNIQUE INDEX IF NOT EXISTS worktree_creation_owner ON worktree_creations(project_id) WHERE status IN ('applying', 'uncertain');
         CREATE INDEX IF NOT EXISTS interactions_repository ON interactions(repository);
         CREATE INDEX IF NOT EXISTS interactions_run ON interactions(json_extract(value, '$.input.runId'));
@@ -59,7 +61,8 @@ export class Store {
           this.db.prepare('UPDATE keyboard_sessions SET value=? WHERE id=?').run(JSON.stringify(next), row.id);
         }
       }
-      this.db.exec("PRAGMA user_version = 18"); // older servers must not interpret a concurrent manual-input period
+      // 18: older servers must not interpret a concurrent manual-input period. 19: nor dispatch runs without their pinned images.
+      this.db.exec("PRAGMA user_version = 19");
     })();
   }
   /** v1 had one global reservation in `control` and sessions without agentType. */

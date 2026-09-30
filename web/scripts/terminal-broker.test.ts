@@ -367,7 +367,7 @@ test('version 17 migration preserves separate original records and requires reco
   store.db.prepare('INSERT INTO keyboard_sessions(id,value) VALUES (?,?)').run(older.id,JSON.stringify(older));
   store.db.pragma('user_version = 17');const config=plane.config;store.close();store=new Store(directory);
   plane=new ControlPlane(new Controller(config,store,new MockAdapter()));
-  assert.equal(store.db.pragma('user_version',{simple:true}),18);
+  assert.equal(store.db.pragma('user_version',{simple:true}),19);
   const periods=plane.authority.pending();assert.equal(periods.length,2);
   const archived=plane.authority.get(settled.id);assert.equal(archived.reconciliationRequired,false);assert.equal(archived.recoveryRequired,false);assert.equal(archived.revision,legacy.revision);assert.deepEqual(archived.panes,legacy.panes);
   for(const period of periods){assert.equal(period.live,false);assert.equal(period.recoveryRequired,true);assert.equal(period.writers[0]!.live,false);assert.deepEqual(period.panes,legacy.panes);}

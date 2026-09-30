@@ -1,4 +1,5 @@
 import type { ManualSession } from './terminals.ts';
+import type { AttachmentDescriptor } from './attachments.ts';
 import type { AgentId, AgentType, CommandInput, CommandRecord, ConsoleState, EventInput, PaneIdentity, SessionRegistration, TurnEvent } from './api.ts';
 import type { Group, ImplementationRun, ImplementationTurn, JournalRecord, StandaloneStart, WorkspaceGit } from './implementation.ts';
 import type { PlanningRun, PlanTurn } from './planning.ts';
@@ -61,6 +62,8 @@ export interface RelayRun {
   implementation?: ImplementationRun;
   planning?: PlanningRun;
   standalone?: StandaloneStart;
+  /** Immutable images frozen and pinned at admission for plain Send, committed work and Plan; every later assignment of the run carries them. */
+  attachments?: AttachmentDescriptor[];
   /** Stage relay binding. A staging run without it predates branch-scoped Stage relay and never dispatches another turn. */
   stage?: StageBinding;
   interaction?: InteractionHold;

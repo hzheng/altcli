@@ -1,7 +1,8 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { RawData, WebSocket } from 'ws';
 const rawBuffer = (data: RawData): Buffer => Array.isArray(data) ? Buffer.concat(data) : Buffer.from(data as ArrayBuffer);
-import type { KeyboardResult, ManualReconcile, ManualSession, TerminalConnection, TerminalFrame, TerminalOpen, TerminalTarget } from '../contracts/terminals.ts';
+import type { KeyboardResult, ManualReconcile, ManualSession, NativeImageInput, TerminalConnection, TerminalFrame, TerminalOpen, TerminalTarget } from '../contracts/terminals.ts';
+import type { AttachmentDescriptor } from '../contracts/attachments.ts';
 import { TERMINAL_LIMITS as L } from '../contracts/terminals.ts';
 import { parseKeyboard, parseKeyboardBatch, parseNativeInput, parseTerminalOpen, terminalFields, terminalNumber, terminalSize, terminalText } from '../core/terminal-validation.ts';
 import { AppError, messageOf } from '../core/errors.ts';
@@ -28,6 +29,10 @@ export interface TerminalServices {
   resolve(target: TerminalTarget): Promise<AttachTarget>;
   begin(input: TerminalOpen, connectionId: string, generation: string, prior?: ManualSession): Promise<ManualSession>;
   reconcile(input: ManualReconcile, handoffRequestId?: string): Promise<ManualSession>;
+  /** Re-resolves the registered CLI and its directory, then returns the verified reference for one attachment in its workspace. */
+  image(target: TerminalTarget, attach: AttachTarget, attachmentId: string): Promise<{ descriptor: AttachmentDescriptor; bytes: Buffer }>;
+  /** Records possible use of the image durably, before the write. */
+  pinImage(descriptor: AttachmentDescriptor, refId: string): void;
 }
 /** Ephemeral PTYs/credit/input queues; only authority metadata is durable. */
 export class TerminalBroker implements TerminalGateway {
@@ -160,6 +165,7 @@ export class TerminalBroker implements TerminalGateway {
   }
   async input(id: string, value: unknown): Promise<{ generation: string; seq: number }> {
     this.enabled(true); const input = parseNativeInput(value), c = this.current(id, input.generation);
+    if ('image' in input) return this.image(c, input);
     const bytes = Buffer.from(input.data, input.encoding === 'binary' ? 'base64' : 'utf8');
     if (bytes.length > L.inputFrame || !bytes.length || (input.encoding === 'binary' ? bytes.toString('base64') !== input.data : bytes.toString('utf8') !== input.data)) throw new AppError('TERMINAL_INPUT', 'Invalid or oversized terminal byte frame.');
     if (!c.writer || !c.manualId || c.pendingBytes + bytes.length > 32 * 1024) throw new AppError('KEYBOARD_REQUIRED', 'This connection has no available keyboard grant.', 409);
@@ -186,6 +192,49 @@ export class TerminalBroker implements TerminalGateway {
     });
     c.tail = work;
     try { return await work; } finally { c.pendingBytes -= bytes.length; }
+  }
+  /** One explicit image insertion, ordered with this connection's typed input. The reference is derived server-side and written once,
+   * never followed by Enter. The strongest available checks run immediately before the write: the writer's actual pane and session,
+   * the registered CLI and its directory, and the attachment's bytes. tmux's own inspection/write race and interleaving with other
+   * writers remain; an exception after the write is uncertain and never retried. */
+  private async image(c: Connection, input: NativeImageInput): Promise<{ generation: string; seq: number }> {
+    const { attachmentId, bootId, paneId, sessionId } = input.image;
+    if (bootId !== this.authority.bootId || paneId !== c.target.identity.paneId || sessionId !== c.target.sessionId) throw new AppError('TARGET_CHANGED', 'This terminal is not the one the image was chosen for. Nothing was inserted.', 409);
+    if (!c.writer || !c.manualId || c.pendingBytes + L.inputFrame > 32 * 1024) throw new AppError('KEYBOARD_REQUIRED', 'This connection has no available keyboard grant.', 409);
+    const digest = createHash('sha256').update(`image:${attachmentId}`).digest('hex');
+    c.pendingBytes += L.inputFrame;
+    const work = c.tail.catch(() => {}).then(async () => {
+      this.current(c.id, input.generation);
+      if (!c.writer || !c.manualId) throw new AppError('KEYBOARD_REVOKED', 'Keyboard authority ended. Nothing was inserted.', 409);
+      if (input.seq <= c.inputSeq) {
+        if (c.receipts.get(input.seq) !== digest) throw new AppError('INPUT_SEQUENCE', 'Conflicting or expired input receipt.', 409);
+        return { generation: c.generation, seq: input.seq };
+      }
+      if (input.seq !== c.inputSeq + 1) throw new AppError('INPUT_SEQUENCE', 'Input sequence gap. Nothing was replayed.', 409);
+      // A writer may have navigated tmux: the actual destination must still be the original pane in the original session.
+      const active = await c.attachment?.active();
+      if (!active || active.paneId !== c.target.identity.paneId || active.sessionId !== c.target.sessionId) throw new AppError('TARGET_CHANGED', 'This terminal now shows another pane or session. Return to the original pane; nothing was inserted.', 409);
+      const prepared = await this.services.image(c.input.target, c.target, attachmentId);
+      if (prepared.bytes.length > L.inputFrame) throw new AppError('IMAGE_REFERENCE', 'This image reference is too long for one input frame. Nothing was inserted.', 409);
+      // The writer can navigate while the image is prepared: fresh destination evidence is the last await, and authority, pin and write
+      // follow it without awaiting.
+      const destination = await c.attachment?.active();
+      if (!destination || destination.paneId !== c.target.identity.paneId || destination.sessionId !== c.target.sessionId) throw new AppError('TARGET_CHANGED', 'This terminal now shows another pane or session. Return to the original pane; nothing was inserted.', 409);
+      this.current(c.id, input.generation);
+      if (!c.writer || c.closed || !c.attachment || !c.manualId) throw new AppError('KEYBOARD_REVOKED', 'Keyboard authority ended before writing. Nothing was inserted.', 409);
+      if (Date.now() - c.rateStart >= 1000) { c.rateStart = Date.now(); c.rateBytes = 0; }
+      if (c.rateBytes + prepared.bytes.length > L.inputQueue) throw new AppError('INPUT_RATE', 'Terminal input rate exceeded. Nothing was inserted.', 429);
+      c.rateBytes += prepared.bytes.length;
+      this.services.pinImage(prepared.descriptor, `${c.id}:${input.generation}:${input.seq}`);
+      this.authority.markInput(c.manualId, c.id, c.generation, prepared.bytes.length);
+      try { c.attachment.write(prepared.bytes); }
+      catch { void this.close(c.id, 'An image reference may have been inserted. Inspect it; never resend.'); throw new AppError('INPUT_UNCERTAIN', 'An image reference may have been inserted. Inspect it; never resend.', 409); }
+      c.inputSeq = input.seq; c.receipts.set(input.seq, digest);
+      while (c.receipts.size > 64) c.receipts.delete(c.receipts.keys().next().value!);
+      return { generation: c.generation, seq: input.seq };
+    });
+    c.tail = work;
+    try { return await work; } finally { c.pendingBytes -= L.inputFrame; }
   }
   async resize(id: string, value: unknown): Promise<void> {
     const b = terminalFields(value, ['generation', 'cols', 'rows']), c = this.current(id, terminalText(b.generation));

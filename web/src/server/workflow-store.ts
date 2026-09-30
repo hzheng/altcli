@@ -12,6 +12,8 @@ import type { HandoffArchive, ImplementationAction, ImplementationRun, JournalRe
 import type { FrozenPlan, PlanCapture, PlanDecision, PlanningRun } from '../contracts/planning.ts';
 import { consumePlan, planAgreed } from './planning-state.ts';
 import type { InteractionHold, InteractionInput } from '../contracts/interactions.ts';
+import type { AttachmentDescriptor } from '../contracts/attachments.ts';
+import { pinAttachments } from './attachments.ts';
 
 const json = JSON.stringify;
 export const DEFAULT_TURN_LIMIT = 20;
@@ -27,6 +29,13 @@ export function wireText(input: StartInput, session: ManagedSession): string {
   const text = input.kind === 'relay' ? `${session.relayPrompt}: ${input.text ?? ''}`.trimEnd() : input.text!;
   const wire = `${text} [altcli-command:${input.requestId}]`;
   if (new TextEncoder().encode(wire).length > 2000) throw new AppError('INVALID_TEXT', 'The text plus its 54-byte correlation marker exceeds 2,000 UTF-8 bytes. Shorten the text.');
+  return promptText(wire);
+}
+/** A plain Send with images names only its immutable input manifest, so no image path is typed where a CLI could turn it into a
+ * native attachment token and change the exact prompt that lifecycle correlation compares. */
+export function manifestWire(requestId: string, path: string): string {
+  const wire = `Read the task input at ${JSON.stringify(path)}. Carry out its instruction; first inspect every image file it lists. [altcli-command:${requestId}]`;
+  if (new TextEncoder().encode(wire).length > 2000) throw new AppError('INVALID_TEXT', 'The task input path is too long for the 2,000-byte prompt limit.');
   return promptText(wire);
 }
 /** A durable execution ledger, separate from transport receipts and the bounded history view. */
@@ -199,9 +208,13 @@ export class WorkflowStore {
     run.pauseRequested = false; run.restoredCheckpoint = true; run.status = 'waiting';
     run.reason = 'Settled checkpoint restored. Choose Next turn or a plan decision explicitly; nothing was sent.'; this.saveRun(run);
   }
-  start(input: StartInput, participants: ManagedSession[], pairId: string | null, implementation?: ImplementationRun, planning?: PlanningRun, standalone?: StandaloneStart): Execution {
+  /** Where a plain Send's input manifest lives: beside the assignments, outside every checkout. */
+  manifestPath(commandId: string): string { return join(this.assignmentDirectory, `${commandId}.input.json`); }
+  start(input: StartInput, participants: ManagedSession[], pairId: string | null, implementation?: ImplementationRun, planning?: PlanningRun, standalone?: StandaloneStart,
+    attachments: AttachmentDescriptor[] = []): Execution {
     const first = participants.find((s) => s.id === input.agentId)!;
-    const wire = implementation || planning ? '' : wireText(input, first); // Validation before any durable write.
+    // Validation before any durable write.
+    const wire = implementation || planning ? '' : standalone && attachments.length ? manifestWire(input.requestId, this.manifestPath(input.requestId)) : wireText(input, first);
     return this.store.db.transaction(() => {
       const existing = this.execution(input.requestId);
       if (existing) {
@@ -230,12 +243,15 @@ export class WorkflowStore {
         autoContinue: input.autoContinue === true, pauseOnObjection: input.pauseOnObjection === true, pauseRequested: false, status: 'running', reason: 'Waiting for this command to finish.',
         currentCommandId: input.requestId, automaticTurns: 0, turnLimit: input.turnLimit ?? DEFAULT_TURN_LIMIT, createdAt: timestamp, updatedAt: timestamp,
         ...(implementation ? { implementation } : {}), ...(planning ? { planning } : {}), ...(standalone ? { standalone } : {}),
-        ...(!implementation && !planning && !standalone && input.stage ? { stage: { branch: input.stage.branch, head: input.stage.head } } : {}) };
+        ...(!implementation && !planning && !standalone && input.stage ? { stage: { branch: input.stage.branch, head: input.stage.head } } : {}),
+        ...(attachments.length ? { attachments } : {}) };
       const turn: Execution = planning ? this.planTurn(run) : implementation ? this.commitTurn(run, first.id, implementation.request.kind !== 'review' ? 'work' : implementation.policy === 'peer' ? 'review_and_improve' : 'review', input.text ?? '', input.handoff === true, input.requestId) : { commandId: input.requestId, runId: run.id, agentId: first.id, input, wireText: wire,
         status: 'planned', sessionId: null, sourceTurnId: null, continuation: false, baselineProcesses: null, baselineWorktree: null };
       this.saveRun(run); this.saveExecution(turn);
       if(this.store.db.prepare('SELECT 1 FROM launch_reservations WHERE index_path=?').get(lockKey)) throw new AppError('LAUNCH_BUSY', 'An unresolved launch owns this checkout.', 409);
       this.store.db.prepare('INSERT INTO workflow_owners(lock_key,run_id) VALUES (?,?)').run(lockKey, run.id);
+      // Pinned with admission: a concurrent deletion either won first (and this start fails) or now refuses.
+      pinAttachments(this.store.db, attachments, 'run', run.id);
       return turn;
     }).immediate();
   }
@@ -493,7 +509,8 @@ export class WorkflowStore {
         epoch: plan.epoch, briefRevision: plan.briefRevision, policyRevision: plan.policyRevision, rosterRevision: plan.group.revision, baseline: plan.request.baseline.head,
         brief: plan.brief, planningGroup: plan.group, planners: plan.participants,
         automaticPolicy: { autoContinue: run.autoContinue, requireApproval: plan.request.requireApproval, turnLimit: run.turnLimit, pauseOnObjection: run.pauseOnObjection === true, automaticTurnsBeforeTransition: run.automaticTurns },
-        plan: plan.current!, endorsements: { ...plan.endorsements }, objections: { ...plan.objections }, implementation: { ...plan.request.implementation, branch: implementation.consent } };
+        plan: plan.current!, endorsements: { ...plan.endorsements }, objections: { ...plan.objections }, implementation: { ...plan.request.implementation, branch: implementation.consent },
+        ...(run.attachments ? { attachments: run.attachments } : {}) };
       plan.step = 'implemented'; plan.next = null;
       run.implementation = implementation; run.participants = plan.implementationParticipants; run.autoContinue = implementation.request.autoContinue;
       const turn = this.commitTurn(run, implementation.request.agentId, 'work', 'Implement the frozen plan within the recorded task scope.', implementation.request.handoff, implementation.request.requestId);

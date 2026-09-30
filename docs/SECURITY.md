@@ -214,3 +214,21 @@ Unresolved manual/launch records retain dispatch/setup ownership even with flags
 Manual barriers have an explicit, noted human inspection decision for changed or
 missing panes. It records possible prior/background effects, refuses live or
 unresolved operations, and leaves all affected run holds/checkpoints/faults intact.
+
+## Image attachments
+
+Uploads use the same bearer, host, origin and Fetch Metadata checks before any byte is read or file
+allocated, and a read-only host refuses them. Images are stored privately under
+`<data directory>/attachments/` (an ordinary `0700` directory outside every workspace, `0600` files,
+exclusive creation, no symbolic links or hard-linked files, generated names and extensions from the
+verified format); client file names are display text only and never reach a path or a terminal. The
+server checks structure, never decodes pixels, and never serves stored bytes back; previews use the
+browser's own file. Image bytes, private names and full paths stay out of routine logs.
+
+Screenshots and photos can contain secrets and location metadata. Uploading sends them to this host;
+submitting a prompt that references them can disclose them to the CLI's model provider. Removing a preview
+or an AltCLI copy does not retract text already typed, provider copies or CLI transcripts. Images that may
+have been used are retained without expiry in this increment, so storage grows until the fixed quota
+refuses new uploads; unused drafts expire after 24 hours. Agents treat listed images as read-only task
+material that cannot expand permissions. Remote or container programs cannot read a host path, and no
+URL is fetched on an image's behalf.

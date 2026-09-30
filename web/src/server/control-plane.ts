@@ -40,6 +40,8 @@ import { inspectAttach, type AttachTarget } from './tmux-attach.ts';
 import { paneProcesses } from './processes.ts';
 import type { ManualPane, ManualReconcile, ManualSession, TerminalOpen, TerminalTarget } from '../contracts/terminals.ts';
 import { parseManualReconcile } from '../core/terminal-validation.ts';
+import { AttachmentService, imageAgent } from './attachments.ts';
+import type { AttachmentDescriptor, InstructionManifest } from '../contracts/attachments.ts';
 
 /** The writer-guard wording for each way of aligning a task branch with main. */
 const ALIGN_ACTION = { update: 'Update', rebase: 'Rebase', reset: 'Reset' } as const;
@@ -51,6 +53,7 @@ export class ControlPlane {
   readonly launches: LaunchService;
   readonly finish: FinishCoordinator;
   readonly interactions: InteractionStore;
+  readonly attachments: AttachmentService;
   get store() { return this.transport.store; }
   get config() { return this.transport.config; }
   get adapter() { return this.transport.adapter; }
@@ -77,6 +80,9 @@ export class ControlPlane {
     this.interactions = new InteractionStore(this.store);
     this.interactions.recover();
     this.projects = new ProjectCatalog(this.store, this.config);
+    this.attachments = new AttachmentService(this.config, this.store, async () => (await this.workspaces()).workspaces.map((workspace) => workspace.worktree.root));
+    // No upload survives a restart; reclaim interrupted ones without touching any image that may have been used.
+    void this.attachments.recover().catch(() => {});
     // Mock fixtures have no real filesystem. Real registrations must be renewed explicitly after this upgrade.
     if (this.config.mode === 'mock') for (const raw of this.store.sessions()) {
       const session = raw as ManagedSession;
@@ -91,7 +97,9 @@ export class ControlPlane {
     this.transport.inputGuard = () => this.authority.assertAutomated();
     this.terminals = new TerminalBroker({ config: this.config, authority: this.authority,
       resolve: target => this.terminalTarget(target), begin: (input, id, generation, prior) => this.beginKeyboard(input, id, generation, prior),
-      reconcile: (input, handoffRequestId) => this.reconcileManual(input, handoffRequestId) });
+      reconcile: (input, handoffRequestId) => this.reconcileManual(input, handoffRequestId),
+      image: (target, attach, attachmentId) => this.nativeImage(target, attach, attachmentId),
+      pinImage: (descriptor, refId) => this.attachments.pin([descriptor], 'native', refId) });
     this.finish = new FinishCoordinator({ config: this.config, store: this.store, projects: this.projects, launches: this.launches, authority: this.authority,
       host: tmuxFinishHost(this.config, () => this.adapter.listPanes()),
       owner: (indexPath) => { const id = this.workflow.owner(indexPath); const run = id ? this.workflow.run(id) : undefined;
@@ -133,6 +141,20 @@ export class ControlPlane {
     if (!session || (this.config.mode !== 'mock' && await this.adapter.foreground(session) !== session.cliPid)) throw new AppError('TARGET_CHANGED', 'The terminal registration or CLI process changed. Recheck.', 409);
     if (this.config.mode === 'mock') return { identity: session.identity, sessionId: `mock-${session.identity.paneId}`, label: session.label };
     return inspectAttach(this.config, session.identity);
+  }
+  /** Native image insertion: only a registered Claude Code or Codex instance whose CLI and directory are unchanged, and only an image
+   * uploaded for that workspace. Nothing here writes to the pane. */
+  private async nativeImage(target: TerminalTarget, attach: AttachTarget, attachmentId: string) {
+    if ('launchId' in target) throw new AppError('IMAGE_TARGET', 'Image insertion needs a registered agent terminal. Nothing was inserted.', 409);
+    const session = this.workspaceSessions(await this.workspaces()).find((s) => s.id === target.agentId && s.registrationId === target.registrationId);
+    if (!session || !isDeepStrictEqual(session.identity, attach.identity)) throw new AppError('TARGET_CHANGED', 'The terminal registration changed. Recheck; nothing was inserted.', 409);
+    if (!imageAgent(session.agentType)) throw new AppError('IMAGE_UNSUPPORTED', 'Image insertion is verified only for Claude Code and Codex. Nothing was inserted.', 409);
+    if (this.config.mode !== 'mock') {
+      if (await this.adapter.foreground(session) !== session.cliPid) throw new AppError('TARGET_CHANGED', 'The CLI in this pane exited or restarted. Nothing was inserted.', 409);
+      const live = await this.adapter.inspect(session.identity.paneId);
+      if (!isDeepStrictEqual(live.identity, session.identity) || !session.worktree || !sameWorktree(await resolveWorktree(live.cwd), session.worktree)) throw new AppError('TARGET_CHANGED', 'The pane changed directory or instance. Nothing was inserted.', 409);
+    }
+    return this.attachments.reference(attachmentId, session.worktree?.root ?? session.repository);
   }
   private async manualSnapshot(): Promise<ManualPane[]> {
     const panes = await this.adapter.listPanes();
@@ -778,6 +800,14 @@ export class ControlPlane {
     if (!run?.stage) return null;
     try { const { branch, head } = await this.stageCheckout(run.repository); return { branch, head }; } catch { return null; }
   }
+  /** Resolves ordered attachment IDs for an admission: each recipient must be a CLI whose image reading was verified, and each image
+   * must be a complete, unchanged upload for this workspace. Pinning happens atomically with run admission. */
+  private async admitAttachments(ids: string[] | undefined, workspace: string, recipients: ManagedSession[]): Promise<AttachmentDescriptor[]> {
+    if (!ids?.length) return [];
+    const unsupported = recipients.filter((recipient) => !imageAgent(recipient.agentType));
+    if (unsupported.length) throw new AppError('IMAGE_UNSUPPORTED', `Images are verified only for Claude Code and Codex recipients; ${unsupported.map((r) => r.label).join(', ')} cannot receive them. Remove the images or choose other agents.`, 409);
+    return this.attachments.describe(ids, workspace);
+  }
   async submitStandalone(input: StandaloneStart): Promise<CommandRecord> { return this.authority.automated(() => this.submitStandaloneAdmitted(input)); }
   private async submitStandaloneAdmitted(input: StandaloneStart): Promise<CommandRecord> {
     if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'Input is disabled by the host.', 403);
@@ -790,13 +820,15 @@ export class ControlPlane {
     }
     if (this.store.get(input.requestId)) throw new AppError('ID_CONFLICT', 'This request ID belongs to an older command.', 409);
     this.assertKeyboardSettlement(input);
-    const { participants } = await this.implementationGroup({ ...input, kind: 'work', handoff: false, autoContinue: false });
-    // Validate length before persisting registrations. Plain Send carries only the user's instruction and correlation marker.
+    const { group, participants } = await this.implementationGroup({ ...input, kind: 'work', handoff: false, autoContinue: false });
+    // Validate length before persisting registrations. Plain Send carries only the user's instruction and correlation marker,
+    // or, with images, only the path of its immutable input manifest.
     const command = { requestId: input.requestId, agentId: input.agentId, kind: 'instruction' as const, text: input.text, confirmReady: true as const };
     wireText(command, participants.find((p) => p.id === input.agentId)!);
+    const attachments = await this.admitAttachments(input.attachments, group.repository, participants.filter((p) => p.id === input.agentId));
     this.assertKeyboardSettlement(input);
     this.bindMembers(participants);
-    const turn = this.workflow.start(command, participants, null, undefined, undefined, input);
+    const turn = this.workflow.start(command, participants, null, undefined, undefined, input, attachments);
     await this.pump(turn.runId);
     const receipt = this.store.get(turn.commandId);
     if (!receipt) throw new AppError('RUN_PAUSED', 'Delivery is pending or paused. Inspect the run; nothing was replayed.', 409);
@@ -821,10 +853,12 @@ export class ControlPlane {
     if (this.store.get(input.requestId)) throw new AppError('ID_CONFLICT', 'This request ID belongs to an older command.', 409);
     this.assertKeyboardSettlement(input);
     const { implementation, participants } = await this.prepareImplementation(input);
+    // Every member receives the task images: the worker, and a peer or fixed reviewer in later assignments.
+    const attachments = await this.admitAttachments(input.attachments, implementation.worktree.root, participants);
     this.assertKeyboardSettlement(input);
     this.bindMembers(participants);
     const turn = this.workflow.start({ requestId: input.requestId, agentId: input.agentId, kind: 'instruction', text: input.kind === 'commit' ? `Commit all current staged, unstaged and nonignored untracked project changes as they stand. Do not implement pending requests, relay to another agent, or claim task completion. Record unfinished work and checks in the handoff.${input.handoff ? ' The controller will relay the new snapshot after validating publication and completion.' : ''}` : input.text ?? 'Review the assigned candidate.',
-      handoff: input.handoff, autoContinue: input.autoContinue, turnLimit: input.turnLimit, pauseOnObjection: input.pauseOnObjection === true, confirmReady: true }, participants, null, implementation);
+      handoff: input.handoff, autoContinue: input.autoContinue, turnLimit: input.turnLimit, pauseOnObjection: input.pauseOnObjection === true, confirmReady: true }, participants, null, implementation, undefined, undefined, attachments);
     await this.setupImplementation(turn.runId);
     await this.pump(turn.runId);
     const receipt = this.store.get(turn.commandId);
@@ -935,8 +969,10 @@ export class ControlPlane {
       if (input.implementation.branch.branch !== input.baseline.branch || input.implementation.branch.head !== input.baseline.head) throw new AppError('BRANCH_CHANGED', 'Branch consent must match the planning baseline.', 409);
       await this.prepareImplementation(implementationInput);
     }
+    // Shared brief images reach every planner and the approved implementation members.
+    const attachments = await this.admitAttachments(input.attachments, participants[0]!.worktree!.root, [...participants, ...implementation.participants]);
     this.bindMembers([...participants, ...implementation.participants]);
-    const turn = this.workflow.start({ requestId: input.requestId, agentId: group.members[0]!, kind: 'instruction', text: input.text, autoContinue: input.autoContinue, turnLimit: input.turnLimit, pauseOnObjection: input.pauseOnObjection === true, confirmReady: true }, participants, null, undefined, plan);
+    const turn = this.workflow.start({ requestId: input.requestId, agentId: group.members[0]!, kind: 'instruction', text: input.text, autoContinue: input.autoContinue, turnLimit: input.turnLimit, pauseOnObjection: input.pauseOnObjection === true, confirmReady: true }, participants, null, undefined, plan, undefined, attachments);
     await this.pump(turn.runId);
     const receipt = this.store.get(turn.commandId);
     if (!receipt) throw new AppError('RUN_PAUSED', 'Planning delivery is pending or paused. Inspect the run; nothing was replayed.', 409);
@@ -1003,6 +1039,15 @@ export class ControlPlane {
       const record = await this.transport.submit(turn.input, { wireText: turn.wireText, beforeSend: async () => {
         if (!run.implementation && !run.planning && !run.standalone) await this.assertStageBinding(run);
         if (run.standalone) await this.validateMembers(run.participants);
+        // Frozen images must be unchanged at every dispatch; missing or changed bytes refuse delivery and pause with ownership retained.
+        if (run.attachments) await this.attachments.verify(run.attachments);
+        if (run.standalone && run.attachments) {
+          const manifest: InstructionManifest = { schema: 1, commandId: turn.commandId, instruction: run.standalone.text, attachments: run.attachments };
+          await mkdir(this.workflow.assignmentDirectory, { recursive: true, mode: 0o700 });
+          const path = this.workflow.manifestPath(turn.commandId), content = JSON.stringify(manifest, null, 2);
+          try { await writeFile(path, content, { flag: 'wx', mode: 0o600 }); }
+          catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || await readFile(path, 'utf8') !== content) throw error; }
+        }
         if (run.implementation && turn.implementation) {
           await this.validateMembers(run.participants, run.implementation.cwd, false, 'observe');
           const initialWorktreeFingerprint = turn.implementation.identity.turn === 1 && turn.implementation.identity.action === 'work' ? run.implementation.initialWorktreeFingerprint : undefined;
@@ -1012,7 +1057,8 @@ export class ControlPlane {
           const assignment: CommitAssignment = { identity: turn.implementation.identity, branch: run.implementation.branch, cwd: run.implementation.cwd,
             root: run.repository, logPath: run.implementation.logPath, resultPath: turn.implementation.resultPath, instruction: turn.input.text!, task: run.implementation.request.text ?? (run.implementation.request.kind === 'commit' ? 'Review the current changes; no claim of task completion.' : 'Review the explicitly assigned committed candidate.'), findings: run.implementation.findings,
             note: turn.agentId !== run.implementation.request.agentId ? run.implementation.request.reviewNote ?? null : null,
-            participant: { agentType: participant.agentType, label: participant.label }, ...(turn.implementation.identity.turn === 1 && run.implementation.request.kind === 'commit' ? { commitOnly: true as const } : {}), ...(initialWorktreeFingerprint ? { initialWorktreeFingerprint } : {}), ...(run.planning?.frozen ? { frozenPlan: run.planning.frozen } : {}) };
+            participant: { agentType: participant.agentType, label: participant.label }, ...(turn.implementation.identity.turn === 1 && run.implementation.request.kind === 'commit' ? { commitOnly: true as const } : {}), ...(initialWorktreeFingerprint ? { initialWorktreeFingerprint } : {}), ...(run.planning?.frozen ? { frozenPlan: run.planning.frozen } : {}),
+            ...(run.attachments ? { attachments: run.attachments } : {}) };
           await mkdir(this.workflow.assignmentDirectory, { recursive: true, mode: 0o700 });
           const path = join(this.workflow.assignmentDirectory, `${turn.commandId}.json`);
           const content = JSON.stringify(assignment, null, 2);
@@ -1026,7 +1072,7 @@ export class ControlPlane {
           const assignment: PlanningAssignment = { identity: turn.planning.identity, root: run.repository, cwd: plan.cwd, branch: plan.request.baseline.branch,
             brief: plan.brief, resultPath: turn.planning.resultPath,
             ...(turn.planning.identity.action !== 'draft' ? { drafts: plan.required.map((id) => ({ agentId: id, document: plan.drafts[id]!.document! })),
-              ...(plan.current ? { plan: plan.current } : {}), findings: plan.objections } : {}) };
+              ...(plan.current ? { plan: plan.current } : {}), findings: plan.objections } : {}), ...(run.attachments ? { attachments: run.attachments } : {}) };
           await mkdir(this.workflow.assignmentDirectory, { recursive: true, mode: 0o700 });
           await writeFile(join(this.workflow.assignmentDirectory, `${turn.commandId}.json`), JSON.stringify(assignment, null, 2), { flag: 'wx', mode: 0o600 });
           if (this.workflow.run(run.id)?.status !== 'running') throw new AppError('RUN_PAUSED', 'Plan paused before dispatch.', 409);

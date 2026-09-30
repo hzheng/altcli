@@ -495,3 +495,16 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
 .finish-outcome { border:1px solid var(--line); border-radius:8px; margin:10px 0; padding:8px 12px; min-width:0; }
 .finish-outcome legend { font-size:12px; color:var(--muted); padding:0 4px; }
 .finish-outcome .readiness { margin:6px 0; }
+/* Image attachments: a tray of thumbnails with truthful states, never another text field. */
+.attach-row { display:flex; align-items:center; flex-wrap:wrap; gap:8px 12px; margin-top:8px; }
+.attach-row small { flex:1 1 220px; }
+.attachment-tray { list-style:none; margin:10px 0 0; padding:0; display:grid; gap:8px; }
+.attachment-item { display:flex; align-items:center; gap:10px; padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:var(--command-bg); min-width:0; }
+.attachment-item img { width:48px; height:48px; object-fit:cover; border-radius:6px; background:var(--term-bg); flex-shrink:0; }
+.attachment-item[data-status=failed], .attachment-item[data-status=uncertain] { border-color:#8a5a3a; }
+.attachment-text { display:flex; flex-direction:column; min-width:0; flex:1; }
+.attachment-text .fine { margin-top:2px; }
+.attachment-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
+.attachment-actions { display:flex; gap:6px; flex-shrink:0; }
+.attachment-actions button { padding:6px 10px; }
+.native-terminal .attachment-tray { margin:0 .5rem .5rem; }

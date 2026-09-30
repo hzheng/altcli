@@ -28,7 +28,11 @@ export interface PaneRequestInput {
   logPath?: string;
   /** Only snapshot relay and existing-commit review carry a baseline; new work never does. */
   reviewBase?: string;
+  /** Uploaded image IDs, in order. Only plain Send and new committed work carry images. */
+  attachments?: string[];
 }
+/** The card actions whose first request may carry images. */
+export const IMAGE_ACTIONS: readonly PaneAction[] = ["send", "send_commit", "send_commit_relay"];
 export type PaneRequest = { path: "instructions"; body: StandaloneStart } | { path: "commands"; body: StartInput } | { path: "implementation"; body: ImplementationStart };
 
 /** The single initial request for a card action. Plain Send, Stage relay and committed work keep their own contracts;
@@ -36,7 +40,8 @@ export type PaneRequest = { path: "instructions"; body: StandaloneStart } | { pa
 export function paneRequest(input: PaneRequestInput): PaneRequest {
   const { action, requestId, groupId, groupRevision, registrations, agentId, policy } = input;
   const text = input.text.trim(); const worker = policy === "worker_reviewer" ? { workerId: input.workerId! } : {};
-  if (action === "send") return { path: "instructions", body: { requestId, groupId, groupRevision, registrations, agentId, text, policy, ...worker, confirmReady: true } };
+  const attachments = IMAGE_ACTIONS.includes(action) && input.attachments?.length ? { attachments: input.attachments } : {};
+  if (action === "send") return { path: "instructions", body: { requestId, groupId, groupRevision, registrations, agentId, text, policy, ...worker, ...attachments, confirmReady: true } };
   if (action === "send_stage_relay") return { path: "commands", body: { requestId, agentId, pairId: groupId, kind: "instruction", text, handoff: true,
     stage: { branch: input.branch.branch!, head: input.branch.head }, autoContinue: input.automatic, turnLimit: input.turnLimit,
     confirmReady: true } };
@@ -47,5 +52,5 @@ export function paneRequest(input: PaneRequestInput): PaneRequest {
     autoContinue: !solo && handoff && input.automatic, turnLimit: input.turnLimit, pauseOnObjection: !solo && input.pauseOnObjection,
     ...(input.logPath ? { logPath: input.logPath } : {}), branch: input.branch,
     ...(kind !== "work" && handoff && input.reviewBase ? { reviewBase: input.reviewBase } : {}),
-    ...(kind !== "review" && handoff && input.reviewNote?.trim() ? { reviewNote: input.reviewNote.trim() } : {}), confirmReady: true } };
+    ...(kind !== "review" && handoff && input.reviewNote?.trim() ? { reviewNote: input.reviewNote.trim() } : {}), ...(kind === "work" ? attachments : {}), confirmReady: true } };
 }

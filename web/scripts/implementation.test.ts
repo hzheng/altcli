@@ -18,6 +18,7 @@ import { parseActivityReset, parseHook, parseRunAction } from '../src/core/workf
 import { assertIdentity } from '../src/core/policy.ts';
 import type { SessionRegistration } from '../src/contracts/api.ts';
 import { codexCompletion, codexStartState } from '../../hooks/protocol.mjs';
+import { png, upload } from './lib/images.ts';
 import type { Group, HandoffEntry, ImplementationStart } from '../src/contracts/implementation.ts';
 import type { WorktreeRenameConfirm } from '../src/contracts/projects.ts';
 import type { HookEvent, ManagedSession, StartInput } from '../src/contracts/workflow.ts';
@@ -613,7 +614,7 @@ test('v4 migration preserves historical pair IDs and creates versioned groups', 
   store.db.prepare('DELETE FROM groups').run(); store.db.pragma('user_version = 4'); store.close();
   store = new Store(join(directory, 'metadata'));
   assert.equal(store.groups()[0]!.id, group.id); assert.equal(store.groups()[0]!.legacyPairId, group.id);
-  assert.deepEqual(store.groups()[0]!.members, ['codex', 'claude']); assert.equal(store.db.pragma('user_version', { simple: true }), 18);
+  assert.deepEqual(store.groups()[0]!.members, ['codex', 'claude']); assert.equal(store.db.pragma('user_version', { simple: true }), 19);
 });
 test('a relay note reaches only the peer\'s review assignment and needs a relay', async () => {
   const input = request({ reviewNote: 'Please check the retry path first.' }); await plane.submitImplementation(input);
@@ -1745,6 +1746,29 @@ test('native keyboard holds a running implementation completion once; release do
   await plane.reconcileCheckpoint(checkpointDecision(input.requestId)); assert.equal(sent.length, 2);
   await plane.terminals.shutdown();
 });
+test('Review input and continue: after a plain stop and the human input decision, the checkpoint review dispatches the queued successor once, keeping the run', async () => {
+  checkpointPanes(); const input = request(); await plane.submitImplementation(input);
+  await takeNativeKeyboard();
+  publish(input.requestId, true); await complete(input.requestId);
+  const held = run(input.requestId);
+  assert.equal(held.status, 'paused'); assert.equal(held.interaction?.disposition, 'automatic'); assert.equal(sent.length, 1);
+  assert.deepEqual([held.implementation!.next?.agentId, held.implementation!.latestPublication?.entry.commandId], ['claude', input.requestId]);
+  // While typing still holds the server, checkpoint review is refused and nothing is dispatched.
+  await assert.rejects(plane.reconcileCheckpoint(checkpointDecision(input.requestId)), /Manual terminal input/); assert.equal(sent.length, 1);
+  // The browser's sequence: stop the live writers without claiming settlement, record the human decision, then review the checkpoint.
+  let manual = plane.authority.pending()[0]!;
+  manual = await plane.terminals.stop({ requestId: randomUUID(), expectedBootId: plane.authority.bootId, manualSessionId: manual.id, expectedRevision: manual.revision,
+    writers: manual.writers.filter((w) => w.live).map((w) => ({ connectionId: w.connectionId, generation: w.generation, revision: w.revision })) });
+  assert.equal(manual.reconciliationRequired, true);
+  await plane.reconcileManual({ requestId: randomUUID(), manualSessionId: manual.id, expectedRevision: manual.revision, confirmInspected: true,
+    note: 'Acknowledged the listed consequences at an action and chose to proceed.' });
+  assert.equal(plane.authority.blocked, false); assert.equal(run(input.requestId).status, 'paused'); assert.equal(sent.length, 1);
+  const decision = checkpointDecision(input.requestId); await plane.reconcileCheckpoint(decision);
+  assert.equal(sent.length, 2); assert.equal(run(input.requestId).status, 'running'); assert.equal(plane.workflow.owner(`${root}/.git/index`), input.requestId);
+  assert.equal(plane.workflow.execution(run(input.requestId).currentCommandId)!.agentId, 'claude');
+  await plane.reconcileCheckpoint(decision); assert.equal(sent.length, 2);
+  await plane.terminals.shutdown();
+});
 async function waitFor(check: () => boolean, timeout = 3000) {
   const deadline = Date.now() + timeout;
   while (!check()) { assert.ok(Date.now() < deadline, 'timed out waiting for the controller'); await new Promise(resolve => setTimeout(resolve, 10)); }
@@ -1804,4 +1828,67 @@ test('native keyboard preserves a waiting checkpoint rather than recapturing int
   assert.equal(run(input.requestId).interaction?.origin, 'keyboard'); assert.equal(sent.length, 2);
   await assert.rejects(plane.reconcileCheckpoint(checkpointDecision(input.requestId)), /checkpoint is incomplete/);
   await plane.terminals.shutdown();
+});
+
+const uploaded = (bytes = png(), workspace = root) => plane.attachments.upload(upload(workspace, bytes));
+const assignmentOf = (id: string) => JSON.parse(readFileSync(join(plane.workflow.assignmentDirectory, `${id}.json`), 'utf8'));
+test('plain Send with images types only its manifest path, freezes and pins the images, and deduplicates by request', async () => {
+  const image = await uploaded(); const input = parseStandalone({ ...instruction(), attachments: [image.id] });
+  const record = await plane.submitStandalone(input); assert.equal(record.status, 'delivered');
+  const path = plane.workflow.manifestPath(input.requestId);
+  assert.deepEqual(sent, [`Read the task input at ${JSON.stringify(path)}. Carry out its instruction; first inspect every image file it lists. [altcli-command:${input.requestId}]`]);
+  const manifest = JSON.parse(readFileSync(path, 'utf8'));
+  assert.deepEqual({ ...manifest, attachments: manifest.attachments.map((a: { id: string; sha256: string; mediaType: string }) => [a.id, a.sha256, a.mediaType]) },
+    { schema: 1, commandId: input.requestId, instruction: 'Explain the pending changes.', attachments: [[image.id, image.sha256, 'image/png']] });
+  assert.deepEqual(readFileSync(manifest.attachments[0].path), png());
+  assert.deepEqual(run(input.requestId).attachments, manifest.attachments);
+  assert.equal(run(input.requestId).participants.length, 2);
+  await assert.rejects(plane.attachments.remove(image.id), /may already have been used/);
+  assert.deepEqual(await plane.submitStandalone(input), record); assert.equal(sent.length, 1);
+  await assert.rejects(plane.submitStandalone({ ...input, attachments: [(await uploaded(png(3, 2, 1))).id] }), /another instruction/);
+  // Text-only Send keeps its original wire format.
+  await complete(input.requestId);
+  const plain = instruction(); await plane.submitStandalone(plain);
+  assert.equal(sent[1], `Explain the pending changes. [altcli-command:${plain.requestId}]`);
+});
+test('images are refused for unverified recipients, other workspaces and missing uploads before any run starts', async () => {
+  const image = await uploaded();
+  // Only Claude Code and Codex are eligible members today, so the recipient check guards future adapters; exercise it directly.
+  const claude = store.sessions().find((s) => s.id === 'claude') as ManagedSession;
+  const admit = (plane as unknown as { admitAttachments(ids: string[], workspace: string, recipients: ManagedSession[]): Promise<unknown> }).admitAttachments.bind(plane);
+  await assert.rejects(admit([image.id], root, [{ ...claude, agentType: 'other' }]), /verified only for Claude Code and Codex recipients; Claude Code cannot/);
+  assert.equal((await admit([image.id], root, [claude]) as unknown[]).length, 1);
+  store.db.prepare("UPDATE attachments SET value=json_set(value,'$.workspace','/elsewhere') WHERE id=?").run(image.id);
+  await assert.rejects(plane.submitStandalone(parseStandalone({ ...instruction(), attachments: [image.id] })), /belongs to another workspace/);
+  const removed = await uploaded(png(3, 2, 3)); await plane.attachments.remove(removed.id);
+  await assert.rejects(plane.submitImplementation(request({ attachments: [removed.id] })), /missing, still uploading/);
+  assert.deepEqual(sent, []); assert.deepEqual(plane.workflow.runs(), []);
+  assert.equal((store.db.prepare('SELECT COUNT(*) AS n FROM attachment_refs').get() as { n: number }).n, 0);
+});
+test('committed work gives the worker and the peer reviewer the same immutable images; they never become project changes', async () => {
+  const first = await uploaded(), second = await uploaded(png(4, 4, 9));
+  const input = request({ attachments: [second.id, first.id] });
+  assert.equal((await plane.submitImplementation(input)).status, 'delivered');
+  const work = assignmentOf(input.requestId);
+  assert.deepEqual(work.attachments.map((a: { id: string }) => a.id), [second.id, first.id]);
+  assert.deepEqual(work.attachments, run(input.requestId).attachments);
+  publish(input.requestId, true); await complete(input.requestId);
+  const review = run(input.requestId).currentCommandId; assert.notEqual(review, input.requestId);
+  const reviewer = assignmentOf(review);
+  assert.equal(reviewer.identity.action, 'review_and_improve'); assert.deepEqual(reviewer.attachments, work.attachments);
+  assert.equal(git('status', '--porcelain'), '');
+  assert.deepEqual((store.db.prepare('SELECT DISTINCT kind, ref_id FROM attachment_refs').all() as { kind: string; ref_id: string }[]), [{ kind: 'run', ref_id: input.requestId }]);
+});
+test('changed or missing image bytes stop a later dispatch, pause with ownership retained, and are never regenerated', async () => {
+  const image = await uploaded(); const input = request({ attachments: [image.id] });
+  await plane.submitImplementation(input);
+  const [descriptor] = run(input.requestId).attachments!;
+  publish(input.requestId, true);
+  writeFileSync(descriptor!.path, png(3, 2, 1));
+  await complete(input.requestId);
+  assert.equal(sent.length, 1);
+  const paused = run(input.requestId);
+  assert.equal(paused.status, 'paused'); assert.match(paused.reason, /image is missing or changed/);
+  assert.equal(plane.workflow.owner(`${root}/.git/index`), input.requestId);
+  assert.deepEqual(readFileSync(descriptor!.path), png(3, 2, 1));
 });

@@ -92,13 +92,31 @@ export function InteractionComposer({ token, state, run, agent, draftKey, disabl
   </section>;
 }
 
-export function CheckpointControls({ token, checkpoint, disabled, refresh }: { token: string; checkpoint: Checkpoint; disabled: boolean; refresh: () => Promise<void> }) {
+export function CheckpointControls({ token, checkpoint, disabled, refresh, override, viewEpoch }: {
+  token: string; checkpoint: Checkpoint; disabled: boolean; refresh: () => Promise<void>; override: Override | null; viewEpoch: number;
+}) {
   const [busy, setBusy] = useState(false); const [message, setMessage] = useState('');
   const blocked = checkpoint.fault || Object.values(checkpoint.external).some((e) => e.state !== 'clear');
+  const mounted = useMounted();
+  // Clearing manual input is expected to change that hold. A changed checkpoint or view still cancels continuation, even if restored.
+  const intent = JSON.stringify([token, checkpoint, disabled, viewEpoch]);
+  const intentRef = useRef({ key: intent, revision: 0 });
+  if (intentRef.current.key !== intent) intentRef.current = { key: intent, revision: intentRef.current.revision + 1 };
   if (checkpoint.kind === 'waiting' && !Object.keys(checkpoint.external).length) return null;
   async function confirm() {
     if (blocked || busy || disabled) return;
-    setBusy(true);
+    setBusy(true); setMessage('');
+    const revision = intentRef.current.revision;
+    if (override) {
+      try {
+        await override.clear();
+        if (!mounted.current) return;
+        if (intentRef.current.revision !== revision) throw Error('Manual input was recorded, but the checkpoint or view changed. Inspect again; the controller was not continued.');
+      } catch (error) {
+        if (!mounted.current) return;
+        setMessage(error instanceof Error ? error.message : 'Manual input could not be recorded. The controller was not continued.'); setBusy(false); await refresh(); return;
+      }
+    }
     try {
       await api(token, 'checkpoints', { body: { requestId: crypto.randomUUID(), runId: checkpoint.runId, commandId: checkpoint.commandId, expectedRevision: checkpoint.revision, action: checkpoint.kind === 'waiting' ? 'restore' : 'review_input', confirmReady: true } });
       setMessage('Checkpoint reconciled. Inspect the current controller state.');
@@ -108,6 +126,8 @@ export function CheckpointControls({ token, checkpoint, disabled, refresh }: { t
   return <section className="notice" aria-label="Input checkpoint">
     <p>{blocked ? checkpoint.reason || 'Missing activity evidence; inspect the workers and take over if needed.' : 'The original result is validated. Check every checkout terminal, queued input and background writer before continuing.'}</p>
     {!blocked && <p className="fine">Continuing tells the controller every checkout writer is settled: empty prompts, no queued input.</p>}
+    {!blocked && override && <><p className="fine">Continuing also accepts these manual-input consequences. This controller run is kept:</p>
+      <ul aria-label="Consequences of continuing">{override.lines.map(line => <li key={line}>{line}</li>)}</ul></>}
     <button disabled={disabled || busy || blocked} onClick={() => void confirm()}>{checkpoint.kind === 'waiting' ? 'Restore checkpoint' : 'Review input and continue'}</button>
     {message && <p role="status">{message}</p>}
   </section>;

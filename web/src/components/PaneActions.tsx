@@ -5,7 +5,9 @@ import type { Group, ReviewPreview, WorkspaceGit } from '../contracts/implementa
 import type { ManagedSession, WorkflowState } from '../contracts/workflow';
 import { api, HttpError } from '../client/api';
 import { useRemembered } from '../client/memory';
-import { paneRequest, sendAction, type AfterSend, type PaneAction } from '../core/pane-actions';
+import { IMAGE_ACTIONS, paneRequest, sendAction, type AfterSend, type PaneAction } from '../core/pane-actions';
+import { imagesBlocker, imagesKey } from '../client/attachments';
+import { AttachImageButton, AttachmentTray, IMAGE_LIMIT_NOTE, pasteImages, useImageTray } from './AttachmentTray';
 import { isSha, type RunSettings } from './RunSettings';
 import { Acknowledgement, overrideKey, type Override } from './Holds';
 
@@ -132,8 +134,12 @@ export function PaneActions(p: PaneActionsProps) {
   const [note, setNote] = useRemembered(`${p.draftKey}:note`, '');
   const [context, setContext] = useRemembered(`${p.draftKey}:context`, '');
   const [reviewOpen, setReviewOpen] = useRemembered(`${p.draftKey}:reviewOpen`, false);
+  // Images for this card's next instruction, remembered with its text; uploading sends nothing.
+  const images = useImageTray(p.token, group.repository, `${p.draftKey}:images`);
+  const [imageNotice, setImageNotice] = useState('');
   // An empty instruction with a commit follow-up hands off the current changes as they stand instead of doing new work.
-  const handoffOnly = !text.trim() && (after === 'commit' || after === 'commit_relay') && dirty;
+  // Attached images always need an instruction, so they can never turn a draft into a snapshot-only Commit.
+  const handoffOnly = !text.trim() && !images.items.length && (after === 'commit' || after === 'commit_relay') && dirty;
   // A refused start is shown in the card that sent it, cleared by the next attempt or Recheck.
   const [startError, setStartError] = useState('');
   useEffect(() => { setStartError(''); }, [p.recheck]);
@@ -145,8 +151,9 @@ export function PaneActions(p: PaneActionsProps) {
     enabled: canReview && clean && !staging, recheck: p.recheck, memoryKey: `${p.draftKey}:review`, onPreview: revoke });
   const registrations = Object.fromEntries(members.map((id) => [id, p.state.sessions.find((session) => session.id === id)?.registrationId ?? '']));
   const instances = members.map((id) => p.state.instances.find((instance) => instance.agentId === id)?.status);
+  // The attached images' selection, order, hashes and upload states are part of what readiness confirms: any change revokes it.
   const stateKey = JSON.stringify(['pane', agent.id, agent.registrationId, group.id, group.revision, registrations, instances, p.agentsKey, git ?? null, p.workspaceError,
-    s.consent, after, p.state.legacyEnabled, handoffOnly, snapshot.consent, review.consent, p.runMark, p.recheck]);
+    s.consent, after, p.state.legacyEnabled, handoffOnly, snapshot.consent, review.consent, p.runMark, p.recheck, imagesKey(images.items)]);
   // A changed set of overridden holds needs a fresh acknowledgement, even when its consequences read the same.
   const key = JSON.stringify([stateKey, overrideKey(p.override)]);
   keyRef.current = key;
@@ -154,7 +161,7 @@ export function PaneActions(p: PaneActionsProps) {
   // are excluded): target, view, drafts, settings and agent activity. The revision is monotonic, so restoring an earlier value while
   // the holds are cleared still cancels the start.
   const intent = JSON.stringify([agent.id, agent.registrationId, group.id, group.revision, registrations, instances, p.agentsKey, git ?? null, p.workspaceError,
-    s.consent, after, p.state.legacyEnabled, handoffOnly, snapshot.consent, review.consent, p.recheck, p.state.activities, p.token, p.viewEpoch, p.active, text, note, context]);
+    s.consent, after, p.state.legacyEnabled, handoffOnly, snapshot.consent, review.consent, p.recheck, p.state.activities, p.token, p.viewEpoch, p.active, text, note, context, imagesKey(images.items)]);
   const intentRef = useRef({ key: intent, revision: 0 });
   if (intentRef.current.key !== intent) intentRef.current = { key: intent, revision: intentRef.current.revision + 1 };
   const mounted = useRef(true);
@@ -169,7 +176,7 @@ export function PaneActions(p: PaneActionsProps) {
     if (common) return common;
     const stage = action === 'send_stage_relay';
     const sending = action === 'send' || stage || action === 'send_commit' || action === 'send_commit_relay';
-    if (sending && !text.trim()) return action === 'send' || stage ? `Enter an instruction for ${name}.` : `Enter an instruction for ${name}; there are no uncommitted changes to hand off.`;
+    if (sending && !text.trim()) return images.items.length ? `Enter an instruction for ${name} to go with the images.` : action === 'send' || stage ? `Enter an instruction for ${name}.` : `Enter an instruction for ${name}; there are no uncommitted changes to hand off.`;
     if (stage) {
       if (!p.state.legacyEnabled) return 'Stage relay is disabled on this host (ALTCLI_ENABLE_LEGACY_RELAY=false).';
       if (!pair) return 'Stage relay needs a two-member group. Select two agents in Projects.';
@@ -182,6 +189,14 @@ export function PaneActions(p: PaneActionsProps) {
     if (action === 'relay' && !git!.clean) return 'Commit or separate the current changes first.';
     if (action === 'commit_relay') { if (snapshot.hint) return snapshot.hint; }
     if (action === 'relay') { if (review.hint) return review.hint; }
+    if (images.items.length) {
+      if (!IMAGE_ACTIONS.includes(action)) return stage ? 'Stage relay sends text only. Remove the images or choose another After send.' : 'Images go with an instruction to Send or committed work. Remove them first.';
+      const blocker = imagesBlocker(images.items); if (blocker) return blocker;
+      // Plain Send reaches only this agent; committed work reaches every member through later review assignments.
+      const recipients = action === 'send' ? [agent.id] : members;
+      const unsupported = recipients.map((id) => p.state.sessions.find((session) => session.id === id)).filter((session) => session?.agentType !== 'claude' && session?.agentType !== 'codex');
+      if (unsupported.length) return `Images are verified only for Claude Code and Codex recipients. Remove the images to send to ${unsupported.map((session) => session?.label ?? 'this agent').join(', ')}.`;
+    }
     if (!ready) return NOT_READY;
     return '';
   }
@@ -190,10 +205,11 @@ export function PaneActions(p: PaneActionsProps) {
     if (reasonFor(action) || !git) return;
     if ((action === 'commit_relay' || action === 'relay') && (!range || range.head !== git.head)) return;
     const requestId = crypto.randomUUID(); const intentRevision = intentRef.current.revision;
+    const sentImages = IMAGE_ACTIONS.includes(action) ? images.items : [];
     const submitted = { text, note, context };
     const request = paneRequest({ action, requestId, groupId: group.id, groupRevision: group.revision, registrations, agentId: agent.id, policy: s.selectedPolicy, workerId: s.workerId,
       text: action === 'commit' || action === 'commit_relay' ? '' : action === 'relay' ? context : text, reviewNote: note, branch: s.branch(), automatic: s.automatic, turnLimit: s.limit,
-      pauseOnObjection: s.pauseOnObjection, logPath: s.logPath, reviewBase: range?.base });
+      pauseOnObjection: s.pauseOnObjection, logPath: s.logPath, reviewBase: range?.base, attachments: sentImages.map((item) => item.receipt!.id) });
     p.setConsent(() => ''); setStartError('');
     await p.submit(async () => {
       let dispatched = false;
@@ -212,7 +228,7 @@ export function PaneActions(p: PaneActionsProps) {
           // Clear only the inputs this action consumed, and only if they still hold what was sent: a newer draft survives.
           const consumed = (sent: string) => (current: string) => current === sent ? '' : current;
           if (action === 'relay') { setContext(consumed(submitted.context)); review.reset(); }
-          else { setText(consumed(submitted.text)); if (action === 'commit_relay') snapshot.reset(); if (action === 'commit_relay' || action === 'send_commit_relay') setNote(consumed(submitted.note)); }
+          else { setText(consumed(submitted.text)); images.clearExact(sentImages.map((item) => item.key)); if (action === 'commit_relay') snapshot.reset(); if (action === 'commit_relay' || action === 'send_commit_relay') setNote(consumed(submitted.note)); }
           p.onSent();
         }
       } catch (error) {
@@ -222,6 +238,7 @@ export function PaneActions(p: PaneActionsProps) {
     });
   }
   const ids = useId();
+  function attachImages(files: File[]) { const problems = images.add(files); setImageNotice(problems.join(' ')); }
   const sendChoice: PaneAction = handoffOnly ? after === 'commit_relay' ? 'commit_relay' : 'commit' : sendAction(after); const sendReason = reasonFor(sendChoice);
   const showSendBlocker = !!text.trim() && !!sendReason;
   const sendLabel = handoffOnly ? after === 'commit_relay' ? `Commit current changes & relay ${peerName}` : `Commit current changes ${name}`
@@ -256,7 +273,12 @@ export function PaneActions(p: PaneActionsProps) {
     <p className="zone-label"><span aria-hidden="true">⌨️</span> Command · {canSend ? `Send to ${name}` : `${name} reviews`}</p>
     {canSend && <>
       <label className="sr-only" htmlFor={`${ids}-text`}>Instruction for {name}</label>
-      <textarea id={`${ids}-text`} rows={2} value={text} maxLength={1900} placeholder={dirty && (after === 'commit' || after === 'commit_relay') ? `Instruction for ${name} — leave empty to hand off the ${git!.changeCount} uncommitted ${git!.changeCount === 1 ? 'path' : 'paths'} as they stand` : `Instruction for ${name}`} onChange={(e) => setText(e.target.value)} />
+      <textarea id={`${ids}-text`} rows={2} value={text} maxLength={1900} placeholder={dirty && (after === 'commit' || after === 'commit_relay') ? `Instruction for ${name} — leave empty to hand off the ${git!.changeCount} uncommitted ${git!.changeCount === 1 ? 'path' : 'paths'} as they stand` : `Instruction for ${name}`} onChange={(e) => setText(e.target.value)}
+        onPaste={(e) => { pasteImages(e, attachImages); }} />
+      <div className="attach-row"><AttachImageButton label="Attach image" className="quiet" disabled={p.busy} onFiles={attachImages} />
+        <small>{staging ? 'Stage relay sends text only.' : `Images go with this instruction. ${IMAGE_LIMIT_NOTE}`}</small></div>
+      <AttachmentTray label={`Images for ${name}`} tray={images} onMessage={setImageNotice} />
+      {imageNotice && <p className="fine" role="status">{imageNotice}</p>}
       <div className="after-send"><label htmlFor={`${ids}-after`}>After send</label>
         <select id={`${ids}-after`} value={after} disabled={p.busy} onChange={(e) => setAfter(e.target.value as AfterSend)}>
           <option value="nothing">Nothing</option>{stageBranch && <option value="stage_relay">Stage relay</option>}

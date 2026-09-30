@@ -232,7 +232,7 @@ The shared Control frame keeps a separate composer for each agent:
 
 Terminal tools are icon buttons that keep their full accessible names, with help on hover and
 focus, and a **?** legend that also works by tap: **Reconnect** 🔄 (observe only), **Captured text** 📄 / **Show terminal** 🖥️, **Expand terminal** ⤢ / **Collapse terminal** ⤡,
-**Screen reader mode** ♿ and **Paste text** 📋. **Expand terminal** enlarges the
+**Screen reader mode** ♿, **Paste text** 📋 and **Attach image** 🖼️. **Expand terminal** enlarges the
 existing surface in the page without opening a new connection or changing keyboard ownership.
 The former visible focus-escape button is gone (September 25 decision); the shortcut and its
 on-focus hint remain. A focus outline identifies the active surface. Snapshot timestamps appear only alongside the captured-text fallback.
@@ -242,13 +242,81 @@ warning confirmation because newlines can execute immediately; paste above
 that explicit click. A first paste enables input; multiline/large first paste asks before admission. A delayed result is
 discarded if focus, input, view or grant changed. Clipboard denial falls back to
 the keyboard/system Paste action. Accepted text uses xterm's single paste path,
-without an added Enter. No image attachment channel is enabled.
+without an added Enter. Image files take the separate attachment path below; a paste that carries them types no text.
 
 **Screen reader mode** enables xterm's accessible output tree explicitly. It
 defaults off because xterm 6 disables its emoji/`insertText` fallback in that mode;
 ordinary key events remain usable. Turn it off when a software keyboard cannot
 enter text, or use Captured text for reading. This option does not establish
 physical screen-reader or Safari/IME acceptance.
+
+## Image attachments
+
+A screenshot is a file, not keystrokes. In a card in **Terminal** mode, pasting an image (or
+choosing **Attach image** 🖼️, the picker for phones and denied clipboards) uploads it to this host;
+nothing is typed, granted, focused or submitted by the upload. Display mode, a hidden card, a disabled
+host or a terminal that is not a registered Claude Code or Codex instance uploads nothing and says why.
+A paste carrying both an image and text asks which to use; Cancel pastes the text through the usual
+checks, and the same paste never does both. HTML and URLs are never read or fetched. The picker is bound
+to the connection, generation, view and target at the click; files returned after any of them changed
+are discarded. Drag and drop is not supported.
+
+`POST /api/v1/attachments` takes one raw PNG or JPEG body with JSON metadata in the `x-altcli-upload`
+header (a client request ID, the canonical workspace root, an optional display name). Authentication
+precedes any read or allocation; a read-only host refuses. Limits are fixed AltCLI bounds, not provider
+limits: 10 MiB per image, four images and 20 MiB per tray or draft, 40 million pixels, two concurrent
+uploads per host, and 512 MiB and 1,000 retained files per host. The server checks structure without
+decoding pixels. For PNG: the signature, a valid first IHDR (dimensions, bit depth and color type,
+compression, filter, interlace), every chunk's length and CRC, only known critical chunks, no animation
+chunks, a palette for indexed color, one contiguous run of image data, and IEND as the last bytes. For
+JPEG: the start marker, every segment inside the file, one frame header with nonzero dimensions, a scan
+after it and an end-of-image marker; bytes after that first end marker (such as appended MPF images) are
+stored but not inspected. The declared type must match. Files are written exclusively (`0600`) under
+`<data directory>/attachments/` (`0700`, an ordinary directory outside every workspace) only after
+validation, and published by a no-clobber link. A retry of the same request ID with the same bytes
+returns the stored receipt; different bytes conflict. Nothing retries automatically.
+
+Each thumbnail states what AltCLI observed: Uploading, Ready to insert, Inserting, **Reference inserted**
+or **Insertion uncertain**. **Insert** is one explicit intent in the connection's ordered input lane
+(`POST /api/v1/terminals/{id}/input` with `image`), sharing its generation, sequence and receipts; typed
+input must finish sending first. The server rechecks the boot, the registered CLI process and its
+directory, and the image's bytes, then takes fresh evidence that the writer still shows the original
+pane in the original session as its last step before the write (a writer that navigated tmux, even while
+the image was being prepared, is refused). Without awaiting anything further it rechecks authority,
+records the image's use and the manual-input evidence and writes `ESC[200~'<absolute path>'ESC[201~`,
+never Enter. tmux forwards the
+paste markers only to a program that enabled bracketed paste. A refusal before the write returns the
+image to Ready; a failed write or lost response is uncertain and never resent. These checks narrow, but
+do not remove, tmux's inspection/write race and interleaving with other writers. Removing an inserted
+preview only hides it: it does not retract the text or any copy the provider received.
+
+On September 29, 2026 a probe on this host (tmux 3.5a, a private socket, a disposable image) observed the
+single-quoted, backslash-escaped and raw path forms, including spaces and Unicode, become `[Image #1]` in
+Claude Code 2.1.285 (auto permission mode, `--no-chrome`) and Codex 0.159.0 (`--no-daemon`); after a
+manual submit both described the image correctly. That is the verified reference; other CLIs are refused.
+A reference in the prompt is not evidence that a model read the image, and remote SSH or container panes
+cannot read a host path.
+
+Control reuses the uploads for plain Send, new committed work and a Plan's shared brief (other Control
+fields stay text-only and say so). An instruction or brief is required with images. Pending or failed
+uploads and recipients other than Claude Code or Codex block the action before any hold is cleared.
+Adding, removing or replacing an image, or an upload finishing, revokes the readiness check. Uploads
+belong to the page draft, so one that finishes after its composer was hidden by a phase, view or
+workspace switch still reaches the draft.
+Admission freezes ordered descriptors (path, media type, size, dimensions, SHA-256) and pins them with
+the run; every later assignment carries them, and bytes are rechecked before each dispatch, pausing the
+run with ownership retained if they changed. Plain Send's prompt names an input manifest
+(`<assignments>/<command>.input.json`) that holds the instruction and descriptors, so no image path is
+typed where a CLI could turn it into an image token and change the exact prompt that correlation checks.
+In the same probe both CLIs read such a manifest and inspected its image outside the checkout without a
+permission prompt in those configurations; other permission modes may ask.
+
+Unreferenced uploads are drafts, reclaimed after 24 hours or deleted by **Remove**
+(`DELETE /api/v1/attachments/{id}`, refused once any use is recorded). Images that may have been used
+never expire in this increment, and a full quota refuses new uploads with the retained size and count:
+there is no in-app release yet, and deleting files by hand breaks recorded references. History exports
+keep descriptors, not image bytes; back up the attachment directory with the host data. Lock forgets
+previews and drafts; server-side references remain.
 
 ## Launch
 

@@ -46,3 +46,15 @@ test("a relay note rides with relays to a peer only, trimmed, never with plain s
   expect(request("relay", { agentId: "claude", reviewNote: "dropped" }).body).not.toHaveProperty("reviewNote");
   expect(request("send_commit_relay", { reviewNote: "   " }).body).not.toHaveProperty("reviewNote");
 });
+test("images travel only with plain Send and new committed work, and every request passes its strict parser", async () => {
+  const { parseStandalone, parseImplementation } = await import("./implementation-validation");
+  const ids = ["22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"];
+  const send = request("send", { attachments: ids, registrations: { codex: base.requestId } });
+  expect(send.body).toMatchObject({ attachments: ids }); expect(parseStandalone(send.body)).toEqual(send.body);
+  for (const action of ["send_commit", "send_commit_relay"] as const) {
+    const work = request(action, { attachments: ids, registrations: { codex: base.requestId } });
+    expect(work.body).toMatchObject({ kind: "work", attachments: ids }); expect(parseImplementation(work.body)).toEqual(work.body);
+  }
+  for (const action of ["send_stage_relay", "commit", "commit_relay", "relay"] as const) expect(request(action, { attachments: ids }).body).not.toHaveProperty("attachments");
+  expect(request("send", { attachments: [] }).body).not.toHaveProperty("attachments");
+});

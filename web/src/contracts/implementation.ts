@@ -1,6 +1,7 @@
 import type { ManagedSession, WorktreeIdentity } from './workflow.ts';
 import type { FrozenPlan } from './planning.ts';
 import type { KeyboardSettlement } from './terminals.ts';
+import type { AttachmentDescriptor } from './attachments.ts';
 
 export type CollaborationPolicy = 'solo' | 'peer' | 'worker_reviewer';
 export type ImplementationAction = 'work' | 'review' | 'review_and_improve';
@@ -76,10 +77,12 @@ export interface ImplementationStart {
   reviewBase?: string;
   /** A note from the human for the peer that reviews this handoff; delivered with the review assignment. Requires handoff. */
   reviewNote?: string;
+  /** Ordered uploaded images for new work (kind `work` only). Frozen into every assignment of the run. */
+  attachments?: string[];
   confirmReady: true;
 }
 /** Plain Send: no branch setup, publication contract, or automatic successor. */
-export type StandaloneStart = Pick<ImplementationStart, 'requestId' | 'groupId' | 'groupRevision' | 'registrations' | 'agentId' | 'policy' | 'workerId' | 'confirmReady' | 'keyboardSettlement'> & { text: string };
+export type StandaloneStart = Pick<ImplementationStart, 'requestId' | 'groupId' | 'groupRevision' | 'registrations' | 'agentId' | 'policy' | 'workerId' | 'confirmReady' | 'keyboardSettlement' | 'attachments'> & { text: string };
 export interface ImplementationPolicy {
   policy: CollaborationPolicy;
   workerId: string | null;
@@ -194,6 +197,8 @@ export interface CommitAssignment {
   frozenPlan?: FrozenPlan;
   /** Present only on the first work assignment, never on reviews or later work turns. */
   initialWorktreeFingerprint?: string;
+  /** Human-supplied task images, read-only task material for every turn; inspect each before acting. */
+  attachments?: AttachmentDescriptor[];
 }
 
 /** Read-only preview of `base..head`. Without `base`, the baseline is the newest first-parent commit at which

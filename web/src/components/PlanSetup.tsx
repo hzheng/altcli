@@ -7,6 +7,8 @@ import { api, HttpError } from '../client/api';
 import { useRemembered } from '../client/memory';
 import { isSha, type RunSettings } from './RunSettings';
 import { Acknowledgement, overrideKey, type Override } from './Holds';
+import { imagesBlocker, imagesKey } from '../client/attachments';
+import { AttachImageButton, AttachmentTray, IMAGE_LIMIT_NOTE, pasteImages, useImageTray } from './AttachmentTray';
 
 /** The last gate before Start Plan; its check is beside the button. */
 const NOT_READY = 'Check Ready for planning above. Changing the brief, a setting or the checkout clears an earlier confirmation.';
@@ -30,15 +32,19 @@ export function PlanSetup(p: {
   const { settings: s, group, git } = p;
   const members = group?.members ?? [];
   const [text, setText] = useRemembered(`${p.draftKey}:brief`, '');
+  // Images that belong to the shared brief: every planner and the approved implementation receive the same ones.
+  const images = useImageTray(p.token, group?.repository ?? '', `${p.draftKey}:brief-images`);
+  const [imageNotice, setImageNotice] = useState('');
+  const attachImages = (files: File[]) => { setImageNotice(images.add(files).join(' ')); };
   // A refused start is shown beside its button; the console-wide message sits elsewhere.
   const [startError, setStartError] = useState('');
   useEffect(() => { setStartError(''); }, [p.recheck]);
   const target = s.selectedPolicy === 'worker_reviewer' ? s.workerId : members.includes(s.actor) ? s.actor : members.includes(p.displayed ?? '') ? p.displayed! : members[0];
   const registrations = Object.fromEntries(members.map((id) => [id, p.state.sessions.find((session) => session.id === id)?.registrationId ?? '']));
   const instances = members.map((id) => p.state.instances.find((instance) => instance.agentId === id)?.status);
-  const key = JSON.stringify(['plan', group?.id, group?.revision, registrations, instances, p.agentsKey, target, git ?? null, p.workspaceError, s.consent, p.runMark, p.recheck, text, overrideKey(p.override)]);
+  const key = JSON.stringify(['plan', group?.id, group?.revision, registrations, instances, p.agentsKey, target, git ?? null, p.workspaceError, s.consent, p.runMark, p.recheck, text, imagesKey(images.items), overrideKey(p.override)]);
   // What a click authorizes except the holds it clears (runs and manual input): any change while they are cleared cancels the start.
-  const intent = JSON.stringify([group?.id, group?.revision, registrations, instances, p.agentsKey, target, git ?? null, p.workspaceError, s.consent, p.recheck, p.state.activities, p.token, p.viewEpoch, text]);
+  const intent = JSON.stringify([group?.id, group?.revision, registrations, instances, p.agentsKey, target, git ?? null, p.workspaceError, s.consent, p.recheck, p.state.activities, p.token, p.viewEpoch, text, imagesKey(images.items)]);
   const intentRef = useRef({ key: intent, revision: 0 });
   if (intentRef.current.key !== intent) intentRef.current = { key: intent, revision: intentRef.current.revision + 1 };
   const mounted = useRef(true);
@@ -48,8 +54,11 @@ export function PlanSetup(p: {
   useEffect(() => { if (consented.current !== key) { const previous = consented.current; consented.current = key; p.setConsent((current) => current === previous ? '' : current); } }, [key]);
   const ready = p.consent === key;
   const branchInvalid = (s.branchChoice === 'stay' && (!git?.branch || git.integration)) || (s.branchChoice === 'new' && !s.branchName.trim());
+  // Shared images reach every planner and implementation member: each must be a CLI whose image reading was verified.
+  const unsupportedAgents = images.items.length ? members.map((id) => p.state.sessions.find((session) => session.id === id)).filter((session) => session?.agentType !== 'claude' && session?.agentType !== 'codex') : [];
+  const unsupported = unsupportedAgents.length ? `Images are verified only for Claude Code and Codex. Remove the images to plan with ${unsupportedAgents.map((session) => session?.label ?? 'this agent').join(', ')}.` : '';
   const disabled = !!p.blockedReason || p.busy || !!p.workspaceError || !group || members.length < 1 || members.length > 2 || !git || !git.clean || branchInvalid
-    || (s.needsBaseline && !isSha(s.taskBase.trim())) || !s.limitValid;
+    || (s.needsBaseline && !isSha(s.taskBase.trim())) || !s.limitValid || !!imagesBlocker(images.items) || !!unsupported;
   // Start Plan would otherwise grey out silently: the consent key includes the brief, so typing after ticking Ready unticks it.
   const reason = p.blockedReason || (p.busy ? 'Wait for the current request or Recheck to finish.'
     : p.workspaceError || !git ? 'Recheck the workspace Git state before planning.'
@@ -57,14 +66,16 @@ export function PlanSetup(p: {
     : branchInvalid ? 'Choose the implementation branch and enter its name, or leave the choice for the plan checkpoint.'
     : s.needsBaseline && !isSha(s.taskBase.trim()) ? 'Enter the full task baseline commit.'
     : !s.limitValid ? 'Set the maximum automatic turns to a whole number from 1 to 200.'
-    : !text.trim() ? 'Enter the shared task brief.'
-    : !ready ? NOT_READY : '');
+    : !text.trim() ? images.items.length ? 'Enter the shared task brief to go with the images.' : 'Enter the shared task brief.'
+    : imagesBlocker(images.items) || unsupported
+    || (!ready ? NOT_READY : ''));
   const reasonId = useId(); const briefId = useId();
   async function start() {
     if (disabled || !ready || !text.trim() || !group || !git || !target) return;
     p.setConsent(() => ''); setStartError(''); const requestId = crypto.randomUUID(); const intentRevision = intentRef.current.revision;
-    // The request is built from the confirmed brief and settings before any hold is cleared.
-    const brief = text; const body = { requestId, groupId: group.id, groupRevision: group.revision, registrations,
+    // The request is built from the confirmed brief, images and settings before any hold is cleared.
+    const brief = text; const sentImages = images.items; const body = { requestId, groupId: group.id, groupRevision: group.revision, registrations,
+      ...(sentImages.length ? { attachments: sentImages.map((item) => item.receipt!.id) } : {}),
       text: text.trim(), baseline: { branch: git.branch, head: git.head }, autoContinue: s.automatic, requireApproval: s.requireApproval, turnLimit: s.limit, pauseOnObjection: s.pauseOnObjection, confirmReady: true,
       implementation: { groupId: group.id, groupRevision: group.revision, registrations, agentId: target, policy: s.selectedPolicy,
         ...(s.selectedPolicy === 'worker_reviewer' ? { workerId: s.workerId } : {}), handoff: !s.solo, ...(s.logPath ? { logPath: s.logPath } : {}), branch: s.branchChoice ? s.branch() : null } };
@@ -80,7 +91,7 @@ export function PlanSetup(p: {
         dispatched = true;
         const record = await api<CommandRecord>(p.token, 'planning', { body });
         if (record.status === 'rejected') setStartError(`REJECTED: ${record.error ?? 'The server refused this start.'}`);
-        else { p.onMessage(`${record.status.toUpperCase()}: ${record.error ?? 'Plan started. The server owns this run.'}`); setText((current) => current === brief ? '' : current); p.onSent(); }
+        else { p.onMessage(`${record.status.toUpperCase()}: ${record.error ?? 'Plan started. The server owns this run.'}`); setText((current) => current === brief ? '' : current); images.clearExact(sentImages.map((item) => item.key)); p.onSent(); }
       } catch (error) {
         setStartError(error instanceof Error ? error.message : 'Phase start failed.');
         if (dispatched && (!(error instanceof HttpError) || error.status >= 500)) p.onUncertain(requestId);
@@ -104,7 +115,12 @@ export function PlanSetup(p: {
     </section>}
     {!group ? <p>Select at least one agent in Projects to start.</p> : members.length > 2 ? <p className="notice" role="status">Your group has {members.length} agents. Plan and Implementation currently execute with one or two agents; larger-group execution is not enabled yet. Your selection is saved. Choose one or two members to start a run.</p> : <>
       <p className="fine">Plan documents are kept in AltCLI’s data directory, not in this checkout. No branch is created during Plan. Output permissions are cooperative and validated, not native CLI sandbox isolation.</p>
-      <label htmlFor={briefId}>Shared task brief</label><textarea id={briefId} rows={3} value={text} disabled={p.busy} maxLength={1900} onChange={(e) => setText(e.target.value)} />
+      <label htmlFor={briefId}>Shared task brief</label><textarea id={briefId} rows={3} value={text} disabled={p.busy} maxLength={1900} onChange={(e) => setText(e.target.value)}
+        onPaste={(e) => { pasteImages(e, attachImages); }} />
+      <div className="attach-row"><AttachImageButton label="Attach image to brief" className="quiet" disabled={p.busy} onFiles={attachImages} />
+        <small>Every planner and the approved implementation receive the brief’s images. {IMAGE_LIMIT_NOTE} Request changes stays text-only; a different image set needs a new Plan.</small></div>
+      <AttachmentTray label="Images for the shared brief" tray={images} onMessage={setImageNotice} />
+      {imageNotice && <p className="fine" role="status">{imageNotice}</p>}
       <div role="group" aria-label="Readiness for Plan">
         <Acknowledgement label="Ready for planning" checked={ready} disabled={disabled} onChange={(checked) => p.setConsent(() => checked ? key : '')} lines={p.override?.lines ?? []}>
           I checked every selected and unselected agent sharing this checkout: all are settled, prompts are empty, and no background writers remain. I authorize document-only planning and the displayed post-plan settings; any branch choice applies only after Plan finishes.</Acknowledgement>

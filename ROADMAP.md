@@ -2,9 +2,9 @@
 
 **Implementation update: September 24, 2026.** Native terminals and explicit agent
 launching are implemented; setup enables their host flags (absent means off); see the
-[milestone status](#native-terminals-and-agent-launch) below. Image attachments
-are deferred by the owner's September 24 direction. Installed-host and physical
-device acceptance remain open.
+[milestone status](#native-terminals-and-agent-launch) below. Image attachments,
+deferred on September 24, were reopened on September 29 and are implemented locally
+(see below). Installed-host and physical device acceptance remain open.
 
 **Stage relay and worktree reuse (September 27, 2026).** The uncommitted relay now runs as
 branch-scoped Stage relay on `main` or the recorded default. The server enforces eligibility,
@@ -17,6 +17,21 @@ and branch rename are implemented locally, with the plan
 objections resolved (ADR-0013, D52). Directory move remains accepted design with its own
 acceptance gate. Installed-host acceptance of Stage relay and of worktree
 reuse remains open.
+
+**Image attachments (September 29, 2026).** M4A and M4B are implemented locally from an endorsed
+two-planner Plan (ADR-0020 amendment, D53). In a Terminal-mode card, a pasted or picked PNG or JPEG
+uploads to private storage under the data directory. An explicit **Insert** types its single-quoted
+absolute path through that connection's ordered input lane as one bracketed paste, never Enter, after
+the server rechecks the writer's pane and session, the registered Claude Code or Codex CLI and its
+directory, and the image, and records its use. Plain Send, new committed work and a Plan's shared brief
+carry immutable image descriptors to the agent, its reviewers, every planner and the approved
+implementation; plain Send's prompt names an input manifest rather than an image path. Stage relay,
+snapshot Commit, review context, relay notes, active-run guidance and Request changes stay text-only.
+Images that may have been used never expire; unused uploads are reclaimed after 24 hours, and a full
+quota refuses new uploads because this increment has no in-app release. A disposable-checkout probe on
+this host observed Claude Code 2.1.285 and Codex 0.159.0 turn the inserted reference into an image and
+describe it, and read a manifest's image. Physical-device, deployed-host and end-to-end relay/Plan runs
+with installed agents reading images remain open.
 
 The completion follow-up removes `stop_hook_active` from background-task
 classification and retains exact Claude turn bindings until acknowledged clear
@@ -229,9 +244,9 @@ Native iOS, optional terminal graphics output, **AI supervision**, generalized w
 
 Scope follows [ADR-0020](docs/adr/ADR-0020-native-terminals.md) and
 [ADR-0021](docs/adr/ADR-0021-project-entry-and-agent-launch.md). Milestone labels
-below correspond to the enhanced terminal/launch plan. The owner explicitly
-deferred image attachments on September 24; M4A/M4B do not gate the remaining
-terminal and launch implementation.
+below correspond to the enhanced terminal/launch plan. The owner deferred image
+attachments on September 24 and reopened them on September 29 (M4A/M4B below); they
+do not gate the remaining terminal and launch acceptance.
 
 | Milestone | Source status | Remaining acceptance |
 | --- | --- | --- |
@@ -240,7 +255,7 @@ terminal and launch implementation.
 | M2: native input | Direct input with concurrent writers, literal keys/Unicode, touch modifiers, guarded text paste, in-page expansion, bounded resize and optional screen-reader mode implemented. Late input responses cannot affect a replacement keyboard generation; leaving the surface drops unsent queued text. A writer follows deliberate tmux session navigation with an updated label (observers never follow; target loss closes), and control-pane drafts including the Plan brief stay editable under a keyboard hold. | Installed CLI menus/questions and physical Safari/IME. |
 | M3: holds and recovery | Durable server-wide manual barriers, original checkpoints, batch stop, disconnect and explicit human reconciliation implemented. | Supervised installed-provider completion/restoration and host restart demonstration. |
 | M4: profiles and launch | Repository-directory entry, versioned literal argv profiles, batch launch, partial-result inspection and a separate launch action after verified worktree creation implemented. | Real installed CLI startup, readiness and workflow demonstration in a disposable checkout. |
-| M4A/M4B: image attachments | Deferred: native upload/insertion and control-pane reuse. | Separate implementation and provider acceptance; no attachment support is advertised. |
+| M4A/M4B: image attachments | M4A: terminal paste/picker, private bounded uploads and an explicit Insert of the verified reference without Enter. M4B: images on plain Send, new committed work and a Plan brief, frozen, pinned and carried to every recipient. | A probe observed native insertion and manifest reads with Claude Code 2.1.285 and Codex 0.159.0. Physical Safari/iPhone clipboard and picker, the deployed origin, and end-to-end relay/Plan runs with installed agents remain. |
 | M5: remote/mobile/security | Automated browser, ownership and private-tmux checks exist; exact observed results are in their commit messages. | Actual private HTTPS/WSS proxy, physical iPhone, network switching, two-device input and installed-host fault acceptance. |
 | M6: docs and guarded release | Maintained protocol, setup, acceptance checklist and host flags are present; setup writes both as true by the owner's September 24 decision. | Settled host rollout, upgrade/rollback and deployed acceptance. |
 

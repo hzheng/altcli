@@ -6,7 +6,11 @@ file under the external data directory. No global alias or skill installation is
 required for this path. Optional installed links are still checked if present.
 The assignment includes the exact branch, parent, accepted baseline, review range,
 action, registration, policy revision, original task, outstanding findings, the
-external `resultPath`, and the optional tracked `logPath`.
+external `resultPath`, the optional tracked `logPath`, and any task images
+(`attachments`: immutable path, media type, size and SHA-256 descriptors). An agent
+checks and inspects every listed image before task work; a missing or mismatched
+image or an unavailable image-reading tool stops the turn with `needsHuman: true`
+(an objection on a review). Images never become project changes.
 It authorizes one scoped local publication; the controller never commits it.
 
 Every turn writes one schema-1 JSON object to `resultPath`, outside the checkout;
@@ -81,7 +85,9 @@ the external data directory. The assigned planner writes only its draft or share
 plan under `<data directory>/plans/<run-ID>/` and the exact `<commandId>.result.json`
 beside its assignment; nothing is written into the checkout.
 `PlanResult` defines the strict schema: copied identity, outcome, output SHA-256,
-model, summary and optional blocking reason. This is a local file-result protocol,
+model, summary and optional blocking reason. A shared brief's images arrive as
+`attachments` in every planning assignment and the frozen plan; a planner that
+cannot verify and inspect one reports `blocked`. This is a local file-result protocol,
 not an HTTP token passed to an agent or a screen/outcome parser.
 
 Publish the result **before** the correlated lifecycle completion. The controller

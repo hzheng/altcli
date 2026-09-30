@@ -2,11 +2,12 @@ import type { PlanDecision, PlannedImplementation, PlanStart } from '../contract
 import { AppError } from './errors.ts';
 import { agentId, object, promptText, requestId } from './validation.ts';
 import { parseImplementation, sha } from './implementation-validation.ts';
+import { attachmentIds } from './attachment-validation.ts';
 
 const fail = (message: string): never => { throw new AppError('INVALID_PLAN', message); };
 export function parsePlan(value: unknown): PlanStart {
   const b = object(value);
-  if (Object.keys(b).some((k) => !['requestId','groupId','groupRevision','registrations','text','baseline','autoContinue','requireApproval','turnLimit','pauseOnObjection','implementation','confirmReady'].includes(k))) fail('Unknown planning field.');
+  if (Object.keys(b).some((k) => !['requestId','groupId','groupRevision','registrations','text','baseline','autoContinue','requireApproval','turnLimit','pauseOnObjection','implementation','attachments','confirmReady'].includes(k))) fail('Unknown planning field.');
   const baseline = object(b.baseline);
   if (Object.keys(baseline).sort().join(',') !== 'branch,head' || (baseline.branch !== null && (typeof baseline.branch !== 'string' || !baseline.branch))) fail('Confirm the displayed planning branch and baseline.');
   if (typeof b.requireApproval !== 'boolean' || typeof b.autoContinue !== 'boolean' || b.confirmReady !== true) fail('Confirm the independent planning, approval and automation choices.');
@@ -20,7 +21,8 @@ export function parsePlan(value: unknown): PlanStart {
   const roster = parseImplementation({ ...parsed, groupId: b.groupId, groupRevision: b.groupRevision, registrations: b.registrations });
   return { requestId: id, groupId: roster.groupId, groupRevision: roster.groupRevision, registrations: roster.registrations, text: text!,
     baseline: { branch: baseline.branch as string | null, head: sha(baseline.head) }, autoContinue: b.autoContinue as boolean, requireApproval: b.requireApproval as boolean,
-    turnLimit, ...(b.pauseOnObjection !== undefined ? { pauseOnObjection: b.pauseOnObjection as boolean } : {}), implementation: { ...settings, branch: raw.branch === null ? null : settings.branch } as PlannedImplementation, confirmReady: true };
+    turnLimit, ...(b.pauseOnObjection !== undefined ? { pauseOnObjection: b.pauseOnObjection as boolean } : {}), implementation: { ...settings, branch: raw.branch === null ? null : settings.branch } as PlannedImplementation,
+    ...(b.attachments === undefined ? {} : { attachments: attachmentIds(b.attachments) }), confirmReady: true };
 }
 export function parsePlanDecision(value: unknown): PlanDecision {
   const b = object(value);

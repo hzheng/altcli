@@ -6,10 +6,12 @@ import type { HistoryExport, ManagedSession, RelayRun, Workspace, WorkspaceDisco
 import type { ProjectWorktree } from '../contracts/projects';
 import { TERMINAL_LIMITS } from '../contracts/terminals';
 import { api, HttpError } from '../client/api';
+import { revokePreviews } from '../client/attachments';
+import { abortUploads } from './AttachmentTray';
 import { MemoryContext, useRemembered, type PageMemory } from '../client/memory';
 import { HomeContext, tildify } from '../client/home';
 import { nameOf, workspaceKey, Workspaces } from './Workspaces';
-import { RunPolicy } from './Implementation';
+import { HandoffProgress, RunPolicy } from './Implementation';
 import { PlanningProgress } from './PlanningProgress';
 import { PaneActions } from './PaneActions';
 import { LaunchProfiles } from './LaunchProfiles';
@@ -331,6 +333,7 @@ export function Console() {
   const override = overrideOf(holds);
   // Input into a running turn keeps that run: only manual input and the request warning are overridden there.
   const inputOverride = overrideOf({ ...holds, runs: [], delivery: null });
+  const checkpointOverride = overrideOf({ request: null, runs: [], delivery: null, manual: state?.manualSessions ?? [] });
   // A changed set of holds needs a fresh acknowledgement, even when it reads the same (the composers' consent keys include the same key).
   const holdsKey = JSON.stringify(overrideKey(override));
   useEffect(() => { setReady(false); }, [holdsKey]);
@@ -415,8 +418,8 @@ export function Console() {
     try { localStorage.removeItem(SAVED_TOKEN); } catch { /* preference only */ }
     generation.current++; readNumber.current++; discoveryRead.current++; setToken(''); setDraftToken(''); setState(null); setDiscovery(null); setTab(null); setReady(false);
     setMessage(''); setError(''); setDiscoveryError(''); setUnknownRequest(null); setResetFor(null); setConsent(''); setConfig(null); setConfigError('');
-    // Lock forgets drafts and form state; server-owned runs continue and are relearned from the server after unlocking.
-    setMemory(new Map()); scrolls.current = {};
+    // Lock forgets drafts and form state, including image previews; server-owned runs and any image already in use continue.
+    setMemory(new Map()); scrolls.current = {}; revokePreviews(); abortUploads();
   }
   /** Runs one request under the console-wide submission guard, so two rapid clicks cannot create competing starts. */
   async function guarded(work: () => Promise<void>) {
@@ -605,6 +608,10 @@ export function Console() {
       : <div className="page-heading compact"><h1>Agent console</h1>{headingStatus}</div>}
     {error && <div className="notice error" role="alert">{tilde(error)} <button onClick={() => void refresh()}>Refresh</button></div>}
     {state && <>
+      {owned.filter(run => run.status === 'paused' && run.implementation?.next && run.implementation.latestPublication?.entry.commandId === run.currentCommandId).map(run => <p key={run.id} className="notice" role="status">
+        Result received; {run.participants.find(p => p.id === run.implementation!.next!.agentId)?.label ?? 'the next agent'}’s {run.implementation!.next!.action === 'work' ? 'work' : 'review'} is paused.{' '}
+        <button type="button" className="quiet inline-link" onClick={() => openAccess()}>Inspect queued handoff</button>
+      </p>)}
       {/* The one Control access panel: workflow takeover, recovery and action readiness appear here once. Typing starts directly at each terminal. It sits outside the
           tab and surface guards, so recovery stays reachable on any tab and with no agents. Opening or closing it changes nothing. */}
       <section id="control-access" ref={accessPanel} tabIndex={-1} className="panel control-access" aria-label="Control access" hidden={!accessOpen}>
@@ -646,6 +653,7 @@ export function Console() {
               return text || target ? <p className="run-command">{target ? <>{turn?.status === 'delivered' || turn?.status === 'finished' ? 'Sent to' : 'For'} <strong>{target}</strong>{text ? ': ' : ''}</> : ''}{text && <span className="command-text" title={text}>“{text.length > 160 ? `${text.slice(0, 160)}…` : text}”</span>}</p> : null;
             })()}
             <p>{run.reason}</p>
+            <HandoffProgress run={run} />
             {run.status === 'paused' && run.blockedHandoff && <BlockedHandoff key={`${run.blockedHandoff.revision}:${viewEpoch}`} handoff={run.blockedHandoff}
               disabled={busy || stale || !state.inputEnabled || !!state.manualSessions?.some(s => s.live || s.reconciliationRequired)} onRecheck={() => void action(run, 'recheck')} />}
             <p className="fine run-meaning">The controller is this server: while it drives this checkout it decides what these agents are sent next and judges their completions. Agents: {run.participants.map((p) => `${p.label} ${statuses.get(p.id)?.badge ?? 'unknown'}`).join(' · ')}.{run.status === 'paused' ? ' The controller is paused, not the agents.' : ''}</p>
@@ -654,7 +662,7 @@ export function Console() {
             {run.status === 'waiting' && (run.implementation || run.planning?.next) && <button disabled={busy || stale || !state.inputEnabled} onClick={() => void action(run, 'continue')}>{run.planning && !run.implementation ? 'I checked readiness — Next planning turn' : 'I checked readiness — Next turn'}</button>}
             {run.status === 'waiting' && run.implementation && <RunPolicy key={`${run.id}:${run.implementation.revision}`} token={token} run={run} disabled={busy || stale} onChanged={refresh} onMessage={setMessage} />}
             {/* Letting the controller continue is the alternative to taking control above. */}
-            {run.status === 'paused' && state.checkpoints?.filter((cp) => cp.runId === run.id && cp.commandId === run.currentCommandId).map((cp) => <CheckpointControls key={`${cp.runId}:${cp.revision}`} token={token} checkpoint={cp} disabled={busy || stale || !state.inputEnabled} refresh={refresh} />)}
+            {run.status === 'paused' && state.checkpoints?.filter((cp) => cp.runId === run.id && cp.commandId === run.currentCommandId).map((cp) => <CheckpointControls key={`${cp.runId}:${cp.revision}`} token={token} checkpoint={cp} disabled={busy || stale || !state.inputEnabled} refresh={refresh} override={checkpointOverride} viewEpoch={viewEpoch} />)}
             {run.status === 'paused' && run.interaction?.active && !run.interaction.fault && run.interaction.disposition && !state.checkpoints?.some((cp) => cp.runId === run.id && cp.commandId === run.currentCommandId) && (() => {
               const unsettled = run.participants.filter((p) => !['idle', 'ready'].includes(state.activities?.find((a) => a.agentId === p.id)?.state ?? 'unknown')).map((p) => p.label);
               return <p className="notice" role="status">No input checkpoint to review yet. It is saved once every agent in this checkout reports settled activity{unsettled.length ? ` (not yet: ${unsettled.join(', ')})` : ''}. Status reset is unavailable while the controller holds this checkout, so if an agent's activity stays unknown, take control above.</p>;
@@ -663,8 +671,7 @@ export function Console() {
           {latestRun && !owned.some((r) => r.id === latestRun.id) && <details className="panel latest-run" open={latestOpen} onToggle={(e) => setLatestOpen(e.currentTarget.open)}>
             <summary><h2>Last command the controller drove</h2><span className={`badge ${latestRun.status === 'stopped' ? 'warning' : ''}`}>{latestRun.status === 'stopped' ? 'CONTROL RETURNED TO YOU' : latestRun.status.toUpperCase()} · {latestRun.automaticTurns}/{latestRun.turnLimit} automatic turns</span></summary>
             <p className="muted">{latestRun.participants.map((p) => p.label).join(' ⇄ ')}{latestRun.implementation ? ` (group "${latestRun.implementation.group.name}")` : latestRun.planning ? ` (planning group "${latestRun.planning.group.name}")` : latestRun.pairId ? ` (group "${latestRun.pairId}")` : ' (single-agent turn)'} · {latestRun.reason} · {timeOf(latestRun.updatedAt)}</p>
-            {latestRun.implementation?.latestPublication && <p className="muted">{latestRun.implementation.latestPublication.sha === latestRun.implementation.latestPublication.entry.parent ? 'Report only, no commit' : <>Commit <span className="mono">{latestRun.implementation.latestPublication.sha.slice(0, 12)}</span></>} · {latestRun.implementation.latestPublication.entry.summary}<br />
-              Checks reported by the agent: {latestRun.implementation.latestPublication.entry.checks.join('; ') || 'none reported'}</p>}
+            <HandoffProgress run={latestRun} />
             {latestRun.planning && <details><summary>Retained plan and authorization</summary>
               <PlanningProgress token={token} run={latestRun} disabled refresh={refresh} onMessage={setMessage} onStop={() => {}} /></details>}
           </details>}
@@ -790,6 +797,7 @@ export function Console() {
             {inputBlocks.has(s.id) && <p className="notice" role="status">{inputBlocks.get(s.id)}</p>}
             {visibleOutcome?.outcome && <div className={`outcome ${visibleOutcome.outcome}`}>{visibleOutcome.outcome}: {visibleOutcome.reason}</div>}
             {config?.terminalEnabled && s.registrationId ? <NativeTerminal ref={handle => {if(handle)terminals.current.set(s.id,handle);else terminals.current.delete(s.id);}} token={token} target={{agentId:s.id,registrationId:s.registrationId}} clientInstanceId={clientInstanceId} viewEpoch={viewKey} label={s.label} capturedAt={snapshot?.capturedAt} inputEnabled={state.inputEnabled}
+              workspace={s.worktree?.root ?? s.repository} imagesSupported={s.agentType === 'claude' || s.agentType === 'codex'}
               holder={keyboardHolder} cliChanged={state.instances.find((i) => i.agentId === s.id)?.status === 'replaced'} held={manualHeld} refresh={refresh} fallback={<Output label={`${s.label} output`} memoryKey={`scroll:${ws}:${s.id}`} text={(snapshot?.status === 'unavailable' ? snapshot.error : snapshot?.text) || 'Waiting for a capture'} />} /> : <Output label={`${s.label} output`} memoryKey={`scroll:${ws}:${s.id}`} text={(snapshot?.status === 'unavailable' ? snapshot.error : snapshot?.text) || 'Waiting for a capture'} />}
             {/* A tmux-style status line: the boundary between the capture above and any command section below. */}
             <div className="pane-footer"><span className="mono">{s.identity.paneId}</span><span>{(!config?.terminalEnabled || !s.registrationId) && snapshot ? `Captured ${new Date(snapshot.capturedAt).toLocaleTimeString()}` : ''}</span></div>
@@ -829,6 +837,7 @@ export function Console() {
                 <p className="zone-label">Stage relay · Send to {agent.label}</p>
                 <label className="sr-only" htmlFor={`instruction-${agent.id}`}>Instruction to {agent.label}</label>
                 <div className="command-line"><textarea id={`instruction-${agent.id}`} autoComplete="off" rows={3} value={text} disabled={stageBlocked} maxLength={1900} onChange={(e) => setStageDrafts((drafts) => ({ ...drafts, [agent.id]: e.target.value }))}
+                  onPaste={(e) => { if (Array.from(e.clipboardData.files).some((file) => file.type.startsWith('image/'))) setMessage('Stage relay sends text only; its frozen protocol carries no images. Attach images to Send or committed work on a task branch, or in a terminal.'); }}
                   onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void send(agent, 'instruction'); } }} placeholder="Instruction or optional review context. ⌘/Ctrl+Enter sends." />
                   <button className="primary" disabled={stageBlocked || !stageReady || !text.trim()}>Send {agent.label}</button>
                   <button type="button" disabled={stageBlocked || !stageReady || !text.trim()} onClick={() => void send(agent, 'instruction', true)}>Send {agent.label} &amp; stage-relay to {state.sessions.find((session) => pair?.sessions.includes(session.id) && session.id !== agent.id)?.label} ↗</button>

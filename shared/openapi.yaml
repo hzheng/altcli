@@ -33,7 +33,36 @@ paths:
   /api/v1/terminals/{id}/keyboard:
     post: {"operationId":"decideKeyboard","description":"Independent writers share one durable server-wide manual-input period. Deliberate input admits a connection; release, lock, disconnect and restart never imply settlement.","responses":{"200":{"description":"Recorded result; never task readiness or acceptance","content":{"application/json":{"schema":{"$ref":"#/components/schemas/KeyboardResult"}}}},"409":{"description":"Changed, held or uncertain; inspect before proceeding","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}},"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/KeyboardInput"}}}},"parameters":[{"in":"path","name":"id","required":true,"schema":{"type":"string"}}]}
   /api/v1/terminals/{id}/input:
-    post: {"operationId":"writeNativeInput","description":"At most 4096 bytes, exact generation and contiguous sequence. No uncertain replay.","responses":{"200":{"description":"Recorded result; never task readiness or acceptance","content":{"application/json":{"schema":{"type":"object","properties":{"generation":{"type":"string","format":"uuid"},"seq":{"type":"integer","minimum":0}},"required":["generation","seq"],"additionalProperties":false}}}},"409":{"description":"Changed, held or uncertain; inspect before proceeding","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}},"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/NativeInput"}}}},"parameters":[{"in":"path","name":"id","required":true,"schema":{"type":"string"}}]}
+    post: {"operationId":"writeNativeInput","description":"At most 4096 bytes, exact generation and contiguous sequence. No uncertain replay. An image insertion shares the same sequence: the server rechecks the writer's actual pane and session, the registered Claude Code or Codex CLI and its directory, and the image, pins it, then writes one single-quoted absolute path as a bracketed paste, never Enter.","responses":{"200":{"description":"Recorded result; never task readiness or acceptance","content":{"application/json":{"schema":{"type":"object","properties":{"generation":{"type":"string","format":"uuid"},"seq":{"type":"integer","minimum":0}},"required":["generation","seq"],"additionalProperties":false}}}},"409":{"description":"Changed, held or uncertain; inspect before proceeding","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}},"requestBody":{"required":true,"content":{"application/json":{"schema":{"oneOf":[{"$ref":"#/components/schemas/NativeInput"},{"$ref":"#/components/schemas/NativeImageInput"}]}}}},"parameters":[{"in":"path","name":"id","required":true,"schema":{"type":"string"}}]}
+  /api/v1/attachments:
+    post:
+      operationId: uploadImage
+      description: 'One raw PNG or JPEG body (not multipart), with bounded JSON metadata in the x-altcli-upload header naming a client requestId, the canonical workspace root and an optional display name. Authentication precedes reading or allocation; a read-only host refuses. Limits: 10 MiB per image, 40 million pixels, two concurrent uploads, 512 MiB and 1,000 retained files per host. The server checks structure (not pixels) and stores the file privately under <data directory>/attachments. The receipt is a draft: it sends, inserts or grants nothing, and an unreferenced draft is reclaimed after 24 hours. Retrying the same requestId with identical bytes returns the stored receipt; different bytes conflict. Nothing retries automatically.'
+      parameters:
+      - {in: header, name: x-altcli-upload, required: true, schema: {type: string, maxLength: 2048}, description: 'JSON: {"requestId": UUID, "workspace": absolute path, "name"?: display label}'}
+      requestBody:
+        required: true
+        content:
+          image/png: {schema: {type: string, contentMediaType: image/png}}
+          image/jpeg: {schema: {type: string, contentMediaType: image/jpeg}}
+      responses:
+        '200': {description: 'Stored draft image; not an insertion or evidence that a model read it', content: {application/json: {schema: {$ref: '#/components/schemas/AttachmentReceipt'}}}}
+        '403': {description: 'Unauthenticated origin, or input disabled on this host', content: {application/json: {schema: {$ref: '#/components/schemas/ApiError'}}}}
+        '408': {description: 'The upload exceeded its time bound; nothing was stored', content: {application/json: {schema: {$ref: '#/components/schemas/ApiError'}}}}
+        '409': {description: 'Unknown workspace, unsafe storage, upload in progress or request ID bound to another image', content: {application/json: {schema: {$ref: '#/components/schemas/ApiError'}}}}
+        '413': {description: 'The image exceeds 10 MiB', content: {application/json: {schema: {$ref: '#/components/schemas/ApiError'}}}}
+        '415': {description: 'Not a structurally valid PNG or JPEG, a mismatched type, or an animated PNG', content: {application/json: {schema: {$ref: '#/components/schemas/ApiError'}}}}
+        '429': {description: 'Two uploads are already in progress', content: {application/json: {schema: {$ref: '#/components/schemas/ApiError'}}}}
+        '507': {description: 'Retained image storage is full; referenced images are never evicted and this version has no in-app release', content: {application/json: {schema: {$ref: '#/components/schemas/ApiError'}}}}
+  /api/v1/attachments/{id}:
+    delete:
+      operationId: removeImageDraft
+      description: Removes an unreferenced draft upload and its file; idempotent. Refused once any possible use (a native insertion or an accepted start) is recorded. Allowed on a read-only host; it never deletes referenced history.
+      parameters:
+      - {in: path, name: id, required: true, schema: {type: string, format: uuid}}
+      responses:
+        '200': {description: 'Removed, or already absent', content: {application/json: {schema: {type: object, properties: {ok: {const: true}, removed: {type: boolean}}, required: [ok, removed], additionalProperties: false}}}}
+        '409': {description: 'The image may already have been used, or is still uploading', content: {application/json: {schema: {$ref: '#/components/schemas/ApiError'}}}}
   /api/v1/terminals/{id}/resize:
     post: {"operationId":"resizeTerminal","description":"At most one resize per connection per 100 ms, with one native inspection in flight. Dimensions clamp to 20–500 columns and 5–200 rows.","responses":{"200":{"description":"Recorded result; never task readiness or acceptance","content":{"application/json":{"schema":{"$ref":"#/components/schemas/Ok"}}}},"409":{"description":"Changed, held or uncertain; inspect before proceeding","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}},"429":{"description":"Resize frequency or concurrency limit reached; wait for the viewport to settle.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ApiError"}}}}},"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","properties":{"generation":{"type":"string","format":"uuid"},"cols":{"type":"integer","minimum":1,"maximum":10000},"rows":{"type":"integer","minimum":1,"maximum":10000}},"required":["generation","cols","rows"],"additionalProperties":false}}}},"parameters":[{"in":"path","name":"id","required":true,"schema":{"type":"string"}}]}
   /api/v1/terminals/{id}/close:
@@ -1235,6 +1264,10 @@ components:
     KeyboardBatch: {"type":"object","properties":{"requestId":{"type":"string","format":"uuid"},"expectedBootId":{"type":"string","format":"uuid"},"manualSessionId":{"type":"string","format":"uuid"},"expectedRevision":{"type":"integer","minimum":1,"maximum":9007199254740991},"writers":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"object","properties":{"connectionId":{"type":"string","format":"uuid"},"generation":{"type":"string","format":"uuid"},"revision":{"type":"integer","minimum":1,"maximum":9007199254740991}},"required":["connectionId","generation","revision"],"additionalProperties":false}},"confirmReady":{"const":true},"handoffRequestId":{"type":"string","format":"uuid"}},"required":["requestId","expectedBootId","manualSessionId","expectedRevision","writers"],"additionalProperties":false}
     KeyboardResult: {"type":"object","properties":{"generation":{"type":"string","format":"uuid"},"manualSession":{"anyOf":[{"$ref":"#/components/schemas/ManualSession"},{"type":"null"}]},"writer":{"type":"boolean"},"reason":{"type":"string"}},"required":["generation","manualSession","writer","reason"],"additionalProperties":false}
     NativeInput: {"type":"object","properties":{"generation":{"type":"string","format":"uuid"},"seq":{"type":"integer","minimum":0},"encoding":{"enum":["utf8","binary"]},"data":{"type":"string"}},"required":["generation","seq","encoding","data"],"additionalProperties":false}
+    NativeImageInput: {"type":"object","description":"One explicit image insertion; bootId, paneId and sessionId are the terminal the image was chosen for.","properties":{"generation":{"type":"string","format":"uuid"},"seq":{"type":"integer","minimum":1},"image":{"type":"object","properties":{"attachmentId":{"type":"string","format":"uuid"},"bootId":{"type":"string","format":"uuid"},"paneId":{"type":"string"},"sessionId":{"type":"string"}},"required":["attachmentId","bootId","paneId","sessionId"],"additionalProperties":false}},"required":["generation","seq","image"],"additionalProperties":false}
+    AttachmentIds: {"type":"array","minItems":1,"maxItems":4,"uniqueItems":true,"items":{"type":"string","format":"uuid"},"description":"Ordered uploaded images for this workspace. Every recipient must be Claude Code or Codex; 20 MiB in total."}
+    AttachmentReceipt: {"type":"object","properties":{"id":{"type":"string","format":"uuid"},"requestId":{"type":"string","format":"uuid"},"workspace":{"type":"string"},"mediaType":{"enum":["image/png","image/jpeg"]},"bytes":{"type":"integer","minimum":1},"width":{"type":"integer","minimum":1},"height":{"type":"integer","minimum":1},"sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"name":{"type":["string","null"]},"createdAt":{"type":"string","format":"date-time"},"draftExpiresAt":{"type":["string","null"],"format":"date-time"}},"required":["id","requestId","workspace","mediaType","bytes","width","height","sha256","name","createdAt","draftExpiresAt"],"additionalProperties":false}
+    AttachmentDescriptor: {"type":"object","description":"An immutable image frozen into a run, instruction manifest or assignment.","properties":{"id":{"type":"string","format":"uuid"},"path":{"type":"string"},"mediaType":{"enum":["image/png","image/jpeg"]},"bytes":{"type":"integer","minimum":1},"width":{"type":"integer","minimum":1},"height":{"type":"integer","minimum":1},"sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"name":{"type":["string","null"]}},"required":["id","path","mediaType","bytes","width","height","sha256","name"],"additionalProperties":false}
     ManualReconcile: {"oneOf":[{"type":"object","properties":{"requestId":{"type":"string","format":"uuid"},"manualSessionId":{"type":"string","format":"uuid"},"expectedRevision":{"type":"integer","minimum":1},"confirmReady":{"const":true}},"required":["requestId","manualSessionId","expectedRevision","confirmReady"],"additionalProperties":false},{"type":"object","properties":{"requestId":{"type":"string","format":"uuid"},"manualSessionId":{"type":"string","format":"uuid"},"expectedRevision":{"type":"integer","minimum":1},"confirmInspected":{"const":true},"note":{"type":"string","minLength":1,"maxLength":1000}},"required":["requestId","manualSessionId","expectedRevision","confirmInspected","note"],"additionalProperties":false}]}
     LaunchProfile: {"type":"object","properties":{"id":{"type":"string","format":"uuid"},"revision":{"type":"integer","minimum":0},"label":{"type":"string"},"executable":{"type":"string"},"args":{"type":"array","items":{"type":"string"}},"adapterHint":{"enum":["codex","claude","manual"]},"enabled":{"type":"boolean"}},"required":["id","revision","label","executable","args","adapterHint","enabled"],"additionalProperties":false}
     LaunchProfileInput: {"type":"object","properties":{"label":{"type":"string"},"executable":{"type":"string"},"args":{"type":"array","items":{"type":"string"}},"adapterHint":{"enum":["codex","claude","manual"]},"enabled":{"type":"boolean"},"expectedRevision":{"type":"integer","minimum":0}},"required":["label","executable","args","adapterHint","enabled"],"additionalProperties":false}
@@ -2580,6 +2613,7 @@ components:
         text: {"type":"string","maxLength":2000}
         policy: {"enum":["solo","peer","worker_reviewer"]}
         workerId: {"$ref":"#/components/schemas/AgentId"}
+        attachments: {"$ref":"#/components/schemas/AttachmentIds","description":"With images, the wire prompt names only an immutable input manifest holding the instruction and image descriptors."}
         confirmReady: {"const":true}
       required: [requestId, groupId, groupRevision, registrations, agentId, text, policy, confirmReady]
       additionalProperties: false
@@ -2647,6 +2681,7 @@ components:
         branch: {"$ref":"#/components/schemas/BranchConsent"}
         reviewBase: {"$ref":"#/components/schemas/GitSha"}
         reviewNote: {type: string, maxLength: 1900, description: A note from the human for the peer that reviews this handoff, delivered with the review assignment as its note. Requires handoff and is not accepted for kind review, whose text is the review context.}
+        attachments: {"$ref":"#/components/schemas/AttachmentIds","description":"kind work only. Frozen and pinned at admission; every assignment of the run, including reviews, carries the descriptors."}
         confirmReady: {"const":true}
       required: ["requestId","groupId","groupRevision","registrations","agentId","kind","handoff","policy","autoContinue","turnLimit","branch","confirmReady"]
       additionalProperties: false
@@ -2862,6 +2897,7 @@ components:
         implementation: {"$ref":"#/components/schemas/ImplementationRun"}
         planning: {"$ref":"#/components/schemas/PlanningRun"}
         standalone: {"$ref":"#/components/schemas/StandaloneStart"}
+        attachments: {"type":"array","items":{"$ref":"#/components/schemas/AttachmentDescriptor"},"description":"Images frozen and pinned at admission; never expired automatically."}
         stage: {"$ref":"#/components/schemas/StageBinding","description":"Stage relay binding. A staging run without it predates branch-scoped Stage relay and dispatches nothing more."}
       required: ["id","repository","lockKey","pairId","participants","autoContinue","pauseRequested","status","reason","currentCommandId","automaticTurns","turnLimit","createdAt","updatedAt"]
       additionalProperties: false
@@ -2934,6 +2970,7 @@ components:
         turnLimit: {"type":"integer","minimum":1,"maximum":200}
         pauseOnObjection: {"type":"boolean","description":"Agreement carried into Implementation. Default false."}
         implementation: {"$ref":"#/components/schemas/PlannedImplementation"}
+        attachments: {"$ref":"#/components/schemas/AttachmentIds","description":"The shared brief's images: every planner and the approved implementation receive them. Request changes stays text-only."}
         confirmReady: {"const":true}
       required: ["requestId","groupId","groupRevision","registrations","text","baseline","autoContinue","requireApproval","turnLimit","implementation","confirmReady"]
       additionalProperties: false
@@ -3050,6 +3087,7 @@ components:
         endorsements: {"type":"object","additionalProperties":{"type":"integer","minimum":1}}
         objections: {"type":"object","additionalProperties":{"type":"string"}}
         implementation: {"$ref":"#/components/schemas/PlannedImplementation"}
+        attachments: {"type":"array","items":{"$ref":"#/components/schemas/AttachmentDescriptor"}}
       required: ["transitionId","authorizedAt","authority","overrideReason","epoch","briefRevision","policyRevision","rosterRevision","baseline","brief","planningGroup","planners","automaticPolicy","plan","endorsements","objections","implementation"]
       additionalProperties: false
     PlanningRun:
@@ -3091,6 +3129,7 @@ components:
         drafts: {"type":"array","items":{"type":"object","properties":{"agentId":{"$ref":"#/components/schemas/AgentId"},"document":{"$ref":"#/components/schemas/PlanDocument"}},"required":["agentId","document"],"additionalProperties":false}}
         plan: {"$ref":"#/components/schemas/PlanVersion"}
         findings: {"type":"object","additionalProperties":{"type":"string"}}
+        attachments: {"type":"array","items":{"$ref":"#/components/schemas/AttachmentDescriptor"},"description":"The shared brief's images; inspect each as read-only task material."}
       required: ["identity","root","cwd","branch","brief","resultPath"]
       additionalProperties: false
     AgentActivity:

@@ -1,10 +1,11 @@
 import type { BranchConsent, Group, ImplementationStart } from './implementation.ts';
 import type { ManagedSession, WorktreeIdentity } from './workflow.ts';
+import type { AttachmentDescriptor } from './attachments.ts';
 
 export type PlanAction = 'draft' | 'synthesize' | 'review' | 'revise';
 export type PlanOutcome = 'complete' | 'accept' | 'object' | 'blocked';
 /** Implementation membership and branch consent are separate from planning membership/approval. */
-export type PlannedImplementation = Omit<ImplementationStart, 'requestId' | 'text' | 'kind' | 'autoContinue' | 'turnLimit' | 'confirmReady' | 'reviewBase' | 'branch' | 'keyboardSettlement'> & { branch: BranchConsent | null };
+export type PlannedImplementation = Omit<ImplementationStart, 'requestId' | 'text' | 'kind' | 'autoContinue' | 'turnLimit' | 'confirmReady' | 'reviewBase' | 'branch' | 'keyboardSettlement' | 'attachments'> & { branch: BranchConsent | null };
 export interface PlanStart {
   requestId: string;
   groupId: string;
@@ -18,6 +19,8 @@ export interface PlanStart {
   turnLimit: number;
   pauseOnObjection?: boolean;
   implementation: PlannedImplementation;
+  /** Ordered uploaded images that belong to the shared brief: every planner and the approved implementation receive them. */
+  attachments?: string[];
   confirmReady: true;
 }
 export interface PlanIdentity {
@@ -84,6 +87,8 @@ export interface FrozenPlan {
   endorsements: Record<string, number>;
   objections: Record<string, string>;
   implementation: PlannedImplementation;
+  /** The shared brief's images, unchanged under every endorsement. */
+  attachments?: AttachmentDescriptor[];
 }
 export interface PlanningRun {
   phase: 'plan';
@@ -122,6 +127,8 @@ export interface PlanningAssignment {
   drafts?: { agentId: string; document: PlanDocument }[];
   plan?: PlanVersion;
   findings?: Record<string, string>;
+  /** Human-supplied images of the shared brief: read-only task material; inspect each before acting. */
+  attachments?: AttachmentDescriptor[];
 }
 export interface PlanDecision {
   runId: string;

@@ -9,6 +9,7 @@ import { attachTmux, inspectAttach, type Attachment } from './lib/tmux-attach.ts
 import { loadConfig } from '../src/server/config.ts';
 import { paneProcesses } from '../src/server/processes.ts';
 import { tmuxLiteral } from './lib/terminal-environment.ts';
+import { nativeReference } from '../src/server/attachments.ts';
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
 async function eventually(check: () => Promise<boolean>) { for (let n=0;n<100;n++) { if (await check()) return; await delay(20); } assert.fail('Native condition timed out'); }
 
@@ -116,6 +117,33 @@ test('private tmux: observer isolation, native bytes, resize, exact client ident
     await run(['set-option', '-t', target.sessionId, 'destroy-unattached', 'off']);
     await desktop.close(); desktop = undefined;
   } finally { await writer?.close(); await observer?.close(); await desktop?.close(); await run(['kill-server']).catch(() => {}); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('private tmux: an image reference reaches the pane as one bracketed paste only where the program enabled it, never with Enter', async () => {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), 'altcli-image-ref-')));
+  const config = loadConfig({ ALTCLI_TOKEN: 'a'.repeat(64), ALTCLI_DATA_DIR: join(dir, 'data'), ALTCLI_TMUX_SOCKET: join(dir, 't.sock') });
+  const run = createRunner(config.tmuxBin, config.tmuxSocket);
+  const attachments: Attachment[] = [];
+  try {
+    for (const [name, mode] of [['bracketed', '\\033[?2004h'], ['plain', '']] as const) {
+      await writeFile(join(dir, `${name}.sh`), `#!/bin/sh\nstty raw -echo\nprintf "${mode}Ready\\r\\n"\nexec /bin/cat > ${name}.bytes\n`);
+      await run(['-f', '/dev/null', ...(name === 'bracketed' ? ['new-session', '-d', '-s', 'images', '-x', '100', '-y', '30'] : ['new-window', '-d', '-t', 'images']), '-c', dir, '/bin/sh', join(dir, `${name}.sh`)]);
+    }
+    const path = join(dir, 'data', 'attachments', '9f1c2d3e-0000-4000-8000-000000000001.png'), reference = nativeReference(path);
+    for (const [paneId, name, expected] of [['%0', 'bracketed', reference], ['%1', 'plain', Buffer.from(`'${path}'`)]] as const) {
+      await eventually(async () => (await inspectPane(run, paneId)).command === 'cat');
+      await run(['select-window', '-t', paneId]);
+      const target = await inspectAttach(config, (await inspectPane(run, paneId)).identity);
+      const writer = await attachTmux(config, target, true, 100, 30, () => {}, () => {}); attachments.push(writer);
+      await eventually(async () => { try { return (await writer.active()).paneId === paneId; } catch { return false; } });
+      writer.write(reference);
+      await eventually(async () => (await readFile(join(dir, `${name}.bytes`))).length === expected.length);
+      await delay(100);
+      assert.deepEqual(await readFile(join(dir, `${name}.bytes`)), expected);
+      assert.ok(!(await readFile(join(dir, `${name}.bytes`))).includes(0x0d));
+      await writer.close();
+    }
+  } finally { for (const a of attachments) await a.close().catch(() => {}); await run(['kill-server']).catch(() => {}); await rm(dir, { recursive: true, force: true }); }
 });
 
 // node-pty 1.1.0 on macOS leaks a spare master, the slave copy and the exit watcher's kqueue per spawn.

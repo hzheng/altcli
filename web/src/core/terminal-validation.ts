@@ -1,4 +1,4 @@
-import type { KeyboardBatch, KeyboardInput, KeyboardSettlement, ManualReconcile, NativeInput, TerminalOpen, TerminalTarget } from '../contracts/terminals.ts';
+import type { KeyboardBatch, KeyboardInput, KeyboardSettlement, ManualReconcile, NativeImageInput, NativeInput, TerminalOpen, TerminalTarget } from '../contracts/terminals.ts';
 import { TERMINAL_LIMITS } from '../contracts/terminals.ts';
 import { AppError } from './errors.ts';
 import { object, requestId } from './validation.ts';
@@ -56,8 +56,14 @@ export function parseKeyboardSettlement(value: unknown): KeyboardSettlement {
   const b = terminalFields(value, ['manualSessionId', 'revision']);
   return { manualSessionId: requestId(b.manualSessionId), revision: terminalNumber(b.revision, 1, Number.MAX_SAFE_INTEGER) };
 }
-export function parseNativeInput(value: unknown): NativeInput {
-  const b = terminalFields(value, ['generation', 'seq', 'encoding', 'data']);
+export function parseNativeInput(value: unknown): NativeInput | NativeImageInput {
+  const b = terminalFields(value, ['generation', 'seq', 'encoding', 'data', 'image']);
+  if (b.image !== undefined) {
+    if (b.encoding !== undefined || b.data !== undefined) throw new AppError('TERMINAL_INPUT', 'An image insertion carries no terminal bytes.');
+    const i = terminalFields(b.image, ['attachmentId', 'bootId', 'paneId', 'sessionId']);
+    return { generation: requestId(b.generation), seq: terminalNumber(b.seq, 1, Number.MAX_SAFE_INTEGER),
+      image: { attachmentId: requestId(i.attachmentId), bootId: requestId(i.bootId), paneId: terminalText(i.paneId, 32), sessionId: terminalText(i.sessionId, 64) } };
+  }
   if (!['utf8', 'binary'].includes(String(b.encoding)) || typeof b.data !== 'string' || b.data.length > TERMINAL_LIMITS.inputFrame * 2) throw new AppError('TERMINAL_INPUT', 'Invalid terminal input frame.');
   return { generation: requestId(b.generation), seq: terminalNumber(b.seq, 1, Number.MAX_SAFE_INTEGER), encoding: b.encoding as NativeInput['encoding'], data: b.data };
 }
