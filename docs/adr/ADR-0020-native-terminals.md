@@ -2,6 +2,16 @@
 
 Status: accepted direction; implementation proposal. Setup enables its flag; a missing flag means off.
 
+## Current contract and amendment precedence
+
+The latest September 29 follow-up below governs current input: **Terminal / Display**
+is the only acquisition control, multiple connections may write even to one pane,
+and new writers may join a recovery period while automation remains held. Native
+interleaving is an accepted risk; application-caused duplication, misrouting,
+stale replay and unannounced automated input are not. Git cannot undo every native
+command or external effect. Earlier single-writer, first-input queue and local-only
+browser handoff rules are retained below as dated history, not current instructions.
+
 Use xterm.js over a ticket-authenticated WebSocket owned by the same Next
 ControlPlane. The per-card HTTP streaming candidate failed the six-connection
 browser control-capacity gate. Use node-pty and native tmux attachment, preserving
@@ -51,9 +61,16 @@ Copy mode and synchronized input block automated dispatch without removing a liv
 verified CLI from its workspace group or unmounting its terminal. Keep the reason
 visible so the owner can use the native keyboard to leave copy mode. Process,
 instance and directory checks still apply; observation is not readiness.
-One AltCLI control pane retains drafts per target. Its recipient is the agent
-selected above the terminals, which starts on a working agent and is then held until
-the owner chooses another; Plan setup addresses the whole group.
+The shared Control frame retains separate drafts/composers per agent. Parallel shows
+them all and holds selection; Focus shows one and follows the next working agent.
+The Agent selector chooses the viewed agent and recipient together; selection
+revokes readiness and sends nothing. Plan setup addresses the whole group.
+
+## Earlier strict browser handoff
+
+This describes the earlier browser handoff. Its command-bound strict settlement
+API remains supported, but the September 29 follow-up replaces the browser action
+sequence with acknowledged stops and human inspection, including remote writers.
 
 An explicit Implementation action may hand off this browser's connected keyboard
 when there is exactly one manual session and no affected run checkpoints. Its
@@ -68,6 +85,10 @@ Settlement failure, uncertainty or changed draft/target/activity/view sends noth
 and preserves the draft. Another browser's ownership and unresolved manual records
 still require separate recovery. Normal dispatch gates apply after release; this
 does not resume held runs or transfer keyboard authority.
+
+## Historical amendments
+
+Read these chronologically: later amendments explicitly supersede earlier controls.
 
 September 25 update: the browser presents the one writer as a single **Keyboard** selector in
 the shared terminal area instead of per-card buttons. Choosing a pane still asks for the same
@@ -198,6 +219,18 @@ descriptors, every later assignment of the run carries them, and plain Send's pr
 manifest instead of an image path, so exact prompt correlation is unchanged. Images that may have been
 used never expire in this increment; a full quota refuses new uploads. The protocol records which CLI
 versions a probe verified; other CLIs are refused.
+
+## Proposed image completion work
+
+Proposed future direction, not implemented: drop input through the same bounded,
+target-bound upload path; reference-aware management and deliberate release of
+eligible used images; and explicit app-conversation/job scope after a text-only
+app-assistance release. Preserve explicit Insert without Enter and no uncertain
+replay. Never evict active/uncertain references, and never promise provider-data
+retraction. The pixel-decoding versus structural-validation contract remains
+[open](../OPEN-DECISIONS.md#proposed-app-wide-assistance-and-completion-choices).
+These extend the September 29 scope rather than recategorizing its exclusions as
+regressions. See the [roadmap](../../ROADMAP.md#proposed-app-wide-assistance-and-completion-work).
 
 See
 [the protocol](../TERMINAL-PROTOCOL.md) for limits, recovery and deployment checks.

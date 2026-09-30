@@ -370,3 +370,72 @@ Automated fixtures, mock tmux tests, real tmux tests, installed-agent tests, and
 ### Result-transport interpretation
 
 Scenarios naming `PLAN-OUTCOME` assume the final-line transport. [ADR-0016](adr/ADR-0016-plan-phase-and-approval.md#result-channel-and-stable-capture) also permits an equivalent correlated structured helper. Under that explicit adapter choice, test the same required identity, decision, findings, content, and lifecycle evidence rather than requiring both transports. A missing valid result is always incomplete.
+
+## Fixture reliability follow-ups
+
+Source inspection at `13283632c826e462768bfdbecc0cfbc1e265c4c5` supports two
+focused investigations from the [next-step source](SOURCES.md#september-30-next-step-design-source).
+These are not tests executed for the documentation integration or proof that all
+historical failures share one cause.
+
+- [projects.test.ts](../web/scripts/projects.test.ts) passes fixture identity as
+  invocation-local `git -c` options, whereas [projects.ts](../web/src/server/projects.ts)
+  independently checks `git var GIT_COMMITTER_IDENT`. Recommend local identity in
+  each disposable repository that application Git touches, isolated from the real
+  home/global configuration. Preserve the production identity check and test the
+  actual application invocation, not only the fixture helper.
+- [native-launch.test.ts](../web/scripts/native-launch.test.ts) starts two workers
+  with one PID-file path, reads that file and checks descendant/survivor evidence
+  for the first session. This supports a race hypothesis, not a reproduction here.
+  Recommend per-instance PID evidence and repeated private-socket runs; keep the
+  descendant assertion and inspect any remaining failures.
+
+Historical CI/provider results retain their original provenance. Exact counts
+are not copied here as current health. Future repairs must record the commands,
+environment and actual outcomes, rather than weakening checks to obtain a pass.
+
+## Proposed app-wide assistance and completion checks
+
+**Planned requirements; new capabilities are not implemented and no results are
+claimed by this catalog.** [ADR-0022](adr/ADR-0022-app-wide-ai-instances.md) and
+[ADR-0023](adr/ADR-0023-app-tools-and-delegated-authority.md) own the proposed
+design. Source scenario IDs below are provenance, not names of existing tests;
+related rows are condensed without replacing current native/workflow coverage.
+
+| Source scenarios | Trigger and expected behavior |
+| --- | --- |
+| NB01 | In an isolated home/repository, application Git calls obtain fixture identity without the owner's global config. |
+| NB02 | Repeated two-worker launches retain PID/descendant evidence for the intended instance; neither overwrites the other's record. |
+| NB03–NB06, NG05 | Multiple app writers, including the same pane, may coexist. Duplicate/conflicting sequences cannot duplicate bytes; losing one writer neither revokes another silently nor replays input. Manual input holds conflicting automated dispatch. Current Terminal/Display acquisition replaces old first-key/exclusive-writer expectations. |
+| NB07 | Changing cards/views preserves target drafts and revokes stale readiness under the current linked selection model. No old confirmation sends to a new recipient; any redesigned selection policy needs separate expectations. |
+| NB08, NG01, NG09 | A supported Global AI instance starts without a dummy project. Its exact startup launch can expose login/trust/model prompts through scoped browser access while retaining reservations and truthful needs-attention; no fake readiness or automatic permission bypass. |
+| NB09 | Navigation into a session with incompatible lifetime settings, including destroy-unattached, has tested warning/refusal or documented native consequences; never promise survival without evidence. |
+| NG02–NG04 | The same profile used for both roles creates distinct sessions/conversations. Background jobs never enter the user prompt; settings changed during a job do not rewrite attribution. |
+| NG06–NG08 | Read-only inspection changes no job. Human manipulation invalidates/reconciles provenance. Host restart rebinds exact surviving instances, rejects old credentials/claims and avoids duplicate runners. |
+| NG10 | Exact infrastructure identity excludes app agents from automatic group membership without hiding real project-writing effects or excluding all processes by name. |
+| NM01–NM02, NM08 | Answers distinguish current capabilities/state from old ADRs; report uncertainty and detect changed tool/document versions rather than recommending unavailable features. |
+| NM03–NM04 | Workspace changes do not retarget in-flight tools; out-of-scope project reads are refused or need an owner-authorized scope change. |
+| NM05, NM07 | Instruction-like tool content and forged actor/policy/approval fields cannot alter authenticated principal or authority. |
+| NM06, NM10 | Helpers reach one host-owned controller/database. A read-only tool scope gains no hidden shell or direct database-write route. |
+| NM09, NA05 | Private preferences/images are shared only with the explicitly scoped conversation/job; neither another project nor the other app role receives them automatically. |
+| ND01, ND11 | A valid standing delegation can resolve an eligible judgment without redundant per-action approval. Already-authorized deterministic progression needs no model gate. |
+| ND02, ND08, ND12 | Human-only Plan approval remains human-only. Explicit delegated risk authority is recorded truthfully and never fabricates inspection/known idle; an assistant cannot broaden its own policy. |
+| ND03–ND04 | Policy revocation or changed branch/plan/roster/action invalidates an assessment before effect admission. |
+| ND05–ND06 | Identical retries inspect/return one operation; changed payloads conflict. A lost response after possible mutation remains uncertain and is not replayed. |
+| ND07, ND09–ND10 | Insufficient completion evidence remains insufficient. Unsupported native permission prompts surface for human interaction; tool mutations cannot bypass manual/launch/workflow barriers. |
+| NJ01–NJ03 | Unchanged polls create no repeated jobs, related events deduplicate/batch, and causation/depth/rate limits prevent self-triggering loops. |
+| NJ04–NJ06 | Time/tool limits stop new admission while preserving possible effects. Quota/login failure is visible; unavailable allowance stays unknown, with no silent paid fallback. |
+| NJ07–NJ09 | Important baseline notifications survive model failure. Delivery uses deduplication/receipts and truthful uncertainty; changed destinations cannot silently redirect old private content. |
+| NB10, NJ10–NJ12 | Lock/phone suspension differs from pausing or stopping background work. Pause stops new jobs, not already admitted effects. Disabling AI preserves deterministic recovery; cooperative restrictions are never called a sandbox. |
+| NA01, NA08 | Drop uses the existing bounded upload path and exact destination. Late upload/insert responses after context changes never write to another prompt; explicit fresh insertion is needed. |
+| NA02 | Direct API bytes that pass structural checks but cannot decode produce behavior matching the explicitly adopted server-validation contract. |
+| NA03–NA04, NA06 | Full storage explains retaining references and permits only eligible release; active/uncertain content is not evicted. Deletion cannot retract provider copies, and changed image bytes hold dispatch rather than substitute data. |
+| NA07 | Physical iPhone Safari over private HTTPS/WSS exercises IME, viewport, picker/paste, suspension/reconnect and concurrent desktop input; viewport emulation is not this acceptance. |
+
+Before effectful release, record exact commit, OS/Node/tmux/library versions,
+CLI/model/auth and permission modes, commands and outcomes for scoped live help,
+separate background work, delegated/stale decisions, startup recovery, quota
+failure, concurrent input and physical-device operation. Fixtures, private tmux,
+installed providers and physical devices are separate layers. See the
+[roadmap gates](../ROADMAP.md#proposed-app-wide-assistance-and-completion-work);
+document checks alone do not satisfy them.

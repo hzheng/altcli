@@ -71,6 +71,8 @@ describe the `46f228b` staging baseline. Task phases Plan/Implementation are dis
 from those older milestone headings.
 
 Source implementation and acceptance are recorded separately.
+The [September 30 app-wide assistance and completion track](#proposed-app-wide-assistance-and-completion-work)
+is proposed future work, not implemented capability or runtime authorization.
 Current architecture: [ADR-0011](docs/adr/ADR-0011-server-owned-relay-runs.md).
 Historical pre-hardening roadmap: [snapshot](docs/history/2026-09-16-pre-hardening/ROADMAP.md).
 
@@ -121,6 +123,8 @@ semantics. Do not make these automatic by trusting outcome prose alone.
 The xterm.js/node-pty terminal is implemented under ADR-0020; its host release
 gates are listed below. Third AI supervisor only after deterministic ownership and reliable
 lifecycle evidence; advisory first, bounded actions, no unrestricted terminal tool.
+The proposed [separate app-wide assistants](docs/adr/ADR-0022-app-wide-ai-instances.md)
+are a distinct future track, not a mandatory reviewer or a change to that runtime deferral.
 Native Swift/iOS consumes the host API later; it does not execute local coding CLIs.
 
 ## Release gate
@@ -238,7 +242,7 @@ Publish/fetch exact code handoffs through a designated remote; optionally link o
 
 **Exit:** no worker consumes an unpublished commit, no comparison of unrelated absolute index paths, and no PR requirement for transport. Multi-host planning additionally needs explicit N-draft transfer/barrier semantics; ignored files never become a remote protocol by assumption.
 
-Native iOS, optional terminal graphics output, **AI supervision**, generalized workflow construction, advisor/quorum planning policies, N-agent implementation, and parallel alternative implementations remain later choices. A third or fourth ordinary planner is explicitly in scope and is not part of that supervisor deferral.
+Native iOS, optional terminal graphics output, **AI supervision**, generalized workflow construction, advisor/quorum planning policies, N-agent implementation, and parallel alternative implementations remain later choices. A third or fourth ordinary planner is explicitly in scope and is not part of that supervisor deferral. The proposed app-wide assistance track below neither replaces the controller nor changes those execution limits.
 
 ## Native terminals and agent launch
 
@@ -251,7 +255,7 @@ do not gate the remaining terminal and launch acceptance.
 | Milestone | Source status | Remaining acceptance |
 | --- | --- | --- |
 | M0: transport and host | One Next/ControlPlane owner, authenticated WebSocket, PTY/tmux attachment and isolated probes implemented. | Run the native CI matrix on the supported Linux/macOS hosts. |
-| M1: observation and layout | In-place terminals, labelled snapshot fallback, N terminal cards and one independent control pane implemented. Badges distinguish another browser, another terminal, a replaced CLI and unresolved manual input; the status line shows the effective window size, and Settings shows keyboard scope and terminal limits. Outside Plan, a Terminal/Control switch shows the terminals or the one control pane in one frame; Plan keeps the optional wide-screen side placement and phone drawer. Parallel shows each agent's controls with separate drafts, side by side on wide screens and stacked on phones; Focus shows one. The Agent selector and card focus choose the active readiness recipient (Plan setup addresses the group). The group row keeps Agents immediately left of local Settings, including in Stage relay. Control access beside connection status gathers keyboard release, recovery, takeover and readiness confirmations. The heading reports active writers and the global hold; first human input admits an independent writer. | Physical-device rendering and accessibility acceptance. |
+| M1: observation and layout | In-place terminals and labelled snapshot fallback implemented. Terminal / Display is each connection's only typing control; exceptional badges show disconnect, replaced CLI or held/unresolved input. The status line reports the actual destination and window size. Outside Plan, Terminal / Control switches between surfaces in one frame; Plan retains its optional side placement and phone drawer. Parallel shows separate per-agent composers/drafts and holds selection; Focus shows one and follows a working agent. The Agent selector chooses the viewed agent and active Control recipient together; focus and native keyboard authority are separate. Agents sits immediately left of local Settings. Control access gathers stops, recovery, takeover and continuation. | Physical-device rendering and accessibility acceptance. |
 | M2: native input | Direct input with concurrent writers, literal keys/Unicode, touch modifiers, guarded text paste, in-page expansion, bounded resize and optional screen-reader mode implemented. Late input responses cannot affect a replacement keyboard generation; leaving the surface drops unsent queued text. A writer follows deliberate tmux session navigation with an updated label (observers never follow; target loss closes), and control-pane drafts including the Plan brief stay editable under a keyboard hold. | Installed CLI menus/questions and physical Safari/IME. |
 | M3: holds and recovery | Durable server-wide manual barriers, original checkpoints, batch stop, disconnect and explicit human reconciliation implemented. | Supervised installed-provider completion/restoration and host restart demonstration. |
 | M4: profiles and launch | Repository-directory entry, versioned literal argv profiles, batch launch, partial-result inspection and a separate launch action after verified worktree creation implemented. | Real installed CLI startup, readiness and workflow demonstration in a disposable checkout. |
@@ -274,11 +278,17 @@ branch** ([ADR-0013](docs/adr/ADR-0013-confirmed-branch-setup.md#confirmed-closi
 confirmed closing of app-launched sessions before the existing removal or discard. Physical
 device, installed-CLI and deployed-host acceptance of these remain separate.
 
-The September 29 direct-input proposal removes Claim/Take keyboard and the selector. One
-backend admits independent writers on first human input, retaining the original server-wide
+The earlier September 29 direct-input proposal removed Claim/Take keyboard and the selector. One
+backend admitted independent writers on first human input, retaining the original server-wide
 barrier. Schema 18, boot/version gates, bounded first-intent queues and exact batch stop/checked
-handoff preserve recovery. Resource and native/browser evidence accompany the change; deployed
+handoff preserved recovery. Resource and native/browser evidence accompanied the change; deployed
 restart and physical-device acceptance remain separate.
+The later September 29 follow-up supersedes its first-input entry field and queue
+with the Terminal / Display toggle and no pre-grant queue. Recovery periods may
+admit new writers while keeping their automation barrier. Current acknowledged
+browser actions can stop listed remote writers and record human inspection;
+checkpoint continuation remains a separate checked action. The
+[protocol](docs/TERMINAL-PROTOCOL.md) describes the current contract.
 
 Use [TESTING](docs/TESTING.md#terminal-and-launch-release-checklist) for the
 remaining demonstrations; commit messages record the commands that
@@ -286,3 +296,34 @@ actually ran. Setup writes `ALTCLI_ENABLE_TERMINAL` and `ALTCLI_ENABLE_AGENT_LAU
 as true; set them false on a deployment you have not accepted. Adopt backend changes only when no delivery is active;
 disabling either flag preserves unresolved ownership. Larger-group and
 remote-worker scope remains as described in Steps 7–8.
+
+## Proposed app-wide assistance and completion work
+
+September 30, 2026: the following code increments are **proposed, not implemented**.
+They selectively integrate the [next-step source](docs/SOURCES.md#september-30-next-step-design-source).
+The current-document corrections are part of that integration; fixture repairs and
+new runtime features are future tasks. Existing Steps 1–8 and terminal M0–M6 keep
+their identities and acceptance gates.
+
+| Track | Proposed increment | Exit evidence for future implementation |
+| --- | --- | --- |
+| B0: baseline reliability | Investigate isolated Git identity and native PID fixtures; retain production checks | Application Git calls work with isolated fixture identity; repeated launches bind PID evidence to each instance; record actual remaining failures and commands, without weakening assertions |
+| B1: startup access | Scoped browser input to an exact launch before supported-agent discovery | Original launch identity and reservation retained; unrelated automation blocked; login/trust/startup remain truthful, with no fake readiness or duplicate launch |
+| B2: independent completion | Image drop, validation decision and used-reference management; optional environment profiles and Create & launch; later app-wide image scope | Each delivered item has explicit consent/scope and failure behavior; active/uncertain images are not evicted, secrets stay out of argv, partial operation successes remain; undelivered items stay visibly deferred |
+| A1: Global AI reads | Separate user-operated app instance with current documentation, capabilities and scoped state tools | Useful answers cite current evidence; no dummy project, silent context sharing or second controller; supported startup/login/quota behavior verified |
+| A2: background reads | Separate opt-in instance with bounded, identified event jobs | Useful triggers deduplicate; no jobs per unchanged poll; status, pause and exact restart recovery work without interrupting Global AI |
+| A3: notifications | Deterministic in-app delivery, optionally enriched by model judgment | Important baseline alerts work without AI; duplicates and uncertain delivery use receipts; external destinations require separate configuration |
+| A4: delegated effects | Explicit versioned policy, scoped principal, exact preview and durable outcome | Current authority admits one eligible effect; stale/revoked/human-only/uncertain cases stay unresolved; no fabricated human inspection, self-enabling policy or manual-barrier bypass |
+| R: rollout | Installed-host/provider and physical-device acceptance, joining existing M5/M6 | Record actual versions, auth/model/tool modes, private HTTPS/WSS, iPhone/IME and recovery demonstrations; enable deliberately, and disabling assistance preserves deterministic recovery and workspace agents |
+
+A1 investigation can proceed alongside B0; cosmetic work and image drop need not
+gate it. Its supported startup path is an explicit dependency. A4 release requires
+trustworthy authority/recovery tests and verified provider integration. Neither
+native iOS, terminal graphics, a new model account nor generalized N-agent
+implementation is a prerequisite. No AI replaces the deterministic controller.
+
+Architecture is proposed in [ADR-0022](docs/adr/ADR-0022-app-wide-ai-instances.md)
+and [ADR-0023](docs/adr/ADR-0023-app-tools-and-delegated-authority.md).
+[Open choices](docs/OPEN-DECISIONS.md#proposed-app-wide-assistance-and-completion-choices)
+retain unresolved mechanisms; [planned checks](docs/TESTING.md#proposed-app-wide-assistance-and-completion-checks)
+are requirements, not executed results.

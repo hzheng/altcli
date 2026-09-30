@@ -69,6 +69,28 @@ Read [WORKFLOWS](docs/WORKFLOWS.md) for vocabulary and UI; [ROADMAP](ROADMAP.md#
 
 ADR-0001 through ADR-0011 remain historical/current-runtime records without being rewritten to pretend new features shipped. ADR-0013 owns the confirmed branch/worktree setup exceptions; the legacy staging path still performs no controller Git mutation. Historical `repository` fields and pair IDs retain their worktree-scoped meaning; project navigation does not rewrite frozen runs or vendor event pairing.
 
+## Proposed app-wide assistance (not implemented)
+
+The September 30 [selective integration](docs/DESIGN-MIGRATION.md#september-30-selective-next-step-integration)
+records useful future architecture from the next-step source. It does not lift
+current runtime deferrals or grant an agent authority. Source-attributed acceptance
+is preserved in [provenance](docs/SOURCES.md#september-30-next-step-design-source);
+the new records below are proposed, not implemented.
+
+| Record | Proposed responsibility |
+| --- | --- |
+| [ADR-0022](docs/adr/ADR-0022-app-wide-ai-instances.md) | Separate Global AI and Background assistant instances, lifecycle, bounded jobs and notifications; not implemented |
+| [ADR-0023](docs/adr/ADR-0023-app-tools-and-delegated-authority.md) | Shared app tools, authenticated principals and explicit delegated authority; not implemented |
+
+Optional app-wide assistance is distinct from a mandatory third reviewer,
+controller replacement or enabling larger Plan/Implementation groups. Existing
+human approval, lifecycle evidence, branch consent and ownership rules remain.
+The D01–D53 ledger below is unchanged; source N decisions are mapped separately
+rather than promoted into accepted decisions. See the
+[roadmap](ROADMAP.md#proposed-app-wide-assistance-and-completion-work),
+[open choices](docs/OPEN-DECISIONS.md#proposed-app-wide-assistance-and-completion-choices)
+and [planned checks](docs/TESTING.md#proposed-app-wide-assistance-and-completion-checks).
+
 ## Scope and decision status
 
 This registry preserves the submitted design's decision IDs and status distinctions after migration into maintained documents. Project-centered task groups, solo operation, optional Plan, committed Implementation, human checkpoints, and confirmed branch/worktree setup are the direction. Quota policy and product-name selection remain out of scope; agent, adapter, and model identity remain relevant to attribution and capabilities. Source and historical versions are provenance, not required reading dependencies. Executed checks are recorded in commit messages; this registry does not claim installed-host acceptance.

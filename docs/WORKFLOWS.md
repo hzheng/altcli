@@ -425,3 +425,36 @@ Busy sessions need **Stop these sessions anyway**. Survivors or an unverified cl
 worktree held until **Inspect again** clears them or you record an inspection decision; a paused
 run must be taken over before the removal or discard step, which shows a fresh preview. See
 [ADR-0013](adr/ADR-0013-confirmed-branch-setup.md#confirmed-closing-of-launched-sessions).
+
+## Proposed app-wide assistance
+
+**Proposed future direction; not implemented.** The existing project/worktree
+workflow above keeps its Plan approval, branch consent, Stage relay and execution
+limits. [ADR-0022](adr/ADR-0022-app-wide-ai-instances.md) proposes two separate
+app roles; they do not become extra mandatory participants in a task group.
+
+| Role | Proposed user journey |
+| --- | --- |
+| Global AI | Open a dedicated native terminal without choosing a project; select a supported profile and explicit context scope; ask for app help or cross-workspace discussion with current evidence |
+| Background assistant | Separately enable a profile and permitted scope; useful application events produce bounded jobs; inspect compact status/activity, pause new jobs or deliberately stop the instance |
+
+The conversations, credentials and scopes remain separate. A background job must
+not type into the user's Global AI prompt. Switching projects neither retargets
+an in-flight request nor authorizes sharing that project's context. Private
+images and preferences need explicit scope; app-wide image input is a later
+extension. Ordinary native multiwriter rules still apply to human Global AI input.
+
+Start with reads, explanations and explicit UI previews. Future standing
+delegation would let the assistant assess eligible actions under a policy the
+owner enabled once, without redundant per-occurrence approval. The backend still
+checks the exact action/state and current policy. Already authorized deterministic
+continuation stays with the controller; a human-only or unsupported decision stays
+pending. A suggested policy does not authorize itself, and an assistant cannot
+pretend the human inspected the host. See
+[ADR-0023](adr/ADR-0023-app-tools-and-delegated-authority.md).
+
+Closing the page does not cancel enabled background work; Lock and stopping jobs
+are distinct. Model/login/quota failure must leave ordinary terminals, docs and
+deterministic recovery usable. The [roadmap](../ROADMAP.md#proposed-app-wide-assistance-and-completion-work)
+and [open choices](OPEN-DECISIONS.md#proposed-app-wide-assistance-and-completion-choices)
+describe dependencies; these are not instructions for controls that exist today.

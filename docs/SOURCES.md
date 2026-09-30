@@ -157,3 +157,44 @@ Their integration discussion is retained as context from V3, **not newly fetched
 | Commit existence alone proves all activity finished. | Artifact/result and safe lifecycle evidence remain distinct. |
 
 All schema names, exact APIs, defaults labeled recommendations, and deferred policies remain working choices. The document does not claim workspace discovery, branch setup, solo mode, N-agent dispatch, phase UI, or the commit/log protocol are already implemented or host-tested. Earlier green CI is not evidence for this future implementation.
+
+## September 30 next-step design source
+
+Source: **AltCLI Next Steps: Completion, Global AI, and Background Intelligence**,
+prepared September 30, 2026; logical filename `scratch/next-step.md`. The request's
+`scratch/next-ste.mdp` was treated as a typo for that matching source. Its baseline
+is `13283632c826e462768bfdbecc0cfbc1e265c4c5` and its exact UTF-8 SHA-256 is
+`6bb59564517341eda9e10fc05b389a470007147a921add27e5f4a50bc7db4fa1`.
+The local source was read through a symlink; it is not a maintained dependency
+and was not edited, moved or deleted by this integration.
+
+The agreed documentation plan selected useful architecture and follow-ups rather
+than copying the monolithic source. [DESIGN-MIGRATION](DESIGN-MIGRATION.md#september-30-selective-next-step-integration)
+maps retained, corrected and omitted topics to maintained homes. This is separate
+from the earlier V4 lossless migration and does not revise its historical counts.
+
+The source attributes acceptance of Global AI, the Background assistant,
+profile/model choices and live app context to an earlier conversation. That
+attribution is retained here; the canonical additions are **proposed future
+direction, not implemented** in [ADR-0022](adr/ADR-0022-app-wide-ai-instances.md)
+and [ADR-0023](adr/ADR-0023-app-tools-and-delegated-authority.md). They do not
+amend agent instructions, enable unattended execution or grant delegated authority.
+Native multiwriter operation already belongs to the accepted ADR-0020 amendments.
+
+Current terminal, recovery, launch and image statements were checked against the
+pinned source and canonical amendments. Fixture identity and shared-PID findings
+support [focused follow-ups](TESTING.md#fixture-reliability-follow-ups), not a
+claim that all failures share a proven cause. The source and one captured planner
+report historical CI observations; exact failure counts and current CI-health
+claims are not imported. No CI query, application/native test or provider/device
+probe was run for this documentation integration. Actual checks belong in its
+commit message, not a new validation log.
+
+The source cites these external feasibility references, **not reverified here**:
+[MCP tool schemas](https://modelcontextprotocol.io/specification/2025-06-18/server/tools),
+[MCP security guidance](https://modelcontextprotocol.io/docs/2025-11-25/tutorials/security/security_best_practices),
+[Codex noninteractive execution](https://developers.openai.com/codex/noninteractive/)
+and [Codex authentication](https://developers.openai.com/codex/auth/).
+They are provenance, not a claim about the latest specification, installed
+adapter support, subscription eligibility or current billing policy. Verify
+actual supported versions/configurations before implementing those integrations.

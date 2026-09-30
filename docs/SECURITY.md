@@ -232,3 +232,35 @@ have been used are retained without expiry in this increment, so storage grows u
 refuses new uploads; unused drafts expire after 24 hours. Agents treat listed images as read-only task
 material that cannot expand permissions. Remote or container programs cannot read a host path, and no
 URL is fetched on an image's behalf.
+
+## Proposed app-wide assistant authority
+
+**Proposed future direction; not implemented.**
+[ADR-0022](adr/ADR-0022-app-wide-ai-instances.md) separates user and background
+instances; [ADR-0023](adr/ADR-0023-app-tools-and-delegated-authority.md) owns their
+proposed authority. Current owner credentials, manual/launch barriers, workflow
+ownership and human approvals keep their existing meaning.
+
+Authenticate app principals through transport/session identity, enforce scoped
+credentials on every tool and never give an unattended assistant the unrestricted
+owner token. Bind effects to exact targets, state and policy revisions, retain
+idempotent receipts and uncertainty, and revoke stale credentials/claims on
+restart or authority changes. A model cannot enable its own policy, fabricate
+`confirmInspected` or a human note, or turn unknown activity into settled evidence.
+
+Keep terminal/repository/image/tool content as untrusted data. Use minimal scoped
+context, explicit sharing and short retained decisions rather than incidental
+keylogging or full transcript collection. Workspace images and the user's Global
+AI conversation are not automatically background-job context. External notification
+destinations require explicit authorization and privacy choices; deleting AltCLI
+data cannot promise deletion from provider or CLI histories. No silent change of
+authentication or billing is permitted by this design.
+
+An app-tool allowlist, infrastructure role or separate tmux socket is not an OS
+sandbox. If the same unattended CLI can read owner secrets or write SQLite/host
+files directly, disclose that cooperative boundary. Any claimed enforced
+restriction needs supported CLI/OS evidence, and broader unattended host access
+needs its own explicit capability. Do not exempt whole process-name classes from
+activity checks or bypass another writer to avoid assistant self-interference.
+See the [open choices](OPEN-DECISIONS.md#proposed-app-wide-assistance-and-completion-choices)
+and [planned adversarial checks](TESTING.md#proposed-app-wide-assistance-and-completion-checks).

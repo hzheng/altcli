@@ -36,7 +36,7 @@ Existing setup instructions, current behavior, runtime skill, and historical ADR
 | 12. Unify execution and separate collaboration policies | [ADR-0015-collaboration-policies-and-solo.md](adr/ADR-0015-collaboration-policies-and-solo.md#unify-execution-and-separate-collaboration-policies) |
 | 13. Peer relay behavior | [ADR-0015-collaboration-policies-and-solo.md](adr/ADR-0015-collaboration-policies-and-solo.md#peer-relay-behavior) |
 | 14. Worker and reviewer behavior | [ADR-0015-collaboration-policies-and-solo.md](adr/ADR-0015-collaboration-policies-and-solo.md#worker-and-reviewer-behavior) |
-| 15. Workspace-first UI, groups, phases, and actions | [WORKFLOWS.md](WORKFLOWS.md#workspace-first-ui-groups-phases-and-actions) |
+| 15. Workspace-first UI, groups, phases, and actions | [WORKFLOWS.md](WORKFLOWS.md#project-centered-ui-groups-phases-and-actions) |
 | 16. Role changes and phase boundaries | [ADR-0015-collaboration-policies-and-solo.md](adr/ADR-0015-collaboration-policies-and-solo.md#role-changes-and-phase-boundaries) |
 | 17. Server-owned orchestration and invariants | [ADR-0017-phase-orchestration-and-evidence.md](adr/ADR-0017-phase-orchestration-and-evidence.md#server-owned-orchestration-and-invariants) |
 | 18. Publication, hooks, and completion evidence | [ADR-0017-phase-orchestration-and-evidence.md](adr/ADR-0017-phase-orchestration-and-evidence.md#publication-hooks-and-completion-evidence) |
@@ -126,3 +126,56 @@ These changes relocate and clarify presentation; they do not silently introduce 
 At migration time, and again in an independent review on September 19, 2026, the redistribution was checked unit by unit against the draft identified by the SHA-256 above: the 26-section destination map, exactly one D01-D50 ledger, all 115 acceptance-table rows plus the solo prose, all 29 fenced blocks, and the remaining substantive table and prose units. Content is present verbatim or has only numbered section references converted to links and the editorial changes listed above. The source-only title/revision banner and table of contents are represented by this provenance record and destination map rather than copied as design requirements. Markdown fence balance and relative links/anchors were also checked. Because the draft is not retained in the repository, that comparison is a one-time record; the durable checks are link/anchor validity and fence balance.
 
 Application tests and live CLI/device acceptance are separate from document validation. No new runtime behavior, passing future test suite, Gemini adapter, or unattended safety is certified by this migration. Existing historical ADRs and executable review skill remain unchanged; see [TESTING](TESTING.md) for requirements; commit messages record the evidence.
+
+## September 30 selective next-step integration
+
+This separate integration uses the title, baseline and exact hash recorded in
+[SOURCES](SOURCES.md#september-30-next-step-design-source). It is selective, not a
+claim to reproduce every source paragraph, example or earlier enhanced-plan test.
+The September 19 migration above and its counts remain historical and unchanged.
+The source's N identifiers below are provenance, not additions to the accepted
+D01–D53 ledger. No scratch file or external planning output is required to use the
+maintained design.
+
+| Source sections | Retained or corrected content and maintained home |
+| --- | --- |
+| Executive direction; 1 | Scope/status in the [architecture index](../Architecture_Decision.md#proposed-app-wide-assistance-not-implemented), source attribution in [SOURCES](SOURCES.md#september-30-next-step-design-source); new authority remains proposed |
+| 2 | Preserve the existing host/terminal/launch/controller foundations in [ADR-0022](adr/ADR-0022-app-wide-ai-instances.md); omit duplicate review praise |
+| 3 | Source-qualified fixture investigations in [TESTING](TESTING.md#fixture-reliability-follow-ups), completion backlog in [ROADMAP](../ROADMAP.md#proposed-app-wide-assistance-and-completion-work); do not import historical CI counts as current health |
+| 4 | Current multiwriter, toggle, recovery and UI guidance in [ADR-0020](adr/ADR-0020-native-terminals.md) and [TERMINAL-PROTOCOL](TERMINAL-PROTOCOL.md); correct obsolete first-key/exclusive-writer assumptions, retain new redesign questions as open |
+| 5–8 | Separate roles, profiles, lifecycle and user journeys in [ADR-0022](adr/ADR-0022-app-wide-ai-instances.md) and [WORKFLOWS](WORKFLOWS.md#proposed-app-wide-assistance) |
+| 9–10 | Current scoped evidence, one service owner and explicit delegated authority in [ADR-0023](adr/ADR-0023-app-tools-and-delegated-authority.md) |
+| 11–12 | Identified jobs, causal bounds, deterministic notification delivery, budgets and authentication limits in [ADR-0022](adr/ADR-0022-app-wide-ai-instances.md) |
+| 13–14 | Exact infrastructure identity, manual-hold self-interference and security in both new ADRs and [SECURITY](SECURITY.md#proposed-app-wide-assistant-authority); unresolved mechanisms in [OPEN-DECISIONS](OPEN-DECISIONS.md#proposed-app-wide-assistance-and-completion-choices) |
+| 15 | Proposed startup/environment/Create & launch follow-ups in [ADR-0021](adr/ADR-0021-project-entry-and-agent-launch.md#proposed-launch-completion-work); image follow-ups in [ADR-0020](adr/ADR-0020-native-terminals.md#proposed-image-completion-work); installed/device gates remain in TESTING |
+| 16 | Keep conceptual responsibilities in the new ADRs; omit speculative TypeScript, enums, policy YAML and endpoint/table layouts from normative contracts |
+| 17 | This ownership map replaces the source's large implementation-seam table; no new standalone spec or duplicated controller architecture |
+| 18 | Two B/A tracks and shared R gate in [ROADMAP](../ROADMAP.md#proposed-app-wide-assistance-and-completion-work); existing Steps 1–8 and M0–M6 identities preserved |
+| 19 | Condensed [prospective catalog](TESTING.md#proposed-app-wide-assistance-and-completion-checks) retains all six source scenario families, grouping related rows; source IDs do not claim executable tests |
+| 20 | N disposition below and the [open-choice register](OPEN-DECISIONS.md#proposed-app-wide-assistance-and-completion-choices); no automatic promotion into accepted D decisions |
+| 21; final principle | [SOURCES](SOURCES.md#september-30-next-step-design-source) owns provenance and verification limits; ADRs retain the useful native/managed/app-intelligence separation |
+
+| Source decisions | Disposition |
+| --- | --- |
+| N01–N02 | Existing ADR-0020 multiwriter/correctness contract; reconcile current prose, no duplicate new decision |
+| N03–N07 | Retain app roles, separation, profile/model and live-context direction as proposed in ADR-0022/0023; source acceptance attribution stays in SOURCES |
+| N08–N11 | Retain reuse, opt-in lifecycle, bounded jobs and deterministic-controller boundaries as recommendations in ADR-0022 |
+| N12–N14 | Retain explicit delegation, human-authority distinction and deterministic notification delivery as proposed contracts in ADR-0023/0022 |
+| N15 | Retain eligible-authentication preference and no silent billing fallback; provider capability/entitlement stays unverified |
+| N16–N18 | Retain fixture, startup and image follow-ups with source-qualified evidence and existing scope exclusions; future implementation remains separate |
+| N19 | Correct current UI descriptions against code/amendments; keep actual redesign choices open |
+| N20 | Retain recommended sequence with noncolliding roadmap labels |
+
+The TESTING catalog groups NB (baseline/native), NG (instance lifecycle), NM
+(context/tools), ND (delegation), NJ (jobs/notifications) and NA (images/devices)
+by trigger and outcome, keeping source IDs alongside the merged requirements.
+Obsolete exclusive-writer and first-key expectations are explicitly replaced by
+the current toggle/multiwriter contract. Old UI/TA identifiers mentioned only by
+the source's enhanced-plan references are not presented as repository tests.
+
+Omitted material includes duplicated praise and history, personal project
+examples, speculative serialized contracts, a large source-path inventory and
+the entire scratch document as a second specification. No current API/schema,
+skill, permission, agent instruction or runtime behavior changes as a result of
+this documentation integration. Documentation checks do not satisfy the new
+runtime acceptance scenarios.

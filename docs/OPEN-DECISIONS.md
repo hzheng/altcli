@@ -22,7 +22,7 @@ This register preserves unresolved choices and explicitly proposed defaults from
 | Shared remote, hosting provider, PR timing | Optional and separate; local first. |
 | Multi-host worker-control transport | Required beyond Git exchange; not selected. |
 | Per-turn CI and final acceptance gate | Focused versus full validation agreed; mandatory checks open. |
-| AI supervisor and native iOS | Deferred. Third/additional ordinary planners remain a planned capability, distinct from the initial one/two-member selection limit and not a supervisor. |
+| AI supervisor and native iOS | Remain deferred. Separate app-wide Global AI and Background assistant roles are proposed, not implemented, under ADR-0022/0023 below; they neither replace the controller nor mandate another reviewer. Additional ordinary planners remain a distinct planned capability, without changing the initial one/two-member execution limit. |
 
 Planning details still to specify:
 
@@ -101,3 +101,36 @@ larger-group rollout or provider capability questions. Deployment acceptance thr
 the actual remote proxy, physical Safari/IME and installed CLI versions remains
 open. The owner chose on September 24 to have setup enable
 both flags.
+
+## Proposed app-wide assistance and completion choices
+
+These choices belong to the **proposed, not implemented** direction of
+[ADR-0022](adr/ADR-0022-app-wide-ai-instances.md) and
+[ADR-0023](adr/ADR-0023-app-tools-and-delegated-authority.md). Recording them does
+not authorize unattended launch, change human approvals or lift current deferrals.
+The [roadmap](../ROADMAP.md#proposed-app-wide-assistance-and-completion-work) gives
+recommended order, not accepted schemas or provider guarantees.
+
+| Choice | Recommended starting point and unresolved boundary |
+| --- | --- |
+| Runtime and model support | One verified structured CLI adapter first; separately establish invocation, auth/billing, model attribution, permission and MCP behavior for installed versions. No permanent model catalog or universal subscription guarantee. |
+| Process and conversation lifecycle | Reusable supervised runner with bounded jobs and exact scoped conversation identities; persistent conversation versus fresh/resumed jobs remains an adapter choice. |
+| MCP transport and authentication | A supported local transport reaching the same host owner; versioned capabilities, scoped principals and typed failures. Exact transport, credentials and tool schemas are not fixed. |
+| Global AI self-interference | Reads and explicit UI previews first; later define how an effectful call settles its own native-input hold without bypassing other writers or changing unknown evidence. |
+| App-owned tmux socket | Optional if lifecycle/navigation benefits justify supported multi-socket behavior; never a claim of filesystem isolation or a prerequisite for the read-only design. |
+| Initial delegation and approval migration | Small useful action set with exact previews/receipts; separate owner-authorized policy and delegated record. Preserve existing human-only Plan settings. Risk overrides need explicit supported scope, not fabricated inspection. |
+| Unattended shell/environment | Minimal required access; determine and disclose cooperative versus enforced boundaries. No inherited broad host authority or unrestricted app shell tool. |
+| Native permission prompts | Defer universal automatic answering. Only verified adapter-specific mechanisms may support a later explicit policy. |
+| Notifications | In-app deterministic delivery first; external destinations, content privacy, retry/uncertainty and destination-change behavior need explicit configuration and tests. |
+| Budgets and retention | Measured job/tool/time limits and bounded context/activity retention; defaults remain open, unavailable quota stays unknown. |
+| Image validation | Keep today's documented structural checks until an explicit decision chooses bounded server decoding or retains that limited contract; browser decoding alone does not cover direct API callers. |
+| Used-image release | Reference-aware management and informed eligible release; never evict active/uncertain use or promise retraction from a provider. Exact retention policy remains open. |
+| App-wide image scope | Later explicit conversation/job destinations, separate from workspace-private uploads; no dummy workspace or automatic broadcast. |
+| Host environment profiles | Optional named allowlists and secret references with redacted, configuration-bound preview; today's credential/proxy omissions remain. |
+| Create & launch | Optional convenience with separate durable creation/launch results; no guessed destination, rollback of successful siblings or uncertain retry. |
+| Workspace UI redesign | Current linked Agent selection, Parallel per-agent composers and Focus following are documented behavior. Any independent target model or changed focus-follow policy needs a separate decision; an older scratch layout does not silently supersede current behavior. |
+
+Fixture identity/PID follow-ups are source-supported investigations in
+[TESTING](TESTING.md#fixture-reliability-follow-ups), not proof of one root cause
+for every historical CI failure. Startup interaction needs the separate
+[launch authority design](adr/ADR-0021-project-entry-and-agent-launch.md#proposed-launch-completion-work).

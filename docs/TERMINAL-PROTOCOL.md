@@ -77,26 +77,27 @@ A session reached by navigation keeps its own lifetime settings. If it uses
 destroy it, just as a desktop client leaving it would.
 
 The ⌨️ status reports the active input connection count and shared automation hold. There is
-no exclusive keyboard owner. Each connected terminal offers an input field, including captured-only
-observation. The first trusted key, IME commit, paste, soft key or mouse-protocol event requests
-`acquire` with an idempotent request ID, exact observer generation and `expectedBootId`.
-Focus, copy/selection, history scrolling and terminal-generated replies never acquire input.
-The pre-grant textarea preserves human intent separately from xterm's mixed `onData` stream.
-Pending intents are bounded at 256 KiB and 2,048 events and tied to the connection and view. After both the
-matching HTTP response and socket writer frame, queued keys/paste use public xterm APIs and the
-new generation's parsed modes. Native attachments advertise the per-client `sync` capability;
+no exclusive keyboard owner. The **Terminal / Display** toggle is the only input request,
+including from captured-only observation. Terminal requests `acquire` with an idempotent request
+ID, exact observer generation and `expectedBootId`; Display releases that connection's writer.
+There is no first-key input field or pre-grant queue. Focus, copy/selection, history scrolling,
+paste in Display and terminal-generated replies never acquire input. The browser enables typing
+only after the matching HTTP result, socket writer generation and already-received output are
+processed, so input uses the current terminal modes. Native attachments advertise the per-client `sync` capability;
 the broker waits for the first synchronized redraw's end before the writer frame (five-second
 limit). This changes no tmux sizing or global option. The byte boundary follows
 [tmux 3.5a’s synchronized-output implementation](https://github.com/tmux/tmux/blob/3.5a/tty.c#L1569);
 xterm 6 supports those sequences. Response/frame order is immaterial; reset alone is insufficient.
-Cancellation, changed view/focus, disconnect or uncertainty drops unsent intents and retains
-any already created manual barrier. No input is replayed into a replacement generation.
+View changes, disconnect or uncertainty drop unsent queued input and retain any already created
+manual barrier; an event already partly sent still drains as described above. No input is
+replayed into a replacement generation. A pending grant does not pull focus back after the user moves elsewhere.
 
 Writers may coexist in this or another browser, even on one pane. Native tmux interleaving and
 size negotiation still apply. Each connection has one attachment, replaced on promotion or stop;
 no extra persistent service is created. The first writer durably records the all-pane snapshot
-and whole-run holds before input. Later writers join the same healthy period without overwriting
-original checkpoints, snapshots or aggregate byte evidence. Acquisition remains serialized with
+and whole-run holds before input. Later writers join the same period without overwriting
+original checkpoints, snapshots or aggregate byte evidence, including when joining an unsettled
+period that needs recovery. Acquisition remains serialized with
 setup, delivery and other keyboard decisions; existing writers have independent input queues.
 Legacy owners still need settlement/takeover. Current modern turns can finish while held but
 cannot dispatch a successor; branch-scoped Stage relay keeps its fault/takeover rule.
@@ -114,22 +115,34 @@ existing writers remain live. Metadata contains identities,
 checkpoints, times and byte counts, never raw input. Stopped writer details may be pruned on join;
 the period retains its aggregate counts and initial targets for cleanup checks.
 
-Checked Implementation Send/commit/review can stop all writers in this page when there is one
-healthy period, no affected run checkpoints, and no remote writer. It freezes every local queue
-before sending one batch; pending input/paste refuses the action. `confirmReady: true` requires
+**Strict settlement API:** the command-bound `handoffRequestId` / `keyboardSettlement` path
+retains its narrower contract: one healthy period, no affected run checkpoints and no remaining
+unselected writer. A caller freezes its selected local queues before sending one checked
+batch stop; pending input/paste refuses the action. `confirmReady: true` requires
 exact aggregate and writer revisions, so bytes admitted after confirmation refuse settlement.
 Strict inventory/activity/background-work/checkpoint checks must succeed before ordinary dispatch.
 A failed check still stops those writers and retains the barrier and reason. The `handoffRequestId`
 binds successful settlement to the exact frozen command; `keyboardSettlement` carries the returned
 period ID/revision through admission, branch setup and delivery checks. New activity, keyboard
 changes or restart invalidate it. A changed draft, target, activity or view cancels dispatch and
-preserves the draft; an uncertain response is never retried. Other browsers and held runs require
-their separate stop/recovery actions. Reconciliation never continues a run.
+preserves the draft; an uncertain response is never retried. This is distinct from the current
+browser's human-inspection sequence below. Settlement alone never continues a run.
+
+**Current browser actions:** the action's acknowledgement lists the exact holds it clears,
+including remote writers, recovery records and any controller runs it ends. It stops all listed
+writers, records the human input decision, then attempts the chosen action through its normal
+checks. A changed view/draft/target or refusal/uncertain response cancels the rest; already
+recorded decisions stand. **Review input and continue** clears only the manual holds before a
+separate saved-checkpoint review, keeping that run. An automatic checkpoint may dispatch its
+eligible queued turn; a waiting checkpoint needs **Next turn** afterward.
+**Take control** ends the run instead. Neither viewing a result nor merely releasing or
+reconciling a manual record sends a successor. See the browser action descriptions below.
 
 Schema 18 migrates each legacy period independently, preserving its original IDs, snapshots,
 run references, revisions and byte evidence, with no surviving live grant. Unresolved records
 remain barriers until explicitly reconciled. The original singleton fields are archival metadata;
-`writers` is current authority, `live` is their aggregate and `recoveryRequired` prevents new joins.
+`writers` is current authority and `live` is their aggregate. `recoveryRequired` retains the
+automation barrier; new writers may join while preserving that evidence and adopting the current boot.
 Protocol-2 opens and host-boot checks make older tabs fail closed. Adopt only at a settled restart;
 older servers refuse this schema instead of interpreting concurrent writers as one owner.
 
@@ -163,8 +176,9 @@ affected runs retain their keyboard holds, checkpoints and faults. It does not
 certify settlement or send anything. Any live keyboard, in-flight operation, or
 unresolved delivery/setup/launch refuses reconciliation. Never clear SQLite rows
 by hand.
-The browser separates terminal view, DOM focus, AltCLI command recipient and
-keyboard grant. Control-pane drafts, including the Plan brief, stay editable while
+The browser selects the viewed agent and Control recipient together; DOM focus and
+keyboard grants remain separate. Native tmux navigation can change a writer's actual
+destination without changing that selected agent. Control-pane drafts, including the Plan brief, stay editable while
 a keyboard or manual barrier holds dispatch; only their actions are blocked, with
 the reason shown. Ctrl+Shift+Escape leaves terminal focus for the visible Terminal/Control switch
 (or the Control access entry); the terminal shows this hint while it has
@@ -177,15 +191,16 @@ and rotation. Alternate-screen wheel-to-arrow translation is suppressed when
 mouse reporting is off. OSC clipboard/title changes are consumed; HTTP(S) links
 require explicit confirmation. Output is never controller instructions or HTML.
 
-Each card's badge is a compact emoji whose accessible name is one of: **Typing enabled** ⌨️,
+The mode toggle shows ordinary typing/viewing state. A separate compact badge appears for
 **Disconnected** 🔌, **Manual CLI/shell** ⚠️ (the registered CLI process was replaced,
 for example it exited to a shell), **Observing · manual input unresolved** or **held** ⚠️, or
-**Observing** 👁️. Help text (on hover, keyboard focus and tap) says what it means and what to do;
+other exceptional states; ordinary **Typing enabled** and **Observing** badges are omitted while
+the toggle is available. Help text (on hover, keyboard focus and tap) says what it means and what to do;
 actionable failures stay visible in the status line. The page's connection indicator works the
 same way (🟢 Connected, 🔴 Not current, ⏳ Connecting); it is not agent activity or readiness. The status
 line shows the actual pane, foreground command and effective window size. If focus
 moved elsewhere while a keyboard grant was pending, the terminal does not take
-focus back; it discards unsent first input and reports the cancellation. With native terminals
+focus back. The toggle queues no first input. With native terminals
 enabled, Settings also shows the server-wide keyboard scope and the terminal limits.
 
 The worktree group row keeps **Agents** immediately left of local **Settings**, including
@@ -239,7 +254,7 @@ on-focus hint remain. A focus outline identifies the active surface. Snapshot ti
 Multiline paste into a terminal without bracketed-paste support requires a
 warning confirmation because newlines can execute immediately; paste above
 16 KiB also requires confirmation. **Paste text** reads the clipboard only on
-that explicit click. A first paste enables input; multiline/large first paste asks before admission. A delayed result is
+that explicit click in Terminal mode; it does not enable input. Multiline/large paste asks before sending. A delayed result is
 discarded if focus, input, view or grant changed. Clipboard denial falls back to
 the keyboard/system Paste action. Accepted text uses xterm's single paste path,
 without an added Enter. Image files take the separate attachment path below; a paste that carries them types no text.
@@ -318,6 +333,11 @@ there is no in-app release yet, and deleting files by hand breaks recorded refer
 keep descriptors, not image bytes; back up the attachment directory with the host data. Lock forgets
 previews and drafts; server-side references remain.
 
+Drop input, used-reference management/release, the pixel-decoding decision and explicit
+app-conversation/job scope are [proposed follow-ups](adr/ADR-0020-native-terminals.md#proposed-image-completion-work),
+not capabilities of these endpoints. Active or uncertain references must not be evicted as a
+quota workaround; deleting a copy cannot retract provider data.
+
 ## Launch
 
 Project entry accepts an existing absolute directory, typed or chosen with **Browse…**, a
@@ -367,6 +387,9 @@ preview. Mock launches are labelled simulated and appear in mock discovery.
 Launch cards in Projects expose status and recovery, without embedded terminals.
 Open the checkout in Console to view and control its discovered agents; startup
 that has not exposed a supported agent yet remains inspectable in host tmux.
+Scoped browser access to the exact startup launch is
+[proposed, not implemented](adr/ADR-0021-project-entry-and-agent-launch.md#proposed-launch-completion-work);
+the existing launch-ID target does not bypass unresolved launch reservations.
 
 Live launched sessions are closed by **Finish branch** on a linked task worktree
 ([ADR-0013](adr/ADR-0013-confirmed-branch-setup.md#confirmed-closing-of-launched-sessions)):

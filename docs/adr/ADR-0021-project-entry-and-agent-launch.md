@@ -61,6 +61,26 @@ with explicit acknowledgement of interrupted work. The final tmux check binds th
 original pane PID. Group membership does not gate closing; existing identity,
 ownership, background-work and no-retry safeguards still apply.
 
+## Proposed launch completion work
+
+Proposed future direction, not implemented: offer browser access to an exact
+verified launch before it qualifies as a coding agent. The existing launch-ID
+terminal target is only a starting point: unresolved launch reservations currently
+block keyboard admission. A future scoped startup interaction must retain that
+reservation, block unrelated automation and preserve truthful needs-attention
+state. Session names alone cannot authorize access; login, trust and model prompts
+must not be converted into fake readiness or automatic approvals.
+
+Optional named host environment profiles and Create & launch remain proposals.
+Environment design needs allowlists, secret references, redacted previews and
+configuration-bound consent, not blanket inheritance or credentials in argv.
+Creation and each launch need separate durable outcomes: never launch into a
+guessed path after uncertain creation, retry an uncertain batch or delete
+successful siblings. These proposals do not change today's explicit launch
+consent or credential/proxy omissions. See
+[open choices](../OPEN-DECISIONS.md#proposed-app-wide-assistance-and-completion-choices)
+and the [roadmap](../../ROADMAP.md#proposed-app-wide-assistance-and-completion-work).
+
 See [the protocol](../TERMINAL-PROTOCOL.md) for API, environment and recovery rules.
 Remote/provider/mobile acceptance remains separate from fake and private-fixture
 validation. Setup enables the feature flags; a missing flag means off.
