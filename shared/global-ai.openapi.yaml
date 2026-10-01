@@ -1,0 +1,66 @@
+openapi: 3.1.0
+info:
+  title: AltCLI Global AI A1 supplemental contract
+  version: 1.0.0
+  description: >-
+    Supplements openapi.yaml without changing its existing workflow or authority
+    schemas. All actions here manage the optional user-operated app instance or
+    read evidence. No delegated app execution or background worker is implemented.
+paths:
+  /api/v1/global-ai:
+    get:
+      security: [{ OwnerBearer: [] }]
+      summary: Observe the app instance, profiles, shareable roots and bounded native capture
+      responses:
+        '200': { description: GlobalAIView plus profiles, roots, fallback and manualHeld; never a credential }
+    post:
+      security: [{ OwnerBearer: [] }]
+      summary: Explicit preview/start/revoke/renew/retire or owner evidence read
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { enum: [preview, start, revoke, refresh-tools, retire, read] }
+                profileId: { type: string }
+                roots: { type: array, maxItems: 32, items: { type: string } }
+                id: { type: string, format: uuid }
+                digest: { type: string }
+                requestId: { type: string, format: uuid }
+                instanceId: { type: string, format: uuid }
+                confirm: { const: true }
+                name: { type: string }
+                arguments: { type: object }
+              additionalProperties: false
+      responses:
+        '200': { description: Observed metadata or bounded read reply; duplicate starts do not replay }
+        '400': { description: Invalid action-specific fields or missing confirmation }
+        '409': { description: Stale preview, conflicting identity/scope, active instance or existing manual hold }
+  /api/v1/global-ai/tools:
+    post:
+      security: [{ AppReadCapability: [] }]
+      summary: Loopback-only bridge endpoint with exact Host and Origin; not the owner API
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [method]
+              properties:
+                method: { enum: [list, call] }
+                name: { enum: [get_capabilities, list_workspaces, list_runs, get_run, get_recent_events, search_docs, read_doc] }
+                arguments: { type: object }
+              additionalProperties: false
+      responses:
+        '200': { description: Tool definitions or source/observedAt/revision/data reply }
+        '401': { description: Missing, revoked, expired or previous-boot capability }
+        '403': { description: Foreign origin or out-of-scope run }
+        '429': { description: Read concurrency bound exceeded }
+components:
+  securitySchemes:
+    OwnerBearer: { type: http, scheme: bearer }
+    AppReadCapability: { type: http, scheme: bearer, description: Separate eight-hour read credential; never accepts the owner token }
