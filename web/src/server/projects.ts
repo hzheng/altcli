@@ -9,15 +9,16 @@ import { FINISH_HOLDING } from '../contracts/projects.ts';
 import type { FinishGit, Project, ProjectRecord, ProjectWorktree, WorktreeCreateInput, WorktreeCreation, WorktreeDiscard, WorktreeDiscardConfirm, WorktreeDiscardFinish, WorktreeDiscardInput, WorktreeDiscardPreview, WorktreeIntegrateInput, WorktreeIntegrateRequest, WorktreeIntegration, WorktreeIntegrationInput, WorktreeIntegrationPreview, WorktreePreview, WorktreePreviewInput, WorktreeRemoval, WorktreeRemovalInput, WorktreeRemovalPreview, WorktreeRemoveInput, WorktreeRename, WorktreeRenameConfirm, WorktreeRenameInput, WorktreeRenamePreview, WorktreeUpdate, WorktreeUpdateConfirm, WorktreeUpdateInput, WorktreeUpdatePreview, WorktreeUpdateRequest } from '../contracts/projects.ts';
 import type { Workspace, WorktreeIdentity } from '../contracts/workflow.ts';
 import { AppError, messageOf } from '../core/errors.ts';
-import { parseDiscard, parseDiscardFinish, parseDiscardPreview, parseIntegrate, parseIntegrationPreview, parseProjectAdd, parseRename, parseRenamePreview, parseUpdate, parseUpdatePreview, parseWorktreeCreate, parseWorktreePreview, parseRemoval, parseRemovalPreview } from '../core/project-validation.ts';
+import { parseDiscard, parseDiscardFinish, parseDiscardPreview, parseIntegrate, parseIntegrationPreview, parseProjectAdd, parseRename, parseRepositorySettings, parseRenamePreview, parseUpdate, parseUpdatePreview, parseWorktreeCreate, parseWorktreePreview, parseRemoval, parseRemovalPreview } from '../core/project-validation.ts';
 import { defaultSquashMessage } from '../core/squash-message.ts';
 import { branchState, defaultBranch, integrationNames, validateNewBranch } from './commit-handoff.ts';
 import { assertGitInspection, gitListing, hasSubmodules } from './git-inspection.ts';
 import type { Config } from './config.ts';
 import type { Store } from './store.ts';
 import { currentBranch, gitEnvironment, resolveWorktree, sameWorktree, worktreeFingerprint } from './worktree.ts';
+import { idOf } from './ids.ts';
+import { pendingSettings } from './upgrade.ts';
 
-const idOf = (kind: string, value: unknown) => `${kind}-${createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 24)}`;
 const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical)
   : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, canonical(v)])) : value;
 /** What a squash confirmation consents to: every pinned preview field except the per-preview request ID and the editable message. */
@@ -173,11 +174,49 @@ export class ProjectCatalog {
     if (expected && (expected.root !== root || expected.commonDir !== commonDir || expected.branch !== branch))
       throw new AppError('PROJECT_CHANGED', 'The chosen checkout changed since you selected it (its directory, repository or branch). Select it again before adding.', 409);
     const id = idOf('project', commonDir); const existing = this.known.get(id);
-    if (existing) { this.store.saveProject(existing); return existing; }
+    if (existing) return this.persist(id);
     const name = projectName(commonDir, await this.taskRoot());
     const slug = name.replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 60) || 'project';
-    const record = { id, commonDir, name, directoryName: [...this.known.values()].some(p => p.directoryName.toLowerCase() === slug.toLowerCase()) ? `${slug}-${id.slice(-8)}` : slug };
-    this.store.saveProject(record); this.known.set(id, record); return record;
+    this.known.set(id, { id, commonDir, name, directoryName: [...this.known.values()].some(p => p.directoryName.toLowerCase() === slug.toLowerCase()) ? `${slug}-${id.slice(-8)}` : slug });
+    return this.persist(id);
+  }
+  /** Saves a known project as a registered repository. One persisted for the first time awaits the owner's confirmation of its
+   * base checkout and integration branch (ADR-0024); saved choices are kept. Synchronous, so callers can use it in a transaction. */
+  persist(projectId: string): ProjectRecord {
+    const known = this.record(projectId);
+    const record = known.settings ? known : { ...known, settings: pendingSettings() };
+    this.store.saveProject(record); this.known.set(projectId, record); return record;
+  }
+  /** Explicit confirmation of a repository's base checkout, local integration branch and default agents. Metadata only: no Git,
+   * tmux or checkout change. The base may be any non-bare checkout of this repository on any branch; it is not app-owned. */
+  async configure(value: unknown): Promise<ProjectRecord> {
+    if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'The host has disabled project changes.', 403);
+    const input = parseRepositorySettings(value);
+    const project = this.record(input.projectId);
+    if (!isAbsolute(input.basePath)) throw new AppError('PROJECT_PATH', 'Enter the base checkout as an absolute directory.');
+    let identity: WorktreeIdentity, branch: string | null;
+    if (this.config.mode === 'mock') {
+      if (input.basePath !== dirname(project.commonDir) || input.integrationBranch !== 'main') throw new AppError('MOCK_PROJECT', 'A simulated repository uses its /demo directory and main. No real checkout is inspected.');
+      identity = { root: input.basePath, gitDir: project.commonDir, indexPath: join(project.commonDir, 'index') }; branch = 'main';
+    } else {
+      const found = await resolveWorktree(await realpath(input.basePath)).catch(() => null);
+      if (!found || await commonGitDir(found.root).catch(() => null) !== project.commonDir) throw new AppError('PROJECT_PATH', 'Choose an accessible, non-bare checkout of this repository.', 409);
+      identity = found; branch = await currentBranch(found.root);
+      const ref = await gitAnswer(['--git-dir', project.commonDir, 'rev-parse', '--verify', '--quiet', `refs/heads/${input.integrationBranch}^{commit}`]);
+      if (ref.code !== 0 || !ref.stdout.trim()) throw new AppError('INTEGRATION_BRANCH', `${input.integrationBranch} is not a local branch with a commit in this repository. Nothing is fetched or created.`, 409);
+    }
+    if (input.expected && (input.expected.root !== identity.root || input.expected.commonDir !== project.commonDir || input.expected.branch !== branch))
+      throw new AppError('PROJECT_CHANGED', 'The base checkout changed since you selected it (its directory, repository or branch). Select it again.', 409);
+    const profiles = (this.store.db.prepare('SELECT value FROM launch_profiles').all() as { value: string }[]).map((row) => JSON.parse(row.value) as { id: string; enabled: boolean });
+    if (input.launchDefaults.some((d) => !profiles.some((p) => p.id === d.profileId && p.enabled))) throw new AppError('PROFILE_CHANGED', 'A default agent profile is missing or disabled. Choose enabled profiles.', 409);
+    return this.store.db.transaction(() => {
+      const current = this.known.get(input.projectId)?.settings;
+      if ((current?.revision ?? 0) !== input.expectedRevision) throw new AppError('PROJECT_CHANGED', 'These repository settings changed meanwhile. Reload them before saving.', 409);
+      if (this.projectHeld(input.projectId)) throw new AppError('PROJECT_SETUP_BUSY', 'A setup, launch or Finish branch operation owns this repository. Inspect it before changing its settings.', 409);
+      const record: ProjectRecord = { ...this.record(input.projectId), settings: { revision: input.expectedRevision + 1, confirmation: 'confirmed',
+        base: { path: identity.root, identity }, integrationBranch: input.integrationBranch, launchDefaults: input.launchDefaults, confirmedAt: new Date().toISOString() } };
+      this.store.saveProject(record); this.known.set(input.projectId, record); return record;
+    }).immediate();
   }
   record(projectId: string): ProjectRecord {
     const project = this.known.get(projectId);
@@ -204,8 +243,8 @@ export class ProjectCatalog {
         if (known?.name === name) continue;
         const slug = name.replace(/[^A-Za-z0-9_-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'project';
         const collision = [...this.known.values()].some((p) => p.id !== id && p.directoryName.toLowerCase() === slug.toLowerCase());
-        const record = { id, commonDir, name, directoryName: collision ? `${slug}-${id.slice(-8)}` : slug };
-        this.known.set(id, record);
+        // A registered repository keeps its saved settings when its displayed name is refreshed.
+        this.known.set(id, { ...known, id, commonDir, name, directoryName: collision ? `${slug}-${id.slice(-8)}` : slug });
       } catch { /* Live discovery already carries diagnostics. Saved projects below remain visible when unavailable. */ }
     }
     this.views = await Promise.all([...this.known.values()].map(async (project) => {
@@ -223,14 +262,15 @@ export class ProjectCatalog {
       return { ...project, worktrees: trees, error, removals: this.store.worktreeRemovals().filter((op) => op.input.projectId === project.id), creations: this.store.worktreeCreations().filter((op) => op.input.projectId === project.id),
         integrations: this.store.worktreeIntegrations().filter((op) => op.input.projectId === project.id), discards: this.store.worktreeDiscards().filter((op) => op.input.projectId === project.id),
         finishes: this.store.taskFinishes().filter((op) => op.preview.projectId === project.id),
-        updates: this.store.worktreeUpdates().filter((op) => op.input.projectId === project.id), renames: this.store.worktreeRenames().filter((op) => op.input.projectId === project.id) };
+        updates: this.store.worktreeUpdates().filter((op) => op.input.projectId === project.id), renames: this.store.worktreeRenames().filter((op) => op.input.projectId === project.id),
+        workspaces: this.store.managedWorkspaces().filter((workspace) => workspace.projectId === project.id) };
     }));
     return this.views;
   }
   /** Called only by deliberate configuration edits / Start. Merely opening a page writes nothing. */
   remember(root: string): void {
     const project = this.views.find((p) => p.worktrees.some((w) => w.path === root));
-    if (project) this.store.saveProject(this.known.get(project.id)!);
+    if (project) this.persist(project.id);
   }
   private pendingLaunch(projectId?: string, root?: string): boolean {
     const batches = (this.store.db.prepare('SELECT value FROM launches WHERE id IN (SELECT launch_id FROM launch_reservations)').all() as {value:string}[]).map(r => JSON.parse(r.value) as import('../contracts/launches.ts').LaunchBatch);
@@ -285,9 +325,19 @@ export class ProjectCatalog {
     if (await exists(path)) throw new AppError('WORKTREE_EXISTS', 'The destination already exists. Nothing will be overwritten.', 409);
     return { ...input, requestId: randomUUID(), source: source.identity!, sourceBranch: source.branch, sourceHead: source.head!, path };
   }
-  private finish(operation: WorktreeCreation, status: WorktreeCreation['status'], message: string): WorktreeCreation {
+  /** `created` is the verified worktree: marking the creation ready records its task workspace in the same transaction. */
+  private finish(operation: WorktreeCreation, status: WorktreeCreation['status'], message: string, created?: WorktreeIdentity): WorktreeCreation {
     const updated = { ...operation, status, message, updatedAt: new Date().toISOString() };
-    this.store.saveWorktreeCreation(updated); return updated;
+    this.store.db.transaction(() => {
+      this.store.saveWorktreeCreation(updated);
+      if (status === 'ready' && created) {
+        const { input } = operation;
+        this.store.recordWorkspace({ id: input.requestId, projectId: input.projectId, worktreeId: idOf('worktree', [input.projectId, created.gitDir, created.indexPath]),
+          path: input.path, identity: created, branch: input.branch, baseline: input.sourceHead, expectedBranch: input.branch, status: 'active',
+          retiredBy: null, aligned: null, createdAt: updated.updatedAt, updatedAt: updated.updatedAt });
+      }
+    })();
+    return updated;
   }
   async create(raw: WorktreeCreateInput): Promise<WorktreeCreation> {
     const input = parseWorktreeCreate(raw);
@@ -315,7 +365,7 @@ export class ProjectCatalog {
         return false;
       }
       if (this.projectHeld(input.projectId)) throw new AppError('PROJECT_SETUP_BUSY', 'Another worktree creation owns this project. Inspect and reconcile it before creating another.', 409);
-      this.store.saveProject(project); this.store.saveWorktreeCreation(operation); return true;
+      this.persist(project.id); this.store.saveWorktreeCreation(operation); return true;
     }).immediate();
     if (!claimed) return this.store.worktreeCreations().find((op) => op.input.requestId === input.requestId)!;
     let attempted = false;
@@ -327,8 +377,9 @@ export class ProjectCatalog {
       await validateNewBranch(input.source.root, input.branch);
       attempted = true;
       await git(['-C', input.source.root, '-c', 'core.hooksPath=/dev/null', '-c', 'submodule.recurse=false', 'worktree', 'add', '--no-track', '-b', input.branch, '--', input.path, input.sourceHead]);
-      if (!await this.createdExactly(operation)) throw new Error('verification failed');
-      return this.finish(operation, 'ready', 'Worktree created. Start your coding agents in its directory, then Recheck. No agents were moved and no run was started.');
+      const created = await this.createdExactly(operation);
+      if (!created) throw new Error('verification failed');
+      return this.finish(operation, 'ready', 'Worktree created. Start your coding agents in its directory, then Recheck. No agents were moved and no run was started.', created);
     } catch (error) {
       // Before Git ran, the specific recheck failure is the useful diagnostic; afterwards only inspection can tell.
       return this.finish(operation, attempted ? 'uncertain' : 'failed', attempted
@@ -336,20 +387,22 @@ export class ProjectCatalog {
         : `${messageOf(error)} Nothing was checked out; preview again after inspecting the host.`);
     }
   }
-  private async createdExactly(operation: WorktreeCreation): Promise<boolean> {
+  /** The created worktree's identity when it is exactly the confirmed clean checkout, branch and commit; null otherwise. */
+  private async createdExactly(operation: WorktreeCreation): Promise<WorktreeIdentity | null> {
     const { input } = operation; const project = this.known.get(input.projectId);
-    if (!project || !await exists(input.path)) return false;
+    if (!project || !await exists(input.path)) return null;
     const tree = (await worktrees(project)).find((w) => w.path === input.path);
-    if (!tree?.identity || tree.error || tree.branch !== input.branch || tree.head !== input.sourceHead || await realpath(input.path) !== input.path) return false;
+    if (!tree?.identity || tree.error || tree.branch !== input.branch || tree.head !== input.sourceHead || await realpath(input.path) !== input.path) return null;
     const state = await branchState(input.path);
-    return state.clean && state.branch === input.branch && state.head === input.sourceHead;
+    return state.clean && state.branch === input.branch && state.head === input.sourceHead ? tree.identity : null;
   }
   async reconcile(requestId: string): Promise<WorktreeCreation> {
     const operation = this.store.worktreeCreations().find((op) => op.input.requestId === requestId);
     if (!operation) throw new AppError('NOT_FOUND', 'Worktree operation not found.', 404);
     if (operation.status !== 'uncertain') return operation; // an in-flight call must finish before reconciliation
     try {
-      if (await this.createdExactly(operation)) return this.finish(operation, 'ready', 'The exact clean worktree, branch and starting commit were verified. No Git changes were made by reconciliation.');
+      const created = await this.createdExactly(operation);
+      if (created) return this.finish(operation, 'ready', 'The exact clean worktree, branch and starting commit were verified. No Git changes were made by reconciliation.', created);
       const project = this.known.get(operation.input.projectId)!;
       const trees = await worktrees(project);
       const refs = await git(['--git-dir', project.commonDir, 'for-each-ref', '--format=%(refname)', '--', `refs/heads/${operation.input.branch}`]);
@@ -360,7 +413,10 @@ export class ProjectCatalog {
   private removalFinish(operation: WorktreeRemoval, status: WorktreeRemoval['status'], message: string): WorktreeRemoval {
     const updated = { ...operation, status, message, updatedAt: new Date().toISOString() };
     this.store.db.transaction(() => {
-      if (status === 'removed') this.store.retireWorktreeIntegrations(operation.input.projectId, operation.input.worktreeId);
+      if (status === 'removed') {
+        this.store.retireWorktreeIntegrations(operation.input.projectId, operation.input.worktreeId);
+        this.store.updateWorkspace(operation.input.projectId, operation.input.worktree.root, { status: 'retired', retiredBy: { kind: 'removal', requestId: operation.input.requestId, at: updated.updatedAt } });
+      }
       this.store.saveWorktreeRemoval(updated);
     })(); return updated;
   }
@@ -474,7 +530,7 @@ export class ProjectCatalog {
     const operation: WorktreeRemoval = { input, status: 'applying', message: 'Checking the confirmed worktree removal.', updatedAt: new Date().toISOString() };
     this.store.db.transaction(() => {
       if (this.projectHeld(input.projectId, parent ? { finish: parent, child: input.requestId } : undefined)) throw new AppError('PROJECT_SETUP_BUSY', 'Another worktree operation owns this project. Inspect its result first.', 409);
-      this.store.saveProject(project); this.store.saveWorktreeRemoval(operation);
+      this.persist(project.id); this.store.saveWorktreeRemoval(operation);
     }).immediate();
     let attempted = false;
     try {
@@ -597,7 +653,7 @@ export class ProjectCatalog {
       const duplicate = this.store.worktreeIntegrations().find((op) => op.input.requestId === input.requestId);
       if (duplicate) throw new AppError('ID_CONFLICT', 'This integration ID was already claimed while inspecting Git. Inspect its result.', 409);
       if (this.projectHeld(input.projectId)) throw new AppError('PROJECT_SETUP_BUSY', 'Another worktree operation owns this project. Inspect its result first.', 409);
-      this.store.saveProject(project); this.store.saveWorktreeIntegration(operation);
+      this.persist(project.id); this.store.saveWorktreeIntegration(operation);
     }).immediate();
     let attempted = false;
     try {
@@ -842,7 +898,10 @@ export class ProjectCatalog {
     const updated = { ...operation, status, message, commit, updatedAt: new Date().toISOString() };
     // Old squash boundaries described the rewritten history; they are kept for history but never reused.
     this.store.db.transaction(() => {
-      if (status === 'updated') this.store.retireWorktreeIntegrations(operation.input.projectId, operation.input.worktreeId);
+      if (status === 'updated') {
+        this.store.retireWorktreeIntegrations(operation.input.projectId, operation.input.worktreeId);
+        this.store.updateWorkspace(operation.input.projectId, operation.input.worktree.root, { aligned: { requestId: operation.input.requestId, mode: operation.input.mode, commit, at: updated.updatedAt } }, operation.input.worktree);
+      }
       this.store.saveWorktreeUpdate(updated);
     })(); return updated;
   }
@@ -908,7 +967,7 @@ export class ProjectCatalog {
       if (this.projectHeld(input.projectId)) throw new AppError('PROJECT_SETUP_BUSY', 'Another worktree operation owns this project. Inspect its result first.', 409);
       // Checked in one transaction with the run ledger, whose starts check this record in theirs.
       if (this.store.indexOwned(input.worktree.indexPath) || this.store.activeFor(input.worktree.root)) throw new AppError('WORKTREE_BUSY', 'A run or unresolved delivery owns this worktree. Let it finish or take over first.', 409);
-      this.store.saveProject(project); this.store.saveWorktreeUpdate(operation);
+      this.persist(project.id); this.store.saveWorktreeUpdate(operation);
     }).immediate();
     const root = input.worktree.root; let attempted = false;
     try {
@@ -1002,7 +1061,10 @@ export class ProjectCatalog {
   }
   private renameFinish(operation: WorktreeRename, status: WorktreeRename['status'], message: string): WorktreeRename {
     const updated = { ...operation, status, message, updatedAt: new Date().toISOString() };
-    this.store.saveWorktreeRename(updated); return updated;
+    this.store.db.transaction(() => {
+      if (status === 'renamed') this.store.updateWorkspace(operation.input.projectId, operation.input.worktree.root, { expectedBranch: operation.input.newBranch }, operation.input.worktree);
+      this.store.saveWorktreeRename(updated);
+    })(); return updated;
   }
   private async renamedExactly(operation: WorktreeRename): Promise<boolean> {
     const { input } = operation; const root = input.worktree.root;
@@ -1031,7 +1093,7 @@ export class ProjectCatalog {
       if (this.store.worktreeRenames().some((op) => op.input.requestId === input.requestId)) throw new AppError('ID_CONFLICT', 'This rename ID was already claimed. Inspect its result.', 409);
       if (this.projectHeld(input.projectId)) throw new AppError('PROJECT_SETUP_BUSY', 'Another worktree operation owns this project. Inspect its result first.', 409);
       if (this.store.indexOwned(input.worktree.indexPath) || this.store.activeFor(input.worktree.root)) throw new AppError('WORKTREE_BUSY', 'A run or unresolved delivery owns this worktree. Let it finish or take over first.', 409);
-      this.store.saveProject(project); this.store.saveWorktreeRename(operation);
+      this.persist(project.id); this.store.saveWorktreeRename(operation);
     }).immediate();
     const unchanged = async () => isDeepStrictEqual({ ...await this.previewRename({ projectId: input.projectId, worktreeId: input.worktreeId, newBranch: input.newBranch }, sessions), requestId: input.requestId, confirm: true }, input);
     let attempted = false;
@@ -1074,7 +1136,10 @@ export class ProjectCatalog {
     return this.store.db.transaction(() => {
       const current = this.store.worktreeDiscards().find((op) => op.input.requestId === operation.input.requestId);
       if (current && (current.status !== operation.status || current.updatedAt !== operation.updatedAt)) return current;
-      if (status === 'discarded') this.store.retireWorktreeIntegrations(operation.input.projectId, operation.input.worktreeId);
+      if (status === 'discarded') {
+        this.store.retireWorktreeIntegrations(operation.input.projectId, operation.input.worktreeId);
+        this.store.updateWorkspace(operation.input.projectId, operation.input.worktree.root, { status: 'retired', retiredBy: { kind: 'discard', requestId: operation.input.requestId, at: updated.updatedAt } });
+      }
       this.store.saveWorktreeDiscard(updated); return updated;
     })();
   }
@@ -1107,7 +1172,7 @@ export class ProjectCatalog {
     const operation: WorktreeDiscard = { input, status: 'applying', message: 'Checking the confirmed discard.', updatedAt: new Date().toISOString() };
     this.store.db.transaction(() => {
       if (this.projectHeld(input.projectId, parent ? { finish: parent, child: input.requestId } : undefined)) throw new AppError('PROJECT_SETUP_BUSY', 'Another worktree operation owns this project. Inspect its result first.', 409);
-      this.store.saveProject(project); this.store.saveWorktreeDiscard(operation);
+      this.persist(project.id); this.store.saveWorktreeDiscard(operation);
     }).immediate();
     const same = (checked: WorktreeDiscardPreview) => isDeepStrictEqual({ ...checked, requestId: input.requestId, confirmBranch: input.branch, confirm: true }, input);
     let attempted = false;

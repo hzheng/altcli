@@ -2,10 +2,11 @@ import assert from 'node:assert/strict';
 import { afterEach, beforeEach, test } from 'node:test';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { WebSocket } from 'ws';
+import Database from 'better-sqlite3';
 import { Store } from '../src/server/store.ts';
 import { Controller } from '../src/server/controller.ts';
 import { ControlPlane } from '../src/server/control-plane.ts';
@@ -400,7 +401,7 @@ test('batch handoff binds the full exact writer set, refuses stale input and ret
   await assert.rejects(plane.terminals.input(a.opened.connectionId,{generation:first.generation,seq:1,encoding:'utf8',data:'revoked'}));
 });
 
-test('version 17 migration preserves separate original records and requires recovery with no surviving grants',async()=>{
+test('a version 17 store with unsettled manual input refuses the upgrade unchanged; once settled it migrates every original record',async()=>{
   const c=await connect(),owned=await grant(c),legacy={...owned.manualSession!};
   await plane.terminals.shutdown();
   const value:Record<string,unknown>={...legacy,live:true,inputMayHaveOccurred:true,bytes:17};delete value.writers;delete value.recoveryRequired;
@@ -409,20 +410,21 @@ test('version 17 migration preserves separate original records and requires reco
   store.db.prepare('INSERT INTO keyboard_sessions(id,value) VALUES (?,?)').run(settled.id,JSON.stringify(settled));
   const older={...value,id:randomUUID(),live:false,bytes:3};
   store.db.prepare('INSERT INTO keyboard_sessions(id,value) VALUES (?,?)').run(older.id,JSON.stringify(older));
-  store.db.pragma('user_version = 17');const config=plane.config;store.close();store=new Store(directory);
+  store.db.pragma('user_version = 17');const config=plane.config;
+  const records=()=>store.db.prepare('SELECT id,value FROM keyboard_sessions ORDER BY rowid').all();const before=records();store.close();
+  // ADR-0024: the live and unreconciled periods belong to the previous version; nothing is converted, backed up or released.
+  assert.throws(()=>new Store(directory),(error:Error&{code?:string})=>error.code==='UPGRADE_BLOCKED'&&(error.message.match(/manual-input/g)??[]).length===2);
+  const raw=new Database(join(directory,'altcli.sqlite3'));
+  assert.equal(raw.pragma('user_version',{simple:true}),17);assert.deepEqual(raw.prepare('SELECT id,value FROM keyboard_sessions ORDER BY rowid').all(),before);
+  assert.deepEqual(readdirSync(directory).filter(name=>name.startsWith('altcli-schema-')),[]);
+  // The previous version reconciles them; only then does this version migrate, converting each original record.
+  for(const id of [legacy.id,older.id])raw.prepare('UPDATE keyboard_sessions SET value=? WHERE id=?').run(JSON.stringify({...JSON.parse((before.find((r)=>(r as {id:string}).id===id) as {value:string}).value),live:false,reconciliationRequired:false}),id);
+  raw.close();store=new Store(directory);
   plane=new ControlPlane(new Controller(config,store,new MockAdapter()));
-  assert.equal(store.db.pragma('user_version',{simple:true}),19);
-  const periods=plane.authority.pending();assert.equal(periods.length,2);
-  const archived=plane.authority.get(settled.id);assert.equal(archived.reconciliationRequired,false);assert.equal(archived.recoveryRequired,false);assert.equal(archived.revision,legacy.revision);assert.deepEqual(archived.panes,legacy.panes);
-  for(const period of periods){assert.equal(period.live,false);assert.equal(period.recoveryRequired,true);assert.equal(period.writers[0]!.live,false);assert.deepEqual(period.panes,legacy.panes);}
-  assert.equal(periods.find(m=>m.id===legacy.id)!.bytes,17);assert.equal(periods.find(m=>m.id===older.id)!.bytes,3);
-  await assert.rejects(plane.terminals.open({target:legacy.target,clientInstanceId:randomUUID(),cols:80,rows:24}),/Reload/);
-  // New typing joins the newest period after restart; every period keeps its recovery requirement.
-  const next=await connect(),joined=await grant(next);
-  assert.equal(joined.manualSession!.id,periods.at(-1)!.id);assert.equal(joined.manualSession!.recoveryRequired,true);assert.equal(joined.manualSession!.bootId,plane.authority.bootId);
-  await plane.terminals.close(next.opened.connectionId);
-  const first=periods[0]!;await plane.reconcileManual({requestId:randomUUID(),manualSessionId:first.id,expectedRevision:first.revision,confirmReady:true});
-  assert.equal(plane.authority.blocked,true);
+  assert.equal(store.db.pragma('user_version',{simple:true}),20);assert.deepEqual(plane.authority.pending(),[]);assert.equal(plane.authority.blocked,false);
+  for(const id of [legacy.id,settled.id,older.id]){const period=plane.authority.get(id);assert.equal(period.recoveryRequired,false);assert.equal(period.writers[0]!.live,false);assert.deepEqual(period.panes,legacy.panes);assert.equal(period.revision,legacy.revision);}
+  assert.equal(plane.authority.get(legacy.id).bytes,17);assert.equal(plane.authority.get(older.id).bytes,3);
+  const [backup]=readdirSync(directory).filter(name=>name.startsWith('altcli-schema-17-'));assert.ok(backup);assert.equal(statSync(join(directory,backup)).mode&0o777,0o600);
 });
 
 test('plain stop accepts intervening bytes while preserving the other writer and original snapshot',async()=>{

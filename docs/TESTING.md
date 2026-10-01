@@ -235,6 +235,21 @@ Use behavior-based tests and label capability stage. N=3/N>3 model tests preserv
 | Task finishes | Do not auto-merge, delete branch/worktree, remove environment files, or provision another directory. |
 | Older stored pair configuration is migrated | Membership/history stays intact under group terminology; vendor event pairing is not renamed semantically. |
 
+### Registered repository and task-workspace scenarios
+
+[ADR-0024](adr/ADR-0024-registered-repositories-and-managed-workspaces.md) increments I0–I1 are implemented
+locally; `web/scripts/registry.test.ts` (in `npm run test:workflow`) covers the rows marked I1. Later rows
+are requirements for their increments, not executed results.
+
+| Scenario | Expected behavior |
+| --- | --- |
+| I1: a schema-19 store with any unresolved owner, delivery, input, manual input, launch, setup, squash, reuse, removal, discard, Finish or Helper start | Opening refuses with every blocker named; schema, records and files are unchanged and no backup is written; `upgrade:check` reports the same without writing |
+| I1: a settled schema-19 store | One private backup of the old schema, then schema 20; repositories pending; reopening never migrates or backs up again |
+| I1: creations with launch, rename, update, removal, discard, integration or session records | A workspace is active only when records from its own lifetime agree on one identity; otherwise pending. A recreated path is a new record; launches link only within that lifetime |
+| I1: verified creation, reconciliation, rename, update, removal and discard | The record is written or updated in the same transaction as the verified result, never from a partial or uncertain one |
+| I1: repository settings | Any checkout of the repository on any branch; an existing local integration branch; enabled profiles, at most six instances; stale revision, changed checkout, held repository and read-only host refuse; no Git or checkout change; listing stays read-only |
+| I2–I7 | See the exit evidence in the [roadmap](../ROADMAP.md#registered-repositories-and-task-workspaces) |
+
 ### Stage relay and worktree-reuse scenarios
 
 Stage relay rows are implemented locally; worktree-reuse rows describe accepted but unimplemented design (ADR-0013).

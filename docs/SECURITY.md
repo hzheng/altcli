@@ -81,7 +81,9 @@ are not stored. Hook correlation context is private local data. No runtime log o
 should be committed. The handoff journal is such app data: it stays under the
 controller data directory, and its export (`/api/v1/history/export`) carries
 prompts, findings and archived patches in plaintext, so store exports with the
-same care. The optional tracked relay log is a distinct protocol artifact defined
+same care. The schema-20 upgrade ([ADR-0024](adr/ADR-0024-registered-repositories-and-managed-workspaces.md))
+leaves a `0600` copy of the previous store, with the same plaintext, in the data directory until you delete it,
+and answers only with the list of unresolved work, rather than migrating, while any owner or uncertain operation remains. The optional tracked relay log is a distinct protocol artifact defined
 by ADR-0014, not permission to commit runtime data. The original review skill remains responsible for staging;
 the staging controller issues no Git mutations and does not independently prove its outcome.
 Since September 27, 2026 that flow runs as Stage relay only on `main` or the recorded default

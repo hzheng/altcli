@@ -1,5 +1,7 @@
 # ADR-0022: App-wide AI instances and background jobs
 
+> October 1, 2026: [ADR-0024](ADR-0024-registered-repositories-and-managed-workspaces.md) resolves the app-owned socket choice: Helper and the future Background assistant run as recorded app-wide instances on AltCLI's dedicated tmux endpoint (not yet implemented), which is not isolation.
+
 Status: **proposed future direction; only the Global AI A1 read increment is
 implemented** ([guide](../GLOBAL-AI.md)), without installed-provider acceptance.
 September 30, 2026.

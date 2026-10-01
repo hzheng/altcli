@@ -91,6 +91,27 @@ captures before setting `ALTCLI_ENABLE_INPUT=true` and restarting the backend.
 After configuration or server-code changes, settle active deliveries before
 restarting; hot reload retains the running controller.
 
+### Upgrade to store schema 20
+
+Versions that record repositories and task workspaces
+([ADR-0024](adr/ADR-0024-registered-repositories-and-managed-workspaces.md)) upgrade the controller store
+only when nothing is unresolved: no run owning a checkout, unresolved delivery or run input, manual
+terminal input awaiting reconciliation, launch or cleanup reservation, launch still applying, starting,
+exited or uncertain (or its cleanup applying or uncertain) until you reconcile, clean up or close it,
+applying or uncertain worktree creation, squash, update, rename, removal, discard or Finish branch, and no
+uncertain Helper start. Before stopping the previous version, run `npm --prefix web run upgrade:check`; it
+opens the store read-only (taking `ALTCLI_DATA_DIR` and `ALTCLI_ADAPTER` from `web/.env.local`, or a data
+directory after `--`) and lists what remains and what migration would record. Settle those with the
+previous version, stop it, then start this one. Until then the new backend changes nothing and answers
+every request with the same list.
+
+The upgrade first keeps a private copy of the previous store, `altcli-schema-<n>-<time>.sqlite3`, in the
+data directory. Rolling back means restoring that copy together with the matching previous version; an
+older backend never opens schema 20. Delete the copy yourself once you no longer need it. Migration records
+only what earlier records prove: repositories await your confirmation of their base checkout and
+integration branch, and a task worktree whose identity no saved record proves stays pending. How projects,
+worktrees and agents are listed does not change yet.
+
 The **Settings** tab shows the configuration in effect and the variable behind each
 value: `ALTCLI_TMUX_BIN` (default `tmux`, resolved through PATH; the tab shows
 where), `ALTCLI_TMUX_SOCKET`, `ALTCLI_DATA_DIR` (default

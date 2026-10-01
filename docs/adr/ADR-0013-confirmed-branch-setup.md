@@ -1,5 +1,7 @@
 # ADR-0013: Confirmed branch and task-worktree setup
 
+> October 1, 2026: [ADR-0024](ADR-0024-registered-repositories-and-managed-workspaces.md) makes AltCLI place agents only in task workspaces it created, takes in-place branch creation out of the normal flow and drives integration from a selected local branch per repository. Verified creation, rename, update, removal and discard now maintain its task-workspace records; the setup operations below are otherwise unchanged until later increments.
+>
 > September 24 extension: ADR-0021 separately permits confirmed session launching in an existing or newly ready checkout. It does not combine branch/worktree consent, copy dirty source files or prepare environments.
 >
 > September 25 extension: [Confirmed closing of launched sessions](#confirmed-closing-of-launched-sessions) adds a fifth, narrow end-of-task exception: **Finish branch** closes only the tmux sessions AltCLI itself launched for a linked task worktree, then hands over to the existing removal or discard.

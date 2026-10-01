@@ -497,9 +497,10 @@ test('checkpoint restart preserves captured text, roster, endorsements and owner
   assert.equal(run(input.requestId).status, 'paused'); assert.equal(sent.length, 4); await assert.rejects(plane.decidePlan(decision(input.requestId)), /settled/);
 });
 test('v5 upgrade preserves stored runs and groups and marks phase-aware data as incompatible with older schedulers', async () => {
-  const input = request(); await plane.submitPlan(input); const saved = run(input.requestId); const groups = store.groups();
+  // Upgrades start from a settled store (ADR-0024; refusal is covered in registry.test.ts): the human took this run over first.
+  const input = request(); await plane.submitPlan(input); plane.workflow.takeover(input.requestId); const saved = run(input.requestId); const groups = store.groups();
   store.db.pragma('user_version = 5'); store.close(); store = new Store(join(directory, 'metadata'));
-  assert.equal(store.db.pragma('user_version', { simple: true }), 19); assert.deepEqual(store.groups(), groups);
+  assert.equal(store.db.pragma('user_version', { simple: true }), 20); assert.deepEqual(store.groups(), groups);
   const record = store.db.prepare('SELECT value FROM workflow_runs WHERE id=?').get(input.requestId) as { value: string };
   assert.deepEqual(JSON.parse(record.value), saved);
 });

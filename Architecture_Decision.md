@@ -1,5 +1,7 @@
 # AltCLI architecture decisions
 
+**Updated October 1, 2026:** [ADR-0024](docs/adr/ADR-0024-registered-repositories-and-managed-workspaces.md) (D54) accepts registered repositories, app-created task workspaces, recorded agent membership and a dedicated tmux endpoint in place of discovery-based enrollment. Its registry, settled-store upgrade gate and migration (schema 20) are implemented locally; listing, admission, the socket and the UI still behave as before until its later increments land.
+
 **Updated September 27, 2026:** the uncommitted relay is now branch-scoped **Stage relay** on main/default (ADR-0014, D51), and linked task worktrees can be updated from main and renamed in place, while directory move remains unimplemented design (ADR-0013, D52). **Updated September 19, 2026.** The new local Implementation path implements the
 commit contract of ADR-0014, solo/peer/fixed-role policies of ADR-0015, and the
 confirmed new-branch exception of ADR-0013. The project-centered entry layer adds
@@ -69,6 +71,15 @@ Read [WORKFLOWS](docs/WORKFLOWS.md) for vocabulary and UI; [ROADMAP](ROADMAP.md#
 
 ADR-0001 through ADR-0011 remain historical/current-runtime records without being rewritten to pretend new features shipped. ADR-0013 owns the confirmed branch/worktree setup exceptions; the legacy staging path still performs no controller Git mutation. Historical `repository` fields and pair IDs retain their worktree-scoped meaning; project navigation does not rewrite frozen runs or vendor event pairing.
 
+## Registered repositories and task workspaces
+
+[ADR-0024](docs/adr/ADR-0024-registered-repositories-and-managed-workspaces.md) makes records, not observation,
+decide membership: owners register repositories with a confirmed base checkout and integration branch, AltCLI
+creates and records task workspaces and the agents it launches, and inspection reports their condition. It amends
+ADR-0004, ADR-0012, ADR-0013, ADR-0014 (Stage relay's product entry), ADR-0020, ADR-0021 and ADR-0022, and
+resolves the app-owned socket choice. Increments I0 and I1 are implemented locally; I2–I7 are listed with their
+status in the ADR and the [roadmap](ROADMAP.md#registered-repositories-and-task-workspaces).
+
 <a id="proposed-app-wide-assistance-not-implemented"></a>
 
 ## App-wide assistance: A1 implementation and proposed direction
@@ -89,7 +100,7 @@ neither these records nor A1 grant delegated authority.
 Optional app-wide assistance is distinct from a mandatory third reviewer,
 controller replacement or enabling larger Plan/Implementation groups. Existing
 human approval, lifecycle evidence, branch consent and ownership rules remain.
-The D01–D53 ledger below is unchanged; source N decisions are mapped separately
+That integration left the D01–D53 ledger unchanged; source N decisions are mapped separately
 rather than promoted into accepted decisions. See the
 [roadmap](ROADMAP.md#proposed-app-wide-assistance-and-completion-work),
 [open choices](docs/OPEN-DECISIONS.md#proposed-app-wide-assistance-and-completion-choices)
@@ -168,3 +179,4 @@ Use these labels when implementing:
 | D51 | Stage relay runs only when the checked-out branch is literal `main` or the recorded default (`origin/HEAD`, no fetch); with no recorded default only `main`. Other integration branches allow neither relay contract. A new start needs the two-member group and the displayed branch and commit; the run is bound to them, rechecked before every delivery and at each completion, and pauses with ownership retained if either changes. Pre-upgrade unbound runs never dispatch another turn. `ALTCLI_ENABLE_LEGACY_RELAY` keeps its name, absent means enabled, explicit false disables. The Settings preference is replaced by Control's Relay mode. | September 27, 2026 human-approved plan (P-1 to P-5, P-16); implemented locally, host acceptance pending |
 | D52 | Reusable linked task worktrees: confirmed update from main (fully integrated first, unintegrated suffix replay later), branch rename and directory move, each with preview/consent, transactional holds, create-only recovery refs where history moves, hooks disabled, uncertain-owner inspection and no automatic retry, rollback or relaunch. Never `git rebase` or `reset --keep`/`--hard`. | September 27, 2026 human-approved plan (P-2, P-6 to P-15). Update from main (with replay) and branch rename **implemented** September 27, 2026, with the plan objections resolved in ADR-0013; Rebase onto main and Reset to main (safe equivalents of `git rebase main` and `git reset --hard main`) implemented September 28, 2026; Update, Rebase, Reset and Rename use warned confirmation instead of agent activity/process-evidence gates (September 28 user revision); directory move accepted design, **not implemented**; remaining choices in [OPEN-DECISIONS](docs/OPEN-DECISIONS.md) |
 | D53 | Image attachments (M4A/M4B): PNG/JPEG uploads to private bounded storage outside every workspace (10 MiB each, four and 20 MiB per draft, 40 million pixels, two concurrent, 512 MiB and 1,000 files per host); structural checks, never pixel decoding. A native insertion is an explicit intent in the writer's ordered lane that rechecks pane, session, CLI, directory and bytes, pins the image, and writes one single-quoted path as a bracketed paste without Enter. Plain Send, new committed work and a Plan brief freeze and pin descriptors at admission; plain Send's prompt names an input manifest; the commit-handoff and plan-handoff skills inspect listed images and stop with a phase-correct blocker when one is missing, changed or unreadable. Other surfaces stay text-only. Possibly used images never expire; unused drafts expire after 24 hours; a full quota refuses uploads. | September 29, 2026 endorsed Plan (brief revision 1, plan revision 3). Implemented locally; a disposable probe verified Claude Code 2.1.285 and Codex 0.159.0. Physical-device, deployed-host and end-to-end workflow acceptance pending |
+| D54 | Records determine membership; live inspection determines condition. Owners register repositories (base checkout on any branch, never app-owned; one selected local integration branch; default agents); AltCLI creates and records task workspaces and launches the only workspace agents; Plan, Implementation, Send, committed review and launches run only in active task workspaces, and new Stage relay starts and in-place branch creation leave the normal flow. Create & launch is one consent with separate effects. Boundary operations inspect app, default and previous tmux endpoints for outside writers. App sessions and Helper use a dedicated `<data directory>/tmux.sock` endpoint, never isolation. The store upgrades only from a settled state, with a private backup and no invented choices; hand-started agents and unrecorded worktrees are not adopted. | October 1, 2026 endorsed two-planner Plan (automatic transition); [ADR-0024](docs/adr/ADR-0024-registered-repositories-and-managed-workspaces.md). I0 and I1 (schema 20 registry, gate, settings metadata, workspace lifecycle records, launch links) implemented locally; I2–I7 not implemented |

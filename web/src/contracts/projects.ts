@@ -1,7 +1,60 @@
 import type { WorktreeIdentity } from './workflow.ts';
 
-/** Local repository identity; remotes and branch names are not keys. */
-export interface ProjectRecord { id: string; name: string; commonDir: string; directoryName: string }
+/** Local repository identity; remotes and branch names are not keys. `settings` exists once the repository is registered
+ * (ADR-0024); an observed-only project has none. */
+export interface ProjectRecord { id: string; name: string; commonDir: string; directoryName: string; settings?: RepositorySettings }
+/** A launch profile and how many instances a new task starts with by default. */
+export interface LaunchDefault { profileId: string; count: number }
+/** The owner's choices for a registered repository. Schema 19 never recorded them, so migrated and newly added repositories stay
+ * `pending` until the owner confirms them; nothing is inferred into a confirmed choice. */
+export interface RepositorySettings {
+  /** Compare-and-set revision for edits. */
+  revision: number;
+  confirmation: 'pending' | 'confirmed';
+  /** The existing checkout the owner chose as the repository's entry point. Registration never makes it app-owned. */
+  base: { path: string; identity: WorktreeIdentity } | null;
+  /** The selected local integration branch; distinct from whatever the base checkout has checked out. */
+  integrationBranch: string | null;
+  launchDefaults: LaunchDefault[];
+  confirmedAt: string | null;
+}
+/** Explicit confirmation of a repository's base checkout, integration branch and default agents. Metadata only. */
+export interface RepositorySettingsInput {
+  projectId: string;
+  expectedRevision: number;
+  basePath: string;
+  integrationBranch: string;
+  launchDefaults: LaunchDefault[];
+  /** What the owner saw for the base checkout; a changed directory, repository or branch refuses. */
+  expected?: ExpectedCheckout;
+}
+/** A task workspace AltCLI created and recorded (ADR-0024). Its record, not tmux or Git inventory, makes it managed; inspection
+ * only reports its condition. Keyed by the creation request: a removed and recreated path is a different workspace. */
+export interface ManagedWorkspace {
+  id: string;
+  projectId: string;
+  /** The branch-independent worktree ID that launches, groups and operations already use. Null with a null identity. */
+  worktreeId: string | null;
+  path: string;
+  /** Recorded at verified creation. A migrated record has one only when saved records anchored it unambiguously. */
+  identity: WorktreeIdentity | null;
+  /** The branch created and the committed baseline it started at; creation provenance is never overwritten. */
+  branch: string;
+  baseline: string;
+  /** The task branch this workspace is expected to have checked out; a confirmed rename updates it. */
+  expectedBranch: string;
+  /** `pending`: a migrated creation whose identity no saved record proves (none, or contradictory ones). It is never treated as
+   * active; nothing promotes it automatically. */
+  status: 'active' | 'pending' | 'retired';
+  /** Verified removal or discard, or a later verified creation at the same path (which proves this one was gone). */
+  retiredBy: { kind: 'removal' | 'discard' | 'superseded'; requestId: string | null; at: string } | null;
+  /** The latest verified update, rebase or reset: current task-boundary facts, kept apart from creation provenance. */
+  aligned: { requestId: string; mode: WorktreeUpdateMode; commit: string | null; at: string } | null;
+  createdAt: string;
+  updatedAt: string;
+  /** Backfilled from a schema-19 creation record instead of being recorded when the worktree was created. */
+  migrated?: true;
+}
 export interface ProjectWorktree {
   id: string;
   path: string;
@@ -21,6 +74,8 @@ export interface Project extends ProjectRecord {
   finishes?: TaskFinish[];
   updates?: WorktreeUpdate[];
   renames?: WorktreeRename[];
+  /** Recorded task workspaces, active, pending and retired. Listing them is not verification of their current condition. */
+  workspaces?: ManagedWorkspace[];
 }
 export interface WorktreePreviewInput { projectId: string; sourceWorktreeId: string; branch: string }
 export interface WorktreePreview extends WorktreePreviewInput {

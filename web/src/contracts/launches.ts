@@ -4,6 +4,9 @@ export interface LaunchProfile { id: string; revision: number; label: string; ex
 export interface LaunchItem {
   id: string; projectId: string; worktreeId: string; worktree: WorktreeIdentity; commonDir: string; branch: string|null; head: string;
   profile: LaunchProfile; executable: string; sessionName: string; environmentDigest: string;
+  /** ADR-0024: a launched coding agent's role, and the recorded task workspace it was launched into (null when its checkout is not
+   * one, such as a base checkout or a launch made before workspaces were recorded). Absent on schema-19 records until migration. */
+  role?: 'workspace-agent'; workspaceId?: string | null;
 }
 export interface LaunchPreview { requestId: string; digest: string; expiresAt: string; items: LaunchItem[]; blockers: string[] }
 export interface LaunchInstance extends LaunchItem {

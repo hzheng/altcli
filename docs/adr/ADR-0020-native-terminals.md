@@ -1,5 +1,7 @@
 # ADR-0020: Native terminal transport and shared keyboard authority
 
+> October 1, 2026: [ADR-0024](ADR-0024-registered-repositories-and-managed-workspaces.md) moves app terminals to a dedicated tmux endpoint and adds a copyable attach command, in later increments; concurrent writers and the manual barrier are unchanged, and navigating never enrolls a destination.
+
 Status: accepted direction; implementation proposal. Setup enables its flag; a missing flag means off.
 
 ## Current contract and amendment precedence

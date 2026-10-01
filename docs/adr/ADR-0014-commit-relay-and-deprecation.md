@@ -1,5 +1,7 @@
 # ADR-0014: Commit relay and staged deprecation of uncommitted relay
 
+> October 1, 2026: [ADR-0024](ADR-0024-registered-repositories-and-managed-workspaces.md) takes new Stage relay starts out of the normal flow (D51's product entry) once its admission increment lands. The staging contract, skill, records and recovery of earlier runs remain.
+
 Date: September 19, 2026
 
 Status: Accepted design direction; implementation and host acceptance pending.

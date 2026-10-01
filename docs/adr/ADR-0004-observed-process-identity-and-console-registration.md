@@ -1,5 +1,7 @@
 # ADR-0004: Observed process identity, console-managed registration, any number of panes
 
+> October 1, 2026: [ADR-0024](ADR-0024-registered-repositories-and-managed-workspaces.md) accepts recorded app launches as the only way an agent enters; pane registration and discovery enrollment are superseded once its I2 increment lands. Identity checks remain.
+
 **Date:** September 15, 2026  
 **Status:** Selected for the scaffold; live-host acceptance pending  
 **Amends:** ADR-0003's process-name check and registration procedure; ADR-0001's two-agent framing

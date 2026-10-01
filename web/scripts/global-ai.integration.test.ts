@@ -21,7 +21,7 @@ test('Global AI shares the existing SQLite/controller/terminal authority without
   try {
     assert.equal(plane.store, store);
     assert.equal(plane.terminals.services.authority, plane.authority);
-    assert.equal(store.db.prepare('PRAGMA user_version').get() && (store.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 19);
+    assert.equal(store.db.prepare('PRAGMA user_version').get() && (store.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 20);
     const result = await plane.globalAI.ownerRead({ name: 'get_capabilities', arguments: {} });
     assert.equal((result.data as { effects: boolean }).effects, false);
     // The host serves the documents packed at build time, not files from a checkout.

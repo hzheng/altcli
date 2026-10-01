@@ -1,4 +1,4 @@
-import type { DirectoryListInput, FinishConfirm, FinishContinue, FinishInput, FinishOutcome, FinishReconcile, ProjectAddInput, WorktreeCreateInput, WorktreeDiscardConfirm, WorktreeDiscardFinish, WorktreeDiscardInput, WorktreeIntegrateRequest, WorktreeIntegrationInput, WorktreeIntegrationRelease, WorktreePreviewInput, WorktreeRemovalInput, WorktreeRemoveInput, WorktreeRenameConfirm, WorktreeRenameInput, WorktreeUpdateInput, WorktreeUpdateMode, WorktreeUpdateRequest } from '../contracts/projects.ts';
+import type { DirectoryListInput, ExpectedCheckout, FinishConfirm, FinishContinue, FinishInput, FinishOutcome, FinishReconcile, ProjectAddInput, RepositorySettingsInput, WorktreeCreateInput, WorktreeDiscardConfirm, WorktreeDiscardFinish, WorktreeDiscardInput, WorktreeIntegrateRequest, WorktreeIntegrationInput, WorktreeIntegrationRelease, WorktreePreviewInput, WorktreeRemovalInput, WorktreeRemoveInput, WorktreeRenameConfirm, WorktreeRenameInput, WorktreeUpdateInput, WorktreeUpdateMode, WorktreeUpdateRequest } from '../contracts/projects.ts';
 import { AppError } from './errors.ts';
 import { object, requestId } from './validation.ts';
 import { sha } from './implementation-validation.ts';
@@ -106,12 +106,32 @@ export function parseDirectoryList(value: unknown): DirectoryListInput {
   if (path !== undefined && !path.startsWith('/')) throw new AppError('INVALID_DIRECTORY', 'Enter an absolute directory path.');
   return { ...(path === undefined ? {} : { path }), ...(body.hidden === undefined ? {} : { hidden: body.hidden }) };
 }
+function expectedCheckout(value: unknown): ExpectedCheckout {
+  const expected = object(value); fields(expected, ['root', 'commonDir', 'branch']);
+  return { root: text(expected.root), commonDir: text(expected.commonDir), branch: expected.branch === null ? null : text(expected.branch) };
+}
 export function parseProjectAdd(value: unknown): ProjectAddInput {
   const body = object(value); fields(body, ['path', 'expected']);
   const path = text(body.path);
   if (body.expected === undefined) return { path };
-  const expected = object(body.expected); fields(expected, ['root', 'commonDir', 'branch']);
-  return { path, expected: { root: text(expected.root), commonDir: text(expected.commonDir), branch: expected.branch === null ? null : text(expected.branch) } };
+  return { path, expected: expectedCheckout(body.expected) };
+}
+/** A repository's confirmed base checkout, local integration branch and default agents (at most six instances, as one launch). */
+export function parseRepositorySettings(value: unknown): RepositorySettingsInput {
+  const body = object(value); fields(body, ['projectId', 'expectedRevision', 'basePath', 'integrationBranch', 'launchDefaults', 'expected']);
+  if (!Number.isSafeInteger(body.expectedRevision) || (body.expectedRevision as number) < 0) throw new AppError('INVALID_WORKTREE', 'Send the settings revision you edited.');
+  const integrationBranch = text(body.integrationBranch);
+  if (integrationBranch.length > 150 || !/^[A-Za-z0-9][A-Za-z0-9/_.-]*$/.test(integrationBranch)) throw new AppError('INVALID_WORKTREE', 'Use a local branch name of at most 150 letters, digits, slashes, dots, underscores or hyphens.');
+  if (!Array.isArray(body.launchDefaults) || body.launchDefaults.length > 6) throw new AppError('INVALID_WORKTREE', 'Choose at most six default agent profiles.');
+  const launchDefaults = body.launchDefaults.map((row) => {
+    const entry = object(row); fields(entry, ['profileId', 'count']);
+    if (!Number.isSafeInteger(entry.count) || (entry.count as number) < 1 || (entry.count as number) > 6) throw new AppError('INVALID_WORKTREE', 'Each default agent count is 1 to 6.');
+    return { profileId: text(entry.profileId), count: entry.count as number };
+  });
+  if (new Set(launchDefaults.map((d) => d.profileId)).size !== launchDefaults.length) throw new AppError('INVALID_WORKTREE', 'List each default profile once, with its count.');
+  if (launchDefaults.reduce((sum, d) => sum + d.count, 0) > 6) throw new AppError('INVALID_WORKTREE', 'Default agents may start at most six instances, like one launch.');
+  return { projectId: text(body.projectId), expectedRevision: body.expectedRevision as number, basePath: text(body.basePath), integrationBranch, launchDefaults,
+    ...(body.expected === undefined ? {} : { expected: expectedCheckout(body.expected) }) };
 }
 
 export function parseFinishInput(value: unknown): FinishInput {

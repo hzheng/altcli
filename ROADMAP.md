@@ -1,5 +1,10 @@
 # AltCLI roadmap
 
+**Registered repositories and task workspaces (October 1, 2026).** [ADR-0024](docs/adr/ADR-0024-registered-repositories-and-managed-workspaces.md)
+replaces discovery-based enrollment: records decide membership and inspection decides condition. Its registry,
+settled-store upgrade gate and schema-20 migration are implemented locally; the remaining increments are listed
+[below](#registered-repositories-and-task-workspaces), and until they land the runtime behaves as before.
+
 **Implementation update: September 24, 2026.** Native terminals and explicit agent
 launching are implemented; setup enables their host flags (absent means off); see the
 [milestone status](#native-terminals-and-agent-launch) below. Image attachments,
@@ -244,6 +249,22 @@ Publish/fetch exact code handoffs through a designated remote; optionally link o
 **Exit:** no worker consumes an unpublished commit, no comparison of unrelated absolute index paths, and no PR requirement for transport. Multi-host planning additionally needs explicit N-draft transfer/barrier semantics; ignored files never become a remote protocol by assumption.
 
 Native iOS, optional terminal graphics output, **AI supervision**, generalized workflow construction, advisor/quorum planning policies, N-agent implementation, and parallel alternative implementations remain later choices. A third or fourth ordinary planner is explicitly in scope and is not part of that supervisor deferral. The proposed app-wide assistance track below neither replaces the controller nor changes those execution limits.
+
+## Registered repositories and task workspaces
+
+Scope follows [ADR-0024](docs/adr/ADR-0024-registered-repositories-and-managed-workspaces.md) and its endorsed plan.
+The increments are dependency order, not a commit count; each records what actually ran in its commit message.
+
+| Increment | Source status | Exit evidence still required |
+| --- | --- | --- |
+| I0: accepted boundary | ADR-0024, D54 and amendment notes in ADR-0004/0012/0013/0014/0020/0021/0022 | Operating guides change as each behavior lands; no guide claims an unlanded behavior |
+| I1: registry and gate | Implemented locally October 1: schema 20; refusal before any write while work is unresolved, with a private backup of the old schema and read-only `npm --prefix web run upgrade:check`; repositories pending until `POST /api/v1/projects/settings` confirms base, integration branch and default agents; task workspaces recorded by verified creation and maintained by verified rename, update, removal and discard; launches record their role and workspace; backfill only from proven records | Upgrade of a settled copy of a real schema-19 store; UI for settings arrives with I6 |
+| I2: inventory and admission | Not implemented | Unrelated panes cause no Git inspection; direct API requests cannot enroll or start outside recorded workspaces; stopped and missing workspaces persist; history and recovery stay readable |
+| I3: boundary observation | Not implemented | Default-server and previous-server occupants remain visible to removal, squash, checkpoint and Finish checks; pane IDs never collide across servers |
+| I4: dedicated endpoint | Not implemented; lands only with or after I3 | Private-socket fixtures for first launch, hooks, environment, renames, restart, foreign sessions, old endpoints and quoted attach commands |
+| I5: Create & launch | Not implemented | Fault injection at each durable stage: no gap, duplicate launch, retry, rollback or loss of successful siblings |
+| I6: UI and integration selection | Not implemented | Desktop and phone flows; a non-main integration branch across creation, squash, reuse and removal |
+| I7: full gate and settled deployment | Not implemented | `./scripts/check.sh --e2e`, disposable installed-provider acceptance, documented migration and rollback |
 
 ## Native terminals and agent launch
 

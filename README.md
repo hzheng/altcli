@@ -14,6 +14,13 @@ They would provide help and bounded assistance through the existing host, withou
 replacing its deterministic controller or becoming mandatory reviewers. See the
 [proposed roadmap](ROADMAP.md#proposed-app-wide-assistance-and-completion-work).
 
+An accepted redesign, [ADR-0024](docs/adr/ADR-0024-registered-repositories-and-managed-workspaces.md),
+replaces discovery-based enrollment: you register repositories, AltCLI creates task workspaces and
+launches the agents it coordinates, and a dedicated tmux server hosts them. So far only its records and
+upgrade gate exist; listing, agent selection and the tmux server work as described below. Upgrading an
+existing store to this version requires all work to be settled first
+([setup](docs/SETUP.md#upgrade-to-store-schema-20)).
+
 ## Native terminals and explicit launch
 
 `node scripts/setup.mjs` writes `ALTCLI_ENABLE_TERMINAL=true` and

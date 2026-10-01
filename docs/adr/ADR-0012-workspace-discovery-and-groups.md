@@ -1,5 +1,7 @@
 # ADR-0012: Project-centered discovery, worktrees and explicit groups
 
+> October 1, 2026: [ADR-0024](ADR-0024-registered-repositories-and-managed-workspaces.md) accepts registered repositories, app-created task workspaces and recorded agents. It supersedes discovery-derived projects, worktree cards from Git inventory, moved-pane rebinding and user-owned agent placement; until its I2 increment lands, this record still describes the runtime.
+>
 > September 24 extension: ADR-0021 adds explicit canonical repository entry and confirmed profile launching. Discovery remains read-only and never grants readiness.
 
 

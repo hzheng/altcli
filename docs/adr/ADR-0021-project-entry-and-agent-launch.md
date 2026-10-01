@@ -1,5 +1,7 @@
 # ADR-0021: Explicit repository entry and agent session launch
 
+> October 1, 2026: [ADR-0024](ADR-0024-registered-repositories-and-managed-workspaces.md) adds confirmed repository settings (implemented as metadata) and records which task workspace each launch joins; launch becomes the only way an agent enters, base-checkout launches leave the normal flow and Create & launch is accepted, in later increments.
+
 Status: accepted direction; implementation proposal. Setup enables its flag; a missing flag means off.
 
 An explicit absolute repository path adds metadata through canonical Git common

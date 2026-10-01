@@ -85,6 +85,10 @@ export class LaunchService {
   /** Names recorded launches still hold, server-wide: different worktrees can produce the same profile/branch name. A batch reserved
    * at or after `since` holds every name, whatever its status: its session may have appeared after that live listing was read. */
   private heldNames(except?:string,since?:string):Set<string> {return new Set(this.batches().filter(b=>b.requestId!==except).flatMap(b=>b.items.filter(i=>!i.closed&&(NAME_HELD.has(i.status)||(since!==undefined&&b.createdAt>=since)))).map(i=>i.sessionName));}
+  /** The active recorded task workspace a launch into this checkout joins (ADR-0024), or null for any other checkout. */
+  private workspaceFor(projectId:string,worktreeId:string,tree:WorktreeIdentity):string|null {
+    return this.store.managedWorkspaces().find(w=>w.status==='active'&&w.projectId===projectId&&w.worktreeId===worktreeId&&!!w.identity&&isDeepStrictEqual(w.identity,tree))?.id??null;
+  }
   private assertAvailable(tree:WorktreeIdentity) {if(this.store.worktreeCreations().some(op=>op.input.source.root===tree.root && ['applying','uncertain'].includes(op.status)))throw new AppError('LAUNCH_BUSY','Source worktree setup is unresolved.',409);this.projects.assertWorktreeReady(tree.root);this.guard(tree);if(this.store.db.prepare('SELECT 1 FROM launch_reservations WHERE index_path=?').get(tree.indexPath))throw new AppError('LAUNCH_BUSY','An earlier launch owns this checkout. Inspect it first.',409);}
   async preview(value:unknown):Promise<LaunchPreview> {
     this.enabled();this.authority.assertAutomated();const b=terminalFields(value,['projectId','items']);const projectId=terminalText(b.projectId);
@@ -99,7 +103,8 @@ export class LaunchService {
       try{this.assertAvailable(tree.identity!);}catch(e){blockers.push(messageOf(e));}
       const executable=await this.resolved(profile);const project=this.projects.record(projectId);
       for(let n=0;n<count;n++){const id=randomUUID(),sessionName=uniqueSessionName(`${slug(profile.label)}-${slug(tree.branch??'detached')}`,taken);taken.add(sessionName);
-        items.push({id,projectId,worktreeId:tree.id,worktree:tree.identity!,commonDir:project.commonDir,branch:tree.branch,head:tree.head!,profile,executable,sessionName,environmentDigest:digest(launchEnvironment())});}
+        items.push({id,projectId,worktreeId:tree.id,worktree:tree.identity!,commonDir:project.commonDir,branch:tree.branch,head:tree.head!,profile,executable,sessionName,environmentDigest:digest(launchEnvironment()),
+          role:'workspace-agent',workspaceId:this.workspaceFor(projectId,tree.id,tree.identity!)});}
     }
     if(items.length>6)throw new AppError('LAUNCH_ITEMS','At most six instances may be launched together.');
     if(this.batches().flatMap(b=>b.items).filter(i=>!i.closed&&!SETTLED.has(i.status)).length+items.length>8)blockers.push('At most eight launched sessions may await attention.');
@@ -126,9 +131,10 @@ export class LaunchService {
         this.enabled();this.authority.assertAutomated();
         // Launches for other worktrees can reserve the same short name between preview and this transaction.
         const held=this.heldNames(id,listedAt);if(preview.items.some(i=>held.has(i.sessionName)))throw new AppError('LAUNCH_PREVIEW_CHANGED','Another launch reserved a previewed session name. Preview again.',409);
-        for(const i of preview.items){this.assertAvailable(i.worktree);if(!isDeepStrictEqual(this.profiles().find(p=>p.id===i.profile.id),i.profile)||digest(launchEnvironment())!==i.environmentDigest)throw new AppError('LAUNCH_PREVIEW_CHANGED','Profile or environment changed before reservation.',409);}
+        for(const i of preview.items){this.assertAvailable(i.worktree);if(!isDeepStrictEqual(this.profiles().find(p=>p.id===i.profile.id),i.profile)||digest(launchEnvironment())!==i.environmentDigest)throw new AppError('LAUNCH_PREVIEW_CHANGED','Profile or environment changed before reservation.',409);
+          if(this.workspaceFor(i.projectId,i.worktreeId,i.worktree)!==i.workspaceId)throw new AppError('LAUNCH_PREVIEW_CHANGED','The checkout\'s recorded task workspace changed. Preview again.',409);}
         const now=new Date().toISOString();const result:LaunchBatch={requestId:id,previewDigest,createdAt:now,items:preview.items.map(i=>({...i,status:'applying',phase:'reserved',message:'Launch reserved; no program started.',identity:null,placeholder:null,sessionId:null,windowId:null,updatedAt:now}))};
-        this.store.saveProject(this.projects.record(preview.items[0]!.projectId));
+        this.projects.persist(preview.items[0]!.projectId);
         this.save(result);for(const index of new Set(preview.items.map(i=>i.worktree.indexPath)))this.store.db.prepare('INSERT INTO launch_reservations(index_path,launch_id) VALUES(?,?)').run(index,id);claimed=true;return result;
       }).immediate();
       if(!claimed)return batch;

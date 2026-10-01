@@ -194,7 +194,7 @@ test("the bounded informational events table survives reopen", () => {
   expect(store.db.prepare("SELECT COUNT(*) AS n FROM events").get()).toEqual({ n: 500 });
   store.close(); store = new Store(directory);
   expect(store.latestTurns()).toHaveLength(1);
-  expect(store.db.pragma("user_version", { simple: true })).toBe(19);
+  expect(store.db.pragma("user_version", { simple: true })).toBe(20);
 });
 test("a listing failure leaves sessions readable and reports the error", async () => {
   adapter.listPanes = async () => { throw new Error("no server running"); };
@@ -208,7 +208,7 @@ test("session metadata, pairs and command history survive store reopen", async (
   expect(store.sessions()).toHaveLength(2); expect(store.pairs()).toHaveLength(1);
   expect(store.get(result.id)?.status).toBe("delivered"); expect(store.activeFor(PROJECT)).toBeNull();
 });
-test("a version 1 store migrates its global reservation and untyped sessions", () => {
+test("a version 1 store with a delivery in flight refuses the upgrade unchanged; settled, it migrates its untyped sessions", () => {
   store.close();
   rmSync(directory, { recursive: true, force: true }); directory = mkdtempSync(join(tmpdir(), "altcli-test-"));
   const db = new Database(join(directory, "altcli.sqlite3"));
@@ -220,12 +220,16 @@ test("a version 1 store migrates its global reservation and untyped sessions", (
   db.prepare("INSERT INTO sessions VALUES (?,?)").run("claude", JSON.stringify({ ...claude, expectedCommand: "claude" }));
   db.prepare("INSERT INTO commands VALUES (?,?)").run(id, JSON.stringify({ id, agentId: "claude", kind: "relay", text: "relay", handoff: true, status: "sending", createdAt: now, updatedAt: now, error: null, releasedAt: null }));
   db.prepare("INSERT INTO control VALUES (1, ?)").run(id);
+  // ADR-0024: the in-flight command belongs to the previous version, which must settle it before this one upgrades the store.
+  expect(() => new Store(directory)).toThrow(new RegExp(`delivery ${id} \\(sending delivery holds the host\\)`));
+  expect(db.pragma("user_version", { simple: true })).toBe(1); expect(db.prepare("SELECT active_id FROM control").get()).toEqual({ active_id: id });
+  db.prepare("UPDATE commands SET value=? WHERE id=?").run(JSON.stringify({ id, agentId: "claude", kind: "relay", text: "relay", handoff: true, status: "delivered", createdAt: now, updatedAt: now, error: null, releasedAt: null }), id);
   db.close();
   store = new Store(directory);
-  expect(store.db.pragma("user_version", { simple: true })).toBe(19);
+  expect(store.db.pragma("user_version", { simple: true })).toBe(20);
   expect(store.sessions().map((s) => [s.id, s.agentType])).toEqual([["codex", "codex"], ["claude", "claude"]]);
   expect(store.reservations()).toEqual([{ repository: PROJECT, activeCommandId: id }]);
-  store.recoverInterrupted();
-  expect(store.get(id)?.status).toBe("uncertain");
+  store.recoverInterrupted(); // a delivered command's transport hold is released, as on any start
+  expect(store.reservations()).toEqual([]); expect(store.get(id)?.status).toBe("delivered");
   expect(() => store.db.prepare("SELECT * FROM control").get()).toThrow(/no such table/);
 });

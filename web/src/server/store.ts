@@ -1,11 +1,14 @@
 import Database from "better-sqlite3";
 import { chmodSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type { AgentId, CommandRecord, RelayPair, Reservation, SessionRegistration, TurnEvent } from "../contracts/api.ts";
 import { AppError } from "../core/errors.ts";
 import { sameRequest, suggestAgentType } from "../core/policy.ts";
 import type { Group } from "../contracts/implementation.ts";
-import type { ProjectRecord, TaskFinish, WorktreeCreation, WorktreeDiscard, WorktreeIntegration, WorktreeRemoval, WorktreeRename, WorktreeUpdate } from '../contracts/projects.ts';
+import type { WorktreeIdentity } from "../contracts/workflow.ts";
+import type { ManagedWorkspace, ProjectRecord, TaskFinish, WorktreeCreation, WorktreeDiscard, WorktreeIntegration, WorktreeRemoval, WorktreeRename, WorktreeUpdate } from '../contracts/projects.ts';
+import { planRegistry, REGISTRY_SCHEMA, settlementBlockers, upgradeBlocked } from './upgrade.ts';
 export class Store {
   readonly db: Database.Database;
   constructor(directory: string) {
@@ -14,10 +17,18 @@ export class Store {
     const path = join(directory, "altcli.sqlite3");
     this.db = new Database(path);
     chmodSync(path, 0o600);
-    this.db.pragma("journal_mode = WAL");
     this.db.pragma("busy_timeout = 5000");
     const version = this.db.pragma("user_version", { simple: true }) as number;
-    if (version > 19) throw new Error("Unsupported database version. Do not downgrade this store.");
+    if (version > REGISTRY_SCHEMA) { this.db.close(); throw new Error("Unsupported database version. Do not downgrade this store."); }
+    // ADR-0024: upgrade only a settled store, checked before anything here writes, and keep a private copy of the old schema.
+    if (version >= 1 && version < REGISTRY_SCHEMA) {
+      const blockers = settlementBlockers(this.db);
+      if (blockers.length) { this.db.close(); throw upgradeBlocked(version, blockers); }
+      const backup = join(directory, `altcli-schema-${version}-${new Date().toISOString().replace(/[:.]/g, "-")}.sqlite3`);
+      this.db.prepare("VACUUM INTO ?").run(backup);
+      chmodSync(backup, 0o600);
+    }
+    this.db.pragma("journal_mode = WAL");
     this.db.transaction(() => {
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -44,6 +55,8 @@ export class Store {
         CREATE TABLE IF NOT EXISTS worktree_renames (id TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, request_id TEXT NOT NULL UNIQUE, status TEXT NOT NULL, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS attachment_refs (attachment_id TEXT NOT NULL, kind TEXT NOT NULL, ref_id TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (attachment_id, kind, ref_id));
+        CREATE TABLE IF NOT EXISTS managed_workspaces (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, path TEXT NOT NULL, status TEXT NOT NULL, value TEXT NOT NULL);
+        CREATE UNIQUE INDEX IF NOT EXISTS managed_workspace_path ON managed_workspaces(path) WHERE status <> 'retired';
         CREATE UNIQUE INDEX IF NOT EXISTS worktree_creation_owner ON worktree_creations(project_id) WHERE status IN ('applying', 'uncertain');
         CREATE INDEX IF NOT EXISTS interactions_repository ON interactions(repository);
         CREATE INDEX IF NOT EXISTS interactions_run ON interactions(json_extract(value, '$.input.runId'));
@@ -61,8 +74,15 @@ export class Store {
           this.db.prepare('UPDATE keyboard_sessions SET value=? WHERE id=?').run(JSON.stringify(next), row.id);
         }
       }
+      if (version < REGISTRY_SCHEMA) {
+        const plan = planRegistry(this.db);
+        for (const project of plan.projects) this.saveProject(project);
+        for (const workspace of plan.workspaces) this.saveManagedWorkspace(workspace);
+        for (const batch of plan.launches) this.db.prepare('UPDATE launches SET value=? WHERE id=?').run(JSON.stringify(batch), batch.requestId);
+      }
       // 18: older servers must not interpret a concurrent manual-input period. 19: nor dispatch runs without their pinned images.
-      this.db.exec("PRAGMA user_version = 19");
+      // 20: nor ignore recorded repositories and task workspaces.
+      this.db.exec(`PRAGMA user_version = ${REGISTRY_SCHEMA}`);
     })();
   }
   /** v1 had one global reservation in `control` and sessions without agentType. */
@@ -84,6 +104,32 @@ export class Store {
   }
   saveProject(project: ProjectRecord): void {
     this.db.prepare('INSERT INTO projects(id,value) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(project.id, JSON.stringify(project));
+  }
+  /** Recorded task workspaces in creation order, retired ones included. */
+  managedWorkspaces(): ManagedWorkspace[] {
+    return (this.db.prepare('SELECT value FROM managed_workspaces ORDER BY rowid').all() as { value: string }[]).map((row) => JSON.parse(row.value));
+  }
+  saveManagedWorkspace(workspace: ManagedWorkspace): void {
+    this.db.prepare('INSERT INTO managed_workspaces(id,project_id,path,status,value) VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,value=excluded.value')
+      .run(workspace.id, workspace.projectId, workspace.path, workspace.status, JSON.stringify(workspace));
+  }
+  /** The recorded, not yet retired workspace at a project path. At most one exists per path. */
+  liveWorkspace(projectId: string, path: string): ManagedWorkspace | undefined {
+    return this.managedWorkspaces().find((w) => w.projectId === projectId && w.path === path && w.status !== 'retired');
+  }
+  /** A verified creation records its workspace. A record still live at that path describes a worktree that is necessarily gone,
+   * because creation refuses an existing destination; it is retired as superseded, never reused. Call within the creation's transaction. */
+  recordWorkspace(workspace: ManagedWorkspace): void {
+    const previous = this.liveWorkspace(workspace.projectId, workspace.path);
+    if (previous) this.saveManagedWorkspace({ ...previous, status: 'retired', retiredBy: { kind: 'superseded', requestId: workspace.id, at: workspace.createdAt }, updatedAt: workspace.createdAt });
+    this.saveManagedWorkspace(workspace);
+  }
+  /** Applies a verified lifecycle result to the live workspace at that path; a checkout AltCLI did not create has none. With
+   * `identity`, a record that proves a different worktree is left alone; retirement omits it, because the directory is gone either way. */
+  updateWorkspace(projectId: string, path: string, change: Partial<ManagedWorkspace>, identity?: WorktreeIdentity): void {
+    const workspace = this.liveWorkspace(projectId, path);
+    if (!workspace || (identity && workspace.identity && !isDeepStrictEqual(workspace.identity, identity))) return;
+    this.saveManagedWorkspace({ ...workspace, ...change, updatedAt: new Date().toISOString() });
   }
   worktreeCreations(): WorktreeCreation[] {
     return (this.db.prepare('SELECT value FROM worktree_creations ORDER BY rowid').all() as { value: string }[]).map((row) => JSON.parse(row.value));
