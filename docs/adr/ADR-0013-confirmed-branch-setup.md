@@ -278,7 +278,21 @@ moved on without that commit, because the human integrated, reset or rewrote by
 hand, releases it as failed too, since nothing is left to retry and a later
 removal check or squash preview judges the current history on its own evidence
 (September 21, 2026 update: previously such a record stayed uncertain and held
-every lifecycle action on the project with no recovery path). No reset, abort,
+every lifecycle action on the project with no recovery path).
+October 1, 2026 update: an inspection that retains ownership records why in the
+operation's message (writer or ownership evidence, uncommitted changes and
+whether the previewed commit is already on the branch, or unreadable Git
+evidence); previously it returned the record unchanged, and the Console offered
+work that the server then refused. When inspection cannot settle the squash,
+the human may confirm **Clear hold**, a recorded decision that checks no writers,
+cleanliness or ownership and changes no Git state. Read-only evidence still
+decides the record: the previewed commit on the first-parent chain since the
+pinned tip records it as integrated (a usable batch boundary); otherwise,
+including when Git evidence cannot be read, the hold is released as failed and
+later removal checks and squash previews judge the history on their own
+evidence. A result recorded by a concurrent inspection or clear stands. The
+squash's notice, inspection and Clear hold are shown in its task worktree's card
+while that worktree exists. No reset, abort,
 retry or history rewrite is performed by the app. Remote publication remains
 outside the app.
 

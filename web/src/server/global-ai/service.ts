@@ -4,6 +4,7 @@ import type { GlobalAIInstance, GlobalAIPreview, GlobalAIView, ToolReply } from 
 import type { LaunchProfile } from '../../contracts/launches.ts';
 import type { PaneIdentity } from '../../contracts/api.ts';
 import { AppReads, APP_TOOLS, fields, GlobalAIError, hash, text } from './reads.ts';
+import { codexProfileArgs } from './codex.ts';
 
 export interface InstanceRepository {
   all(): GlobalAIInstance[];
@@ -17,6 +18,9 @@ export interface GlobalHost {
   launch(instance: GlobalAIInstance, save: (change: Partial<GlobalAIInstance>) => void): Promise<void>;
   inspect(instance: GlobalAIInstance): Promise<{ identity: PaneIdentity; sessionId: string; label: string; dead: boolean }>;
   capture(instance: GlobalAIInstance): Promise<string>;
+  /** Ends the exact, marked Global AI tmux session after verifying it; refuses anything it cannot verify. A refusal throws
+   * GlobalAIError before any effect; any other failure may follow the stop. */
+  stop(instance: GlobalAIInstance): Promise<void>;
   descriptor(instance: GlobalAIInstance, descriptor: { endpoint: string; token: string }): Promise<void>;
 }
 export interface GlobalServices {
@@ -25,7 +29,6 @@ export interface GlobalServices {
   reads: AppReads;
   directory: string;
   profiles(): LaunchProfile[];
-  roots(): Promise<string[]>;
   enabled(): boolean;
   /** Existing admission excludes managed writes during launch. It does not impose exclusive native writers. */
   launchGuard<T>(work: () => Promise<T>): Promise<T>;
@@ -38,7 +41,7 @@ export function uuid(value: unknown): string { const id = text(value, 36); if (!
 export function toolEndpoint(origin: string): string {
   const url = new URL(origin);
   if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || url.username || url.password || url.search || url.hash || url.pathname !== '/')
-    throw new GlobalAIError('HOST_ADDRESS', 'Global AI requires this host\'s loopback HTTP origin.');
+    throw new GlobalAIError('HOST_ADDRESS', 'Helper requires this host\'s loopback HTTP origin.');
   return `${url.origin}/api/v1/global-ai/tools`;
 }
 
@@ -57,8 +60,12 @@ export class GlobalAIService {
     }
   }
   private active(): GlobalAIInstance | null { return this.services.repository.all().find(i => i.status !== 'retired') ?? null; }
+  /** Enabled profiles whose arguments A1 accepts. Listing is advisory: preview validates the chosen profile again. */
+  launchableProfiles(): LaunchProfile[] {
+    return this.services.profiles().filter(p => { if (!p.enabled) return false; try { codexProfileArgs(p); return true; } catch { return false; } });
+  }
   instance(id: string): GlobalAIInstance | undefined { return this.services.repository.all().find(i => i.id === id); }
-  private checkEnabled() { if (!this.services.enabled()) throw new GlobalAIError('GLOBAL_AI_DISABLED', 'Enable host input, native terminals and agent launch before starting Global AI.', 403); }
+  private checkEnabled() { if (!this.services.enabled()) throw new GlobalAIError('GLOBAL_AI_DISABLED', 'Enable host input, native terminals and agent launch before starting Helper.', 403); }
   private update(instance: GlobalAIInstance, change: Partial<GlobalAIInstance>) {
     Object.assign(instance, change, { updatedAt: new Date().toISOString() }); this.services.repository.save(instance);
   }
@@ -72,7 +79,7 @@ export class GlobalAIService {
   }
   async view(): Promise<GlobalAIView> {
     const instance = this.active();
-    if (!instance) return this.publicView(null, 'unverified', 'No Global AI instance has been started.');
+    if (!instance) return this.publicView(null, 'unverified', 'No Helper instance has been started.');
     if (instance.status === 'launching') return this.publicView(instance, 'unverified', 'Launch is in flight; its placeholder is not agent readiness.');
     if (!instance.identity) return this.publicView(instance, 'unavailable', 'Launch identity is unresolved. No automatic retry or adoption.');
     const inspectedGrantRevision = this.grantRevision;
@@ -87,17 +94,13 @@ export class GlobalAIService {
   }
   async preview(value: unknown, origin: string): Promise<GlobalAIPreview> {
     this.checkEnabled();
-    const b = fields(value, ['profileId', 'roots']);
+    const b = fields(value, ['profileId']);
     const profile = this.services.profiles().find(p => p.id === text(b.profileId) && p.enabled);
     if (!profile) throw new GlobalAIError('PROFILE_UNKNOWN', 'Choose an enabled launch profile.');
-    if (!Array.isArray(b.roots) || b.roots.length > 32) throw new GlobalAIError('INVALID_SCOPE', 'Choose at most 32 workspaces, or none for documentation only.', 400);
-    const roots = [...new Set(b.roots.map(r => text(r, 4096)))].sort();
-    const current = await this.services.roots();
-    if (roots.some(r => !current.includes(r))) throw new GlobalAIError('SCOPE_CHANGED', 'A chosen workspace is no longer in the host inventory. Refresh it.');
     const executable = await this.services.host.executable(profile);
     const id = randomUUID(), directory = join(this.services.directory, id), args = this.services.host.args(profile, directory);
     const environment = this.services.host.environmentHash(), endpoint = toolEndpoint(origin), expiresAt = new Date(Date.now() + 120000).toISOString();
-    const core = { id, expiresAt, profile: structuredClone(profile), executable, args, directory, roots, sessionName: `altcli-global-${id}` };
+    const core = { id, expiresAt, profile: structuredClone(profile), executable, args, directory, sessionName: `altcli-global-${id}` };
     const preview = { ...core, digest: hash({ ...core, environment, endpoint }) };
     for (const [id, held] of this.previews) if (Date.parse(held.preview.expiresAt) < Date.now()) this.previews.delete(id);
     if (this.previews.size >= 16) throw new GlobalAIError('PREVIEW_LIMIT', 'Too many pending previews. Let older previews expire.');
@@ -115,22 +118,20 @@ export class GlobalAIService {
         return this.publicView(previous, 'unverified', 'Recorded request returned without replaying its launch.');
       }
       this.checkEnabled();
-      if (this.active()) throw new GlobalAIError('GLOBAL_AI_EXISTS', 'Open the existing Global AI conversation or explicitly retire its app access first.');
+      if (this.active()) throw new GlobalAIError('GLOBAL_AI_EXISTS', 'Open the existing Helper conversation or explicitly retire its app access first.');
       const held = this.previews.get(id);
-      if (!held || held.preview.digest !== digest || Date.parse(held.preview.expiresAt) < Date.now()) throw new GlobalAIError('PREVIEW_CHANGED', 'Preview again before starting Global AI.');
+      if (!held || held.preview.digest !== digest || Date.parse(held.preview.expiresAt) < Date.now()) throw new GlobalAIError('PREVIEW_CHANGED', 'Preview again before starting Helper.');
       const p = held.preview;
       const profile = this.services.profiles().find(s => s.id === p.profile.id);
       if (!profile || hash(profile) !== hash(p.profile) || await this.services.host.executable(profile) !== p.executable || held.environment !== this.services.host.environmentHash())
         throw new GlobalAIError('PROFILE_CHANGED', 'The profile, executable or launch environment changed. Preview again.');
-      const current = await this.services.roots();
-      if (p.roots.some(r => !current.includes(r))) throw new GlobalAIError('SCOPE_CHANGED', 'Shared workspace inventory changed. Preview again.');
       return this.services.launchGuard(async () => {
         this.checkEnabled();
         if (hash(this.services.profiles().find(s => s.id === p.profile.id)) !== hash(p.profile) || held.environment !== this.services.host.environmentHash())
           throw new GlobalAIError('PROFILE_CHANGED', 'Launch settings changed during admission. Preview again.');
         const at = new Date().toISOString();
         const instance: GlobalAIInstance = { schema: 1, id, requestId, requestDigest: digest, role: 'global_ai', profile: p.profile,
-          executable: p.executable, args: p.args, directory: p.directory, roots: p.roots, sessionName: p.sessionName,
+          executable: p.executable, args: p.args, directory: p.directory, sessionName: p.sessionName,
           sessionId: null, windowId: null, identity: null, phase: 'reserved', status: 'launching',
           message: 'Confirmed launch recorded before any process starts.', createdAt: at, updatedAt: at };
         this.services.repository.save(instance); this.previews.delete(id);
@@ -143,7 +144,7 @@ export class GlobalAIService {
           this.update(instance, { status: 'started', phase: 'observed', message: 'Started a distinct user-operated CLI. Inspect login and /mcp; startup is not proof of readiness.' });
         } catch {
           this.revoke();
-          this.update(instance, { status: 'uncertain', message: 'Global AI startup did not settle. Inspect the original session. Nothing is retried, deleted or adopted automatically.' });
+          this.update(instance, { status: 'uncertain', message: 'Helper startup did not settle. Inspect the original session. Nothing is retried, deleted or adopted automatically.' });
         }
         return this.publicView(instance, 'unverified', instance.message);
       });
@@ -153,11 +154,11 @@ export class GlobalAIService {
   revoke(): void { this.grant = null; this.grantRevision++; }
   async refreshTools(value: unknown, origin: string): Promise<GlobalAIView> {
     const b = fields(value, ['instanceId', 'confirm']);
-    if (b.confirm !== true) throw new GlobalAIError('CONFIRM_REQUIRED', 'Confirm read access to the original shared scope.', 400);
+    if (b.confirm !== true) throw new GlobalAIError('CONFIRM_REQUIRED', 'Confirm renewing read-only app access.', 400);
     const id = uuid(b.instanceId);
     return this.serialize(async () => {
       this.checkEnabled(); const instance = this.active();
-      if (!instance || instance.id !== id || instance.status !== 'started') throw new GlobalAIError('INSTANCE_CHANGED', 'This conversation is not an observed Global AI instance.');
+      if (!instance || instance.id !== id || instance.status !== 'started') throw new GlobalAIError('INSTANCE_CHANGED', 'This conversation is not an observed Helper instance.');
       const requestedRevision = this.grantRevision;
       const native = await this.services.host.inspect(instance);
       if (requestedRevision !== this.grantRevision) throw new GlobalAIError('APP_ACCESS_REVOKED', 'Revocation canceled the pending renewal.');
@@ -169,16 +170,28 @@ export class GlobalAIService {
       if (revision !== this.grantRevision) throw new GlobalAIError('APP_ACCESS_REVOKED', 'Revocation canceled the pending renewal.');
       this.checkEnabled();
       this.grant = { instanceId: id, token, expires: Date.now() + 8 * 3600000, revision: ++this.grantRevision };
-      return this.publicView(instance, 'alive', 'Original scope reauthorized for this boot. No prompt, run or process was restarted.');
+      return this.publicView(instance, 'alive', 'Read-only app access renewed for this boot. No prompt, run or process was restarted.');
     });
   }
   async retire(value: unknown): Promise<GlobalAIView> {
-    const b = fields(value, ['instanceId', 'confirm']); const id = uuid(b.instanceId);
+    const b = fields(value, ['instanceId', 'confirm', 'stop']); const id = uuid(b.instanceId);
     if (b.confirm !== true) throw new GlobalAIError('CONFIRM_REQUIRED', 'Confirm that retiring access does not stop the CLI or undo shared context.', 400);
+    if (b.stop !== undefined && b.stop !== true) throw new GlobalAIError('INVALID_INPUT', 'Send stop: true to also stop the CLI, or omit it.', 400);
     return this.serialize(async () => {
       const instance = this.instance(id);
       if (!instance) throw new GlobalAIError('INSTANCE_CHANGED', 'The instance record is unavailable.');
       if (this.grant?.instanceId === id) this.revoke();
+      // Restart stops only Global AI's own verified session; an unverified one keeps running and stays unretired for inspection.
+      if (b.stop === true && instance.status !== 'retired') {
+        this.checkEnabled();
+        try { if (!instance.identity) throw new Error('unobserved'); await this.services.host.stop(instance); }
+        catch (error) {
+          // A refusal stopped nothing, so its reason (such as extra panes or windows) is certain and worth showing.
+          if (error instanceof GlobalAIError) throw new GlobalAIError('GLOBAL_IDENTITY', `${error.message} Nothing was stopped or retired; app tools are revoked.`);
+          throw new GlobalAIError('GLOBAL_IDENTITY', 'Stopping Helper could not be verified. It was not retired and app tools are revoked; inspect its original session before trying again.');
+        }
+        this.update(instance, { status: 'retired', message: 'Stopped and retired by the owner. Codex keeps its own session history.' });
+      }
       if (instance.status !== 'retired') this.update(instance, { status: 'retired', message: 'App access retired by the owner. CLI/session and provider conversation are not deleted or stopped.' });
       return this.view();
     });
@@ -187,7 +200,7 @@ export class GlobalAIService {
     const grant = this.grant, instance = this.active();
     if (!grant || !instance || grant.instanceId !== instance.id || grant.expires <= Date.now() || !this.services.enabled() ||
       !/^[a-f0-9]{64}$/.test(token) || !timingSafeEqual(Buffer.from(token), Buffer.from(grant.token)))
-      throw new GlobalAIError('APP_ACCESS_REVOKED', 'Global AI app access is absent, expired or revoked. Ask the owner to refresh its original scope.', 401);
+      throw new GlobalAIError('APP_ACCESS_REVOKED', 'Helper app access is absent, expired or revoked. Ask the owner to refresh app access.', 401);
     return { instance, revision: grant.revision };
   }
   async tools(token: string, value: unknown): Promise<unknown> {
@@ -197,16 +210,15 @@ export class GlobalAIService {
     try {
       let result: unknown;
       if (b.method === 'list' && b.name === undefined && b.arguments === undefined) result = { tools: APP_TOOLS };
-      else if (b.method === 'call') result = await this.services.reads.call(text(b.name), b.arguments ?? {}, caller.instance.roots);
+      else if (b.method === 'call') result = await this.services.reads.call(text(b.name), b.arguments ?? {});
       else throw new GlobalAIError('TOOL_METHOD', 'Only tool listing and read calls are supported.', 400);
-      // Revocation/restart/scope retirement during an await must win over the pending read.
+      // Revocation, restart or retirement during an await must win over the pending read.
       if (this.authenticate(token).revision !== caller.revision) throw new GlobalAIError('APP_ACCESS_REVOKED', 'App access changed while the read was pending.', 401);
       return result;
     } finally { this.requests--; }
   }
   async ownerRead(value: unknown): Promise<ToolReply> {
     const b = fields(value, ['name', 'arguments']);
-    const instance = this.active();
-    return this.services.reads.call(text(b.name), b.arguments ?? {}, instance?.roots ?? []);
+    return this.services.reads.call(text(b.name), b.arguments ?? {});
   }
 }

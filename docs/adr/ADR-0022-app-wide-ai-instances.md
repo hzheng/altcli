@@ -15,7 +15,7 @@ or a replacement for the controller; neither enables larger workflow groups.
 | Role | Initiator and purpose | Conversation and visibility |
 | --- | --- | --- |
 | Workspace agent (existing) | Human or controller assigns project planning, work or review | Existing workspace Console |
-| Global AI (proposed) | Human asks app questions or discusses explicitly scoped projects | Dedicated app-wide native terminal, available without a dummy project |
+| Global AI (proposed) | Human asks app questions or discusses the host's projects (A1 reads all of them) | Dedicated app-wide native terminal, available without a dummy project |
 | Background assistant (proposed) | Enabled policies select useful events for bounded jobs | Separate instance with compact status and inspectable activity |
 
 Keep the app roles' instance IDs, tmux sessions, conversations, context scopes and

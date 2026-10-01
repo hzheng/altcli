@@ -12,7 +12,6 @@ export interface GlobalAIInstance {
   executable: string;
   args: string[];
   directory: string;
-  roots: string[];
   sessionName: string;
   sessionId: string | null;
   windowId: string | null;
@@ -31,7 +30,6 @@ export interface GlobalAIPreview {
   executable: string;
   args: string[];
   directory: string;
-  roots: string[];
   sessionName: string;
 }
 export interface GlobalAIView {

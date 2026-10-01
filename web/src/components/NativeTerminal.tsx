@@ -39,8 +39,8 @@ const TOOL_HELP = [
 type Queued = { bytes: Uint8Array; start: boolean; image?: undefined } | { image: { key: string; attachmentId: string }; start: true; bytes?: undefined };
 /** Refused by the server before anything was written: the image stays ready for a later, deliberate Insert. */
 class ImageRefused extends Error {}
-/** Native bytes stay local. Only the Terminal toggle begins input; output, focus and clicks in Display mode never do. */
-export function NativeTerminal({ ref, token, target, clientInstanceId, label, fallback, capturedAt, held, holder, cliChanged = false, refresh, viewEpoch = 0, inputEnabled = true, workspace, imagesSupported = false }: {
+/** Workspace input starts only with the Terminal toggle. Independent app terminals start input on connection. */
+export function NativeTerminal({ ref, token, target, clientInstanceId, label, fallback, capturedAt, held, holder, cliChanged = false, refresh, viewEpoch = 0, inputEnabled = true, autoInput = false, workspace, imagesSupported = false }: {
   ref?: Ref<NativeTerminalHandle>;
   token: string; target: TerminalTarget; clientInstanceId: string; label: string; fallback: ReactNode;
   /** Canonical worktree root of this pane's workspace; images uploaded here belong to it. */
@@ -54,12 +54,14 @@ export function NativeTerminal({ ref, token, target, clientInstanceId, label, fa
   cliChanged?: boolean;
   /** Host input policy; observation remains available when input is disabled. */
   inputEnabled?: boolean;
+  /** An app terminal outside the manual-input barrier (Global AI): input starts once connected, with no Display/Terminal switch. */
+  autoInput?: boolean;
 }) {
   const mount = useRef<HTMLDivElement>(null), terminal = useRef<Terminal | null>(null), root = useRef<HTMLElement>(null);
   // One input event may span several 4 KiB chunks; `start` marks each event's first chunk. `failed` makes the next toggle reconnect first.
   const live = useRef<{ id: string; bootId: string; paneId: string; sessionId: string; generation: string; writer: boolean; ready: boolean; failed: boolean; seq: number; queue: Queued[]; bytes: number; sending: boolean; draining: Promise<void> | null; ws: WebSocket } | null>(null);
   const [connected, setConnected] = useState(false), [native, setNative] = useState(false), [writer, setWriter] = useState(false);
-  const [capture, setCapture] = useState(false), [notice, setNotice] = useState('Open a terminal to observe this pane.'), [active, setActive] = useState('');
+  const [capture, setCapture] = useState(false), [notice, setNotice] = useState(autoInput ? 'Connecting to terminal…' : 'Open a terminal to observe this pane.'), [active, setActive] = useState('');
   const [busy, setBusy] = useState(false), [epoch, setEpoch] = useState(1);
   // Synchronous mirrors for the handle: a second decision must not start before React re-renders.
   const busyRef = useRef(false), connectedRef = useRef(false), frames = useRef(0);
@@ -118,7 +120,7 @@ export function NativeTerminal({ ref, token, target, clientInstanceId, label, fa
     unsentImages(c.queue);
     c.writer = c.ready = false; c.failed = true; c.queue = []; c.bytes = 0; c.ws.close(); busyRef.current = false; setBusy(false);
     if (terminal.current) terminal.current.options.disableStdin = true;
-    clearModifiers(); setWriter(false); setNotice(`${reason} Toggle Terminal to reconnect.`); void refreshRef.current();
+    clearModifiers(); setWriter(false); setNotice(`${reason} ${autoInput ? 'Reconnect to continue typing.' : 'Toggle Terminal to reconnect.'}`); void refreshRef.current();
   }
   function drain(): Promise<void> {
     const c = live.current; if (!c || !c.writer) return Promise.resolve();
@@ -233,11 +235,11 @@ export function NativeTerminal({ ref, token, target, clientInstanceId, label, fa
       await new Promise<void>(resolve => term.write('', resolve));
       if (live.current !== c || !c.writer) throw Error('Input stopped before it was ready.');
       c.ready = true; term.options.disableStdin = false; setWriter(true); setCapture(false);
-      setNotice('Terminal mode: typing goes to this pane. Automation is held until manual input is stopped and reconciled.');
+      setNotice(autoInput ? result.reason : 'Terminal mode: typing goes to this pane. Automation is held until manual input is stopped and reconciled.');
       if (document.activeElement === origin || document.activeElement === document.body) term.focus();
       void refreshRef.current();
     } catch (error) {
-      if (live.current === c) { c.failed = true; setNotice(`${error instanceof Error ? error.message : 'Input could not start.'} Toggle Terminal again to reset the connection and retry.`); }
+      if (live.current === c) { c.failed = true; setNotice(`${error instanceof Error ? error.message : 'Input could not start.'} ${autoInput ? 'Reconnect to continue typing.' : 'Toggle Terminal again to reset the connection and retry.'}`); }
     }
   }
   /** The Display side: ends this connection's input and keeps watching. Anything that fails resets to a fresh observer. */
@@ -315,12 +317,13 @@ export function NativeTerminal({ ref, token, target, clientInstanceId, label, fa
             if (f.bootId !== opened.bootId) throw Error('Host boot changed.');
             const first = !connectedRef.current; connecting.current = false;
             generation = f.generation; connection.generation = generation; connection.writer = connection.ready = false; connection.seq = 0; connection.queue = []; connection.bytes = 0; connection.sending = false; connection.draining = null;
-            sequence = processedBytes = 0; clearModifiers(); term!.reset(); term!.options.disableStdin = true; setWriter(false); setConnected(true); setNative(f.native); setNotice(f.reason || 'Display mode: view only. Use the Terminal toggle to type.');
+            sequence = processedBytes = 0; clearModifiers(); term!.reset(); term!.options.disableStdin = true; setWriter(false); setConnected(true); setNative(f.native); setNotice(autoInput ? 'Connecting terminal input…' : f.reason || 'Display mode: view only. Use the Terminal toggle to type.');
             frames.current++; connectedRef.current = true;
             if (generationSeen.current?.generation === f.generation && !generationSeen.current.writer) generationSeen.current.resolve();
             scheduleSize();
-            // The toggle chose Terminal on a failed connection: start input once this replacement is connected.
-            if (first && enterAfterReset.current) { enterAfterReset.current = false; void enterTerminal(focusOrigin.current); }
+            // The toggle chose Terminal on a failed connection: start input once this replacement is connected. An autoInput terminal
+            // always does, without taking focus from wherever the user is.
+            if (first && (enterAfterReset.current || autoInput)) { const origin = enterAfterReset.current ? focusOrigin.current : null; enterAfterReset.current = false; void enterTerminal(origin); }
           } else if (f.type === 'out') {
             if (f.generation !== generation) return;
             const bytes = Uint8Array.from(atob(f.data), c => c.charCodeAt(0));
@@ -335,17 +338,17 @@ export function NativeTerminal({ ref, token, target, clientInstanceId, label, fa
             setNotice(f.reason);
             void refreshRef.current();
           } else if (f.type === 'active') { setNavigated(f.sessionId !== opened.sessionId || f.paneId !== opened.paneId); setActive(`${f.label} · ${f.paneId} · ${f.command}${f.size ? ` · ${f.size.replace('x', '×')} window` : ''}${f.sessionId !== opened.sessionId ? ' · navigated to another tmux session; the control target is unchanged' : ''}`); }
-          else if(f.type==='closed') {setNotice(`${f.reason} Toggle Terminal to reconnect.`); ws!.close();}
+          else if(f.type==='closed') {setNotice(`${f.reason} ${autoInput ? 'Reconnect to continue typing.' : 'Toggle Terminal to reconnect.'}`); ws!.close();}
           else if(f.type!=='hb') throw Error('Unsupported frame.');
         } catch { loseInput('Terminal protocol changed.', connection, generation); }
       };
       ws.onclose = () => { if(disposed) return; connecting.current = false; clearModifiers(); connection.writer=connection.ready=false; connection.failed=true; unsentImages(connection.queue); connection.queue=[]; connection.bytes=0; if(term) term.options.disableStdin=true; setConnected(false); setWriter(false);
         connectedRef.current = false; void refreshRef.current(); };
-      ws.onerror = () => { if(!disposed) setNotice('Terminal disconnected. Inspect manual input, then toggle Terminal to reconnect.'); };
+      ws.onerror = () => { if(!disposed) setNotice(autoInput ? 'Terminal disconnected. Reconnect to continue typing.' : 'Terminal disconnected. Inspect manual input, then toggle Terminal to reconnect.'); };
       heartbeat = setInterval(() => { if (ws?.readyState === WebSocket.OPEN && generation) ws.send(JSON.stringify({type:'heartbeat',generation})); }, 10000);
     })().catch(error => { if (!disposed) { connecting.current = enterAfterReset.current = false; setNotice(error instanceof Error ? error.message : 'Terminal unavailable.'); } });
     return () => { disposed = true; connectedRef.current = false; clearInterval(heartbeat); clearTimeout(resizeTimer); refit.current=null; resize?.disconnect(); if(fitViewport){window.visualViewport?.removeEventListener('resize',fitViewport);window.removeEventListener('orientationchange',fitViewport);} close(); term?.dispose(); terminal.current = null; live.current = null; };
-    // Mounting, exact identity changes, Reconnect and a toggle on a failed connection open observation. Never requests input.
+    // Workspace terminals reconnect in Display mode. Independent app terminals also start their own input above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token,targetKey,clientInstanceId,epoch]);
   async function acquire(): Promise<KeyboardResult> {
@@ -397,8 +400,8 @@ export function NativeTerminal({ ref, token, target, clientInstanceId, label, fa
       if(!allowPaste(text)){event.preventDefault();event.stopPropagation();}else clearModifiers();
     }}>
     {/* The mode toggle already shows typing or viewing; the status badge appears only for states the toggle cannot show. */}
-    <div className="terminal-tools">{(!inputEnabled || (badge !== 'Typing enabled' && badge !== 'Observing')) && <StatusIcon icon={BADGES[badge][0]} label={badge} help={BADGES[badge][1]} />}
-      {inputEnabled && <IconButton icon={writer ? '⌨️' : '👁️'} label="Terminal mode" className="mode-toggle" aria-pressed={writer} aria-busy={busy} disabled={busy}
+    <div className="terminal-tools">{!autoInput && (!inputEnabled || (badge !== 'Typing enabled' && badge !== 'Observing')) && <StatusIcon icon={BADGES[badge][0]} label={badge} help={BADGES[badge][1]} />}
+      {inputEnabled && !autoInput && <IconButton icon={writer ? '⌨️' : '👁️'} label="Terminal mode" className="mode-toggle" aria-pressed={writer} aria-busy={busy} disabled={busy}
         help={writer ? 'Terminal: typing goes to this pane. Press to switch to Display (view only); input already sent stays, and automation waits until manual input is reconciled.'
           : 'Display: view only. Press to switch to Terminal and type here. If the connection failed, this reconnects first.'}
         onClick={event=>{if(!event.isTrusted)return;void (writer ? enterDisplay() : enterTerminal());}} />}
@@ -408,17 +411,19 @@ export function NativeTerminal({ ref, token, target, clientInstanceId, label, fa
         onFiles={files => { const intent = pickerIntent.current; pickerIntent.current = null; const c = live.current;
           if (!intent || intent.connection !== c || !c?.ready || c.generation !== intent.generation || intent.view !== viewEpochRef.current || intent.target !== targetMemory) { setNotice('The terminal changed while choosing images. Nothing was attached.'); return; }
           attachImages(files); }} />}
-      {!connected && <IconButton icon={epoch ? '🔄' : '▶️'} label={epoch ? 'Reconnect' : 'Open terminal'} help="Watch this pane live. This does not start typing." onClick={() => reset('Reconnecting as observer…', false)} />}
+      {(!connected || (autoInput && !writer)) && <IconButton icon={epoch ? '🔄' : '▶️'} label={epoch ? 'Reconnect' : 'Open terminal'} disabled={autoInput && busy}
+        help={autoInput ? 'Reconnect to continue typing. Input already sent is never replayed.' : 'Watch this pane live. This does not start typing.'}
+        onClick={() => reset(autoInput ? 'Reconnecting terminal input…' : 'Reconnecting as observer…', false)} />}
       <IconButton icon={capture ? '🖥️' : '📄'} label={capture ? 'Show terminal' : 'Captured text'} help="A readable, selectable snapshot with its timestamp, not the live terminal." aria-pressed={capture} onClick={()=>setCapture(x=>!x)} />
       <IconButton icon={expanded ? '⤡' : '⤢'} label={expanded ? 'Collapse terminal' : 'Expand terminal'} help="Enlarge within the page. It does not reconnect or change the terminal mode." aria-expanded={expanded} onClick={()=>setExpanded(!expanded)} />
       <IconButton icon="♿" label="Screen reader mode" help="Expose terminal output to assistive technology. Turn it off if a software keyboard cannot type; Captured text is the alternative." aria-pressed={screenReader} onClick={()=>{setScreenReader(!screenReader);if(terminal.current)terminal.current.options.screenReaderMode=!screenReader;}} />
-      <HelpTip label="Terminal tools help" help={<>{TOOL_HELP.map(([icon, name, text]) => <span key={name} className="legend-line">{icon} <strong>{name}</strong>: {text}</span>)}</>} /></div>
+      <HelpTip label="Terminal tools help" help={autoInput ? 'Typing starts when Helper connects. Keys and paste go to Helper independently of workspace terminals. Reconnect restores input without replaying it.' : <>{TOOL_HELP.map(([icon, name, text]) => <span key={name} className="legend-line">{icon} <strong>{name}</strong>: {text}</span>)}</>} /></div>
     {screenReader && <p className="fine">If your keyboard cannot enter text in this mode, turn it off. Captured text is also available for reading.</p>}
     <AttachmentTray label={`Images for ${label}`} tray={images} onMessage={setNotice} insert={{ onInsert: insertImage, blocked: insertBlocked }} />
     {images.items.length > 0 && <p className="fine">{IMAGE_LIMIT_NOTE} Images stay on this host; a submitted prompt may send them to the CLI’s provider.</p>}
     <p className="fine" role="status">{notice}{active && ` · ${active}`}{focused && ' · Ctrl+Shift+Esc: leave terminal focus'}</p>
     <div ref={mount} className="xterm-mount" hidden={capture || !native} aria-label={`${label} native output`} onFocus={() => setFocused(true)} onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) { setFocused(false); leaving.current = false; } }} />
-    {(capture || !native) && <><p className="fine">{capturedAt ? `Snapshot captured at ${new Date(capturedAt).toLocaleTimeString()}` : 'Snapshot only'}{connected && !native && ' · native observation unavailable'}{writer && !native ? ' · Terminal mode: this pane has no native screen here, switch to Display' : ''}</p>{fallback}</>}
+    {(capture || !native) && <><p className="fine">{capturedAt ? `Snapshot captured at ${new Date(capturedAt).toLocaleTimeString()}` : 'Snapshot only'}{connected && !native && ' · native observation unavailable'}{writer && !native ? autoInput ? ' · Waiting for the terminal screen' : ' · Terminal mode: this pane has no native screen here, switch to Display' : ''}</p>{fallback}</>}
     {connected && writer && <div className="terminal-keys" aria-label="Terminal keys">{(['ctrl','alt'] as const).map(key=><button type="button" key={key} aria-label={`${key==='ctrl'?'Ctrl':'Alt'} next key`} aria-pressed={modifierState[key]} onClick={()=>{modifiers.current={...modifiers.current,[key]:!modifiers.current[key]};setModifierState(modifiers.current);terminal.current?.focus();}}>{key==='ctrl'?'Ctrl':'Alt'}</button>)}{[['Esc','Escape',27],['Tab','Tab',9],['↑','ArrowUp',38],['↓','ArrowDown',40],['←','ArrowLeft',37],['→','ArrowRight',39],['Ctrl-C','c',67],['Enter','Enter',13]].map(([name,key,keyCode])=><button type="button" key={name} onClick={event=>{if(!event.isTrusted)return;softKey({key:String(key),keyCode:Number(keyCode),ctrlKey:name==='Ctrl-C'||modifiers.current.ctrl,altKey:modifiers.current.alt,bubbles:true,cancelable:true});}}>{name}</button>)}</div>}
   </section>;
 }

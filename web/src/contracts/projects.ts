@@ -106,6 +106,8 @@ export interface WorktreeIntegration {
   /** The squash commit on the integration branch once verified. */
   commit: string | null;
 }
+/** Clear hold: the human's recorded decision to end an uncertain squash that inspection cannot settle. */
+export interface WorktreeIntegrationRelease { requestId: string; confirm: true }
 
 /** Align a linked task worktree's branch with the local integration branch (main, else the recorded default) in place, keeping its
  * directory, ignored environment and agents. `update` replays only the commits after the proven integrated boundary, so squashed

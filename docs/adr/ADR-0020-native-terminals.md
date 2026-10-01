@@ -21,6 +21,11 @@ Observation defaults read-only. The human approved captured-text fallback wherev
 native observation could resize workers after the tmux 3.5a probe exposed the
 all-clients-ignored sizing behavior. Do not change discovered/global options.
 Writable input uses per-connection grants under one server-wide manual-input barrier.
+The one exception is Global AI's own app-role terminal: no project, run or automated
+delivery uses it, so its input stays outside the barrier. Its input bytes are directed
+to its own pane, independently of its read-only display client, so tmux client
+navigation cannot carry that exemption into workspace terminals
+([GLOBAL-AI](../GLOBAL-AI.md#native-input-and-recovery)).
 The September 29 amendment below supersedes the earlier single-writer controls. Persist its
 manual barrier and affected whole-run checkpoint holds before input is possible.
 Release/disconnect/restart are not reconciliation or continuation. Never persist

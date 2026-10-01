@@ -36,3 +36,12 @@ export function lacksCodexNoDaemon(profile: { adapterHint: string; executable: s
 }
 /** A display hint cannot establish how a shell or wrapper passes arguments to Codex. */
 export const isDirectCodexProfile = (profile: { executable: string }): boolean => /(^|\/)codex$/.test(profile.executable);
+/** The only model and reasoning values a Global AI (A1) launch accepts. Settings saves them in the profile with this label. */
+export const GLOBAL_AI_PROFILE_LABEL = "Helper";
+/** The label saved before the Helper rename. Such a profile is still found until Settings saves it under the current label. */
+const LEGACY_GLOBAL_AI_PROFILE_LABEL = "Global AI";
+export function findGlobalAIProfile<T extends { label: string }>(profiles: T[]): T | undefined {
+  return profiles.find((p) => p.label === GLOBAL_AI_PROFILE_LABEL) ?? profiles.find((p) => p.label === LEGACY_GLOBAL_AI_PROFILE_LABEL);
+}
+export const GLOBAL_AI_MODEL = /^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$/;
+export const GLOBAL_AI_EFFORTS = ["minimal", "low", "medium", "high", "xhigh"] as const;

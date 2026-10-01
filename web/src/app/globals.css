@@ -148,6 +148,7 @@ details.advanced[open] summary { margin-bottom:12px; }
 .worktree-tab-bar > button { margin-left:auto; }
 .worktree-tab-bar [role="tab"] { background:transparent; border-color:transparent; }
 .worktree-tab-bar [role="tab"][aria-selected="true"] { background:#293b33; border-color:#537144; color:var(--accent); }
+.worktree-results { margin:0 16px; }
 .worktree-tab-panel { padding:14px 16px; min-width:0; }
 .worktree-tab-panel[hidden] { display:none; }
 /* The Branch tab: labelled groups; each group's buttons share one wrapping row, and reasons and opened forms follow it at full width. */
@@ -313,6 +314,8 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
 .toolbar { min-width:0; }
 .toolbar-note { font-size:11px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 @media(max-width:1000px) { .toolbar-note { display:none; } }
+/* Below the width that holds one top-bar row, the section tabs take their own full-width row; an overflowing top bar would make mobile browsers zoom the whole page out. */
+@media(max-width:900px) { .topbar { flex-wrap:wrap; gap:8px 12px; padding:10px 0; }.section-tabs { order:3; width:100%; margin-left:0; flex-wrap:wrap; }.section-tabs button { flex:1; padding:8px 10px; font-size:13px; } }
 .inline-link { padding:0 0 0 8px; border:0; font-size:12px; color:var(--accent); font-weight:600; }
 .pane-buttons button { padding:8px 14px; }
 .pane-disclosure { display:grid; gap:8px; border-top:1px dashed var(--line); padding-top:8px; }
@@ -370,8 +373,6 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
   .panes, .panes.focus { --output-h:clamp(340px, 52svh, 520px); }.toolbar-note { display:none; }
   .context-actions { margin-left:0; }.run-summary .summary-text { flex-basis:100%; white-space:normal; overflow-wrap:anywhere; }.run-summary .badge.warning { white-space:normal; }.row-toggles { margin-left:0; width:100%; }.pane-actions { padding:10px 12px 12px; }.baseline { flex-wrap:wrap; }.composer,.panel { padding:16px; }.command-line { flex-wrap:wrap; }.register-grid { grid-template-columns:1fr; }
   .workspace-cards { grid-template-columns:1fr; }.workspaces .section-heading { flex-wrap:wrap; }
-  /* The section tabs take their own full-width row; an overflowing top bar would make mobile browsers zoom the whole page out. */
-  .topbar { flex-wrap:wrap; gap:8px 12px; padding:10px 0; }.section-tabs { order:3; width:100%; margin-left:0; flex-wrap:wrap; }.section-tabs button { flex:1; padding:8px 10px; font-size:13px; }
   .context-bar > button { margin-left:0; }.groups li { flex-direction:column; align-items:flex-start; }.agent-actions { white-space:normal; }
   .target-row { flex-direction:column; }.target-row > button, .row-tools { align-self:flex-end; }
   .command-line input, .command-line textarea { flex-basis:calc(100% - 24px); }.command-line button { flex:1; margin-top:3px; }

@@ -33,7 +33,7 @@ async function unlock(page: Page, token = TOKEN, useFallback = true) {
     }
   }
 }
-async function openTab(page: Page, name: 'Console' | 'Projects' | 'Settings' | 'About') { await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name, exact: true }).click(); }
+async function openTab(page: Page, name: 'Console' | 'Projects' | 'Helper' | 'Settings') { await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name, exact: true }).click(); }
 async function editWorkspace(page: Page, name: string) {
   await page.getByRole('button', { name: `Project ${name}`, exact: true }).click();
   await expandWorktree(page, name); await page.getByRole('button', { name: `Open ${name}`, exact: true }).click();
@@ -224,6 +224,28 @@ test('readiness is explicit and a delivered command retains execution ownership'
   await complete(request, run.currentCommandId, 'accept_without_improvement');
   await expect(page.getByRole('region', { name: 'Who controls the agents' })).toHaveCount(0);
   await expect(ready).not.toBeChecked();
+});
+test('an unresolved squash into this checkout disables Stage relay and says where to inspect it', async ({ page }) => {
+  // The server refuses work on both checkouts of an applying or uncertain squash; Console must not offer a start it will refuse.
+  await page.route('**/api/v1/workspaces', async (route) => {
+    const data = await (await route.fetch()).json() as WorkspaceDiscovery;
+    const project = data.projects!.find((p) => p.worktrees.some((tree) => tree.path === '/demo/project'))!;
+    const identity = (root: string) => ({ root, gitDir: `${root}/.git`, indexPath: `${root}/.git/index` });
+    project.integrations = [{ status: 'uncertain', message: 'The squash commit step failed.', updatedAt: new Date().toISOString(), commit: null, input: {
+      projectId: project.id, worktreeId: 'tree-ui', requestId: crypto.randomUUID(), worktree: identity('/demo/ui'), branch: 'feature/ui', head: 'b'.repeat(40), through: 'b'.repeat(40),
+      previousCommit: null, dirty: false, targetRef: 'refs/heads/main', targetHead: MAIN.head, target: identity('/demo/project'), mergeBase: MAIN.head, commitCount: 1, commits: [],
+      tree: 'c'.repeat(40), message: 'feat: ui', commands: [], consent: 'd'.repeat(64), confirm: true } }];
+    await route.fulfill({ json: data });
+  });
+  const writes: string[] = []; page.on('request', (sent) => { if (sent.method() !== 'GET' && !observationTransport(sent.url())) writes.push(sent.url()); });
+  await unlock(page);
+  const reason = 'Squash of feature/ui into main is uncertain. Inspect it in Projects before starting work.';
+  await expect(page.locator('.notice:visible').filter({ hasText: reason })).toBeVisible();
+  const stage = page.getByRole('region', { name: 'Stage relay', exact: true });
+  await expect(stage.getByRole('status').filter({ hasText: reason }).first()).toBeVisible();
+  await expect(await readiness(page, 'Ready to send')).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Stage-relay review by Codex ↗', exact: true })).toBeDisabled();
+  expect(writes).toEqual([]);
 });
 test('history export downloads this worktree\'s runs and journal as JSON through the authorized API', async ({ page, request }) => {
   await unlock(page);

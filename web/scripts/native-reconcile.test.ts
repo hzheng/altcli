@@ -74,7 +74,9 @@ test('private tmux: a pane already exited at the grant neither breaks its snapsh
   // Launches deliberately keep exited programs visible with remain-on-exit; that must not disable keyboard grants.
   await run(['new-session', '-d', '-s', 'exited', '-c', directory, '/usr/bin/env', '/bin/sleep', '30']);
   await run(['set-window-option', '-t', 'exited', 'remain-on-exit', 'on']); await run(['respawn-pane', '-k', '-t', 'exited', '/usr/bin/true']);
-  for (let n = 0; n < 100 && !(await plane.adapter.listPanes()).some(p => p.dead); n++) await wait(20);
+  // respawn-pane can return during exec, before the exited pane has stable metadata.
+  for (let n = 0; n < 100 && (await run(['display-message', '-p', '-t', 'exited', '#{pane_dead}'])).trim() !== '1'; n++) await wait(20);
+  assert.equal((await run(['display-message', '-p', '-t', 'exited', '#{pane_dead}'])).trim(), '1');
   const m = await barrier(); held();
   assert.deepEqual(m.panes.filter(p => p.dead).map(p => [p.command, p.processes]), [['exited', []]]);
   await plane.reconcileManual(strict(m)); assert.equal(plane.authority.blocked, false);

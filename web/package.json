@@ -8,14 +8,19 @@
     "node": ">=22.18.0"
   },
   "scripts": {
+    "kb": "node scripts/build-kb.mjs",
+    "predev": "npm run kb",
     "dev": "node --experimental-strip-types server.ts --dev",
+    "prebuild": "npm run kb",
     "build": "next build",
     "start": "node --experimental-strip-types server.ts",
+    "pretypecheck": "npm run kb",
     "typecheck": "next typegen && tsc --noEmit",
     "test:terminal": "node --experimental-strip-types --test scripts/terminal-input.test.ts",
     "test:smoke": "node --experimental-strip-types --test scripts/smoke.test.ts",
     "test": "vitest run",
     "test:watch": "vitest",
+    "pree2e": "npm run kb",
     "e2e": "playwright test",
     "check": "npm run test:global-ai && npm run typecheck && npm run test:smoke && npm run test:workflow && npm test && npm run build",
     "check:e2e": "npm run check && npm run e2e",
@@ -26,6 +31,7 @@
     "test:native": "node --experimental-strip-types --test scripts/native-terminal.test.ts scripts/native-launch.test.ts scripts/native-reconcile.test.ts scripts/native-global-ai.test.ts",
     "probe:terminal:writers": "node --expose-gc --experimental-strip-types --test scripts/native-writers.test.ts",
     "probe:terminal:ws": "node scripts/terminal-websocket-probe.mjs",
+    "pretest:global-ai": "npm run kb",
     "test:global-ai": "node --experimental-strip-types --test scripts/global-ai.test.ts scripts/global-ai.integration.test.ts"
   },
   "dependencies": {

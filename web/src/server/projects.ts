@@ -646,7 +646,8 @@ export class ProjectCatalog {
     }
     return null;
   }
-  /** Read-only inspection of an uncertain squash. Unsettled writers or a dirty integration checkout retain ownership.
+  /** Read-only inspection of an uncertain squash. Unsettled writers, a dirty integration checkout or unreadable evidence retain ownership,
+   * and the record then says which, and whether the previewed commit is already on the branch.
    * A clean checkout with settled writers settles it: the previewed commit on the branch (even under later commits) completes the
    * operation; otherwise the human resolved it another way, by leaving the tip untouched or by integrating, resetting or
    * rewriting by hand, and the hold is released as failed. Nothing is retried and no Git state is changed. */
@@ -655,20 +656,46 @@ export class ProjectCatalog {
     if (!operation) throw new AppError('NOT_FOUND', 'Integration operation not found.', 404);
     if (operation.status !== 'uncertain') return operation;
     const { input } = operation; const name = input.targetRef.replace('refs/heads/', '');
+    const kept = (why: string) => this.integrationSettle(operation, 'uncertain', `Inspection kept this squash uncertain: ${why} Nothing was retried. Resolve that and Inspect again, or clear the hold yourself.`);
+    try { await guard(input.target, input.worktree); } catch (error) { return kept(messageOf(error)); }
     try {
-      await guard(input.target, input.worktree);
       await assertGitInspection(input.target.root, []);
       const state = await branchState(input.target.root);
-      if (!state.clean) return operation; // the staged squash (or other work) is still pending for the human
       const tip = (await git(['-C', input.target.root, 'rev-parse', '--verify', `${input.targetRef}^{commit}`])).trim();
       const commit = await this.integratedEventually(operation, tip);
-      if (commit) return this.integrationFinish(operation, 'integrated', `Squash verified as ${commit.slice(0, 12)}${commit === tip ? '' : `; ${name} has moved on since`}. No Git changes were made by inspection.`, commit);
+      // The staged squash (or other work) may still be pending for the human.
+      if (!state.clean) return kept(`${input.target.root} has ${state.changeCount} uncommitted change${state.changeCount === 1 ? '' : 's'}, so a pending squash cannot be told apart from other work. ${commit
+        ? `The previewed squash commit ${commit.slice(0, 12)} is already on ${name}; commit or stash those changes, or clearing the hold records it as integrated.`
+        : 'A staged squash without a commit means the commit step failed (for example a rejecting hook): commit or reset it yourself.'}`);
+      if (commit) return this.integrationSettle(operation, 'integrated', `Squash verified as ${commit.slice(0, 12)}${commit === tip ? '' : `; ${name} has moved on since`}. No Git changes were made by inspection.`, commit);
       // A verified historical commit establishes completion; releasing an unverified attempt still needs settled writers.
-      await guard(input.target, input.worktree);
-      if (tip === input.targetHead) return this.integrationFinish(operation, 'failed', 'The integration checkout is unchanged at its previous commit. Nothing was squashed; preview again if needed.');
-      return this.integrationFinish(operation, 'failed', `${name} moved from ${input.targetHead.slice(0, 12)} to ${tip.slice(0, 12)} without the previewed squash commit: it was integrated, reset or rewritten by hand. The hold is released; nothing was retried. Check removal or a new squash preview will judge the current history on its own evidence.`);
-    } catch { /* Missing evidence retains ownership. */ }
-    return operation;
+      try { await guard(input.target, input.worktree); } catch (error) { return kept(`releasing it without the previewed commit needs settled writers. ${messageOf(error)}`); }
+      if (tip === input.targetHead) return this.integrationSettle(operation, 'failed', 'The integration checkout is unchanged at its previous commit. Nothing was squashed; preview again if needed.');
+      return this.integrationSettle(operation, 'failed', `${name} moved from ${input.targetHead.slice(0, 12)} to ${tip.slice(0, 12)} without the previewed squash commit: it was integrated, reset or rewritten by hand. The hold is released; nothing was retried. Check removal or a new squash preview will judge the current history on its own evidence.`);
+    } catch (error) { return kept(`the Git evidence could not be read. ${messageOf(error)}`); }
+  }
+  /** The human's recorded decision to end an uncertain squash that inspection cannot settle. It checks no writers, cleanliness or
+   * ownership and changes no Git state. Read-only evidence still decides the record: the previewed commit on the branch's first-parent
+   * chain records the squash as integrated, a usable batch boundary; otherwise the hold is released as failed. */
+  async releaseIntegration(requestId: string): Promise<WorktreeIntegration> {
+    if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'The host has disabled Git setup and terminal input.', 403);
+    const operation = this.store.worktreeIntegrations().find((op) => op.input.requestId === requestId);
+    if (!operation) throw new AppError('NOT_FOUND', 'Integration operation not found.', 404);
+    if (operation.status !== 'uncertain') return operation;
+    const { input } = operation; const name = input.targetRef.replace('refs/heads/', '');
+    let commit: string | null = null; let unread = '';
+    try {
+      await assertGitInspection(input.target.root, []);
+      commit = await this.integratedEventually(operation, (await git(['-C', input.target.root, 'rev-parse', '--verify', `${input.targetRef}^{commit}`])).trim());
+    } catch (error) { unread = ` The Git evidence could not be read: ${messageOf(error)}`; }
+    return commit
+      ? this.integrationSettle(operation, 'integrated', `You cleared the hold. The previewed squash commit ${commit.slice(0, 12)} is on ${name}, so the squash is recorded as integrated. No Git changes were made.`, commit)
+      : this.integrationSettle(operation, 'failed', `You cleared the hold without a verified squash commit on ${name}.${unread} It is released as failed; no Git changes were made and nothing is retried. Check removal or a new squash preview judges the current history on its own evidence.`);
+  }
+  /** Writes an inspection or release result unless another request settled the squash meanwhile; that recorded result then stands. */
+  private integrationSettle(operation: WorktreeIntegration, status: WorktreeIntegration['status'], message: string, commit: string | null = operation.commit): WorktreeIntegration {
+    const current = this.store.worktreeIntegrations().find((op) => op.input.requestId === operation.input.requestId);
+    return current && current.status !== 'uncertain' ? current : this.integrationFinish(operation, status, message, commit);
   }
 
   /** This branch's earlier names on the worktree, following verified renames back from its current name. */

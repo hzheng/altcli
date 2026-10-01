@@ -45,7 +45,7 @@ function exitWatcher(pid: number): Promise<number | null> {
 export interface Attachment {
   /** The first synchronized native redraw has reached the output callback. */
   ready?: Promise<void>;
-  pid: number; write(data: Buffer): void; resize(cols: number, rows: number): void;
+  pid: number; write(data: Buffer): void | Promise<void>; resize(cols: number, rows: number): void;
   pause(): void; resume(): void; close(): Promise<void>;
   /** `size` is the effective tmux window, which other clients may also influence. */
   active(): Promise<{ paneId: string; command: string; sessionId: string; label: string; size?: string }>;
@@ -66,7 +66,7 @@ export async function inspectAttach(config: Config, identity: PaneIdentity): Pro
   return { identity, sessionId: fields[0]!, label: fields[1]! };
 }
 export async function attachTmux(config: Config, target: AttachTarget, writer: boolean, cols: number, rows: number,
-  data: (bytes: Buffer) => void, exited: () => void): Promise<Attachment> {
+  data: (bytes: Buffer) => void, exited: () => void, paneInput = false): Promise<Attachment> {
   const fresh = await inspectAttach(config, target.identity);
   if (fresh.sessionId !== target.sessionId) throw new AppError('TARGET_CHANGED', 'The target session changed.', 409);
   if (!writer) await assertObserverSize(config, target.sessionId);
@@ -77,7 +77,7 @@ export async function attachTmux(config: Config, target: AttachTarget, writer: b
     (await import('node-pty/package.json', { with: { type: 'json' } })).default.version === '1.1.0';
   const before = cleanup ? openDescriptors() : null;
   const child = spawn(config.tmuxBin, [...(config.tmuxSocket ? ['-S', config.tmuxSocket] : []), '-u', '-T', 'sync', 'attach-session', '-E', '-t', target.sessionId,
-    ...(!writer ? ['-f', 'read-only,ignore-size'] : [])], { name: 'xterm-256color', cols, rows, env: terminalEnvironment(), encoding: null });
+    ...(!writer ? ['-f', 'read-only,ignore-size'] : paneInput ? ['-f', 'read-only'] : [])], { name: 'xterm-256color', cols, rows, env: terminalEnvironment(), encoding: null });
   if (before) closeLeakedTerminals(before, child);
   const watcher = cleanup ? exitWatcher(child.pid) : Promise.resolve(null);
   let ended = false;
@@ -104,7 +104,15 @@ export async function attachTmux(config: Config, target: AttachTarget, writer: b
   await watcher; // Identified while the child runs, before anyone can close it.
   const run = terminalRunner(config);
   return {
-    ready, pid: child.pid, write: bytes => child.write(bytes), resize: (c, r) => child.resize(c, r), pause: () => child.pause(), resume: () => child.resume(),
+    ready, pid: child.pid,
+    write: bytes => {
+      if (ended) throw new AppError('TARGET_CHANGED', 'The terminal attachment ended. Reconnect before typing.', 409);
+      // Helper has no workspace hold. Send its exact bytes to its pane rather than through tmux's client key bindings:
+      // a prefix or a client switch, even within one frame, must never redirect input to a workspace session.
+      if (writer && paneInput) return run(['send-keys', '-H', '-t', target.identity.paneId, ...Array.from(bytes, b => b.toString(16).padStart(2, '0'))]).then(() => {});
+      child.write(bytes);
+    },
+    resize: (c, r) => child.resize(c, r), pause: () => child.pause(), resume: () => child.resume(),
     async close() {
       if (ended) return;
       child.kill('SIGTERM');
@@ -117,9 +125,9 @@ export async function attachTmux(config: Config, target: AttachTarget, writer: b
       if (!writer) await assertObserverSize(config, target.sessionId);
       const clients = (await run(['list-clients', '-F', '#{client_pid}\t#{session_id}\t#{pane_id}\t#{pane_current_command}\t#{window_width}x#{window_height}\t#{session_name}'])).trimEnd().split('\n');
       const current = clients.map(line => line.split('\t')).find(parts => parts[0] === String(child.pid));
-      // A writer may deliberately navigate to another session (covered by the server-wide keyboard hold); the label follows.
+      // Only a writer covered by the server-wide keyboard hold may follow deliberate session navigation.
       // A read-only observer cannot navigate, so a changed session means tmux moved it after a loss.
-      if (!current || current.length !== 6 || (!writer && current[1] !== target.sessionId)) throw new AppError('TARGET_CHANGED', 'The attached client changed sessions or exited. Reconnect as an observer.', 409);
+      if (!current || current.length !== 6 || ((!writer || paneInput) && current[1] !== target.sessionId) || (paneInput && current[2] !== target.identity.paneId)) throw new AppError('TARGET_CHANGED', 'The attached client changed sessions or panes, or exited. Reconnect as an observer.', 409);
       return { sessionId: current[1]!, paneId: current[2]!, command: current[3]!, size: current[4]!, label: current[5]! };
     },
   };

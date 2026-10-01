@@ -19,7 +19,7 @@ async function privateDirectory(path: string): Promise<void> {
   await mkdir(path, { recursive: true, mode: 0o700 });
   const st = await lstat(path);
   if (!st.isDirectory() || st.isSymbolicLink() || st.uid !== process.getuid?.() || st.mode & 0o077 || await realpath(path) !== resolve(path))
-    throw new GlobalAIError('APP_DIRECTORY', 'Global AI needs a private ordinary directory owned by this host user.');
+    throw new GlobalAIError('APP_DIRECTORY', 'Helper needs a private ordinary directory owned by this host user.');
 }
 async function privateFile(path: string, contents: string): Promise<void> {
   const temporary = `${path}.${randomUUID()}.part`;
@@ -55,9 +55,9 @@ export class NativeGlobalHost implements GlobalHost {
   async prepare(instance: GlobalAIInstance, descriptor: { endpoint: string; token: string }): Promise<void> {
     await privateDirectory(join(this.config.dataDir, 'global-ai'));
     await privateDirectory(instance.directory);
-    if (await resolveWorktree(instance.directory)) throw new GlobalAIError('APP_DIRECTORY', 'Global AI must start outside a Git worktree; choose another AltCLI data directory.');
+    if (await resolveWorktree(instance.directory)) throw new GlobalAIError('APP_DIRECTORY', 'Helper must start outside a Git worktree; choose another AltCLI data directory.');
     const script = await lstat(this.bridge);
-    if (!script.isFile() || script.isSymbolicLink()) throw new GlobalAIError('MCP_MISSING', 'The installed Global AI MCP bridge is missing.');
+    if (!script.isFile() || script.isSymbolicLink()) throw new GlobalAIError('MCP_MISSING', 'The installed Helper MCP bridge is missing.');
     await privateFile(join(instance.directory, 'AGENTS.md'), GLOBAL_ORIENTATION);
     await this.descriptor(instance, descriptor);
   }
@@ -66,12 +66,20 @@ export class NativeGlobalHost implements GlobalHost {
     await privateFile(join(instance.directory, 'connection.json'), JSON.stringify({ schema: 1, ...descriptor }) + '\n');
   }
   async inspect(instance: GlobalAIInstance) {
-    if (!instance.identity || !instance.sessionId || !instance.windowId) throw new GlobalAIError('GLOBAL_IDENTITY', 'No exact observed Global AI terminal identity.');
+    if (!instance.identity || !instance.sessionId || !instance.windowId) throw new GlobalAIError('GLOBAL_IDENTITY', 'No exact observed Helper terminal identity.');
     const run = terminalRunner(this.config), pane = await inspectPane(run, instance.identity.paneId);
     const values = (await run(['display-message', '-p', '-t', pane.identity.paneId, '#{session_id}\t#{window_id}\t#{@altcli_global_ai}'])).trimEnd().split('\t');
     if (!isDeepStrictEqual(pane.identity, instance.identity) || values.join('\t') !== [instance.sessionId, instance.windowId, instance.id].join('\t') || pane.cwd !== instance.directory)
-      throw new GlobalAIError('GLOBAL_IDENTITY', 'Global AI identity, marker or directory changed. Nothing was adopted.');
-    return { identity: pane.identity, sessionId: instance.sessionId, label: 'Global AI', dead: pane.dead };
+      throw new GlobalAIError('GLOBAL_IDENTITY', 'Helper identity, marker or directory changed. Nothing was adopted.');
+    return { identity: pane.identity, sessionId: instance.sessionId, label: 'Helper', dead: pane.dead };
+  }
+  async stop(instance: GlobalAIInstance): Promise<void> {
+    await this.inspect(instance);
+    const run = terminalRunner(this.config);
+    const panes = (await run(['list-panes', '-s', '-t', instance.sessionId!, '-F', '#{pane_id}'])).trimEnd().split('\n');
+    if (panes.length !== 1 || panes[0] !== instance.identity!.paneId)
+      throw new GlobalAIError('GLOBAL_IDENTITY', 'Helper has additional panes or windows. Inspect them before stopping its session.');
+    await run(['kill-session', '-t', instance.sessionId!]);
   }
   async capture(instance: GlobalAIInstance): Promise<string> {
     await this.inspect(instance);

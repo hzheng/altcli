@@ -1,2 +1,2 @@
-import { GlobalAI } from '@/components/GlobalAI';
-export default function GlobalAIPage() { return <GlobalAI />; }
+import { Console } from '@/components/Console';
+export default function GlobalAIPage() { return <Console initialTab="helper" />; }

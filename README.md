@@ -332,7 +332,8 @@ worktree root, integration branches, adapter, input, allowed origins) with the
 environment variable behind each value; values are read when the host starts, so a
 change means editing `web/.env.local` or the shell and restarting. Settings also
 holds this page's console preferences, such as launch profiles and staying unlocked.
-**About** explains how the console works. Paths under the host user's home directory
+**Helper** holds **Chat**, a Codex conversation with read-only app tools for this
+host's projects ([guide](docs/GLOBAL-AI.md)), with its **Session** and **Evidence**, and **Guide**, which explains the console. Paths under the host user's home directory
 are shown with a leading `~`; hover a path for its full form.
 
 Switching between tabs, agents, Parallel and Focus, Plan and

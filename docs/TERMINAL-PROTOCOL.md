@@ -68,7 +68,7 @@ target pane leaving its original session, or that session ending, closes even a
 navigated writer; nothing falls back to another session. Incompatible
 `destroy-unattached` settings refuse attach.
 
-A keyboard writer is a full tmux client, so it may deliberately navigate to another
+A workspace keyboard writer is a full tmux client, so it may deliberately navigate to another
 session. The attachment then follows: the status line shows the actual session,
 pane and command and notes the navigation. The card's agent and the Control
 target do not change, and the server-wide manual hold still covers every session.
@@ -77,7 +77,15 @@ A session reached by navigation keeps its own lifetime settings. If it uses
 destroy it, just as a desktop client leaving it would.
 
 The ⌨️ status reports the active input connection count and shared automation hold. There is
-no exclusive keyboard owner. The **Terminal / Display** toggle is the only input request,
+no exclusive keyboard owner. Global AI's own terminal is the exception to everything about the
+hold below: it requests input automatically once connected, shows no toggle, and its `acquire`
+returns `manualSession: null` without joining any manual-input period. Its display client
+is read-only; ordered input frames use `send-keys -H` with its exact original pane,
+so tmux prefixes go to Helper's CLI and cannot navigate the client into another session.
+An externally moved display client closes instead of following. Pending writes drain
+before close, and uncertain writes are never replayed. Other terminals' holds and
+in-flight automation do not block Helper input. Elsewhere, the
+**Terminal / Display** toggle is the only input request,
 including from captured-only observation. Terminal requests `acquire` with an idempotent request
 ID, exact observer generation and `expectedBootId`; Display releases that connection's writer.
 There is no first-key input field or pre-grant queue. Focus, copy/selection, history scrolling,

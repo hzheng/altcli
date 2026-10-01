@@ -236,13 +236,14 @@ URL is fetched on an image's behalf.
 ## Proposed app-wide assistant authority
 
 **Proposed future direction.** Only Global AI's A1 read increment is implemented:
-its separate loopback read capability, private descriptor and fixed scope are
-described in [GLOBAL-AI](GLOBAL-AI.md#tools-and-authority). Unattended and delegated
+its separate loopback read capability, private descriptor and host-wide read
+scope (every project on the host) are described in [GLOBAL-AI](GLOBAL-AI.md#tools-and-authority). Unattended and delegated
 authority below remain proposed.
 [ADR-0022](adr/ADR-0022-app-wide-ai-instances.md) separates user and background
 instances; [ADR-0023](adr/ADR-0023-app-tools-and-delegated-authority.md) owns their
 proposed authority. Current owner credentials, manual/launch barriers, workflow
-ownership and human approvals keep their existing meaning.
+ownership and human approvals keep their existing meaning, except that Global AI's own
+terminal, which no workspace automation uses, is outside the manual-input barrier.
 
 Authenticate app principals through transport/session identity, enforce scoped
 credentials on every tool and never give an unattended assistant the unrestricted

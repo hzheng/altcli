@@ -150,19 +150,24 @@ test('private tmux: Finish branch closes only the proven launched session by ID 
   const config = loadConfig({ ALTCLI_TOKEN: 'a'.repeat(64), ALTCLI_DATA_DIR: join(directory, 'data'), ALTCLI_TMUX_SOCKET: join(directory, 't.sock'), ALTCLI_ENABLE_AGENT_LAUNCH: 'true' });
   const run = createRunner('tmux', config.tmuxSocket), store = new Store(config.dataDir), authority = new InputAuthority(store), catalog = new ProjectCatalog(store, config);
   const launches = new LaunchService(config, store, catalog, authority, () => {}, async () => sessionNamesOf(await listPanes(run)));
-  let childPid: number | undefined;
+  let childPid: number | undefined; const children = new Set<number>();
   try {
     // A user's own session in the worktree, which Finish branch must never close.
     await run(['-f', '/dev/null', 'new-session', '-d', '-s', 'mine', '-c', task, '/bin/sleep', '300']);
     const program = join(directory, 'worker.mjs'), pidFile = join(directory, 'child-pid');
-    await writeFile(program, "import{spawn}from'node:child_process';import{writeFileSync}from'node:fs';const child=spawn(process.execPath,['-e','setTimeout(()=>{},300000)'],{detached:true,stdio:'ignore'});writeFileSync(process.argv[2],String(child.pid));child.unref();setTimeout(()=>{},300000);\n");
+    await writeFile(program, "import{spawn}from'node:child_process';import{writeFileSync}from'node:fs';const child=spawn(process.execPath,['-e','setTimeout(()=>{},300000)'],{detached:true,stdio:'ignore'});writeFileSync(process.argv[2]+'-'+process.env.TMUX_PANE,String(child.pid));child.unref();setTimeout(()=>{},300000);\n");
     const project = await catalog.add({ path: root }), tree = (await catalog.discover([], []))[0]!.worktrees.find((w) => w.path === task)!;
     const profile = (await launches.profile({ label: 'Worker', executable: process.execPath, args: [program, pidFile], adapterHint: 'manual', enabled: true }))!;
     const preview = await launches.preview({ projectId: project.id, items: [{ worktreeId: tree.id, profileId: profile.id, count: 2 }] });
     const batch = await launches.confirm({ requestId: preview.requestId, previewDigest: preview.digest, confirm: true });
     const [first, second] = batch.items as [typeof batch.items[0], typeof batch.items[0]];
     assert.deepEqual([first.sessionName, second.sessionName], ['Worker-feature-finished', 'Worker-feature-finished-2']);
-    for (let n = 0; n < 100; n++) { const value = await readFile(pidFile, 'utf8').catch(() => ''); if (value) { childPid = Number(value); break; } await wait(20); }
+    // Each instance owns its child's evidence; the second launch must not overwrite the first one's PID.
+    for (const item of batch.items) {
+      let pid: number | undefined;
+      for (let n = 0; n < 100; n++) { const value = await readFile(`${pidFile}-${item.identity!.paneId}`, 'utf8').catch(() => ''); if (value) { pid = Number(value); break; } await wait(20); }
+      assert.ok(pid); children.add(pid); if (item.id === first.id) childPid = pid;
+    }
     assert.ok(childPid);
     // A non-CLI program keeps its launch reservation until inspected; an unresolved launch refuses Finish branch.
     for (const item of batch.items) await launches.reconcile(item.id, { requestId: randomUUID(), confirmInspected: true, note: 'Fixture worker inspected on the private server.' });
@@ -186,10 +191,10 @@ test('private tmux: Finish branch closes only the proven launched session by ID 
     assert.ok((await run(['list-sessions', '-F', '#{session_name}'])).includes('mine'));
     assert.equal(done.status, 'attention', done.message); assert.deepEqual(done.sessions[0]!.survivors.map((p) => p.pid), [String(childPid)]);
     assert.ok(launches.batches().flatMap((b) => b.items).find((i) => i.id === first.id)!.closed);
-    process.kill(childPid!, 'SIGKILL'); childPid = undefined; await wait(100);
+    process.kill(childPid!, 'SIGKILL'); children.delete(childPid!); childPid = undefined; await wait(100);
     const cleared = await finish.reconcile({ requestId: done.requestId, revision: done.revision, action: 'inspect' });
     assert.equal(cleared.status, 'done', cleared.message);
-  } finally { if (childPid) try { process.kill(childPid, 'SIGKILL'); } catch { /* already gone */ } await run(['kill-server']).catch(() => {}); store.close(); await rm(directory, { recursive: true, force: true }); }
+  } finally { for (const pid of children) try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } await run(['kill-server']).catch(() => {}); store.close(); await rm(directory, { recursive: true, force: true }); }
 });
 test('private tmux: a confirmed branch rename also renames the worktree\'s app-launched session whatever its name, never the user\'s own', async () => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'altcli-rename-'))), root = join(directory, 'repo'), task = join(directory, 'ui1'); await mkdir(root);

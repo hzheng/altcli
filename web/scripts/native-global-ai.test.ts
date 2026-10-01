@@ -24,13 +24,13 @@ test('private tmux: Git-free Global AI startup is inspectable before agent recog
   await writeFile(binary, '#!/bin/sh\nprintf "Fixture startup: resolve login in the native terminal\\n"\nexec /bin/cat\n', { mode: 0o700 });
   const profile: LaunchProfile = { id: 'fixture', revision: 1, label: 'Fixture Codex', executable: binary, args: [], adapterHint: 'codex', enabled: true };
   const host = new NativeGlobalHost(config, resolve(process.cwd(), '..')), records = new Map<string, GlobalAIInstance>();
-  const reads = new AppReads({ docsRoot: resolve(process.cwd(), '..'), featureFlags: () => ({}),
+  const reads = new AppReads({ kb: { documents: [] }, featureFlags: () => ({}),
     state: async () => { throw new Error('No fixture state read expected.'); }, workspaces: async () => { throw new Error('No fixture discovery expected.'); }, run: () => undefined });
   const service = new GlobalAIService({ repository: { all: () => [...records.values()], save: i => { records.set(i.id, structuredClone(i)); } },
-    host, reads, directory: join(config.dataDir, 'global-ai'), profiles: () => [profile], roots: async () => [], enabled: () => true, launchGuard: work => work() });
+    host, reads, directory: join(config.dataDir, 'global-ai'), profiles: () => [profile], enabled: () => true, launchGuard: work => work() });
   const run = terminalRunner(config);
   try {
-    const preview = await service.preview({ profileId: 'fixture', roots: [] }, 'http://127.0.0.1:8787');
+    const preview = await service.preview({ profileId: 'fixture' }, 'http://127.0.0.1:8787');
     const result = await service.start({ id: preview.id, digest: preview.digest, requestId: preview.id, confirm: true });
     assert.equal(result.instance!.status, 'started', result.instance!.message);
     const instance = result.instance!, pane = await host.inspect(instance);
@@ -44,5 +44,15 @@ test('private tmux: Git-free Global AI startup is inspectable before agent recog
     // Retiring tool authority is metadata-only; native inspection still finds the original process.
     await service.retire({ instanceId: instance.id, confirm: true });
     assert.equal((await host.inspect(instance)).dead, false);
+    // Restart: a second conversation starts after retirement, and stopping it ends exactly its own session.
+    const again = await service.preview({ profileId: 'fixture' }, 'http://127.0.0.1:8787');
+    const second = (await service.start({ id: again.id, digest: again.digest, requestId: again.id, confirm: true })).instance!;
+    assert.equal(second.status, 'started', second.message);
+    const extra = (await run(['new-window', '-d', '-P', '-F', '#{window_id}', '-t', second.sessionId!, '/bin/sleep', '300'])).trim();
+    await assert.rejects(service.retire({ instanceId: second.id, confirm: true, stop: true }), { code: 'GLOBAL_IDENTITY', message: /additional panes or windows/ });
+    assert.equal(records.get(second.id)!.status, 'started'); assert.equal((await host.inspect(second)).dead, false);
+    await run(['kill-window', '-t', extra]);
+    await service.retire({ instanceId: second.id, confirm: true, stop: true });
+    await assert.rejects(host.inspect(second)); assert.equal((await host.inspect(instance)).dead, false);
   } finally { await run(['kill-server']).catch(() => {}); await rm(directory, { recursive: true, force: true }); }
 });

@@ -817,6 +817,44 @@ test('restart or a failed verification keeps a squash uncertain; read-only inspe
   assert.equal(git(root, 'rev-parse', 'HEAD^'), preview.targetHead);
   assert.equal((await catalog.discover([], []))[0]!.integrations!.length, 2); assert.equal(projectId, (await catalog.discover([], []))[0]!.id);
 });
+test('inspection says why it keeps a squash uncertain; Clear hold records the verified commit without gates or Git changes', async () => {
+  const { target } = await taskFixture();
+  const preview = await catalog.previewIntegration(target);
+  const verify = catalog['integratedExactly'].bind(catalog); catalog['integratedExactly'] = async () => null;
+  assert.equal((await catalog.integrate(confirmSquash(preview), noGuard)).status, 'uncertain'); catalog['integratedExactly'] = verify;
+  const squash = git(root, 'rev-parse', 'HEAD');
+  // Later, unrelated work is staged on main: inspection cannot settle the squash and says so, naming the commit it found.
+  writeFileSync(join(root, 'later.txt'), 'new work\n'); git(root, 'add', 'later.txt');
+  const dirty = await catalog.reconcileIntegration(preview.requestId, noGuard);
+  assert.equal(dirty.status, 'uncertain'); assert.match(dirty.message, /1 uncommitted change,/); assert.match(dirty.message, new RegExp(`commit ${squash.slice(0, 12)} is already on main`));
+  const writers = await catalog.reconcileIntegration(preview.requestId, async () => { throw new Error('Agents are still working.'); });
+  assert.equal(writers.status, 'uncertain'); assert.match(writers.message, /^Inspection kept this squash uncertain: Agents are still working\./);
+  assert.throws(() => catalog.assertWorktreeReady(root), /squash integration/);
+  await assert.rejects(new ProjectCatalog(store, { ...config, inputEnabled: false }).releaseIntegration(preview.requestId), /disabled/);
+  const cleared = await catalog.releaseIntegration(preview.requestId);
+  assert.equal(cleared.status, 'integrated'); assert.equal(cleared.commit, squash); assert.match(cleared.message, /^You cleared the hold\./);
+  catalog.assertWorktreeReady(root); assert.equal(git(root, 'rev-parse', 'HEAD'), squash); assert.equal(git(root, 'status', '--porcelain'), 'A  later.txt');
+  // A settled record stands against a later clear or inspection.
+  assert.deepEqual(await catalog.releaseIntegration(preview.requestId), cleared);
+  assert.deepEqual(await catalog.reconcileIntegration(preview.requestId, noGuard), cleared);
+});
+test('Clear hold without the previewed commit releases a squash as failed and leaves its staged squash to the human', async () => {
+  const { target } = await taskFixture(); const mainHead = git(root, 'rev-parse', 'HEAD');
+  const hooks = join(directory, 'hooks'); mkdirSync(hooks); writeFileSync(join(hooks, 'commit-msg'), '#!/bin/sh\nexit 1\n'); chmodSync(join(hooks, 'commit-msg'), 0o755);
+  git(root, 'config', 'core.hooksPath', hooks);
+  const preview = await catalog.previewIntegration(target);
+  assert.equal((await catalog.integrate(confirmSquash(preview), noGuard)).status, 'uncertain');
+  const staged = git(root, 'status', '--porcelain');
+  assert.match((await catalog.reconcileIntegration(preview.requestId, noGuard)).message, /staged squash without a commit means the commit step failed/);
+  // An inspection racing the clear cannot turn the released record back into an uncertain one.
+  let resume!: () => void; const paused = new Promise<void>((resolve) => { resume = resolve; });
+  const racing = catalog.reconcileIntegration(preview.requestId, () => paused);
+  const cleared = await catalog.releaseIntegration(preview.requestId);
+  assert.equal(cleared.status, 'failed'); assert.equal(cleared.commit, null); assert.match(cleared.message, /without a verified squash commit on main/);
+  resume(); assert.deepEqual(await racing, cleared);
+  assert.equal(git(root, 'rev-parse', 'HEAD'), mainHead); assert.equal(git(root, 'status', '--porcelain'), staged); // nothing in Git changed
+  catalog.assertWorktreeReady(root);
+});
 test('discard previews the work that would be lost, requires the typed branch, archives first, then deletes the worktree and its branch', async () => {
   const { request, target } = await taskFixture(); writeFileSync(join(request.path, 'wip.txt'), 'unfinished\n');
   const preview = await catalog.previewDiscard(target);

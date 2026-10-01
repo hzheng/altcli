@@ -6,23 +6,21 @@ import { fields, GlobalAIError, text } from './reads.ts';
 
 const origin = () => {
   const value = terminalHost().loopbackOrigin;
-  if (!value || terminalHost().closing) throw new GlobalAIError('HOST_UNAVAILABLE', 'Start AltCLI with its custom Node host before using Global AI.');
+  if (!value || terminalHost().closing) throw new GlobalAIError('HOST_UNAVAILABLE', 'Start AltCLI with its custom Node host before using Helper.');
   return value;
 };
 export async function globalOwner(request: Request): Promise<Response> {
   return endpoint(request, async () => {
     try {
       const plane = controller(), service = plane.globalAI;
-      if (!service) throw new GlobalAIError('RESTART_REQUIRED', 'Restart the host to load Global AI without replacing the live dispatcher.');
+      if (!service) throw new GlobalAIError('RESTART_REQUIRED', 'Restart the host to load Helper without replacing the live dispatcher.');
       if (request.method === 'GET') {
         const view = await service.view();
         const fallback = view.instance && view.nativeState !== 'unavailable' && view.nativeState !== 'unverified'
           ? await service.services.host.capture(view.instance).catch(() => 'Capture unavailable; inspect the original terminal.') : '';
-        const roots = await service.services.roots();
-        return { ...view, profiles: plane.launches.profiles(), roots: roots.slice(0, 128), rootsTruncated: roots.length > 128,
-          fallback, capturedAt: new Date().toISOString(), manualHeld: plane.authority.blocked };
+        return { ...view, profiles: service.launchableProfiles(), fallback, capturedAt: new Date().toISOString(), manualHeld: plane.authority.blocked };
       }
-      const value = await jsonBody(request), base = fields(value, ['action', 'profileId', 'roots', 'id', 'digest', 'requestId', 'confirm', 'instanceId', 'name', 'arguments']);
+      const value = await jsonBody(request), base = fields(value, ['action', 'profileId', 'id', 'digest', 'requestId', 'confirm', 'instanceId', 'stop', 'name', 'arguments']);
       const { action, ...body } = base;
       switch (action) {
         case 'preview': return service.preview(body, origin());
@@ -31,7 +29,7 @@ export async function globalOwner(request: Request): Promise<Response> {
         case 'retire': return service.retire(body);
         case 'revoke': fields(body, []); service.revoke(); return { ok: true };
         case 'read': return service.ownerRead(body);
-        default: throw new GlobalAIError('INVALID_ACTION', 'Unknown Global AI operation.', 400);
+        default: throw new GlobalAIError('INVALID_ACTION', 'Unknown Helper operation.', 400);
       }
     } catch (e) {
       if (e instanceof GlobalAIError) throw new AppError(e.code, e.message, e.status);

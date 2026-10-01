@@ -85,7 +85,9 @@ export function Workspaces(props: Props) {
         const selected = (directoryRoot ?? selectedRoot) === tree.path;
         const name = !tree.main && tree.branch ? tree.branch : nameOf(tree.path);
         const title = tree.branch ?? `${name} · detached HEAD`;
-        const expanded = expandedWorktrees[tree.id] ?? false;
+        // An unresolved squash of this task branch is shown and inspected in this card, which starts open until toggled.
+        const squash = project.integrations?.find((op) => op.input.worktree.root === tree.path && ['applying', 'uncertain'].includes(op.status));
+        const expanded = expandedWorktrees[tree.id] ?? !!squash;
         const tab = worktreeTabs[tree.id]?.tab ?? 'agents';
         const viewEpoch = (props.viewEpoch ?? 0) + (worktreeTabs[tree.id]?.revision ?? 0);
         const setExpanded = (next: boolean) => setExpandedWorktrees(previous => previous[tree.id] === next ? previous : { ...previous, [tree.id]: next });
@@ -95,7 +97,9 @@ export function Workspaces(props: Props) {
           metadata={<>
           <span className="mono cwd" title={tree.path}>{tilde(tree.path)}</span>
           {(tree.error || run || !agents.length) && <span className="muted">{tree.error ? tilde(tree.error) : (run ? `${run.implementation ? 'Implementation' : run.planning ? 'Plan' : run.standalone ? 'Send' : 'Stage relay'} · ${run.status}` : 'No agents · start coding CLIs here, then Recheck')}</span>}
+          {squash && <span>Squash into {squash.input.targetRef.replace('refs/heads/', '')} {squash.status}</span>}
           </>}
+          results={squash && <LifecycleResults project={project} tree={tree} token={props.token} onChanged={props.onChanged} viewEpoch={viewEpoch} />}
           openConsole={<button type="button" className="quiet" aria-pressed={selected} aria-label={`Open ${name}`} onClick={() => {
             setDirectoryRoot(tree.path);
             if (workspace) onSelectWorkspace(workspace); else onSelectWorktree(tree);
@@ -107,14 +111,16 @@ export function Workspaces(props: Props) {
           disabled={!!squashReason} disabledReason={squashReason} deletionReason={hardReason} deletionHint={detachedReason || occupied} override={props.overrideFor?.(tree.path, 'worktree') ?? null}
           onChanged={props.onChanged} viewEpoch={viewEpoch} />} />;
       })}</ul>
-      <LifecycleResults project={project} token={props.token} onChanged={props.onChanged} />
+      <LifecycleResults project={project} token={props.token} onChanged={props.onChanged} viewEpoch={props.viewEpoch} />
     </section>}
   </>;
 }
 /** Panels stay mounted so drafts and uncertain requests survive tab changes. */
-function WorktreeCard({ name, selected, expanded, onToggle, title, metadata, tab, onTab, openConsole, agents, branch }: {
+function WorktreeCard({ name, selected, expanded, onToggle, title, metadata, results, tab, onTab, openConsole, agents, branch }: {
   name: string; selected: boolean; expanded: boolean; onToggle: (open: boolean) => void;
   title: ReactNode; metadata: ReactNode; tab: WorktreeTab; onTab: (tab: WorktreeTab) => void;
+  /** Unresolved operations of this worktree, shown above both tabs. */
+  results?: ReactNode;
   openConsole: ReactNode; agents: ReactNode; branch: ReactNode;
 }) {
   const id = useId();
@@ -122,6 +128,7 @@ function WorktreeCard({ name, selected, expanded, onToggle, title, metadata, tab
     <summary className="workspace-card" aria-label={`Worktree ${name}`}>
       {title}{metadata}
     </summary>
+    {results && <div className="worktree-results">{results}</div>}
     <div className="worktree-tab-bar">
       <div role="tablist" aria-label={`Worktree ${name} sections`}>
         {(['agents', 'branch'] as const).map(value => <button key={value} type="button" role="tab" id={`${id}-${value}-tab`}

@@ -368,16 +368,16 @@ test('Lock forgets drafts and settings within the same document and revokes term
   await expect(page.getByLabel('Pause on a reviewer objection')).not.toBeChecked();
   expect(sent).toEqual(['POST /api/v1/terminals/revoke']);
 });
-test('Settings shows the effective host configuration and the console preference; About holds the general explanation', async ({ page, request }) => {
+test('Settings shows the effective host configuration and the console preference; Helper holds the general explanation', async ({ page, request }) => {
   const group = await post(request, 'groups', { name: 'Tabs', members: ['codex','claude'] });
   await openGroup(page, group);
   // Neither the deprecated toggle nor the general explanation belongs in the Console.
   await expect(page.locator('summary').filter({ hasText: /^(Advanced|How this works)$/ })).toHaveCount(0);
-  const sections = page.getByRole('navigation', { name: 'Sections' });
+  const sections = page.getByRole('navigation', { name: 'Sections', exact: true });
   await sections.getByRole('button', { name: 'Settings', exact: true }).click();
   // Console preferences is the first subtab and opens by default; Host configuration is one click away.
   const subtabs = page.getByRole('navigation', { name: 'Settings sections' });
-  await expect(subtabs.getByRole('button')).toHaveText(['Console preferences', 'Host configuration']);
+  await expect(subtabs.getByRole('button')).toHaveText(['Console preferences', 'Host configuration', 'Helper']);
   await expect(subtabs.getByRole('button', { name: 'Console preferences', exact: true })).toHaveAttribute('aria-pressed', 'true');
   const host = page.getByRole('region', { name: 'Host configuration' });
   await expect(page.getByRole('region', { name: 'Console preferences' })).toBeVisible(); await expect(host).toBeHidden();
@@ -393,9 +393,15 @@ test('Settings shows the effective host configuration and the console preference
   await subtabs.getByRole('button', { name: 'Console preferences', exact: true }).click();
   const preferences = page.getByRole('region', { name: 'Console preferences' });
   await expect(preferences.getByLabel('Staging fallback', { exact: true })).toHaveCount(0); // Stage relay is offered in Control on main, not as a preference
-  await sections.getByRole('button', { name: 'About', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'About AltCLI', exact: true })).toBeVisible();
+  await sections.getByRole('button', { name: 'Helper', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Helper', exact: true })).toBeVisible();
+  // Helper opens on Chat; the general explanation is its Guide section, whose heading keeps Control access.
+  const helper = page.getByRole('navigation', { name: 'Helper sections' });
+  await expect(helper.getByRole('button')).toHaveText(['Chat', 'Session', 'Evidence', 'Guide']);
+  await expect(helper.getByRole('button', { name: 'Chat', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await helper.getByRole('button', { name: 'Guide', exact: true }).click();
   await expect(page.getByRole('region', { name: 'How this works' })).toContainText('No effect in this page sends commands');
+  await expect(page.locator('.page-heading').getByRole('button', { name: /^Control access/ })).toBeVisible();
   await sections.getByRole('button', { name: 'Console', exact: true }).click(); await showSurface(page, 'Control');
   await expect(page.getByRole('region', { name: 'Stage relay', exact: true })).toBeVisible(); // main's default Control action
 });
@@ -637,7 +643,7 @@ test('Agents sits left of local Settings, including Stage relay, and lists this 
   await page.route('**/api/v1/config', async (route) => { const response = await route.fetch(); await route.fulfill({ json: { ...(await response.json()), homeDir: '/demo' } }); });
   await openGroup(page, group);
   const sections = page.getByRole('navigation', { name: 'Sections' });
-  await expect(sections.getByRole('button')).toHaveText(['Console', 'Projects', 'Settings', 'About']);
+  await expect(sections.getByRole('button')).toHaveText(['Console', 'Projects', 'Helper', 'Settings']);
   const path = page.locator('.context-project > .mono');
   await expect(path).toHaveText('~/project'); await expect(path).toHaveAttribute('title', '/demo/project');
   const sent = mutations(page), local = page.getByRole('region', { name: 'Implementation settings', exact: true });

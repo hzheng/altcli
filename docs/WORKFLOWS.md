@@ -436,7 +436,7 @@ app roles; they do not become extra mandatory participants in a task group.
 
 | Role | Proposed user journey |
 | --- | --- |
-| Global AI | Open a dedicated native terminal without choosing a project; select a supported profile and explicit context scope; ask for app help or cross-workspace discussion with current evidence |
+| Global AI | Open a dedicated native terminal without choosing a project; select a supported profile; A1 reads every project's AltCLI records; ask for app help or cross-workspace discussion with current evidence |
 | Background assistant | Separately enable a profile and permitted scope; useful application events produce bounded jobs; inspect compact status/activity, pause new jobs or deliberately stop the instance |
 
 The conversations, credentials and scopes remain separate. A background job must

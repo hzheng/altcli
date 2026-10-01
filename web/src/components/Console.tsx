@@ -15,6 +15,8 @@ import { HandoffProgress, RunPolicy } from './Implementation';
 import { PlanningProgress } from './PlanningProgress';
 import { PaneActions } from './PaneActions';
 import { LaunchProfiles } from './LaunchProfiles';
+import { GlobalAISettings } from './GlobalAISettings';
+import { GlobalAI, type HelperSection } from './GlobalAI';
 import { NativeTerminal, type NativeTerminalHandle } from './NativeTerminal';
 import { keyboardOwnerOf } from './KeyboardSelector';
 import { Acknowledgement, clearHolds, holdConsequences, holdKey, overrideKey, TakeControlHere, type Holds, type Override } from './Holds';
@@ -24,6 +26,7 @@ import { CheckpointControls, InteractionComposer } from './InteractionControls';
 import { RunSettingsBar, useRunSettings, type Phase } from './RunSettings';
 import { MANUAL_ACKNOWLEDGEMENT, TakeControl } from './ControlAccess';
 import { controlItems } from '../core/control-items';
+import { worktreeHolds } from '../core/worktree-holds';
 const PREFERENCE = 'altcli.autoRelay';
 const LAYOUT = 'altcli.paneLayout';
 const CONTROL_PLACEMENT = 'altcli.controlPlacement';
@@ -34,7 +37,8 @@ const STAY_UNLOCKED = 'altcli.stayUnlocked';
 const SAVED_TOKEN = 'altcli.token';
 const DEFAULT_TURN_LIMIT = 20;
 const timeOf = (iso: string) => new Date(iso).toLocaleTimeString();
-type Tab = 'console' | 'workspaces' | 'settings' | 'about';
+type Tab = 'console' | 'workspaces' | 'helper' | 'settings';
+const HELPER_SECTIONS: [HelperSection, string][] = [['chat', 'Chat'], ['session', 'Session'], ['evidence', 'Evidence'], ['guide', 'Guide']];
 /** The selected workspace card and the checkout it belongs to; the console shows the agents registered on that checkout. */
 interface WorkspaceChoice { key: string; root: string; projectId?: string }
 /** What one Take control confirmation clears, with the identities its requests are checked against. */
@@ -115,7 +119,8 @@ function Output({ text, label, memoryKey }: { text: string; label: string; memor
     place.current = { top: el.scrollTop, stick: el.scrollHeight - el.scrollTop - el.clientHeight < 8 }; memory.set(memoryKey, place.current); }}>{text}</pre>;
 }
 /** A view and command client. There is intentionally no effect that sends another turn. */
-export function Console() {
+/** `initialTab` opens a section directly, e.g. /global-ai; otherwise Console or Projects is chosen from the registered agents. */
+export function Console({ initialTab }: { initialTab?: Tab } = {}) {
   // Page memory for drafts and choices. Lock replaces it: hooks that stay mounted above the unlock form must not keep old values.
   const [memory, setMemory] = useState<PageMemory>(() => new Map());
   const [clientInstanceId] = useState(() => crypto.randomUUID());
@@ -192,7 +197,13 @@ export function Console() {
     return () => abort.abort();
   }, [token]);
   // First view: the console when agents are already named, otherwise setup. Later switches are the user's.
-  useEffect(() => { if (state && tab === null) setTab(state.sessions.length ? 'console' : 'workspaces'); }, [state, tab]);
+  useEffect(() => { if (state && tab === null) setTab(initialTab ?? (state.sessions.length ? 'console' : 'workspaces')); }, [state, tab, initialTab]);
+  // Helper opens on Chat; a section chosen earlier on this page is kept.
+  const [helperSection, setHelperSection] = useRemembered<HelperSection>('helperSection', 'chat', memory);
+  // Helper's conversation mounts on the first visit to one of its sections and then stays mounted, so its terminal and typing survive
+  // switching tabs.
+  const [globalOpened, setGlobalOpened] = useState(false);
+  useEffect(() => { if (tab === 'helper' && helperSection !== 'guide') setGlobalOpened(true); }, [tab, helperSection]);
   // Both sections stay mounted; each keeps its own page scroll across switches.
   useEffect(() => { if (tab) window.scrollTo(0, scrolls.current[tab] ?? 0); }, [tab]);
   const showTab = (next: Tab) => { if (tab) scrolls.current[tab] = window.scrollY; setTab(next); };
@@ -216,9 +227,9 @@ export function Console() {
     .sort((a, b) => Number(b.main) - Number(a.main))
     .find(tree => discovery?.workspaces.some(w => w.worktree.root === tree.path && w.agents.some(a => a.eligible || a.observable))) }));
   const worktreeOptions = [...(selectedProject?.worktrees ?? [])].sort((a, b) => Number(b.main) - Number(a.main));
-  const setupHolds = discovery?.projects?.flatMap((p) => [...p.creations.filter((op) => ['applying', 'uncertain'].includes(op.status)).map((op) => op.input.path),
-    ...[...(p.removals ?? []), ...(p.updates ?? []), ...(p.renames ?? [])].filter((op) => ['applying', 'uncertain'].includes(op.status)).map((op) => op.input.worktree.root)]) ?? [];
-  const setupHeld = !!project && setupHolds.includes(project);
+  const setupHolds = worktreeHolds(discovery?.projects ?? []);
+  const setupHold = project ? setupHolds.find((hold) => hold.root === project) : undefined;
+  const setupHeld = !!setupHold;
   const groups = state?.groups ?? [];
   const pairs = groups.map((g) => ({ ...g, sessions: g.members }));
   const pair = pairs.find((p) => p.repository === project && p.cwd === card?.cwd && p.members.length > 0);
@@ -240,7 +251,9 @@ export function Console() {
   const [phase, setPhase] = useRemembered<Phase>(`phase:${ws}`, 'implementation', memory);
   // The run/transition whose phase this workspace last followed: each transition is applied once, so a later click is never overridden.
   const [followedPhase, setFollowedPhase] = useRemembered<string | null>(`phaseFollowed:${ws}`, null, memory);
-  const [settingsTab, setSettingsTab] = useRemembered<'preferences' | 'host'>('settingsTab', 'preferences', memory);
+  const [settingsTab, setSettingsTab] = useRemembered<'preferences' | 'host' | 'global-ai'>('settingsTab', 'preferences', memory);
+  // A Global AI save remounts Launch profiles so its list shows that profile.
+  const [profilesVersion, setProfilesVersion] = useState(0);
   // Stage relay is uncommitted review on main or the default branch; Commit relay needs a task branch. The mode is view state only.
   const [relayMode, setRelayMode] = useRemembered<'stage' | 'commit'>(`relayMode:${ws}`, 'stage', memory);
   const stageEligible = !!git?.stageRelay?.eligible;
@@ -354,7 +367,7 @@ export function Console() {
     ? { key: target.agentId, label: describeTerminal(target) } : undefined, describeTerminal);
   const dispatchReason = identityBlockedReason
     || (groupInputBlock ? `${groupInputBlock.label}: ${inputBlocks.get(groupInputBlock.id)}` : '') || (stale ? 'The console is not current. Wait for it to reconnect.' : '')
-    || (setupHeld ? 'A worktree operation is applying or uncertain. Reconcile it in Projects before starting work.' : '')
+    || (setupHold?.reason ?? '')
     || (!state?.inputEnabled ? 'Read-only console: the host has disabled input.' : '')
     || (checking ? 'Wait for Recheck to finish.' : '')
     || (!!pair && !limitValid ? 'Set the Stage relay maximum automatic turns to 1–200.' : '');
@@ -416,7 +429,7 @@ export function Console() {
   function lock() {
     void api(token, 'terminals/revoke', {body:{clientInstanceId}}).catch(() => {});
     try { localStorage.removeItem(SAVED_TOKEN); } catch { /* preference only */ }
-    generation.current++; readNumber.current++; discoveryRead.current++; setToken(''); setDraftToken(''); setState(null); setDiscovery(null); setTab(null); setReady(false);
+    generation.current++; readNumber.current++; discoveryRead.current++; setToken(''); setDraftToken(''); setState(null); setDiscovery(null); setTab(null); setGlobalOpened(false); setReady(false);
     setMessage(''); setError(''); setDiscoveryError(''); setUnknownRequest(null); setResetFor(null); setConsent(''); setConfig(null); setConfigError('');
     // Lock forgets drafts and form state, including image previews; server-owned runs and any image already in use continue.
     setMemory(new Map()); scrolls.current = {}; revokePreviews(); abortUploads();
@@ -596,15 +609,16 @@ export function Console() {
       <nav className="section-tabs" aria-label="Sections">
         <button type="button" className={tab === 'console' ? 'selected' : ''} aria-pressed={tab === 'console'} onClick={() => showTab('console')}>Console</button>
         <button type="button" className={tab === 'workspaces' ? 'selected' : ''} aria-pressed={tab === 'workspaces'} onClick={() => showTab('workspaces')}>Projects</button>
-        <button type="button" className={tab === 'settings' ? 'selected' : ''} aria-pressed={tab === 'settings'} onClick={() => showTab('settings')}>Settings</button>
-        <button type="button" className={tab === 'about' ? 'selected' : ''} aria-pressed={tab === 'about'} onClick={() => showTab('about')}>About</button></nav>
+        <button type="button" className={tab === 'helper' ? 'selected' : ''} aria-pressed={tab === 'helper'} onClick={() => showTab('helper')}>Helper</button>
+        <button type="button" className={tab === 'settings' ? 'selected' : ''} aria-pressed={tab === 'settings'} onClick={() => showTab('settings')}>Settings</button></nav>
       <div className="toolbar">{state?.mode === 'mock' && <span className="muted toolbar-note">Simulated panes. No commands reach real terminals.</span>}
         <span className="badge">{state?.mode === 'mock' ? 'MOCK MODE' : 'LOCAL HOST'}</span>
         <button className="quiet" onClick={lock} disabled={busy}>Lock</button></div></header>
     {tab === 'workspaces' ? <div className="page-heading"><div><p className="eyebrow">PROJECT · WORKTREE · TASK</p><h1>Projects and agents</h1>
         <p className="muted">Choose an existing worktree or explicitly create one for a new task. Opening a console never starts work.</p></div>{headingStatus}</div>
       : tab === 'settings' ? <div className="page-heading compact"><h1>Settings</h1>{headingStatus}</div>
-      : tab === 'about' ? <div className="page-heading compact"><h1>About AltCLI</h1>{headingStatus}</div>
+      // Helper's terminal holds nothing, so outside Guide its heading leaves Control access and the input status to the other tabs.
+      : tab === 'helper' ? <div className="page-heading compact"><h1>Helper</h1>{helperSection === 'guide' ? headingStatus : <div className="heading-status">{connection}</div>}</div>
       : <div className="page-heading compact"><h1>Agent console</h1>{headingStatus}</div>}
     {error && <div className="notice error" role="alert">{tilde(error)} <button onClick={() => void refresh()}>Refresh</button></div>}
     {state && <>
@@ -686,7 +700,7 @@ export function Console() {
       {feedback}
       <Workspaces token={token} disabled={busy} discovery={discovery} discoveryError={discoveryError} onRecheck={() => recheck()}
         inputEnabled={state.inputEnabled} runs={state.runs} selectedRoot={project ?? null} onSelectWorktree={chooseWorktree}
-        launchEnabled={config?.launchEnabled === true} overrideFor={worktreeOverride} sessions={sessions} pairs={groups} lockedRepositories={[...setupHolds, ...state.runs.filter((run) => ['running','waiting','paused'].includes(run.status)).map((run) => run.repository)]}
+        launchEnabled={config?.launchEnabled === true} overrideFor={worktreeOverride} sessions={sessions} pairs={groups} lockedRepositories={[...setupHolds.map((hold) => hold.root), ...state.runs.filter((run) => ['running','waiting','paused'].includes(run.status)).map((run) => run.repository)]}
         onSelectWorkspace={chooseWorkspace} viewEpoch={viewEpoch}
         onChanged={async (notice) => { setMessage(notice); await Promise.all([refresh(), recheck()]); }} />
     </div>
@@ -716,7 +730,7 @@ export function Console() {
           <button type="button" className="quiet" onClick={() => showTab('workspaces')}>Projects →</button></span>
       </div>
       {(workspaceError || card?.gitError) && <p className="notice error" role="alert">{tilde(workspaceError || card?.gitError || '')} Recheck before starting.</p>}
-      {setupHeld && <p className="notice">This worktree operation is applying or uncertain. Inspect and reconcile its result in Projects before starting work.</p>}
+      {setupHold && <p className="notice">{setupHold.reason}</p>}
       {unknownRequest && <div className="notice error" role="alert">Request {unknownRequest} has an uncertain HTTP result. Inspect its server run and the terminal; do not resend it.
         Check the terminal; the next action’s acknowledgement, or Take control in Control access, clears this warning.</div>}
       {!!resetAgents.length && <section className="notice" aria-label="Agent identity changed">
@@ -882,11 +896,12 @@ export function Console() {
       {/* Both sections stay mounted, so switching keeps unsaved profile edits. */}
       <nav className="section-tabs settings-tabs" aria-label="Settings sections">
         <button type="button" className={settingsTab === 'preferences' ? 'selected' : ''} aria-pressed={settingsTab === 'preferences'} onClick={() => setSettingsTab('preferences')}>Console preferences</button>
-        <button type="button" className={settingsTab === 'host' ? 'selected' : ''} aria-pressed={settingsTab === 'host'} onClick={() => setSettingsTab('host')}>Host configuration</button></nav>
+        <button type="button" className={settingsTab === 'host' ? 'selected' : ''} aria-pressed={settingsTab === 'host'} onClick={() => setSettingsTab('host')}>Host configuration</button>
+        <button type="button" className={settingsTab === 'global-ai' ? 'selected' : ''} aria-pressed={settingsTab === 'global-ai'} onClick={() => setSettingsTab('global-ai')}>Helper</button></nav>
       {state && <section className="panel" aria-label="Console preferences" hidden={settingsTab !== 'preferences'}>
         <div className="section-heading"><h2>Console preferences</h2><span className="badge">THIS PAGE</span></div>
         <p className="muted">Preferences for this browser page. They never start work on their own.</p>
-        <LaunchProfiles token={token} enabled={config?.launchEnabled === true && state?.inputEnabled === true} />
+        <LaunchProfiles key={profilesVersion} token={token} enabled={config?.launchEnabled === true && state?.inputEnabled === true} />
         <label className="readiness"><input type="checkbox" aria-label="Stay unlocked on this device" checked={stayUnlocked} onChange={(e) => rememberToken(e.target.checked)} />
           Stay unlocked on this device: keep the host access token in this browser so reopening the page does not ask for it. Anyone who can use this browser profile can then open the console; the host still checks the token on every request. <strong>Lock</strong> always forgets the token.</label>
       </section>}
@@ -918,9 +933,18 @@ export function Console() {
         </tbody></table></div>}
         {!config && !configError && <p className="muted">Reading the host configuration…</p>}
       </section>
+      {/* Mounted only while shown, so each visit reads the saved profile again. */}
+      {state && settingsTab === 'global-ai' && <GlobalAISettings token={token} config={config} enabled={config?.launchEnabled === true && state.inputEnabled === true}
+        onSaved={() => setProfilesVersion(v => v + 1)} />}
     </div>
-    <div className="section-panel" hidden={tab !== 'about'}>
-      <section className="panel about" aria-label="How this works">
+    <div className="section-panel" hidden={tab !== 'helper'}>
+      <nav className="section-tabs settings-tabs" aria-label="Helper sections">
+        {HELPER_SECTIONS.map(([id, name]) => <button type="button" key={id} className={helperSection === id ? 'selected' : ''} aria-pressed={helperSection === id} onClick={() => setHelperSection(id)}>{name}</button>)}</nav>
+      <div hidden={helperSection === 'guide'}>
+        {globalOpened && <GlobalAI token={token} clientInstanceId={clientInstanceId} section={helperSection} onSection={setHelperSection}
+          onSetup={() => { showTab('settings'); setSettingsTab('global-ai'); }} />}
+      </div>
+      <section className="panel about" aria-label="How this works" hidden={helperSection !== 'guide'}>
         <div className="section-heading"><h2>How this works</h2></div>
         <p>AltCLI is a host-resident console for coding agents running in tmux panes. You can start CLIs yourself or explicitly preview and confirm profile launches when the host enables that feature. The console coordinates their turns.</p>
         <p>The Agent selector above the terminals chooses both the terminal shown and the Control pane's recipient; it starts on a working agent. In <strong>Focus</strong> it then follows whichever agent starts working, for the terminal and Control alike; in <strong>Parallel</strong> all agent controls appear side by side on wide screens and stacked on phones, with separate drafts. Selecting a card activates its readiness check and clears the previous confirmation. Outside Plan, the <strong>Terminal / Control</strong> switch shows one or the other in the same frame, and an accepted command from Control switches back to the terminals. Plan setup addresses the whole group and keeps its own section. The worktree group's <strong>Agents</strong> toggle, beside its local <strong>Settings</strong> toggle, shows agent status. Local Settings remain available in Stage relay; they configure Plan and committed work. Every action has one readiness check beside it; while something holds the checkout (a controller run, an uncertain delivery or request, manual terminal input) the check lists each consequence and the action clears those holds before it runs. <strong>Control access</strong>, at the top of every page, explains what holds work and offers Take control, typing stops and recovery; nothing there is required first. The keyboard emoji reports active input connections and the shared automation hold. Each terminal has a <strong>Terminal / Display</strong> toggle: Terminal types in that pane and stays writable when you focus another; Display only watches, and toggling again resets a failed connection. Send delivers an instruction; After send can add one handoff commit, or a commit and one review by the named peer. Current changes snapshots work as it stands, and Committed review asks this agent to review a committed range. Every action names its recipients and needs a fresh readiness confirmation.</p>

@@ -441,10 +441,15 @@ export function DiscardWorktree({ project, tree, token, disabled, disabledReason
 }
 
 /** Applying or uncertain lifecycle operations stay visible with read-only inspection until they reach a recorded result. A discard whose
- * inspection found only the branch left, at the confirmed head, also offers the confirmed finish of that same consent. */
-export function LifecycleResults({ project, token, onChanged }: { project: Project; token: string; onChanged: (notice: string) => Promise<void> }) {
+ * inspection found only the branch left, at the confirmed head, also offers the confirmed finish of that same consent. With `tree`, only
+ * the squashes of that task worktree, which its card shows; without, everything else, including a squash whose worktree is gone.
+ * An uncertain squash can also be cleared by the human's confirmed decision; hiding the view revokes that confirmation. */
+export function LifecycleResults({ project, tree, token, onChanged, viewEpoch }: { project: Project; tree?: ProjectWorktree; token: string; onChanged: (notice: string) => Promise<void>; viewEpoch?: number }) {
   const tilde = useTildify();
   const [busy, setBusy] = useState(false); const [error, setError] = useState('');
+  // The squash whose Clear hold confirmation is open.
+  const [clearing, setClearing] = useState<string | null>(null);
+  useEffect(() => { setClearing(null); }, [viewEpoch]);
   async function send(path: string, body: { requestId: string; confirm?: true }) {
     setBusy(true); setError('');
     try { const result = await api<{ message: string }>(token, path, { body }); await onChanged(result.message); }
@@ -452,6 +457,18 @@ export function LifecycleResults({ project, token, onChanged }: { project: Proje
     finally { setBusy(false); }
   }
   const pending = <T extends { status: string }>(ops: T[] | undefined) => (ops ?? []).filter((op) => ['applying', 'uncertain'].includes(op.status));
+  const squashes = pending(project.integrations).filter((op) => tree ? op.input.worktree.root === tree.path : !project.worktrees.some((t) => t.path === op.input.worktree.root))
+    .map((op) => <div className="notice" key={op.input.requestId}>
+      <strong>Squash integration {op.status}</strong><p>{tilde(op.message)}</p><p className="mono">{op.input.branch} → {tilde(op.input.target.root)}</p>
+      <button type="button" disabled={busy || op.status === 'applying'} onClick={() => void send('projects/worktrees/integration/reconcile', { requestId: op.input.requestId })}>Inspect squash result</button>
+      {op.status === 'uncertain' && clearing !== op.input.requestId && <button type="button" className="quiet" disabled={busy} onClick={() => setClearing(op.input.requestId)}>Clear hold…</button>}
+      {op.status === 'uncertain' && clearing === op.input.requestId && <div role="group" aria-label={`Clear the ${op.input.branch} squash hold`}>
+        <p>Clearing records your decision. AltCLI does not check agents or uncommitted changes, changes no Git state and retries nothing. If the previewed squash commit is on {refName(op.input.targetRef)}, the squash is recorded as integrated; otherwise the hold is released as failed, and Check removal or a new squash preview judges the history on its own evidence.</p>
+        <button type="button" className="danger" disabled={busy} onClick={() => void send('projects/worktrees/integration/release', { requestId: op.input.requestId, confirm: true }).then(() => setClearing(null))}>Clear hold</button>
+        <button type="button" className="quiet" disabled={busy} onClick={() => setClearing(null)}>Keep hold</button></div>}
+    </div>);
+  const failure = error && <p className="notice error" role="alert">{error}</p>;
+  if (tree) return <>{squashes}{failure}</>;
   return <>
     {/* A Git step can remove the worktree before its finish is settled. Keep recovery reachable without its card. */}
     {(project.finishes ?? []).filter((op) => FINISH_HOLDING.includes(op.status) && !project.worktrees.some((tree) => tree.id === op.preview.worktreeId)).map((op) =>
@@ -462,10 +479,7 @@ export function LifecycleResults({ project, token, onChanged }: { project: Proje
       <strong>Worktree removal {op.status}</strong><p>{tilde(op.message)}</p><p className="mono">{tilde(op.input.worktree.root)}</p>
       <button type="button" disabled={busy || op.status === 'applying'} onClick={() => void send('projects/worktrees/removal/reconcile', { requestId: op.input.requestId })}>Inspect removal result</button>
     </div>)}
-    {pending(project.integrations).map((op) => <div className="notice" key={op.input.requestId}>
-      <strong>Squash integration {op.status}</strong><p>{tilde(op.message)}</p><p className="mono">{op.input.branch} → {tilde(op.input.target.root)}</p>
-      <button type="button" disabled={busy || op.status === 'applying'} onClick={() => void send('projects/worktrees/integration/reconcile', { requestId: op.input.requestId })}>Inspect squash result</button>
-    </div>)}
+    {squashes}
     {pending(project.updates).map((op) => <div className="notice" key={op.input.requestId}>
       <strong>Worktree {op.input.mode ?? 'update'} {op.status}</strong><p>{tilde(op.message)}</p><p className="mono">{op.input.branch} → {refName(op.input.targetRef)} in {tilde(op.input.worktree.root)}</p>
       <button type="button" disabled={busy || op.status === 'applying'} onClick={() => void send('projects/worktrees/update/reconcile', { requestId: op.input.requestId })}>Inspect {op.input.mode ?? 'update'} result</button>
@@ -479,6 +493,6 @@ export function LifecycleResults({ project, token, onChanged }: { project: Proje
       <button type="button" disabled={busy || op.status === 'applying'} onClick={() => void send('projects/worktrees/discard/reconcile', { requestId: op.input.requestId })}>Inspect discard result</button>
       {op.status === 'uncertain' && op.branchRemains && <button type="button" className="danger" disabled={busy} onClick={() => void send('projects/worktrees/discard/finish', { requestId: op.input.requestId, confirm: true })}>Delete branch {op.input.branch} and finish discard</button>}
     </div>)}
-    {error && <p className="notice error" role="alert">{error}</p>}
+    {failure}
   </>;
 }

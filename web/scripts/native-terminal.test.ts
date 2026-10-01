@@ -119,6 +119,41 @@ test('private tmux: observer isolation, native bytes, resize, exact client ident
   } finally { await writer?.close(); await observer?.close(); await desktop?.close(); await run(['kill-server']).catch(() => {}); await rm(dir, { recursive: true, force: true }); }
 });
 
+test('private tmux: Helper bytes stay on its own pane, including tmux shortcuts and a navigated display client', async () => {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), 'altcli-helper-input-')));
+  const config = loadConfig({ ALTCLI_TOKEN: 'a'.repeat(64), ALTCLI_DATA_DIR: join(dir, 'data'), ALTCLI_TMUX_SOCKET: join(dir, 't.sock') });
+  const run = createRunner(config.tmuxBin, config.tmuxSocket);
+  let writer: Attachment | undefined;
+  try {
+    await writeFile(join(dir, 'reader.sh'), '#!/bin/sh\nstty raw -echo\nprintf "Ready\\r\\n"\nexec /bin/cat > "$1"\n');
+    for (const name of ['helper', 'project']) {
+      await run(['-f', '/dev/null', 'new-session', '-d', '-s', name, '-c', dir, '/bin/sh', join(dir, 'reader.sh'), join(dir, `${name}.bytes`)]);
+    }
+    await eventually(async () => (await inspectPane(run, '%0')).command === 'cat' && (await inspectPane(run, '%1')).command === 'cat');
+    const target = await inspectAttach(config, (await inspectPane(run, '%0')).identity);
+    writer = await attachTmux(config, target, true, 80, 24, () => {}, () => {}, true);
+    await writer.ready;
+    // Prefixes, Unicode, binary controls and bracketed paste are CLI input, never tmux client commands.
+    const bytes = Buffer.from('\x02:switch-client -t project\r\x00é次🙂\x1b[A\x03\x1b[200~line1\nline2\x1b[201~');
+    await writer.write(bytes);
+    await eventually(async () => (await readFile(join(dir, 'helper.bytes'))).length === bytes.length);
+    assert.deepEqual(await readFile(join(dir, 'helper.bytes')), bytes);
+    assert.equal((await writer.active()).sessionId, target.sessionId);
+    // Even a host-side client switch between inspection and writing cannot redirect a frame.
+    const client = (await run(['list-clients', '-F', '#{client_pid}\t#{client_name}'])).trimEnd().split('\n').map(l => l.split('\t')).find(p => p[0] === String(writer!.pid))![1]!;
+    await run(['switch-client', '-c', client, '-t', 'project']);
+    await writer.write(Buffer.from('still Helper'));
+    await eventually(async () => (await readFile(join(dir, 'helper.bytes'))).length === bytes.length + 12);
+    assert.equal((await readFile(join(dir, 'project.bytes'))).length, 0);
+    await assert.rejects(writer.active(), /changed sessions/);
+    await run(['switch-client', '-c', client, '-t', 'helper']);
+    writer.resize(70, 20);
+    await eventually(async () => (await writer!.active()).size === '70x19');
+    await writer.close();
+    await assert.rejects(async () => writer!.write(Buffer.from('after close')));
+  } finally { await writer?.close(); await run(['kill-server']).catch(() => {}); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('private tmux: an image reference reaches the pane as one bracketed paste only where the program enabled it, never with Enter', async () => {
   const dir = await realpath(await mkdtemp(join(tmpdir(), 'altcli-image-ref-')));
   const config = loadConfig({ ALTCLI_TOKEN: 'a'.repeat(64), ALTCLI_DATA_DIR: join(dir, 'data'), ALTCLI_TMUX_SOCKET: join(dir, 't.sock') });

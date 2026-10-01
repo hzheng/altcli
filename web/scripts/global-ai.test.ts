@@ -12,11 +12,13 @@ import type { GlobalAIInstance } from '../src/contracts/global-ai.ts';
 import { AppReads, APP_TOOLS, GlobalAIError } from '../src/server/global-ai/reads.ts';
 import { GlobalAIService, toolEndpoint, type GlobalHost } from '../src/server/global-ai/service.ts';
 import { codexProfileArgs } from '../src/server/global-ai/codex.ts';
+import { buildKnowledgeBase, DOCUMENTS } from './build-kb.mjs';
 // JS stdio boundary is intentionally dependency-free; it never owns the application store.
 import { createProtocol, connectionFile, main as bridgeMain } from './global-ai-mcp.mjs';
 
 const profile: LaunchProfile = { id: 'codex', revision: 1, label: 'My Codex', executable: 'codex', args: ['--no-daemon', '--model', 'test-model'], adapterHint: 'codex', enabled: true };
-function readFixture(docsRoot = '/missing') {
+const kb = { documents: [{ name: 'README.md', description: 'overview', content: 'one\nblocked example\nthree\n' }] };
+function readFixture() {
   const run = { id: 'run-a', repository: '/work/a', status: 'paused', reason: 'Manual input requires checkpoint review.',
     currentCommandId: 'command-a', updatedAt: '2026-09-30T00:00:00Z', participants: [{ id: 'coder-a', label: 'Coder A' }],
     autoContinue: true, automaticTurns: 2, turnLimit: 20,
@@ -27,7 +29,7 @@ function readFixture(docsRoot = '/missing') {
   const discovery = { workspaces: [{ cwd: '/work/a', worktree: { root: '/work/a' }, branch: 'feature/a', agents: [] },
     { cwd: '/secret', worktree: { root: '/secret' }, branch: 'private', agents: [] }], discoveredAt: run.updatedAt, error: null } as unknown as WorkspaceDiscovery;
   const services = { state: async () => state, workspaces: async () => discovery, run: (id: string) => state.runs.find(r => r.id === id),
-    featureFlags: () => ({ input: true }), docsRoot };
+    featureFlags: () => ({ input: true }), kb };
   return { reads: new AppReads(services), services, state, run };
 }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
@@ -44,14 +46,14 @@ function serviceFixture() {
       save({ phase: 'executing' }); if (fail) throw new Error('lost spawn response');
       save({ identity: { paneId: '%1', panePid: '2', serverPid: '3', serverStarted: '4', socketPath: '/socket' }, sessionId: '$1', windowId: '@1' });
     },
-    inspect: async i => ({ identity: i.identity!, sessionId: i.sessionId!, label: 'Global AI', dead: false }), capture: async () => 'native output',
+    inspect: async i => ({ identity: i.identity!, sessionId: i.sessionId!, label: 'Helper', dead: false }), capture: async () => 'native output', stop: async () => {},
   };
   const services = { repository: { all: () => [...records.values()].reverse().map(i => structuredClone(i)), save: (i: GlobalAIInstance) => { records.set(i.id, structuredClone(i)); } },
-    host, reads: fixture.reads, profiles: () => profiles, directory: '/data/global-ai', roots: async () => ['/work/a'], enabled: () => enabled,
+    host, reads: fixture.reads, profiles: () => profiles, directory: '/data/global-ai', enabled: () => enabled,
     launchGuard: async <T>(work: () => Promise<T>) => { guarded = true; try { return await work(); } finally { guarded = false; } } };
   const service = new GlobalAIService(services);
   async function start() {
-    const preview = await service.preview({ profileId: profile.id, roots: ['/work/a'] }, 'http://127.0.0.1:8787');
+    const preview = await service.preview({ profileId: profile.id }, 'http://127.0.0.1:8787');
     const input = { id: preview.id, digest: preview.digest, requestId: randomUUID(), confirm: true };
     return { preview, input, view: await service.start(input) };
   }
@@ -62,18 +64,19 @@ function serviceFixture() {
 test('all advertised tools are read-only and unknown methods/arguments are rejected', async () => {
   const { reads } = readFixture();
   assert.ok(APP_TOOLS.every(t => t.annotations.readOnlyHint && !t.annotations.destructiveHint));
-  await assert.rejects(reads.call('execute_action', {}, ['/work/a']), { code: 'TOOL_UNKNOWN' });
-  await assert.rejects(reads.call('get_capabilities', { approved: true }, []), { code: 'INVALID_INPUT' });
+  await assert.rejects(reads.call('execute_action', {}), { code: 'TOOL_UNKNOWN' });
+  await assert.rejects(reads.call('get_capabilities', { approved: true }), { code: 'INVALID_INPUT' });
 });
-test('workspace/run scope is explicit and a model cannot supply a broader scope', async () => {
+test('every project on the host is readable; unknown runs and extra arguments are refused', async () => {
   const { reads } = readFixture();
-  assert.equal(JSON.stringify((await reads.call('list_runs', {}, ['/work/a'])).data).includes('secret-run'), false);
-  assert.equal(JSON.stringify((await reads.call('list_workspaces', {}, [])).data).includes('/work/a'), false);
-  await assert.rejects(reads.call('get_run', { runId: 'secret-run' }, ['/work/a']), { code: 'SCOPE_DENIED' });
-  await assert.rejects(reads.call('get_run', { runId: 'run-a', roots: ['/secret'] }, []), { code: 'INVALID_INPUT' });
+  const runs = JSON.stringify((await reads.call('list_runs', {})).data), workspaces = JSON.stringify((await reads.call('list_workspaces', {})).data);
+  assert.ok(runs.includes('run-a') && runs.includes('secret-run')); assert.ok(workspaces.includes('/work/a') && workspaces.includes('/secret'));
+  assert.equal((await reads.call('get_run', { runId: 'secret-run' })).source, 'altcli:get_run');
+  await assert.rejects(reads.call('get_run', { runId: 'missing-run' }), { code: 'RUN_UNKNOWN' });
+  await assert.rejects(reads.call('get_run', { runId: 'run-a', roots: ['/secret'] }), { code: 'INVALID_INPUT' });
 });
 test('blocked-run evidence preserves unknown activity, exact checkpoint and unresolved manual input', async () => {
-  const result = await readFixture().reads.call('get_run', { runId: 'run-a' }, ['/work/a']);
+  const result = await readFixture().reads.call('get_run', { runId: 'run-a' });
   const data = result.data as { blockedHandoff: { backgroundState: string }; checkpoint: { revision: number }; participants: { activity: { state: string } }[]; manualInput: { heldAcrossServer: boolean } };
   assert.equal(data.blockedHandoff.backgroundState, 'unknown'); assert.equal(data.checkpoint.revision, 3);
   assert.equal(data.participants[0]!.activity.state, 'unknown'); assert.equal(data.manualInput.heldAcrossServer, true);
@@ -81,36 +84,46 @@ test('blocked-run evidence preserves unknown activity, exact checkpoint and unre
   assert.equal(JSON.stringify(result).includes('PRIVATE_RAW_PROMPT'), false);
 });
 test('event projections do not disclose wire text or command prompts', async () => {
-  const result = await readFixture().reads.call('get_recent_events', { runId: 'run-a' }, ['/work/a']);
+  const result = await readFixture().reads.call('get_recent_events', { runId: 'run-a' });
   assert.equal(JSON.stringify(result).includes('PRIVATE_RAW_PROMPT'), false);
 });
-test('docs are allowlisted, hashed and line-addressed; traversal, symlinks and oversized content fail', async () => {
+test('docs come from the packed knowledge base, hashed and line-addressed; other IDs and paths fail', async () => {
+  const { reads } = readFixture();
+  const result = await reads.call('read_doc', { document: 'README.md', startLine: 2, maxLines: 1 });
+  const data = result.data as { lines: { line: number; text: string }[]; nextLine: number; documentHash: string };
+  assert.deepEqual(data.lines, [{ line: 2, text: 'blocked example', truncated: false }]); assert.equal(data.nextLine, 3);
+  assert.match(data.documentHash, /^[a-f0-9]{64}$/);
+  assert.deepEqual(((await reads.call('get_capabilities', {})).data as { documents: unknown }).documents, { 'README.md': 'overview' });
+  assert.equal(((await reads.call('search_docs', { query: 'BLOCKED' })).data as { results: { line: number }[] }).results[0]!.line, 2);
+  await assert.rejects(reads.call('read_doc', { document: '../secrets' }), { code: 'DOCUMENT_UNKNOWN' });
+  await assert.rejects(reads.call('read_doc', { document: 'docs/SETUP.md' }), { code: 'DOCUMENT_UNKNOWN' });
+});
+test('the build packs every allowlisted document and refuses symlinked or oversized ones', async () => {
   const root = await mkdtemp(join(tmpdir(), 'global-docs-'));
   try {
-    await mkdir(join(root, 'docs')); await writeFile(join(root, 'README.md'), 'one\nblocked example\nthree\n');
-    const { reads } = readFixture(root);
-    const result = await reads.call('read_doc', { document: 'README.md', startLine: 2, maxLines: 1 }, []);
-    const data = result.data as { lines: { line: number; text: string }[]; nextLine: number; documentHash: string };
-    assert.deepEqual(data.lines, [{ line: 2, text: 'blocked example', truncated: false }]); assert.equal(data.nextLine, 3);
-    assert.match(data.documentHash, /^[a-f0-9]{64}$/);
-    await assert.rejects(reads.call('read_doc', { document: '../secrets' }, []), { code: 'DOCUMENT_UNKNOWN' });
-    await symlink('/etc/passwd', join(root, 'docs/SETUP.md'));
-    await assert.rejects(reads.call('read_doc', { document: 'docs/SETUP.md' }, []), { code: 'DOCUMENT_UNAVAILABLE' });
-    await writeFile(join(root, 'README.md'), 'x'.repeat(300000));
-    await assert.rejects(reads.call('read_doc', { document: 'README.md' }, []), { code: 'DOCUMENT_UNAVAILABLE' });
+    await mkdir(join(root, 'docs'));
+    for (const name of Object.keys(DOCUMENTS)) await writeFile(join(root, name), `${name} body\n`);
+    const packed = await buildKnowledgeBase(root);
+    assert.deepEqual(packed.documents.map(d => [d.name, d.content]), Object.keys(DOCUMENTS).map(name => [name, `${name} body\n`]));
+    await rm(join(root, 'docs/SETUP.md')); await symlink('/etc/passwd', join(root, 'docs/SETUP.md'));
+    await assert.rejects(buildKnowledgeBase(root), /docs\/SETUP\.md/);
+    await rm(join(root, 'docs/SETUP.md')); await writeFile(join(root, 'docs/SETUP.md'), 'x'.repeat(300000));
+    await assert.rejects(buildKnowledgeBase(root), /docs\/SETUP\.md/);
+    // The repository's own documents pack within the bound.
+    assert.equal((await buildKnowledgeBase(join(process.cwd(), '..'))).documents.length, Object.keys(DOCUMENTS).length);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 test('preview does not launch, and simultaneous duplicate confirmations execute once', async () => {
-  const f = serviceFixture(), p = await f.service.preview({ profileId: 'codex', roots: ['/work/a'] }, 'http://127.0.0.1:8787');
+  const f = serviceFixture(), p = await f.service.preview({ profileId: 'codex' }, 'http://127.0.0.1:8787');
   assert.equal(f.launches(), 0); assert.equal(f.records.size, 0);
   const input = { id: p.id, digest: p.digest, requestId: randomUUID(), confirm: true };
   const [a, b] = await Promise.all([f.service.start(input), f.service.start(input)]);
   assert.equal(a.instance!.id, b.instance!.id); assert.equal(f.launches(), 1);
 });
-test('changed profile and foreign roots refuse before any launch', async () => {
+test('a changed profile or a scope argument refuses before any launch', async () => {
   const f = serviceFixture();
-  await assert.rejects(f.service.preview({ profileId: 'codex', roots: ['/secret'] }, 'http://127.0.0.1:8787'), { code: 'SCOPE_CHANGED' });
-  const p = await f.service.preview({ profileId: 'codex', roots: [] }, 'http://127.0.0.1:8787'); f.profiles[0]!.revision++;
+  await assert.rejects(f.service.preview({ profileId: 'codex', roots: ['/secret'] }, 'http://127.0.0.1:8787'), { code: 'INVALID_INPUT' });
+  const p = await f.service.preview({ profileId: 'codex' }, 'http://127.0.0.1:8787'); f.profiles[0]!.revision++;
   await assert.rejects(f.service.start({ id: p.id, digest: p.digest, requestId: randomUUID(), confirm: true }), { code: 'PROFILE_CHANGED' });
   assert.equal(f.launches(), 0);
 });
@@ -120,15 +133,15 @@ test('uncertain startup is durable and repeated requests never replay', async ()
   await f.service.start(input); assert.equal(f.launches(), 1);
   await assert.rejects(f.service.start({ ...input, digest: 'different' }), { code: 'ID_CONFLICT' });
 });
-test('capability cannot perform mutations, forge an actor or read unshared state', async () => {
+test('capability cannot perform mutations or forge an actor', async () => {
   const f = serviceFixture(); await f.start(); const key = f.descriptor().token;
   const result = await f.service.tools(key, { method: 'call', name: 'get_run', arguments: { runId: 'run-a' } }); assert.ok(result);
   await assert.rejects(f.service.tools(key, { method: 'execute', name: 'get_run' }), { code: 'TOOL_METHOD' });
   await assert.rejects(f.service.tools(key, { method: 'list', actor: 'owner' }), { code: 'INVALID_INPUT' });
-  await assert.rejects(f.service.tools(key, { method: 'call', name: 'get_run', arguments: { runId: 'secret-run' } }), { code: 'SCOPE_DENIED' });
+  await assert.rejects(f.service.tools(key, { method: 'call', name: 'get_run', arguments: { runId: 'missing-run' } }), { code: 'RUN_UNKNOWN' });
   assert.throws(() => f.service.authenticate('a'.repeat(64)), { code: 'APP_ACCESS_REVOKED' });
 });
-test('revocation while a scoped read is waiting prevents its result being returned', async () => {
+test('revocation while a read is waiting prevents its result being returned', async () => {
   const f = serviceFixture(); await f.start(); const gate = deferred<WorkflowState>();
   f.fixture.services.state = () => gate.promise;
   const result = f.service.tools(f.descriptor().token, { method: 'call', name: 'list_runs', arguments: {} });
@@ -153,6 +166,22 @@ test('retiring app access preserves tmux/history and does not authorize new effe
   assert.throws(() => f.service.authenticate(key), { code: 'APP_ACCESS_REVOKED' });
   assert.equal(f.records.get(view.instance!.id)!.status, 'retired'); assert.equal(f.launches(), 1);
 });
+test('restart stops only a verified session before retiring it; a failed check stops and retires nothing', async () => {
+  const f = serviceFixture(); const { view } = await f.start(), id = view.instance!.id, key = f.descriptor().token;
+  f.host.stop = async () => { throw new Error('marker changed'); };
+  await assert.rejects(f.service.retire({ instanceId: id, confirm: true, stop: true }), { code: 'GLOBAL_IDENTITY', message: /could not be verified/ });
+  assert.equal(f.records.get(id)!.status, 'started'); assert.throws(() => f.service.authenticate(key), { code: 'APP_ACCESS_REVOKED' });
+  // A refusal before any effect names its reason; nothing was stopped.
+  f.host.stop = async () => { throw new GlobalAIError('GLOBAL_IDENTITY', 'Helper has additional panes or windows.'); };
+  await assert.rejects(f.service.retire({ instanceId: id, confirm: true, stop: true }), { code: 'GLOBAL_IDENTITY', message: /^Helper has additional panes or windows\. Nothing was stopped or retired/ });
+  assert.equal(f.records.get(id)!.status, 'started');
+  await assert.rejects(f.service.retire({ instanceId: id, confirm: true, stop: 'yes' }), { code: 'INVALID_INPUT' });
+  let stopped = 0; f.host.stop = async () => { stopped++; };
+  await f.service.retire({ instanceId: id, confirm: true, stop: true });
+  assert.equal(stopped, 1); assert.equal(f.records.get(id)!.status, 'retired');
+  // The saved profile then starts a new conversation.
+  const second = await f.start(); assert.notEqual(second.view.instance!.id, id); assert.equal(f.launches(), 2);
+});
 test('a revocation during credential renewal wins instead of re-enabling access', async () => {
   const f = serviceFixture(); const { view } = await f.start(), gate = deferred<void>(), entered = deferred<void>();
   f.host.descriptor = async () => { entered.resolve(); await gate.promise; };
@@ -162,8 +191,12 @@ test('a revocation during credential renewal wins instead of re-enabling access'
 });
 test('disabling the host refuses further reads and launches', async () => {
   const f = serviceFixture(); await f.start(); f.disable();
+  let stopped = false; f.host.stop = async () => { stopped = true; };
+  const instance = [...f.records.values()][0]!;
+  await assert.rejects(f.service.retire({ instanceId: instance.id, confirm: true, stop: true }), { code: 'GLOBAL_AI_DISABLED' });
+  assert.equal(stopped, false); assert.equal(f.records.get(instance.id)!.status, 'started');
   assert.throws(() => f.service.authenticate(f.descriptor().token), { code: 'APP_ACCESS_REVOKED' });
-  await assert.rejects(f.service.preview({ profileId: 'codex', roots: [] }, 'http://127.0.0.1:8787'), { code: 'GLOBAL_AI_DISABLED' });
+  await assert.rejects(f.service.preview({ profileId: 'codex' }, 'http://127.0.0.1:8787'), { code: 'GLOBAL_AI_DISABLED' });
 });
 test('loopback endpoint and supported Codex profile validation reject arbitrary commands/config', () => {
   assert.equal(toolEndpoint('http://127.0.0.1:9911'), 'http://127.0.0.1:9911/api/v1/global-ai/tools');
@@ -172,6 +205,12 @@ test('loopback endpoint and supported Codex profile validation reject arbitrary 
   for (const args of [['--dangerously-bypass-approvals-and-sandbox'], ['--cd', '/secret'], ['resume', '--last'], ['-c', 'mcp_servers.other.url="https://x"'], ['--model']])
     assert.throws(() => codexProfileArgs({ ...profile, args }), GlobalAIError);
   assert.throws(() => codexProfileArgs({ ...profile, executable: '/bin/sh' }), { code: 'PROFILE_UNSUPPORTED' });
+});
+test('only enabled profiles that A1 can launch are listed for selection', () => {
+  const f = serviceFixture();
+  f.profiles.push({ ...profile, id: 'wrapper', executable: '/bin/zsh', args: ['-lc', 'codex'] }, { ...profile, id: 'bypass', args: ['--dangerously-bypass-approvals-and-sandbox'] },
+    { ...profile, id: 'claude', adapterHint: 'claude', executable: 'claude', args: [] }, { ...profile, id: 'off', enabled: false });
+  assert.deepEqual(f.service.launchableProfiles().map(p => p.id), ['codex']);
 });
 test('MCP initialization, read listing, structured replies and forbidden operations are explicit', async () => {
   const calls: unknown[] = [];

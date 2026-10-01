@@ -27,7 +27,7 @@ import { assertPlanArtifacts, assertPlanBaseline, capturePlanResult, planRoot } 
 import { ProjectCatalog, type SessionRenames } from './projects.ts';
 import { installedInside } from './cli-install.ts';
 import { AgentActivityTracker } from './agent-activity.ts';
-import type { WorktreeCreateInput, WorktreeDiscardConfirm, WorktreeDiscardFinish, WorktreeDiscardInput, WorktreeIntegrateRequest, WorktreeIntegrationInput, WorktreePreviewInput, WorktreeRemovalInput, WorktreeRemoveInput, WorktreeRenameConfirm, WorktreeRenameInput, WorktreeUpdateInput, WorktreeUpdateRequest } from '../contracts/projects.ts';
+import type { WorktreeCreateInput, WorktreeDiscardConfirm, WorktreeDiscardFinish, WorktreeDiscardInput, WorktreeIntegrateRequest, WorktreeIntegrationInput, WorktreeIntegrationRelease, WorktreePreviewInput, WorktreeRemovalInput, WorktreeRemoveInput, WorktreeRenameConfirm, WorktreeRenameInput, WorktreeUpdateInput, WorktreeUpdateRequest } from '../contracts/projects.ts';
 import type { Checkpoint, CheckpointInput, InteractionInput, InteractionRecord } from '../contracts/interactions.ts';
 import type { RelayRun } from '../contracts/workflow.ts';
 import { InteractionStore } from './interaction-store.ts';
@@ -97,6 +97,7 @@ export class ControlPlane {
     this.transport.inputGuard = () => this.authority.assertAutomated();
     this.terminals = new TerminalBroker({ config: this.config, authority: this.authority,
       resolve: target => this.terminalTarget(target), begin: (input, id, generation, prior) => this.beginKeyboard(input, id, generation, prior),
+      exempt: target => this.inputExempt(target),
       reconcile: (input, handoffRequestId) => this.reconcileManual(input, handoffRequestId),
       image: (target, attach, attachmentId) => this.nativeImage(target, attach, attachmentId),
       pinImage: (descriptor, refId) => this.attachments.pin([descriptor], 'native', refId) });
@@ -134,6 +135,8 @@ export class ControlPlane {
       throw new AppError('INPUT_BUSY', 'A delivery, setup or launch is unresolved. Inspect its owner before native input or reconciliation.', 409);
     }
   }
+  /** Every workspace terminal joins the manual-input barrier; app-role subclasses may exempt their own. */
+  inputExempt(_target: TerminalTarget): boolean { return false; }
   async terminalTarget(target: TerminalTarget): Promise<AttachTarget> {
     if ('launchId' in target) return this.launches.target(target.launchId);
     const discovery = await this.workspaces();
@@ -440,6 +443,8 @@ export class ControlPlane {
     const acknowledged = this.store.worktreeIntegrations().find((op) => op.input.requestId === requestId)?.input.acknowledgeActivity === true;
     return this.projects.reconcileIntegration(requestId, (target, source) => this.integrationGuard(target, source, revision, acknowledged));
   }
+  /** Clear hold: the human's decision replaces the inspection gates; no Git state changes, so no writer or ownership check applies. */
+  releaseIntegration(input: WorktreeIntegrationRelease) { return this.projects.releaseIntegration(input.requestId); }
   async previewUpdate(input: WorktreeUpdateInput) {
     await this.workspaces();
     const preview = await this.projects.previewUpdate(input);

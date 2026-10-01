@@ -1,4 +1,4 @@
-import type { DirectoryListInput, FinishConfirm, FinishContinue, FinishInput, FinishOutcome, FinishReconcile, ProjectAddInput, WorktreeCreateInput, WorktreeDiscardConfirm, WorktreeDiscardFinish, WorktreeDiscardInput, WorktreeIntegrateRequest, WorktreeIntegrationInput, WorktreePreviewInput, WorktreeRemovalInput, WorktreeRemoveInput, WorktreeRenameConfirm, WorktreeRenameInput, WorktreeUpdateInput, WorktreeUpdateMode, WorktreeUpdateRequest } from '../contracts/projects.ts';
+import type { DirectoryListInput, FinishConfirm, FinishContinue, FinishInput, FinishOutcome, FinishReconcile, ProjectAddInput, WorktreeCreateInput, WorktreeDiscardConfirm, WorktreeDiscardFinish, WorktreeDiscardInput, WorktreeIntegrateRequest, WorktreeIntegrationInput, WorktreeIntegrationRelease, WorktreePreviewInput, WorktreeRemovalInput, WorktreeRemoveInput, WorktreeRenameConfirm, WorktreeRenameInput, WorktreeUpdateInput, WorktreeUpdateMode, WorktreeUpdateRequest } from '../contracts/projects.ts';
 import { AppError } from './errors.ts';
 import { object, requestId } from './validation.ts';
 import { sha } from './implementation-validation.ts';
@@ -28,6 +28,11 @@ export function parseWorktreeCreate(value: unknown): WorktreeCreateInput {
 }
 export function parseWorktreeReconcile(value: unknown): string {
   const body = object(value); fields(body, ['requestId']); return requestId(body.requestId);
+}
+export function parseIntegrationRelease(value: unknown): WorktreeIntegrationRelease {
+  const body = object(value); fields(body, ['requestId', 'confirm']);
+  if (body.confirm !== true) throw new AppError('CONFIRM_REQUIRED', 'Confirm clearing the squash hold.');
+  return { requestId: requestId(body.requestId), confirm: true };
 }
 
 export function parseRemovalPreview(value: unknown): WorktreeRemovalInput {

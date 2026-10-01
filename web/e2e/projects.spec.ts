@@ -1,7 +1,7 @@
 import { expect, test, type Page, type APIRequestContext } from '@playwright/test';
 import type { WorkspaceDiscovery, WorkflowState } from '../src/contracts/workflow';
 import type { ManualSession } from '../src/contracts/terminals';
-import type { DirectoryListing, FinishPreview, ProjectWorktree, TaskFinish, WorktreeCreateInput, WorktreeCreation, WorktreeDiscard, WorktreePreview } from '../src/contracts/projects';
+import type { DirectoryListing, FinishPreview, ProjectWorktree, TaskFinish, WorktreeCreateInput, WorktreeCreation, WorktreeDiscard, WorktreeIntegration, WorktreePreview } from '../src/contracts/projects';
 import { observationTransport, expandAgents, expandWorktree } from './ui';
 
 const token = 'a'.repeat(64); // test fixture only
@@ -671,6 +671,51 @@ test('an uncertain discard shows what inspection found and finishes only through
   await expect(notice(page, 'its branch is deleted after the worktree')).toBeVisible();
   await expect(page.getByText('Worktree discard uncertain', { exact: true })).toHaveCount(0);
   expect(posted).toEqual(['reconcile', 'finish']);
+});
+
+test('an uncertain squash is shown and inspected in its task worktree card; one whose worktree is gone stays in the project list', async ({ page, request }) => {
+  const inventory = await fixture(page, request); const project = inventory.projects![0]!; const main = project.worktrees[0]!;
+  const task = tree('/home/fixture/tasks/ui', 'feature/ui'); project.worktrees = [main, task];
+  const squash = (worktree: ProjectWorktree, branch: string): WorktreeIntegration => ({ status: 'uncertain', message: `The squash of ${branch} is uncertain.`, updatedAt: new Date().toISOString(), commit: null,
+    input: { projectId: project.id, worktreeId: worktree.id, requestId: crypto.randomUUID(), worktree: worktree.identity!, branch, head: 'a'.repeat(40), through: 'a'.repeat(40),
+      previousCommit: null, dirty: false, targetRef: 'refs/heads/main', targetHead: 'b'.repeat(40), target: main.identity!, mergeBase: 'b'.repeat(40), commitCount: 1, commits: [],
+      tree: 'c'.repeat(40), message: 'feat: ui', commands: [], consent: 'd'.repeat(64), confirm: true } });
+  const own = squash(task, 'feature/ui'), gone = squash(tree('/home/fixture/tasks/gone', 'feature/gone'), 'feature/gone');
+  project.integrations = [own, gone]; const inspected: string[] = [];
+  await page.route('**/api/v1/projects/worktrees/integration/reconcile', (route) => {
+    inspected.push(route.request().postDataJSON().requestId);
+    Object.assign(own, { status: 'integrated', commit: 'f'.repeat(40), message: 'Squash verified as ffffffffffff. No Git changes were made by inspection.' });
+    return route.fulfill({ json: own });
+  });
+  await page.getByRole('button', { name: 'Recheck', exact: true }).click();
+  const list = page.getByRole('list', { name: 'Available worktrees' });
+  const card = (name: string) => list.getByRole('listitem').filter({ has: page.getByLabel(`Worktree ${name}`, { exact: true }) });
+  const inspect = (scope: typeof list) => scope.getByRole('button', { name: 'Inspect squash result', exact: true });
+  // The task card opens on its own, names the squash in its summary and shows the notice above both tabs; the main card shows none.
+  await expect(page.getByLabel('Worktree feature/ui', { exact: true })).toContainText('Squash into main uncertain');
+  await expect(card('feature/ui').getByText('The squash of feature/ui is uncertain.')).toBeVisible();
+  await card('feature/ui').getByRole('tab', { name: 'Branch', exact: true }).click(); await expect(inspect(card('feature/ui'))).toBeVisible();
+  await expect(inspect(card('project'))).toHaveCount(0);
+  const outside = page.getByRole('region', { name: 'Project worktrees project', exact: true }).locator(':scope > .notice');
+  await expect(outside).toHaveCount(1); await expect(outside).toContainText('feature/gone');
+  await inspect(card('feature/ui')).click();
+  await expect(notice(page, 'Squash verified as ffffffffffff')).toBeVisible();
+  await expect(inspect(card('feature/ui'))).toHaveCount(0); await expect(page.getByLabel('Worktree feature/ui', { exact: true })).not.toContainText('Squash into main');
+  expect(inspected).toEqual([own.input.requestId]);
+  // Clear hold is a confirmed decision: opening and keeping sends nothing; confirming posts the release once.
+  const released: unknown[] = [];
+  await page.route('**/api/v1/projects/worktrees/integration/release', (route) => {
+    released.push(route.request().postDataJSON());
+    Object.assign(gone, { status: 'failed', message: 'You cleared the hold without a verified squash commit on main.' });
+    return route.fulfill({ json: gone });
+  });
+  await outside.getByRole('button', { name: 'Clear hold…', exact: true }).click();
+  const decision = page.getByRole('group', { name: 'Clear the feature/gone squash hold', exact: true });
+  await expect(decision).toContainText('changes no Git state'); await decision.getByRole('button', { name: 'Keep hold', exact: true }).click();
+  await expect(decision).toHaveCount(0); expect(released).toEqual([]);
+  await outside.getByRole('button', { name: 'Clear hold…', exact: true }).click(); await decision.getByRole('button', { name: 'Clear hold', exact: true }).click();
+  await expect(notice(page, 'You cleared the hold')).toBeVisible(); await expect(outside).toHaveCount(0);
+  expect(released).toEqual([{ requestId: gone.input.requestId, confirm: true }]);
 });
 
 test('an empty worktree keeps its setup guidance beside a shell pane, while a blocked coding CLI shows its reason', async ({ page, request }) => {

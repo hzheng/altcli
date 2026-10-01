@@ -1,7 +1,4 @@
 import { createHash } from 'node:crypto';
-import { lstat, open, realpath } from 'node:fs/promises';
-import { constants } from 'node:fs';
-import { join, sep } from 'node:path';
 import type { AppTool, ToolReply } from '../../contracts/global-ai.ts';
 import type { RelayRun, WorkflowState, WorkspaceDiscovery } from '../../contracts/workflow.ts';
 
@@ -35,64 +32,48 @@ const tool = (name: string, description: string, inputSchema: Record<string, unk
   annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } });
 export const APP_TOOLS: AppTool[] = [
   tool('get_capabilities', 'Read supported AltCLI tools, documentation IDs and runtime feature flags. No actions are authorized.', schema({})),
-  tool('list_workspaces', 'List only workspaces explicitly shared with this Global AI conversation.', schema({})),
-  tool('list_runs', 'Read recent and active runs in the shared scope. A missing history row is not proof of completion.', schema({})),
+  tool('list_workspaces', 'List the workspaces AltCLI observes on this host, with branch and agent metadata.', schema({})),
+  tool('list_runs', 'Read recent and active runs across this host\'s projects. A missing history row is not proof of completion.', schema({})),
   tool('get_run', 'Read exact recorded blockers, current activity, checkpoint, plan and publication. Explain uncertainty; navigation hints are NOT approval.', schema({ runId: string }, ['runId'])),
-  tool('get_recent_events', 'Read bounded command/turn status for a specific shared run; no terminal transcript or raw prompt.', schema({ runId: string }, ['runId'])),
-  tool('search_docs', 'Search installed allowlisted operating documents. Results include document hashes and line references.', schema({ query: string }, ['query'])),
-  tool('read_doc', 'Read a bounded range from an installed document ID, not an arbitrary filesystem path.', schema({
+  tool('get_recent_events', 'Read bounded command/turn status for a specific run; no terminal transcript or raw prompt.', schema({ runId: string }, ['runId'])),
+  tool('search_docs', 'Search the operating documents built into this AltCLI version. Results include document hashes and line references.', schema({ query: string }, ['query'])),
+  tool('read_doc', 'Read a bounded range from a built-in document ID, not an arbitrary filesystem path.', schema({
     document: string, startLine: { type: 'integer', minimum: 1, maximum: 100000 }, maxLines: { type: 'integer', minimum: 1, maximum: 120 },
   }, ['document'])),
 ];
-export const DOCUMENTS = {
-  'README.md': 'overview and current status',
-  'docs/WORKFLOWS.md': 'operating guidance; explicitly labelled future sections may be present',
-  'docs/TERMINAL-PROTOCOL.md': 'terminal operations and current recovery contract',
-  'docs/SETUP.md': 'installed-host setup',
-  'docs/GLOBAL-AI.md': 'Global AI A1 capabilities and limitations',
-} as const;
+/** Operating documents packed at build time by scripts/build-kb.mjs; nothing is read from a checkout at runtime. */
+export interface KnowledgeBase { documents: { name: string; description: string; content: string }[] }
 export interface ReadServices {
   state(): Promise<WorkflowState>;
   workspaces(): Promise<WorkspaceDiscovery>;
   run(id: string): RelayRun | undefined;
   featureFlags(): Record<string, boolean>;
-  docsRoot: string;
+  kb: KnowledgeBase;
 }
 /** Bounded projection of the same host's read model. No SQLite connection, command execution or mutation tools. */
 export class AppReads {
   readonly services: ReadServices;
   constructor(services: ReadServices) { this.services = services; }
-  private async document(name: string): Promise<{ name: string; content: string; hash: string }> {
-    if (!Object.hasOwn(DOCUMENTS, name)) throw new GlobalAIError('DOCUMENT_UNKNOWN', 'Choose a document from get_capabilities.', 404);
-    const root = await realpath(this.services.docsRoot), path = join(root, name);
-    const info = await lstat(path);
-    if (!info.isFile() || info.isSymbolicLink() || info.size > 256 * 1024 || !(await realpath(path)).startsWith(root + sep))
-      throw new GlobalAIError('DOCUMENT_UNAVAILABLE', 'This installed document is not a bounded ordinary file.');
-    const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-    try {
-      // Bounded even if a file grows after stat. Never read arbitrary or symlinked data into model context.
-      const bytes = Buffer.alloc(256 * 1024 + 1);
-      const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
-      if (bytesRead > 256 * 1024) throw new GlobalAIError('DOCUMENT_UNAVAILABLE', 'The installed document exceeds its bound.');
-      const content = bytes.subarray(0, bytesRead).toString('utf8');
-      return { name, content, hash: hash(content) };
-    } finally { await file.close(); }
+  private document(name: string): { name: string; content: string; hash: string } {
+    const doc = this.services.kb.documents.find(d => d.name === name);
+    if (!doc) throw new GlobalAIError('DOCUMENT_UNKNOWN', 'Choose a document from get_capabilities.', 404);
+    return { name, content: doc.content, hash: hash(doc.content) };
   }
-  private scoped(run: RelayRun | undefined, roots: readonly string[]): RelayRun {
-    if (!run || !roots.includes(run.repository)) throw new GlobalAIError('SCOPE_DENIED', 'This run is unavailable in the explicitly shared scope.', 403);
+  private known(run: RelayRun | undefined): RelayRun {
+    if (!run) throw new GlobalAIError('RUN_UNKNOWN', 'No recorded run has this ID. Use list_runs.', 404);
     return run;
   }
-  async call(name: string, value: unknown, roots: readonly string[]): Promise<ToolReply> {
+  async call(name: string, value: unknown): Promise<ToolReply> {
     const definitions = APP_TOOLS.find(t => t.name === name);
     if (!definitions) throw new GlobalAIError('TOOL_UNKNOWN', 'Only the listed read-only tools are supported.', 404);
     const args = fields(value, Object.keys(definitions.inputSchema.properties as object));
     let data: unknown;
     if (name === 'get_capabilities') {
       data = { product: 'AltCLI', contract: 'global-ai-read-v1', flags: this.services.featureFlags(), tools: APP_TOOLS.map(t => t.name),
-        documents: DOCUMENTS, effects: false, backgroundAssistant: false, model: 'unknown',
+        documents: Object.fromEntries(this.services.kb.documents.map(d => [d.name, d.description])), effects: false, backgroundAssistant: false, model: 'unknown',
         authority: 'Read-only AltCLI tools. Native CLI permissions and provider billing remain separate.' };
     } else if (name === 'read_doc') {
-      const doc = await this.document(text(args.document));
+      const doc = this.document(text(args.document));
       const start = integer(args.startLine, 1, 100000), count = integer(args.maxLines, 80, 120);
       const lines = doc.content.split('\n');
       const selected = lines.slice(start - 1, start - 1 + count);
@@ -100,32 +81,30 @@ export class AppReads {
         lines: selected.map((line, i) => ({ line: start + i, text: line.slice(0, 2000), truncated: line.length > 2000 })),
         nextLine: start - 1 + selected.length < lines.length ? start + selected.length : null };
     } else if (name === 'search_docs') {
-      const query = text(args.query).toLocaleLowerCase(), results: unknown[] = [], unavailable: string[] = [];
-      for (const name of Object.keys(DOCUMENTS)) {
-        try {
-          const doc = await this.document(name);
-          doc.content.split('\n').forEach((line, index) => {
-            if (results.length < 24 && line.toLocaleLowerCase().includes(query)) results.push({ document: name, documentHash: doc.hash, line: index + 1, text: line.slice(0, 1200) });
-          });
-        } catch { unavailable.push(name); }
+      const query = text(args.query).toLocaleLowerCase(), results: unknown[] = [];
+      for (const { name } of this.services.kb.documents) {
+        const doc = this.document(name);
+        doc.content.split('\n').forEach((line, index) => {
+          if (results.length < 24 && line.toLocaleLowerCase().includes(query)) results.push({ document: name, documentHash: doc.hash, line: index + 1, text: line.slice(0, 1200) });
+        });
       }
-      data = { results, unavailable, limit: 24 };
+      data = { results, limit: 24 };
     } else if (name === 'list_workspaces') {
       const discovery = await this.services.workspaces();
       data = { discoveredAt: discovery.discoveredAt, error: discovery.error,
-        workspaces: discovery.workspaces.filter(w => roots.includes(w.worktree.root)).slice(0, 32).map(w => ({
+        workspaces: discovery.workspaces.slice(0, 32).map(w => ({
           root: w.worktree.root, directory: w.cwd, branch: w.branch, gitError: w.gitError ?? null,
           agents: w.agents.filter(a => a.observable || a.eligible).map(a => ({ id: a.session?.id ?? a.registeredAs, label: a.label, kind: a.kind, reason: a.reason })),
         })) };
     } else {
       const state = await this.services.state();
       if (name === 'list_runs') {
-        const runs = state.runs.filter(r => roots.includes(r.repository));
+        const runs = state.runs;
         data = { runs: runs.slice(0, 40).map(r => ({ id: r.id, workspace: r.repository, status: r.status, reason: r.reason,
           phase: r.implementation ? 'implementation' : r.planning ? 'plan' : r.stage ? 'stage-relay' : 'instruction', updatedAt: r.updatedAt })),
-          truncated: runs.length > 40, scope: [...roots] };
+          truncated: runs.length > 40 };
       } else {
-        const run = this.scoped(this.services.run(text(args.runId)), roots);
+        const run = this.known(this.services.run(text(args.runId)));
         const execution = state.executions.find(e => e.commandId === run.currentCommandId);
         if (name === 'get_recent_events') {
           data = { runId: run.id, runUpdatedAt: run.updatedAt,

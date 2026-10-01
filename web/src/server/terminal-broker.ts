@@ -17,6 +17,8 @@ interface Connection {
   /** This connection's last few replaced generations: acknowledgments and heartbeats already in flight for them are ignored. */
   retired: string[];
   manualId: string | null; lastRenew: number; lastAck: number; lastHb: number; checking: boolean;
+  /** A writer on an exempt target: granted outside the manual-input barrier, so it has no manual record. */
+  free: boolean;
   sequence: number; acknowledged: number; sentBytes: number; acknowledgedBytes: number;
   credit: Map<number, number>; queued: Buffer[]; queuedBytes: number; paused: boolean;
   inputSeq: number; receipts: Map<number, string>; tail: Promise<unknown>; pendingBytes: number;
@@ -28,6 +30,8 @@ export interface TerminalServices {
   attach?: typeof attachTmux; // Injectable native boundary for fault/flow-control fixtures.
   resolve(target: TerminalTarget): Promise<AttachTarget>;
   begin(input: TerminalOpen, connectionId: string, generation: string, prior?: ManualSession): Promise<ManualSession>;
+  /** An app-role terminal (Global AI) that no project or run uses. Its input stays outside the server-wide manual-input barrier. */
+  exempt?(target: TerminalTarget): boolean;
   reconcile(input: ManualReconcile, handoffRequestId?: string): Promise<ManualSession>;
   /** Re-resolves the registered CLI and its directory, then returns the verified reference for one attachment in its workspace. */
   image(target: TerminalTarget, attach: AttachTarget, attachmentId: string): Promise<{ descriptor: AttachmentDescriptor; bytes: Buffer }>;
@@ -60,7 +64,7 @@ export class TerminalBroker implements TerminalGateway {
     if (this.connections.size >= L.hostConnections || [...this.connections.values()].filter(c => c.target.sessionId === target.sessionId).length >= L.sessionConnections) throw new AppError('TERMINAL_LIMIT', 'The host has reached its terminal connection limit. Close an existing terminal first.', 409);
     const id = randomUUID(), ticket = randomBytes(32).toString('hex'), now = Date.now();
     const c: Connection = { id, input, target, ticket, expires: now + L.ticketMs, generation: randomUUID(), retired: [], native: false, writer: false, closed: false,
-      manualId: null, lastRenew: now, lastAck: now, lastHb: now, checking: false, sequence: 0, acknowledged: 0, sentBytes: 0, acknowledgedBytes: 0,
+      manualId: null, free: false, lastRenew: now, lastAck: now, lastHb: now, checking: false, sequence: 0, acknowledged: 0, sentBytes: 0, acknowledgedBytes: 0,
       credit: new Map(), queued: [], queuedBytes: 0, paused: false, inputSeq: 0, receipts: new Map(), tail: Promise.resolve(), pendingBytes: 0, rateStart: now, rateBytes: 0, resizing: false, lastResize: 0 };
     this.connections.set(id, c);
     return { connectionId: id, ticket, bootId: this.authority.bootId, label: target.label, paneId: target.identity.paneId, sessionId: target.sessionId };
@@ -101,7 +105,7 @@ export class TerminalBroker implements TerminalGateway {
   private emit(c: Connection, frame: TerminalFrame) {
     if (!c.closed && c.ws?.readyState === 1) c.ws.send(JSON.stringify(frame));
   }
-  private async startAttachment(c: Connection, writer: boolean): Promise<void> {
+  private async startAttachment(c: Connection, writer: boolean, paneInput = false): Promise<void> {
     // Retire callbacks before detaching: the old PTY exits during this awaited close.
     const old = c.attachment; c.attachment = undefined; c.retired = [...c.retired, c.generation].slice(-4); c.generation = randomUUID(); await old?.close();
     if (c.closed || c.ws?.readyState !== 1) throw new AppError('TERMINAL_CHANGED', 'Terminal closed before attachment.', 409);
@@ -125,7 +129,7 @@ export class TerminalBroker implements TerminalGateway {
     const generation = c.generation;
     const attachment = await (this.services.attach ?? attachTmux)(this.services.config, target, writer, c.input.cols, c.input.rows,
       bytes => { if (c.generation === generation) this.output(c, bytes); },
-      () => { if (c.generation === generation && !c.closed) void this.close(c.id, 'Attached client exited; inspect manual input.'); });
+      () => { if (c.generation === generation && !c.closed) void this.close(c.id, 'Attached client exited; inspect manual input.'); }, paneInput);
     if (c.closed || c.generation !== generation) { await attachment.close(); return; }
     c.attachment = attachment;
     if (writer && attachment.ready) {
@@ -168,14 +172,14 @@ export class TerminalBroker implements TerminalGateway {
     if ('image' in input) return this.image(c, input);
     const bytes = Buffer.from(input.data, input.encoding === 'binary' ? 'base64' : 'utf8');
     if (bytes.length > L.inputFrame || !bytes.length || (input.encoding === 'binary' ? bytes.toString('base64') !== input.data : bytes.toString('utf8') !== input.data)) throw new AppError('TERMINAL_INPUT', 'Invalid or oversized terminal byte frame.');
-    if (!c.writer || !c.manualId || c.pendingBytes + bytes.length > 32 * 1024) throw new AppError('KEYBOARD_REQUIRED', 'This connection has no available keyboard grant.', 409);
+    if (!c.writer || !(c.manualId || c.free) || c.pendingBytes + bytes.length > 32 * 1024) throw new AppError('KEYBOARD_REQUIRED', 'This connection has no available keyboard grant.', 409);
     if (Date.now() - c.rateStart >= 1000) { c.rateStart = Date.now(); c.rateBytes = 0; }
     if (c.rateBytes + bytes.length > L.inputQueue) throw new AppError('INPUT_RATE', 'Terminal input rate exceeded. Inspect the input before continuing.', 429);
     c.rateBytes += bytes.length; c.pendingBytes += bytes.length;
     const digest = createHash('sha256').update(bytes).digest('hex');
     const work = c.tail.catch(() => {}).then(async () => {
       this.current(id, input.generation);
-      if (!c.writer || !c.manualId) throw new AppError('KEYBOARD_REVOKED', 'Keyboard authority ended.', 409);
+      if (!c.writer || !(c.manualId || c.free)) throw new AppError('KEYBOARD_REVOKED', 'Keyboard authority ended.', 409);
       if (input.seq <= c.inputSeq) {
         if (c.receipts.get(input.seq) !== digest) throw new AppError('INPUT_SEQUENCE', 'Conflicting or expired input receipt.', 409);
         return { generation: c.generation, seq: input.seq };
@@ -183,8 +187,8 @@ export class TerminalBroker implements TerminalGateway {
       if (input.seq !== c.inputSeq + 1) throw new AppError('INPUT_SEQUENCE', 'Input sequence gap. Nothing was replayed.', 409);
       await c.attachment?.active();
       if (!c.writer || c.closed || !c.attachment) throw new AppError('KEYBOARD_REVOKED', 'Keyboard authority ended before writing.', 409);
-      this.authority.markInput(c.manualId, c.id, c.generation, bytes.length);
-      try { c.attachment.write(bytes); }
+      if (c.manualId) this.authority.markInput(c.manualId, c.id, c.generation, bytes.length);
+      try { await c.attachment.write(bytes); }
       catch { void this.close(c.id, 'Input may have occurred. Inspect it; never resend.'); throw new AppError('INPUT_UNCERTAIN', 'Input may have occurred. Inspect it; never resend.', 409); }
       c.inputSeq = input.seq; c.receipts.set(input.seq, digest);
       while (c.receipts.size > 64) c.receipts.delete(c.receipts.keys().next().value!);
@@ -227,7 +231,7 @@ export class TerminalBroker implements TerminalGateway {
       c.rateBytes += prepared.bytes.length;
       this.services.pinImage(prepared.descriptor, `${c.id}:${input.generation}:${input.seq}`);
       this.authority.markInput(c.manualId, c.id, c.generation, prepared.bytes.length);
-      try { c.attachment.write(prepared.bytes); }
+      try { await c.attachment.write(prepared.bytes); }
       catch { void this.close(c.id, 'An image reference may have been inserted. Inspect it; never resend.'); throw new AppError('INPUT_UNCERTAIN', 'An image reference may have been inserted. Inspect it; never resend.', 409); }
       c.inputSeq = input.seq; c.receipts.set(input.seq, digest);
       while (c.receipts.size > 64) c.receipts.delete(c.receipts.keys().next().value!);
@@ -247,8 +251,8 @@ export class TerminalBroker implements TerminalGateway {
     } finally {c.resizing=false;}
   }
   private async endWriter(c: Connection, reason: string, observe: boolean, uncertain = false): Promise<void> {
-    await this.authority.draining(async () => {
-      c.writer = false;
+    const end = async () => {
+      c.writer = false; c.free = false;
       const wasLive = c.manualId && this.authority.get(c.manualId).writers.some(w => w.connectionId === c.id && w.live);
       if (wasLive) this.authority.release(c.manualId!, c.id, reason, uncertain);
       try {
@@ -258,7 +262,9 @@ export class TerminalBroker implements TerminalGateway {
         if (wasLive) this.authority.release(c.manualId!, c.id, `Typing stopped but attachment replacement failed. ${messageOf(error)}`, true);
         throw error;
       }
-    });
+    };
+    // Finishing Helper input is local to its pane and must not delay another terminal's keyboard grant or reconciliation.
+    if (c.free) await end(); else await this.authority.draining(end);
   }
   async keyboard(id: string, value: unknown): Promise<KeyboardResult> {
     const work = this.decisionTail.catch(() => {}).then(() => this.keyboardDecision(id, value));
@@ -269,6 +275,18 @@ export class TerminalBroker implements TerminalGateway {
     if (input.expectedBootId !== this.authority.bootId) throw new AppError('TERMINAL_CHANGED', 'The host restarted. Reconnect as an observer.', 409);
     const prior = this.authority.duplicate<KeyboardResult>(input.requestId, request); if (prior) return prior;
     const c = this.current(id, input.expectedGeneration);
+    if (input.action === 'acquire' && this.services.exempt?.(c.input.target)) {
+      // No manual record, run checkpoint or server-wide hold: deliveries, setup and launches never use this pane.
+      this.enabled(true);
+      if (c.writer) throw new AppError('KEYBOARD_HELD', 'This connection is already writable.', 409);
+      try {
+        await this.startAttachment(c, true, true); this.enabled(true); this.current(id);
+        c.writer = c.free = true; c.lastRenew = Date.now();
+        const result = { generation: c.generation, manualSession: null, writer: true, reason: 'Typing goes to this terminal. It does not hold automation.' };
+        this.emit(c, { type: 'keyboard', generation: c.generation, manualSessionId: null, writer: true, reason: result.reason });
+        this.authority.decide(input.requestId, request, result); return result;
+      } catch (error) { await this.close(c.id, 'Input setup did not settle; reconnect to type.'); throw error; }
+    }
     if (input.action === 'acquire') {
       this.enabled(true);
       return this.authority.acquire(async () => {
