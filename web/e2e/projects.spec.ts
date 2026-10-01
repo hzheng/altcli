@@ -780,6 +780,9 @@ test('worktree actions stay clickable and explain blockers without sending reque
     await squash.click(); await expect(main.getByRole('alert')).toContainText('Check “Proceed anyway” above');
     expect(writes).toEqual([]);
   }
+  // The checkbox keeps its own size inside the worktree actions, and its text starts beside it.
+  const checkBox = (await acknowledgement.getByRole('checkbox').boundingBox())!, textBox = (await acknowledgement.locator('.readiness > span').boundingBox())!;
+  expect(checkBox.width).toBeLessThan(24); expect(textBox.x - (checkBox.x + checkBox.width)).toBeLessThan(24);
   await acknowledgement.getByRole('checkbox').check(); await squash.click();
   await expect(main.getByRole('alert')).toContainText('Nothing was changed. The action was not started');
   expect(writes.map(url => new URL(url).pathname)).toEqual(['/api/v1/runs']); writes.length = 0;
