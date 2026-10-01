@@ -518,14 +518,16 @@ the published-copy refusal when history is rewritten, verification and uncertain
   block Rename; its explicit confirmation accepts the warning about concurrent Git work and the old name.
 - **Narrowed refusals.** A rename changes no file, so sparse checkout, submodules, installed hook or skill
   links and the host's own checkout are not refused. Hidden index flags and stopped Git operations are.
-- **Names that follow (September 28, 2026 user revision).** Open tmux sessions AltCLI launched in the worktree
-  whose name is still the one it gives the old branch (profile and branch, with any uniqueness number) are
-  listed in the preview's commands as `tmux rename-session` and renamed after the verified Git rename, each
-  only while it is still that launch's verified session under that name; its launch record follows. A saved
-  agent name equal to its session's old name follows it; a chosen name stays. A saved group named after the
-  old branch's last segment takes the new one, and a linked worktree's default group name comes from its
-  branch. Session renames are reported, never retried, and never make the Git rename uncertain.
-- **Unchanged.** The directory, and tmux sessions the user created or renamed by hand.
+- **Names that follow (September 28, 2026 user revision; widened September 30, 2026).** Open tmux sessions AltCLI
+  launched in the worktree take the name it gives the new branch (profile and branch, with any uniqueness number)
+  whatever branch their current name recalls, so a session left under an older name catches up; one already
+  named for the new branch keeps its name. They are listed in the preview's commands as `tmux rename-session`
+  and renamed after the verified Git rename, each only while it is still that launch's verified session under
+  its recorded name; its launch record follows. A saved agent name equal to its session's old name follows it;
+  a chosen name stays. A saved group named after the old branch's last segment takes the new one, and a linked
+  worktree's default group name comes from its branch. Session renames are reported, never retried, and never
+  make the Git rename uncertain.
+- **Unchanged.** The directory, tmux sessions the user created, and launched sessions renamed by hand in tmux.
 - **Squash batches.** Their boundaries follow verified rename records instead of the branch name alone.
 
 **Move directory.**

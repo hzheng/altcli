@@ -156,7 +156,7 @@ export interface WorktreeUpdate {
   commit: string | null;
 }
 
-/** Rename a linked task worktree's branch in place. Files and the directory are unchanged; `commands` also lists the renames of app-launched tmux sessions named after the old branch. */
+/** Rename a linked task worktree's branch in place. Files and the directory are unchanged; `commands` also lists the renames of the worktree's open app-launched tmux sessions. */
 export interface WorktreeRenameInput { projectId: string; worktreeId: string; newBranch: string }
 export interface WorktreeRenamePreview extends WorktreeRenameInput {
   requestId: string;

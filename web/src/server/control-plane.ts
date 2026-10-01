@@ -453,7 +453,7 @@ export class ControlPlane {
   async reconcileUpdate(requestId: string) {
     return this.projects.reconcileUpdate(requestId, (worktree) => this.changeGuard(worktree, 'Update'));
   }
-  private readonly sessionRenames: SessionRenames = (worktreeId, branch, newBranch) => this.launches.plannedRenames(worktreeId, branch, newBranch);
+  private readonly sessionRenames: SessionRenames = (worktreeId, newBranch) => this.launches.plannedRenames(worktreeId, newBranch);
   async previewRename(input: WorktreeRenameInput) {
     await this.workspaces();
     const preview = await this.projects.previewRename(input, this.sessionRenames);

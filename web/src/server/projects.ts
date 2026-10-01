@@ -46,8 +46,8 @@ function gitWith(args: string[], options: { input?: string; env?: Record<string,
   });
 }
 const short = (sha: string) => sha.slice(0, 12);
-/** App-launched tmux sessions named after a branch, with their names for the new branch; they follow a confirmed branch rename. */
-export type SessionRenames = (worktreeId: string, branch: string, newBranch: string) => Promise<{ from: string; to: string }[]>;
+/** A worktree's open app-launched tmux sessions, with their names for the new branch; they follow a confirmed branch rename. */
+export type SessionRenames = (worktreeId: string, newBranch: string) => Promise<{ from: string; to: string }[]>;
 const SESSION_RENAME = 'tmux rename-session -t ';
 /** What an update confirmation consents to: every pinned preview field except the per-preview request ID. */
 const updateConsent = (preview: Omit<WorktreeUpdatePreview, 'requestId' | 'consent'>) => createHash('sha256').update(JSON.stringify(canonical(preview))).digest('hex');
@@ -968,8 +968,8 @@ export class ProjectCatalog {
     if (state.branch !== tree.branch || state.head !== tree.head) throw new AppError('WORKTREE_CHANGED', 'The task worktree changed during inspection. Recheck.', 409);
     const names = this.branchNames(input.projectId, input.worktreeId, tree.branch);
     const checkpoints = this.store.worktreeIntegrations().filter((op) => op.status === 'integrated' && !op.retired && op.input.projectId === input.projectId && op.input.worktreeId === input.worktreeId && names.has(op.input.branch)).length;
-    const renames = await sessions?.(input.worktreeId, tree.branch, input.newBranch) ?? [];
-    if (renames.length > 9) throw new AppError('RENAME_SESSIONS', `${renames.length} app-launched tmux sessions are named after ${tree.branch}; close some, then preview again.`, 409);
+    const renames = await sessions?.(input.worktreeId, input.newBranch) ?? [];
+    if (renames.length > 9) throw new AppError('RENAME_SESSIONS', `${renames.length} app-launched tmux sessions in this worktree would be renamed; close some, then preview again.`, 409);
     return { ...input, requestId: randomUUID(), worktree: tree.identity, branch: tree.branch, head: tree.head, fingerprint: await worktreeFingerprint(tree.path),
       dirty: !state.clean, checkpoints, commands: [`git -C ${tree.path} branch -m ${tree.branch} ${input.newBranch}`, ...renames.map((r) => `${SESSION_RENAME}${r.from} ${r.to}`)] };
   }

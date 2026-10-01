@@ -500,14 +500,14 @@ test('Rename previews the unchanged directory and uncommitted work, and editing 
   await expect(region).toContainText('including your uncommitted changes'); await expect(region).toContainText('1 recorded squash batch carries over');
   await expect(region).toContainText('Make sure agents are not running Git commands in this branch directory.');
   await expect(region).toContainText('Running agents are not stopped and may still refer to the old branch name.');
-  await expect(region).toContainText('No tmux session AltCLI launched here is named after the old branch, so session names stay the same.');
+  await expect(region).toContainText('No open tmux session AltCLI launched here needs renaming, so session names stay the same.');
   const tabs = page.getByRole('tablist', { name: 'Worktree feature/finished sections', exact: true });
   await tabs.getByRole('tab', { name: 'Agents', exact: true }).click();
   await tabs.getByRole('tab', { name: 'Branch', exact: true }).click();
   await expect(region).toHaveCount(0); await expect(field).toHaveValue('feature/draft');
   await field.fill('feature/next'); await expect(region).toHaveCount(0); expect(posted).toEqual([]); // editing the name revokes the preview
   await page.getByRole('button', { name: 'Preview rename', exact: true }).click();
-  await expect(region).toContainText('The tmux sessions AltCLI launched here under the old branch name are renamed as listed below');
+  await expect(region).toContainText('The tmux sessions AltCLI launched here are renamed for the new branch as listed below');
   await expect(region).toContainText('tmux rename-session -t CC-feature-finished CC-feature-next');
   await page.getByRole('button', { name: 'Confirm rename', exact: true }).click();
   await expect(notice(page, 'Renamed feature/finished to feature/next.')).toBeVisible();

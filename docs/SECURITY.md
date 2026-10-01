@@ -98,7 +98,7 @@ user deletes them. Update, Rebase and Reset warn about concurrent editing and pr
 without native activity or process-evidence prerequisites. Update and Rebase leave conflicts for manual
 resolution; Reset warns about permanent loss of uncommitted tracked work. They do not stop agents.
 Confirmed **Rename** runs `git branch -m` with hooks disabled, then the previewed `tmux rename-session`
-for each still-verified session AltCLI launched there under the old branch name. Its warning advises avoiding concurrent
+for each still-verified open session AltCLI launched there, whatever branch its name recalls. Its warning advises avoiding concurrent
 Git commands and telling agents the new branch name; missing or active native/process evidence does
 not block preview or confirmation. All refuse run ownership. None fetches or pushes.
 Directory move is not implemented.

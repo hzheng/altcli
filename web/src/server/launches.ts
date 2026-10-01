@@ -8,7 +8,7 @@ import { AppError, messageOf } from '../core/errors.ts';
 import { requestId } from '../core/validation.ts';
 import { terminalFields, terminalNumber, terminalText } from '../core/terminal-validation.ts';
 import { classifyAgent } from '../core/workspaces.ts';
-import { uniqueSessionName } from '../core/session-names.ts';
+import { SESSION_NAME_LIMIT, uniqueSessionName } from '../core/session-names.ts';
 import { resolveExecutable, type Config } from './config.ts';
 import type { Store } from './store.ts';
 import type { ProjectCatalog } from './projects.ts';
@@ -181,17 +181,17 @@ export class LaunchService {
     if(!isDeepStrictEqual(pane.identity,identity)||ids.join('\t')!==[item.sessionId,item.windowId,item.id].join('\t')||pane.cwd!==item.worktree.root)throw new AppError('LAUNCH_CHANGED','The recorded launch identity, marker or directory changed. Nothing was adopted.',409);
     return pane;
   }
-  /** Read-only: open sessions this app launched in a worktree under the name it gives `branch`, with the name each takes for `newBranch`.
-   * A session renamed by hand, gone or being cleaned up keeps its name. A confirmed branch rename lists these as its tmux commands. */
-  async plannedRenames(worktreeId:string,branch:string,newBranch:string):Promise<{from:string;to:string}[]> {
+  /** Read-only: open sessions this app launched in a worktree, whatever branch their current name recalls, with the name each takes for `newBranch`.
+   * A session already named for `newBranch`, renamed by hand, gone or being cleaned up keeps its name. A confirmed branch rename lists these as its tmux commands. */
+  async plannedRenames(worktreeId:string,newBranch:string):Promise<{from:string;to:string}[]> {
     const items=this.batches().flatMap(b=>b.items).filter(i=>i.worktreeId===worktreeId&&!i.closed&&!i.cleanup&&i.sessionId&&i.identity);
     if(!items.length)return [];
     const live=await this.sessionNames(),taken=new Set([...live,...this.heldNames()]),planned:{from:string;to:string}[]=[];
     for(const item of items){
-      const base=`${slug(item.profile.label)}-${slug(branch)}`;
-      if(!live.has(item.sessionName)||(item.sessionName!==base&&!new RegExp(`^${base}-\\d+$`).test(item.sessionName)))continue;
-      const to=uniqueSessionName(`${slug(item.profile.label)}-${slug(newBranch)}`,taken);
-      if(to!==item.sessionName){taken.add(to);planned.push({from:item.sessionName,to});}
+      const base=`${slug(item.profile.label)}-${slug(newBranch)}`;
+      const suffix=Number(item.sessionName.match(new RegExp(`^${base}-([1-9]\\d*)$`))?.[1]);
+      if(!live.has(item.sessionName)||item.sessionName===base||(suffix>=2&&suffix<=SESSION_NAME_LIMIT))continue;
+      const to=uniqueSessionName(base,taken);taken.add(to);planned.push({from:item.sessionName,to});
     }
     return planned;
   }

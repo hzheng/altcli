@@ -254,7 +254,7 @@ export function AlignWorktree({ project, tree, token, disabled, disabledReason, 
   </div>;
 }
 
-/** Rename the task branch in place: files and the directory are unchanged; app-launched sessions named after the branch follow it. */
+/** Rename the task branch in place: files and the directory are unchanged; the worktree's app-launched sessions follow it. */
 export function RenameBranch({ project, tree, token, disabled, disabledReason, noticeId, onChanged, viewEpoch, proceed }: ActionProps) {
   const tilde = useTildify();
   const [editing, setEditing] = useState(false); const [newBranch, setNewBranch] = useState('');
@@ -314,7 +314,7 @@ export function RenameBranch({ project, tree, token, disabled, disabledReason, n
     </div>}
     {preview && <div className="notice" role="region" aria-label={`Rename ${name}`}>
       <p>Rename <span className="mono">{preview.branch}</span> to <span className="mono">{preview.newBranch}</span> at <span className="mono">{short(preview.head)}</span>.</p>
-      <p>The directory <span className="mono">{tilde(preview.worktree.root)}</span>, its files{preview.dirty ? ' (including your uncommitted changes, which stay exactly as they are)' : ''} and the agents stay the same. {preview.commands.length > 1 ? 'The tmux sessions AltCLI launched here under the old branch name are renamed as listed below, and agent names still showing an old session name follow them.' : 'No tmux session AltCLI launched here is named after the old branch, so session names stay the same.'}{preview.checkpoints ? ` ${preview.checkpoints} recorded squash batch${preview.checkpoints === 1 ? ' carries' : 'es carry'} over to the new name.` : ''} Nothing is pushed.</p>
+      <p>The directory <span className="mono">{tilde(preview.worktree.root)}</span>, its files{preview.dirty ? ' (including your uncommitted changes, which stay exactly as they are)' : ''} and the agents stay the same. {preview.commands.length > 1 ? 'The tmux sessions AltCLI launched here are renamed for the new branch as listed below, and agent names still showing an old session name follow them.' : 'No open tmux session AltCLI launched here needs renaming, so session names stay the same.'}{preview.checkpoints ? ` ${preview.checkpoints} recorded squash batch${preview.checkpoints === 1 ? ' carries' : 'es carry'} over to the new name.` : ''} Nothing is pushed.</p>
       <p>Make sure agents are not running Git commands in this branch directory. Running agents are not stopped and may still refer to the old branch name. Confirm if you accept this, then tell them the new name.</p>
       <p className="mono commands">{preview.commands.join('\n')}</p>
       {!current && <p>The worktree changed. Cancel and check again.</p>}
