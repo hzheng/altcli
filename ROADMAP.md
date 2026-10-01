@@ -72,7 +72,8 @@ from those older milestone headings.
 
 Source implementation and acceptance are recorded separately.
 The [September 30 app-wide assistance and completion track](#proposed-app-wide-assistance-and-completion-work)
-is proposed future work, not implemented capability or runtime authorization.
+records A1's implemented read increment and the remaining proposed work;
+it does not authorize future runtime capabilities.
 Current architecture: [ADR-0011](docs/adr/ADR-0011-server-owned-relay-runs.md).
 Historical pre-hardening roadmap: [snapshot](docs/history/2026-09-16-pre-hardening/ROADMAP.md).
 
@@ -299,25 +300,26 @@ remote-worker scope remains as described in Steps 7–8.
 
 ## Proposed app-wide assistance and completion work
 
-September 30, 2026: the following code increments are **proposed, not implemented**.
-They selectively integrate the [next-step source](docs/SOURCES.md#september-30-next-step-design-source).
-The current-document corrections are part of that integration; fixture repairs and
-new runtime features are future tasks. Existing Steps 1–8 and terminal M0–M6 keep
-their identities and acceptance gates.
+September 30, 2026: **A1's read increment is implemented**; the remaining increments
+below are proposed. They selectively integrate the
+[next-step source](docs/SOURCES.md#september-30-next-step-design-source).
+Existing Steps 1–8 and terminal M0–M6 keep their identities and acceptance gates.
 
-| Track | Proposed increment | Exit evidence for future implementation |
+| Track | Increment and source status | Remaining exit evidence |
 | --- | --- | --- |
 | B0: baseline reliability | Investigate isolated Git identity and native PID fixtures; retain production checks | Application Git calls work with isolated fixture identity; repeated launches bind PID evidence to each instance; record actual remaining failures and commands, without weakening assertions |
 | B1: startup access | Scoped browser input to an exact launch before supported-agent discovery | Original launch identity and reservation retained; unrelated automation blocked; login/trust/startup remain truthful, with no fake readiness or duplicate launch |
 | B2: independent completion | Image drop, validation decision and used-reference management; optional environment profiles and Create & launch; later app-wide image scope | Each delivered item has explicit consent/scope and failure behavior; active/uncertain images are not evicted, secrets stay out of argv, partial operation successes remain; undelivered items stay visibly deferred |
-| A1: Global AI reads | Separate user-operated app instance with current documentation, capabilities and scoped state tools | Useful answers cite current evidence; no dummy project, silent context sharing or second controller; supported startup/login/quota behavior verified |
+| A1: Global AI reads | Implemented: separate user-operated Codex instance with current documentation, capabilities and scoped read tools ([guide](docs/GLOBAL-AI.md)) | Installed-provider evidence for grounded answers, scoped state, startup/login/quota and recovery; physical-device acceptance remains separate |
 | A2: background reads | Separate opt-in instance with bounded, identified event jobs | Useful triggers deduplicate; no jobs per unchanged poll; status, pause and exact restart recovery work without interrupting Global AI |
 | A3: notifications | Deterministic in-app delivery, optionally enriched by model judgment | Important baseline alerts work without AI; duplicates and uncertain delivery use receipts; external destinations require separate configuration |
 | A4: delegated effects | Explicit versioned policy, scoped principal, exact preview and durable outcome | Current authority admits one eligible effect; stale/revoked/human-only/uncertain cases stay unresolved; no fabricated human inspection, self-enabling policy or manual-barrier bypass |
 | R: rollout | Installed-host/provider and physical-device acceptance, joining existing M5/M6 | Record actual versions, auth/model/tool modes, private HTTPS/WSS, iPhone/IME and recovery demonstrations; enable deliberately, and disabling assistance preserves deterministic recovery and workspace agents |
 
-A1 investigation can proceed alongside B0; cosmetic work and image drop need not
-gate it. Its supported startup path is an explicit dependency. A4 release requires
+A1 acceptance can proceed alongside B0; cosmetic work and image drop need not
+gate it. A1's installed-provider, startup, login and quota exit evidence is not yet
+recorded. Its app-instance startup path does not complete B1's separate project-launch
+work. A4 release requires
 trustworthy authority/recovery tests and verified provider integration. Neither
 native iOS, terminal graphics, a new model account nor generalized N-agent
 implementation is a prerequisite. No AI replaces the deterministic controller.

@@ -22,7 +22,7 @@ This register preserves unresolved choices and explicitly proposed defaults from
 | Shared remote, hosting provider, PR timing | Optional and separate; local first. |
 | Multi-host worker-control transport | Required beyond Git exchange; not selected. |
 | Per-turn CI and final acceptance gate | Focused versus full validation agreed; mandatory checks open. |
-| AI supervisor and native iOS | Remain deferred. Separate app-wide Global AI and Background assistant roles are proposed, not implemented, under ADR-0022/0023 below; they neither replace the controller nor mandate another reviewer. Additional ordinary planners remain a distinct planned capability, without changing the initial one/two-member execution limit. |
+| AI supervisor and native iOS | Remain deferred. Separate app-wide Global AI and Background assistant roles are proposed under ADR-0022/0023 below, with only Global AI's A1 read increment implemented ([guide](GLOBAL-AI.md)); they neither replace the controller nor mandate another reviewer. Additional ordinary planners remain a distinct planned capability, without changing the initial one/two-member execution limit. |
 
 Planning details still to specify:
 
@@ -104,9 +104,11 @@ both flags.
 
 ## Proposed app-wide assistance and completion choices
 
-These choices belong to the **proposed, not implemented** direction of
+These choices concern the remaining proposed work and acceptance of
 [ADR-0022](adr/ADR-0022-app-wide-ai-instances.md) and
-[ADR-0023](adr/ADR-0023-app-tools-and-delegated-authority.md). Recording them does
+[ADR-0023](adr/ADR-0023-app-tools-and-delegated-authority.md). A1's current Codex
+instance and read-only MCP contract are documented in [GLOBAL-AI](GLOBAL-AI.md);
+installed-provider acceptance remains open. Recording these choices does
 not authorize unattended launch, change human approvals or lift current deferrals.
 The [roadmap](../ROADMAP.md#proposed-app-wide-assistance-and-completion-work) gives
 recommended order, not accepted schemas or provider guarantees.
@@ -115,7 +117,7 @@ recommended order, not accepted schemas or provider guarantees.
 | --- | --- |
 | Runtime and model support | One verified structured CLI adapter first; separately establish invocation, auth/billing, model attribution, permission and MCP behavior for installed versions. No permanent model catalog or universal subscription guarantee. |
 | Process and conversation lifecycle | Reusable supervised runner with bounded jobs and exact scoped conversation identities; persistent conversation versus fresh/resumed jobs remains an adapter choice. |
-| MCP transport and authentication | A supported local transport reaching the same host owner; versioned capabilities, scoped principals and typed failures. Exact transport, credentials and tool schemas are not fixed. |
+| MCP transport and authentication | A1 implements a stdio bridge to the same host's loopback endpoint with a separate read capability and a fixed read-tool set. Installed-provider interoperability remains unverified; background and delegated tool contracts remain open. |
 | Global AI self-interference | Reads and explicit UI previews first; later define how an effectful call settles its own native-input hold without bypassing other writers or changing unknown evidence. |
 | App-owned tmux socket | Optional if lifecycle/navigation benefits justify supported multi-socket behavior; never a claim of filesystem isolation or a prerequisite for the read-only design. |
 | Initial delegation and approval migration | Small useful action set with exact previews/receipts; separate owner-authorized policy and delegated record. Preserve existing human-only Plan settings. Risk overrides need explicit supported scope, not fabricated inspection. |

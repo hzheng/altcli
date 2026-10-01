@@ -9,6 +9,7 @@ const portFlag = args.indexOf('--port');
 const port = Number(portFlag < 0 ? 8787 : args[portFlag + 1]);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid loopback port.');
 const bridge = terminalHost(); bridge.active = true;
+bridge.loopbackOrigin = `http://127.0.0.1:${port}`;
 const app = next({ dev, hostname: '127.0.0.1', port });
 const handle = app.getRequestHandler();
 await app.prepare();

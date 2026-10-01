@@ -1,6 +1,8 @@
 # ADR-0022: App-wide AI instances and background jobs
 
-Status: **proposed future direction; not implemented**. September 30, 2026.
+Status: **proposed future direction; only the Global AI A1 read increment is
+implemented** ([guide](../GLOBAL-AI.md)), without installed-provider acceptance.
+September 30, 2026.
 This records a selectively integrated [design source](../SOURCES.md#september-30-next-step-design-source),
 not permission to launch assistants or change the current controller contract.
 

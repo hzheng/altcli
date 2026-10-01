@@ -428,7 +428,8 @@ run must be taken over before the removal or discard step, which shows a fresh p
 
 ## Proposed app-wide assistance
 
-**Proposed future direction; not implemented.** The existing project/worktree
+**Proposed future direction.** Only Global AI's A1 read increment is implemented;
+see [GLOBAL-AI](GLOBAL-AI.md) for its current journey. The existing project/worktree
 workflow above keeps its Plan approval, branch consent, Stage relay and execution
 limits. [ADR-0022](adr/ADR-0022-app-wide-ai-instances.md) proposes two separate
 app roles; they do not become extra mandatory participants in a task group.

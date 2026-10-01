@@ -5,7 +5,7 @@ export interface TerminalGateway {
   connect(socket: WebSocket): void;
   shutdown(): Promise<void>;
 }
-interface TerminalHost { gateway?: TerminalGateway; active: boolean; closing: boolean }
+interface TerminalHost { gateway?: TerminalGateway; active: boolean; closing: boolean; loopbackOrigin?: string }
 const root = globalThis as typeof globalThis & { altcliTerminalHost?: TerminalHost };
 export function terminalHost(): TerminalHost {
   return root.altcliTerminalHost ??= { active: false, closing: false };

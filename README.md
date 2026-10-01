@@ -8,7 +8,8 @@ implementation uses committed handoffs. The same responsive
 web console is intended for desktop and private iPhone access through Tailscale.
 Native iOS and a third AI supervisor remain deferred.
 Separate app-wide **Global AI** and **Background assistant** roles are
-[proposed future direction, not implemented](docs/adr/ADR-0022-app-wide-ai-instances.md).
+[proposed future direction](docs/adr/ADR-0022-app-wide-ai-instances.md); only the
+Global AI read increment, A1, is implemented ([guide](docs/GLOBAL-AI.md)).
 They would provide help and bounded assistance through the existing host, without
 replacing its deterministic controller or becoming mandatory reviewers. See the
 [proposed roadmap](ROADMAP.md#proposed-app-wide-assistance-and-completion-work).
@@ -117,7 +118,7 @@ not stop a run. A backend restart pauses owned runs without replaying commands.
 | Native terminal and explicit launch | Implemented; setup enables both host flags (a missing flag means off); installed-host/mobile acceptance remains open |
 | Image attachments | Paste or pick PNG/JPEG in a Terminal-mode card, then Insert its host path (never Enter); plain Send, committed work and a Plan brief carry images to Claude Code and Codex. Private host storage; installed-host and device acceptance open |
 | Native iOS / supervisor | Deferred |
-| Global AI / Background assistant | Proposed, not implemented; separate user/background conversations and scoped app tools ([ADR-0022](docs/adr/ADR-0022-app-wide-ai-instances.md), [ADR-0023](docs/adr/ADR-0023-app-tools-and-delegated-authority.md)) |
+| Global AI / Background assistant | Global AI A1 implemented: a user-operated Codex terminal with read-only app tools ([guide](docs/GLOBAL-AI.md)); installed-provider and device acceptance open. Background assistant and delegated tools proposed, not implemented ([ADR-0022](docs/adr/ADR-0022-app-wide-ai-instances.md), [ADR-0023](docs/adr/ADR-0023-app-tools-and-delegated-authority.md)) |
 
 **Background-work evidence:** Claude uses `UserPromptSubmit` and the current
 Stop payload, including background-task and cron information when available.

@@ -69,18 +69,22 @@ Read [WORKFLOWS](docs/WORKFLOWS.md) for vocabulary and UI; [ROADMAP](ROADMAP.md#
 
 ADR-0001 through ADR-0011 remain historical/current-runtime records without being rewritten to pretend new features shipped. ADR-0013 owns the confirmed branch/worktree setup exceptions; the legacy staging path still performs no controller Git mutation. Historical `repository` fields and pair IDs retain their worktree-scoped meaning; project navigation does not rewrite frozen runs or vendor event pairing.
 
-## Proposed app-wide assistance (not implemented)
+<a id="proposed-app-wide-assistance-not-implemented"></a>
+
+## App-wide assistance: A1 implementation and proposed direction
 
 The September 30 [selective integration](docs/DESIGN-MIGRATION.md#september-30-selective-next-step-integration)
-records useful future architecture from the next-step source. It does not lift
-current runtime deferrals or grant an agent authority. Source-attributed acceptance
+records the broader proposed architecture from the next-step source. Only the
+Global AI A1 read increment is implemented; [GLOBAL-AI](docs/GLOBAL-AI.md) describes
+its current behavior and outstanding provider/device acceptance. Background jobs,
+notifications and delegated effects remain proposed. Source-attributed acceptance
 is preserved in [provenance](docs/SOURCES.md#september-30-next-step-design-source);
-the new records below are proposed, not implemented.
+neither these records nor A1 grant delegated authority.
 
-| Record | Proposed responsibility |
+| Record | Responsibility and implementation status |
 | --- | --- |
-| [ADR-0022](docs/adr/ADR-0022-app-wide-ai-instances.md) | Separate Global AI and Background assistant instances, lifecycle, bounded jobs and notifications; not implemented |
-| [ADR-0023](docs/adr/ADR-0023-app-tools-and-delegated-authority.md) | Shared app tools, authenticated principals and explicit delegated authority; not implemented |
+| [ADR-0022](docs/adr/ADR-0022-app-wide-ai-instances.md) | Separate Global AI and Background assistant instances, lifecycle, bounded jobs and notifications; only the Global AI A1 read increment is implemented ([guide](docs/GLOBAL-AI.md)) |
+| [ADR-0023](docs/adr/ADR-0023-app-tools-and-delegated-authority.md) | Shared app tools, authenticated principals and explicit delegated authority; only A1's read-only tools are implemented, with no delegated authority |
 
 Optional app-wide assistance is distinct from a mandatory third reviewer,
 controller replacement or enabling larger Plan/Implementation groups. Existing

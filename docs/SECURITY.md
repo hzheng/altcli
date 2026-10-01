@@ -235,7 +235,10 @@ URL is fetched on an image's behalf.
 
 ## Proposed app-wide assistant authority
 
-**Proposed future direction; not implemented.**
+**Proposed future direction.** Only Global AI's A1 read increment is implemented:
+its separate loopback read capability, private descriptor and fixed scope are
+described in [GLOBAL-AI](GLOBAL-AI.md#tools-and-authority). Unattended and delegated
+authority below remain proposed.
 [ADR-0022](adr/ADR-0022-app-wide-ai-instances.md) separates user and background
 instances; [ADR-0023](adr/ADR-0023-app-tools-and-delegated-authority.md) owns their
 proposed authority. Current owner credentials, manual/launch barriers, workflow

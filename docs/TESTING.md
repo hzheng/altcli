@@ -396,8 +396,10 @@ environment and actual outcomes, rather than weakening checks to obtain a pass.
 
 ## Proposed app-wide assistance and completion checks
 
-**Planned requirements; new capabilities are not implemented and no results are
-claimed by this catalog.** [ADR-0022](adr/ADR-0022-app-wide-ai-instances.md) and
+**Planned requirements; no results are claimed by this catalog.** Only Global AI's
+A1 read increment is implemented; its fixture checks and their limits are listed in
+[GLOBAL-AI](GLOBAL-AI.md#storage-rollout-and-tests), and installed-provider acceptance
+remains open. [ADR-0022](adr/ADR-0022-app-wide-ai-instances.md) and
 [ADR-0023](adr/ADR-0023-app-tools-and-delegated-authority.md) own the proposed
 design. Source scenario IDs below are provenance, not names of existing tests;
 related rows are condensed without replacing current native/workflow coverage.

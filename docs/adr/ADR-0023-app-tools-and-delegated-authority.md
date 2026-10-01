@@ -1,17 +1,19 @@
 # ADR-0023: Shared app tools and delegated authority
 
-Status: **proposed future direction; not implemented**. September 30, 2026.
+Status: **proposed future direction; only A1's read-only app tools are implemented**
+([guide](../GLOBAL-AI.md)). September 30, 2026.
 This accompanies [ADR-0022](ADR-0022-app-wide-ai-instances.md); it grants no present
 tool access, standing delegation or exemption from human approval.
 
 ## One authoritative service boundary
 
 Expose scoped documentation, capabilities, application state and captured
-evidence through a thin app-tool facade. MCP is a proposed interface, not a
-source of permission. HTTP and tools reuse the same operation services,
+evidence through a thin app-tool facade. A1 implements read-only MCP through a
+stdio bridge to the existing host; MCP does not itself grant permission.
+HTTP and tools reuse the same operation services,
 validation, ownership and recovery; a helper must not instantiate another
 ControlPlane or competing SQLite owner. Do not add an unrestricted shell tool
-as the app interface. Transport and adapter support remain
+as the app interface. Installed-provider acceptance and broader adapter support remain
 [open](../OPEN-DECISIONS.md#proposed-app-wide-assistance-and-completion-choices).
 
 Reads identify the installed build, enabled capabilities, document revision and
@@ -22,9 +24,10 @@ context on demand; terminal snapshots require explicit scope, not unrestricted
 transcript access. A workspace change cannot retarget an in-flight request or
 silently disclose another project's context.
 
-Conceptual tool areas are reads, action previews, assessments, policy proposals,
-authorized effects and notification requests. Names, schemas, transport,
-capability negotiation and versioning are working choices, not current endpoints.
+The current A1 read tools are described in [GLOBAL-AI](../GLOBAL-AI.md) and the
+[HTTP contract](../../shared/openapi.yaml). Action previews, assessments, policy
+proposals, authorized effects and notification requests remain conceptual tool
+areas; their schemas, capability negotiation and versioning are working choices.
 Return typed failures and bound output/time; stale tool expectations fail visibly.
 
 ## Authenticated principals and scoped access
