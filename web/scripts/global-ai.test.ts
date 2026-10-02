@@ -10,13 +10,17 @@ import type { WorkflowState, RelayRun, WorkspaceDiscovery } from '../src/contrac
 import type { LaunchProfile } from '../src/contracts/launches.ts';
 import type { GlobalAIInstance } from '../src/contracts/global-ai.ts';
 import { AppReads, APP_TOOLS, GlobalAIError } from '../src/server/global-ai/reads.ts';
-import { GlobalAIService, toolEndpoint, type GlobalHost } from '../src/server/global-ai/service.ts';
+import { GlobalAIService, helperProfileArgs, toolEndpoint, type GlobalHost } from '../src/server/global-ai/service.ts';
 import { codexProfileArgs } from '../src/server/global-ai/codex.ts';
+import { claudeProfileArgs } from '../src/server/global-ai/claude.ts';
+import { NativeGlobalHost } from '../src/server/global-ai/host.ts';
+import { loadConfig } from '../src/server/config.ts';
 import { buildKnowledgeBase, DOCUMENTS } from './build-kb.mjs';
 // JS stdio boundary is intentionally dependency-free; it never owns the application store.
 import { createProtocol, connectionFile, main as bridgeMain } from './global-ai-mcp.mjs';
 
-const profile: LaunchProfile = { id: 'codex', revision: 1, label: 'My Codex', executable: 'codex', args: ['--no-daemon', '--model', 'test-model'], adapterHint: 'codex', enabled: true };
+const profile: LaunchProfile = { id: 'codex', revision: 1, label: 'My Codex', executable: 'codex', args: ['--no-daemon', '--model', 'test-model'], adapterHint: 'codex', enabled: true, purpose: 'helper' };
+const claude: LaunchProfile = { id: 'claude', revision: 1, label: 'My Claude', executable: 'claude', args: ['--model', 'sonnet', '--effort', 'max'], adapterHint: 'claude', enabled: true, purpose: 'helper' };
 const kb = { documents: [{ name: 'README.md', description: 'overview', content: 'one\nblocked example\nthree\n' }] };
 function readFixture() {
   const run = { id: 'run-a', repository: '/work/a', status: 'paused', reason: 'Manual input requires checkpoint review.',
@@ -206,11 +210,37 @@ test('loopback endpoint and supported Codex profile validation reject arbitrary 
     assert.throws(() => codexProfileArgs({ ...profile, args }), GlobalAIError);
   assert.throws(() => codexProfileArgs({ ...profile, executable: '/bin/sh' }), { code: 'PROFILE_UNSUPPORTED' });
 });
-test('only enabled profiles that A1 can launch are listed for selection', () => {
+test('a Claude Code profile accepts only a model and effort; Helper owns its permission mode and MCP servers', () => {
+  assert.deepEqual(claudeProfileArgs(claude), claude.args);
+  assert.deepEqual(claudeProfileArgs({ ...claude, executable: '/Users/me/.local/bin/claude', args: [] }), []);
+  for (const args of [['--dangerously-skip-permissions'], ['--permission-mode', 'bypassPermissions'], ['--allowedTools', 'Bash'], ['--mcp-config', '{}'],
+    ['--settings', '{}'], ['--add-dir', '/secret'], ['--resume'], ['--continue'], ['-p', 'hi'], ['--model'], ['--model', 'bad model'], ['--effort', 'minimal'], ['-m', 'opus']])
+    assert.throws(() => claudeProfileArgs({ ...claude, args }), GlobalAIError);
+  assert.throws(() => claudeProfileArgs({ ...claude, executable: '/bin/zsh', args: ['-lc', 'claude'] }), { code: 'PROFILE_UNSUPPORTED' });
+  assert.throws(() => claudeProfileArgs({ ...claude, adapterHint: 'codex' }), { code: 'PROFILE_UNSUPPORTED' });
+  // Each CLI is validated by its own rules; a Codex argument does not pass as a Claude Code one, or the reverse.
+  assert.throws(() => helperProfileArgs({ ...claude, args: ['--no-daemon'] }), { code: 'PROFILE_ARGUMENT' });
+  assert.throws(() => helperProfileArgs({ ...profile, args: ['--effort', 'high'] }), { code: 'PROFILE_ARGUMENT' });
+  assert.throws(() => helperProfileArgs({ ...profile, adapterHint: 'manual' }), { code: 'PROFILE_UNSUPPORTED' });
+});
+test('Claude Code launches in manual mode with only the AltCLI read server, auto-allowed; Codex keeps its read-only sandbox', () => {
+  const host = new NativeGlobalHost(loadConfig({ ALTCLI_TOKEN: 'a'.repeat(64), ALTCLI_DATA_DIR: '/data' }), '/repo'), directory = '/data/global-ai/one';
+  const args = host.args(claude, directory), mcp = args[args.indexOf('--mcp-config') + 1]!;
+  // The variadic --allowedTools is last, so it cannot take another argument; nothing names a directory, setting or other tool.
+  assert.deepEqual(args, [...claude.args, '--permission-mode', 'manual', '--strict-mcp-config', '--mcp-config', mcp, '--allowedTools', 'mcp__altcli_read']);
+  assert.deepEqual(JSON.parse(mcp), { mcpServers: { altcli_read: { type: 'stdio', command: process.execPath,
+    args: ['/repo/web/scripts/global-ai-mcp.mjs', '/data/global-ai/one/connection.json'] } } });
+  assert.deepEqual(host.args(profile, directory).slice(0, 7), [...profile.args, '--cd', directory, '--sandbox', 'read-only']);
+});
+test('only enabled Helper profiles that Helper can launch are listed for selection', async () => {
   const f = serviceFixture();
   f.profiles.push({ ...profile, id: 'wrapper', executable: '/bin/zsh', args: ['-lc', 'codex'] }, { ...profile, id: 'bypass', args: ['--dangerously-bypass-approvals-and-sandbox'] },
-    { ...profile, id: 'claude', adapterHint: 'claude', executable: 'claude', args: [] }, { ...profile, id: 'off', enabled: false });
-  assert.deepEqual(f.service.launchableProfiles().map(p => p.id), ['codex']);
+    { ...claude, id: 'claude', args: [] }, { ...claude, id: 'claude-bypass', args: ['--dangerously-skip-permissions'] },
+    { ...claude, id: 'claude-wrapper', executable: '/bin/zsh', args: ['-lc', 'claude'] }, { ...profile, id: 'off', enabled: false },
+    { ...profile, id: 'agent', purpose: 'agent' });
+  assert.deepEqual(f.service.launchableProfiles().map(p => p.id), ['codex', 'claude']);
+  // An agent profile cannot start Helper even when its arguments would be acceptable.
+  await assert.rejects(f.service.preview({ profileId: 'agent' }, 'http://127.0.0.1:8787'), { code: 'PROFILE_UNKNOWN' });
 });
 test('MCP initialization, read listing, structured replies and forbidden operations are explicit', async () => {
   const calls: unknown[] = [];

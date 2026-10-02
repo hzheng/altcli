@@ -38,7 +38,7 @@ const SAVED_TOKEN = 'altcli.token';
 const DEFAULT_TURN_LIMIT = 20;
 const timeOf = (iso: string) => new Date(iso).toLocaleTimeString();
 type Tab = 'console' | 'workspaces' | 'helper' | 'settings';
-const HELPER_SECTIONS: [HelperSection, string][] = [['chat', 'Chat'], ['session', 'Session'], ['evidence', 'Evidence'], ['guide', 'Guide']];
+const HELPER_SECTIONS: [HelperSection, string][] = [['chat', 'Chat'], ['session', 'Session'], ['settings', 'Settings'], ['evidence', 'Evidence'], ['guide', 'Guide']];
 /** The selected workspace card and the checkout it belongs to; the console shows the agents registered on that checkout. */
 interface WorkspaceChoice { key: string; root: string; projectId?: string }
 /** What one Take control confirmation clears, with the identities its requests are checked against. */
@@ -251,7 +251,7 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
   const [phase, setPhase] = useRemembered<Phase>(`phase:${ws}`, 'implementation', memory);
   // The run/transition whose phase this workspace last followed: each transition is applied once, so a later click is never overridden.
   const [followedPhase, setFollowedPhase] = useRemembered<string | null>(`phaseFollowed:${ws}`, null, memory);
-  const [settingsTab, setSettingsTab] = useRemembered<'preferences' | 'host' | 'global-ai'>('settingsTab', 'preferences', memory);
+  const [settingsTab, setSettingsTab] = useRemembered<'preferences' | 'host'>('settingsTab', 'preferences', memory);
   // A Global AI save remounts Launch profiles so its list shows that profile.
   const [profilesVersion, setProfilesVersion] = useState(0);
   // Stage relay is uncommitted review on main or the default branch; Commit relay needs a task branch. The mode is view state only.
@@ -896,12 +896,13 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
       {/* Both sections stay mounted, so switching keeps unsaved profile edits. */}
       <nav className="section-tabs settings-tabs" aria-label="Settings sections">
         <button type="button" className={settingsTab === 'preferences' ? 'selected' : ''} aria-pressed={settingsTab === 'preferences'} onClick={() => setSettingsTab('preferences')}>Console preferences</button>
-        <button type="button" className={settingsTab === 'host' ? 'selected' : ''} aria-pressed={settingsTab === 'host'} onClick={() => setSettingsTab('host')}>Host configuration</button>
-        <button type="button" className={settingsTab === 'global-ai' ? 'selected' : ''} aria-pressed={settingsTab === 'global-ai'} onClick={() => setSettingsTab('global-ai')}>Helper</button></nav>
+        <button type="button" className={settingsTab === 'host' ? 'selected' : ''} aria-pressed={settingsTab === 'host'} onClick={() => setSettingsTab('host')}>Host configuration</button></nav>
       {state && <section className="panel" aria-label="Console preferences" hidden={settingsTab !== 'preferences'}>
         <div className="section-heading"><h2>Console preferences</h2><span className="badge">THIS PAGE</span></div>
         <p className="muted">Preferences for this browser page. They never start work on their own.</p>
         <LaunchProfiles key={profilesVersion} token={token} enabled={config?.launchEnabled === true && state?.inputEnabled === true} />
+        <p className="fine">These profiles launch worktree agents. Helper&apos;s profiles are kept apart, in{' '}
+          <button type="button" className="inline-link" onClick={() => { showTab('helper'); setHelperSection('settings'); }}>Helper → Settings</button>.</p>
         <label className="readiness"><input type="checkbox" aria-label="Stay unlocked on this device" checked={stayUnlocked} onChange={(e) => rememberToken(e.target.checked)} />
           Stay unlocked on this device: keep the host access token in this browser so reopening the page does not ask for it. Anyone who can use this browser profile can then open the console; the host still checks the token on every request. <strong>Lock</strong> always forgets the token.</label>
       </section>}
@@ -933,16 +934,16 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
         </tbody></table></div>}
         {!config && !configError && <p className="muted">Reading the host configuration…</p>}
       </section>
-      {/* Mounted only while shown, so each visit reads the saved profile again. */}
-      {state && settingsTab === 'global-ai' && <GlobalAISettings token={token} config={config} enabled={config?.launchEnabled === true && state.inputEnabled === true}
-        onSaved={() => setProfilesVersion(v => v + 1)} />}
     </div>
     <div className="section-panel" hidden={tab !== 'helper'}>
       <nav className="section-tabs settings-tabs" aria-label="Helper sections">
         {HELPER_SECTIONS.map(([id, name]) => <button type="button" key={id} className={helperSection === id ? 'selected' : ''} aria-pressed={helperSection === id} onClick={() => setHelperSection(id)}>{name}</button>)}</nav>
       <div hidden={helperSection === 'guide'}>
         {globalOpened && <GlobalAI token={token} clientInstanceId={clientInstanceId} section={helperSection} onSection={setHelperSection}
-          onSetup={() => { showTab('settings'); setSettingsTab('global-ai'); }} />}
+          profilesVersion={profilesVersion} />}
+        {/* Keep this editor's draft across top-level tabs; reentering the Helper Settings section reads saved profiles again. */}
+        {state && helperSection === 'settings' && <GlobalAISettings token={token} config={config} enabled={config?.launchEnabled === true && state.inputEnabled === true}
+          onSaved={() => setProfilesVersion(v => v + 1)} />}
       </div>
       <section className="panel about" aria-label="How this works" hidden={helperSection !== 'guide'}>
         <div className="section-heading"><h2>How this works</h2></div>

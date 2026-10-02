@@ -8,6 +8,8 @@ import { AppError, messageOf } from '../core/errors.ts';
 import { requestId } from '../core/validation.ts';
 import { terminalFields, terminalNumber, terminalText } from '../core/terminal-validation.ts';
 import { classifyAgent } from '../core/workspaces.ts';
+import { isGlobalAIProfileLabel } from '../core/policy.ts';
+import { helperProfileArgs } from './global-ai/service.ts';
 import { SESSION_NAME_LIMIT, uniqueSessionName } from '../core/session-names.ts';
 import { resolveExecutable, type Config } from './config.ts';
 import type { Store } from './store.ts';
@@ -18,6 +20,14 @@ import { inspectPane } from './adapters/tmux.ts';
 import { inspectAttach, type AttachTarget } from './tmux-attach.ts';
 import { launchCleanupHost, type LaunchCleanupHost } from './launch-cleanup-host.ts';
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+/** A profile saved before purposes existed is an agent profile, except the one the earlier Settings → Helper saved: named Helper or
+ * Global AI, with arguments Helper can launch. */
+function purposed(profile: LaunchProfile): LaunchProfile {
+  if (profile.purpose) return profile;
+  let helper = isGlobalAIProfileLabel(profile.label);
+  if (helper) try { helperProfileArgs(profile); } catch { helper = false; }
+  return { ...profile, purpose: helper ? 'helper' : 'agent' };
+}
 const slug = (v: string) => v.replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 24) || 'agent';
 const SETTLED = new Set(['running','reconciled','failed']);
 /** Recorded launches whose session may exist without being visible as running yet: their names stay reserved. */
@@ -55,10 +65,10 @@ export class LaunchService {
     }
   }
   private enabled() { if(!this.config.launchEnabled || !this.config.inputEnabled) throw new AppError('LAUNCH_DISABLED','Agent launching is disabled on this host.',403); }
-  profiles(): LaunchProfile[] { return (this.store.db.prepare('SELECT value FROM launch_profiles ORDER BY rowid').all() as {value:string}[]).map(r=>JSON.parse(r.value)); }
+  profiles(): LaunchProfile[] { return (this.store.db.prepare('SELECT value FROM launch_profiles ORDER BY rowid').all() as {value:string}[]).map(r=>purposed(JSON.parse(r.value))); }
   async profile(value: unknown, id?: string, remove=false): Promise<LaunchProfile|null> {
     this.enabled();
-    const b=terminalFields(value, remove?['expectedRevision']:['expectedRevision','label','executable','args','adapterHint','enabled']);
+    const b=terminalFields(value, remove?['expectedRevision']:['expectedRevision','label','executable','args','adapterHint','enabled','purpose']);
     const before=id?this.profiles().find(p=>p.id===id):undefined;
     if(id && (!before || before.revision!==terminalNumber(b.expectedRevision,1,Number.MAX_SAFE_INTEGER))) throw new AppError('PROFILE_CHANGED','The profile changed. Reload before saving.',409);
     if(remove){this.store.db.prepare('DELETE FROM launch_profiles WHERE id=?').run(id!);return null;}
@@ -66,8 +76,13 @@ export class LaunchService {
     if(!isAbsolute(executable) && !/^[A-Za-z0-9._+-]+$/.test(executable)) throw new AppError('PROFILE_EXECUTABLE','Use an executable name or an absolute path.');
     if(!Array.isArray(b.args) || b.args.length>32 || b.args.some(a=>typeof a!=='string'||Buffer.byteLength(a)>1024||/[\x00-\x1f\x7f]/.test(a)) || Buffer.byteLength(b.args.join(''))>4096) throw new AppError('PROFILE_ARGS','Use at most 32 literal arguments, 1 KiB each and 4 KiB total.');
     if(!['codex','claude','manual'].includes(String(b.adapterHint)) || typeof b.enabled!=='boolean') throw new AppError('PROFILE_INPUT','Choose a display hint and enabled state.');
+    const purpose=b.purpose??before?.purpose??'agent';
+    if(purpose!=='agent'&&purpose!=='helper') throw new AppError('PROFILE_INPUT','A profile is for agent launches or for Helper.');
+    if(before&&purpose!==before.purpose) throw new AppError('PROFILE_PURPOSE','A profile keeps the purpose it was created with.',409);
     if(this.config.mode!=='mock' && !resolveExecutable(executable, launchEnvironment())) throw new AppError('PROFILE_EXECUTABLE','Executable is unavailable on the host.',409);
-    const result:LaunchProfile={id:id??randomUUID(),revision:(before?.revision??0)+1,label,executable,args:b.args as string[],adapterHint:b.adapterHint as LaunchProfile['adapterHint'],enabled:b.enabled};
+    const result:LaunchProfile={id:id??randomUUID(),revision:(before?.revision??0)+1,label,executable,args:b.args as string[],adapterHint:b.adapterHint as LaunchProfile['adapterHint'],enabled:b.enabled,purpose};
+    // A Helper profile is always one Helper can launch, so its settings never silently drop an argument.
+    if(purpose==='helper') try{helperProfileArgs(result);}catch(e){throw new AppError('PROFILE_ARGS',messageOf(e));}
     this.store.db.prepare('INSERT INTO launch_profiles(id,value) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(result.id,JSON.stringify(result));return result;
   }
   batches(): LaunchBatch[] {return (this.store.db.prepare('SELECT value FROM launches ORDER BY rowid').all() as {value:string}[]).map(r=>JSON.parse(r.value));}
@@ -99,6 +114,7 @@ export class LaunchService {
     try{for(const name of await this.sessionNames())taken.add(name);}catch{blockers.push('Cannot list tmux sessions to choose unique names. Recheck, then preview again.');}
     for(const row of b.items){const i=terminalFields(row,['worktreeId','profileId','count']), count=terminalNumber(i.count,1,6);
       const tree=await this.projects.launchWorktree(projectId,terminalText(i.worktreeId));const profile=this.profiles().find(p=>p.id===i.profileId);
+      if(profile?.purpose==='helper')throw new AppError('PROFILE_PURPOSE','A Helper profile cannot launch a worktree agent. Choose an agent profile.',409);
       if(!profile?.enabled)throw new AppError('PROFILE_CHANGED','Choose an enabled profile.',409);
       try{this.assertAvailable(tree.identity!);}catch(e){blockers.push(messageOf(e));}
       const executable=await this.resolved(profile);const project=this.projects.record(projectId);

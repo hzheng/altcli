@@ -6,11 +6,12 @@ ADR-0022/0023.
 
 ## Scope and status
 
-A1 adds a user-operated, app-wide Codex terminal and a read-only MCP interface to
-AltCLI's existing host. It is not the Background assistant, a new reviewer, a
-second controller, or delegated execution. The source and regression fixtures are
-present; installed Codex, macOS/Linux deployment and physical iPhone acceptance
-must be recorded separately. See ADR-0022/0023 for the broader direction.
+A1 adds a user-operated, app-wide Codex or Claude Code terminal and a read-only MCP
+interface to AltCLI's existing host. It is not the Background assistant, a new
+reviewer, a second controller, or delegated execution. The source and regression
+fixtures are present; installed Codex and Claude Code, macOS/Linux deployment and
+physical iPhone acceptance must be recorded separately. See ADR-0022/0023 for the
+broader direction.
 
 ## Use
 
@@ -19,33 +20,45 @@ start` command. Server changes must not replace a live dispatcher through hot
 reload. The custom host supplies its actual loopback port to the MCP bridge;
 plain `next start` does not provide the native terminal gateway.
 
-Set it up first in Console → **Settings → Helper**. Choose a model and reasoning
-effort (blank keeps Codex's configured default). Saving creates or updates the
-ordinary launch profile labelled `Helper`, shown literally as `codex --no-daemon
--m <model> -c model_reasoning_effort=<effort>`, and launches nothing. A profile
-saved under the earlier label `Global AI` is still found and preselected; saving it
-here applies the new label. That tab also
+Set it up first in Console → **Helper → Settings**; Chat's start flow links there, as
+does Settings → Console preferences under its launch profiles. Each Helper profile has
+a name, a CLI (Codex or Claude Code), a model and a reasoning effort (blank keeps the
+CLI's configured default), so different CLIs, models and efforts can sit side by side.
+Saving creates or updates an ordinary launch profile, shown literally as
+`codex --no-daemon -m <model> -c model_reasoning_effort=<effort>` or
+`claude --model <model> --effort <effort>`, and launches nothing. **New profile** adds
+another; the first is named `Helper` by default. Choosing the other CLI starts from its
+defaults; until saved, the profile keeps its CLI and values. Helper profiles are kept
+apart from agent profiles: each launch profile records its purpose, set when it is
+created. Settings → Console preferences → Launch profiles and worktree **Launch
+agents** list only agent profiles, and the host refuses a Helper profile for an agent
+launch; Helper lists and starts only Helper profiles, and the host accepts a Helper
+profile only with arguments Helper can launch. A profile saved before purposes existed
+is an agent profile, except the one the earlier single-profile Settings → Helper saved:
+named `Helper` or `Global AI`, with arguments Helper can launch. Deleting asks first and
+stops no running conversation. Chat preselects the profile named
+`Helper`, or one saved under the earlier label `Global AI`, otherwise the first; saving
+never renames a profile. That section also
 names any missing host requirement: the tmux adapter, input, native terminals and
-agent launch. AltCLI does not list or verify the models a Codex sign-in offers;
-Codex reports an unavailable model in its terminal. A running conversation keeps the
+agent launch. AltCLI does not list or verify the models a sign-in offers; the CLI
+reports an unavailable model in its terminal. A running conversation keeps the
 settings it was launched with: after a change, the Chat section names the difference
 and offers **Restart with saved settings**, or type `/model` in its terminal to switch
 that conversation's model in place.
 
 Open the **Helper** tab in Console, before **Settings**, or go to `/global-ai`, which
-opens Console there. Helper has four sections: **Chat** (where it opens: the
+opens Console there. Helper has five sections: **Chat** (where it opens: the
 conversation's terminal once one exists, otherwise the start flow), **Session** (status,
-restart, app access and retirement), **Evidence** (the read model) and **Guide** (the
+restart, app access and retirement), **Settings** (the launch profiles above), **Evidence**
+(the read model) and **Guide** (the
 general explanation of the console); a section chosen earlier on the page is kept.
 Helper uses Console's unlocked token and **Lock**, and the
 token is never passed to the model. Switching tabs keeps every tab's drafts and the
 Helper terminal. Outside Guide, the heading shows only the connection status: Control
-access and the input status stay on the other tabs, since this terminal holds nothing. The `Helper` profile is preselected. The list holds only
-enabled direct Codex profiles that A1 can launch: `--model`/`-m`, `--no-daemon`, `--no-alt-screen`, and
-`-c model_reasoning_effort=...`. Preview validates the chosen profile again, and other
-arguments are refused explicitly, not silently stripped. Keep the normal coding
-profile separate when it uses wrappers, resume, workspace-changing or approval-bypass
-options.
+access and the input status stay on the other tabs, since this terminal holds nothing. Chat's list holds only
+enabled Helper profiles, which A1 accepts only as direct launches: Codex with `--model`/`-m`, `--no-daemon`, `--no-alt-screen`, and
+`-c model_reasoning_effort=...`; Claude Code with `--model` and `--effort`. Preview validates the chosen profile again, and other
+arguments are refused explicitly, not silently stripped.
 
 Global AI reads AltCLI's records for every project on this host, including projects
 added after it starts; there is no per-workspace selection. Preview the exact program,
@@ -54,13 +67,31 @@ records to the model provider. No session or model request starts from viewing t
 page. Model selection is configured in the profile; actual model and
 remaining subscription quota are not inferred.
 
-A1 reuses the user's Codex home/sign-in. It adds a read-only sandbox request and an
+A1 reuses the CLI's existing home and sign-in. It adds a read-only posture and an
 `altcli_read` stdio MCP configuration for this launch, without editing user config.
 No API-key fallback, global clipboard access or owner-token environment is added.
 The launcher preserves the existing conservative environment policy. Authentication,
 provider permissions, subscriptions and required runtime options need verification
 for the installed CLI. The CLI's inherited configuration and other integrations
 remain the owner's responsibility: **read-only AltCLI tools are not an OS sandbox**.
+
+### What read-only means for each CLI
+
+Helper's app tools are read-only. Native CLI commands follow the CLI's permission
+policy, including existing approvals. Helper adds these arguments after the profile's:
+
+| | Codex | Claude Code |
+| --- | --- | --- |
+| Arguments | `--cd <directory> --sandbox read-only` and `-c mcp_servers.altcli_read.*` | `--permission-mode manual --strict-mcp-config --mcp-config <altcli_read> --allowedTools mcp__altcli_read`; tmux starts it in the directory |
+| Writes | The OS sandbox blocks writes by its commands and edits; Codex can ask the owner to approve an exception under its configured approval policy | Manual mode prompts for file edits and shell commands unless already allowed; built-in read-only commands can run without prompting. This is Claude Code's own check, not an OS sandbox; permitted commands run with the owner's rights |
+| AltCLI reads | Through `altcli_read` | Allowed without asking. No other MCP server loads, including claude.ai connectors |
+| Inherited configuration | The user's Codex config, other MCP servers and hooks | The user's Claude settings: their allow rules, "don't ask again" answers, hooks and plugins still apply |
+| Orientation | `AGENTS.md` | `CLAUDE.md` |
+
+Claude Code asks whether to trust each new Helper directory; answer in its terminal.
+Claude Code 2.1.287 also accepts a trusted parent outside Git, so trusting
+`<data directory>/global-ai` once (run `claude` there and accept) stops the question
+on restarts. Approving an action in Helper creates no manual-input hold for either CLI.
 
 Use the native terminal for `/mcp`, login/trust/model prompts and questions. The
 terminal is bound to the app launch rather than coding-agent discovery, so a
@@ -71,7 +102,7 @@ external browser flows can still need an external step. Ask:
 - "Why is run <ID> blocked, and what should I do next?"
 - "Explain Commit versus Relay in this installed version."
 
-The agent receives orientation in its private AGENTS.md. Tools return current
+The agent receives orientation in its private AGENTS.md or CLAUDE.md. Tools return current
 recorded facts, explicit unknowns, observation time, content-derived revision and
 document line/hash references. The **Evidence** section lets the owner inspect the
 same read model. It is not another prompt composer. Existing Console controls
@@ -101,7 +132,7 @@ still be necessary. This increment does not fix startup access for every existin
 project launch; its Git-free app-instance path is specifically A1.
 
 **Revoke app tools** immediately invalidates the read capability, without stopping
-Codex. **Refresh app access** explicitly reauthorizes read access after expiry or
+the CLI. **Refresh app access** explicitly reauthorizes read access after expiry or
 a host restart, only while the observed instance still matches. The stdio
 bridge rereads its private descriptor on each request, so no prompt or CLI restart
 is needed merely to renew access. A revocation racing renewal wins.
@@ -110,13 +141,15 @@ is needed merely to renew access. A revocation racing renewal wins.
 tmux, erase the provider conversation or prove no background work exists, and AltCLI
 no longer opens a retired instance's terminal.
 
-**Restart with saved settings** previews the saved profile, then after one confirmation
-of the exact command stops the current Codex by ending its tmux session, retires it and
-starts a new conversation. Only the exact, marked Global AI session that inspection
+Session's **Restart with** chooses a profile: this conversation's, as saved now, or
+another one. **Restart** previews it, then after one confirmation of the exact command
+stops the current CLI by ending its tmux session, retires it and starts a new
+conversation with that profile. The changed-settings notice's **Restart with saved
+settings** does the same with this conversation's profile. Only the exact, marked Global AI session that inspection
 verifies is stopped; extra panes or windows refuse the stop, and the host's input
 and launch switches still apply. If inspection or the stop cannot be verified,
 the instance remains unretired with tools revoked for inspection; a lost stop
-response does not prove the process is still running. Codex keeps its own session history, but the new
+response does not prove the process is still running. The CLI keeps its own session history, but the new
 conversation does not continue the old one. Exit the CLI in its terminal first when appropriate. Retired records
 remain historical; a new conversation receives a new UUID. Old input is never
 replayed into it. Old app panes stay excluded from automatic project grouping while
@@ -188,22 +221,34 @@ npm run build
 The dependency-free `node --experimental-strip-types --test scripts/global-ai.test.ts`
 checks provenance, the packed documents, private descriptors, MCP framing/HTTP,
 idempotency, revocation and restart with injected services. The integration fixture uses real
-SQLite and the existing ControlPlane. The private-tmux fixture uses a harmless
-program named codex, not a provider; it never touches the user's tmux server.
+SQLite and the existing ControlPlane. The private-tmux fixtures use harmless
+programs named codex and claude, not providers; they never touch the user's tmux
+server. The claude fixture checks that the exact arguments, including the JSON MCP
+configuration, reach the program and that its orientation is `CLAUDE.md`.
 Existing failing baseline fixtures are not weakened or relabelled by this feature.
 The web gate runs the new checks and TypeScript early so unrelated historical
 workflow failures do not hide A1 validation.
 
-Installed acceptance: record the actual Codex/auth/model/config versions; verify
+Installed acceptance: record the actual Codex or Claude Code/auth/model/config versions; verify
 `/mcp`, an answer grounded in a deliberately blocked disposable run, an answer citing
 a built-in document, startup prompts, multiple browsers, host restart plus explicit access renewal, and
 physical iPhone input. Mock/native fixture success is not this provider/device
 acceptance. Revoking or retiring A1 does not stop workspace agents or erase history.
 
+Recorded for Claude Code 2.1.287 on macOS (October 1, 2026), with a fixture read
+endpoint, not an AltCLI host: a one-shot `claude -p` run with Helper's arguments
+connected only `altcli_read`, called a read tool without asking, and held both a
+Write and a Bash call for approval; started interactively in a new directory, it
+first asked for trust. A Helper conversation launched from AltCLI with Claude Code
+has not been recorded.
+
 ## Primary integration references
 
 - Codex MCP configuration: https://developers.openai.com/codex/mcp/
 - Codex CLI arguments: https://developers.openai.com/codex/cli/reference/
+- Claude Code CLI arguments: https://code.claude.com/docs/en/cli-reference
+- Claude Code MCP configuration: https://code.claude.com/docs/en/mcp
+- Claude Code permission modes and rules: https://code.claude.com/docs/en/permissions
 - MCP stdio transport: https://modelcontextprotocol.io/specification/2025-11-25/basic/transports
 
 These document the integration mechanisms, not successful execution on a particular

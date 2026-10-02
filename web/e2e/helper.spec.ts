@@ -68,3 +68,47 @@ for (const refused of [false, true]) test(`Helper always types without a mode sw
   expect(acquires).toBe(refused ? 3 : 2);
   await expect(helper.getByRole('button', { name: 'Terminal mode', exact: true })).toHaveCount(0);
 });
+for (const switched of [false, true]) test(`Helper names changed settings and offers /model only within one CLI (${switched ? 'CLI switched' : 'model changed'})`, async ({ page }) => {
+  // Browser-only fixture: the launched profile differs from the saved one; no terminal identity, so nothing connects.
+  await page.route('**/api/v1/global-ai', async route => {
+    const response = await route.fetch(), view = await response.json();
+    const launched = { id: 'helper-profile', revision: 1, label: 'Helper', executable: 'codex', args: ['--no-daemon', '-m', 'gpt-old'], adapterHint: 'codex', enabled: true };
+    const saved = switched ? { ...launched, revision: 2, executable: 'claude', args: ['--model', 'sonnet'], adapterHint: 'claude' } : { ...launched, revision: 2, args: ['--no-daemon', '-m', 'gpt-new'] };
+    await route.fulfill({ response, json: { ...view, enabled: true, nativeState: 'unavailable', profiles: [saved],
+      instance: { id: 'helper-fixture', profile: launched, identity: null, sessionId: null, status: 'started', args: [] } } });
+  });
+  await page.goto('/global-ai'); await page.getByLabel('Host access token').fill('a'.repeat(64)); await page.getByRole('button', { name: 'Open console' }).click();
+  const notice = page.getByRole('status').filter({ hasText: 'Helper settings changed' });
+  if (switched) {
+    await expect(notice).toContainText('codex --no-daemon -m gpt-old → claude --model sonnet');
+    await expect(notice).toContainText('applies them.'); await expect(notice).not.toContainText('/model');
+  } else await expect(notice).toContainText('--no-daemon -m gpt-old → --no-daemon -m gpt-new. Restart with saved settings applies them, or type /model');
+});
+test('Session restarts the conversation with another chosen profile after one confirmation of its exact command', async ({ page }) => {
+  // Browser-only fixture of the host's preview, retire and start responses; their server behavior has unit and native coverage.
+  const launched = { id: 'helper-codex', revision: 1, label: 'Helper', executable: 'codex', args: ['--no-daemon', '-m', 'gpt-old'], adapterHint: 'codex', enabled: true };
+  const other = { id: 'helper-claude', revision: 1, label: 'Claude Opus max', executable: 'claude', args: ['--model', 'opus', '--effort', 'max'], adapterHint: 'claude', enabled: true };
+  const actions: Record<string, unknown>[] = [];
+  await page.route('**/api/v1/global-ai', async route => {
+    const response = await route.fetch(), view = await response.json();
+    const json = { ...view, enabled: true, nativeState: 'unavailable', profiles: [launched, other],
+      instance: { id: 'helper-fixture', profile: launched, identity: null, sessionId: null, status: 'started', args: launched.args, executable: 'codex' } };
+    if (route.request().method() !== 'POST') return route.fulfill({ response, json });
+    const body = route.request().postDataJSON(); actions.push(body);
+    if (body.action === 'preview') return route.fulfill({ json: { id: crypto.randomUUID(), digest: 'fixture-digest', expiresAt: new Date(Date.now() + 60000).toISOString(),
+      profile: other, executable: '/usr/local/bin/claude', args: [...other.args, '--permission-mode', 'manual'], directory: '/data/global-ai/next', sessionName: 'altcli-global-next' } });
+    return route.fulfill({ json });
+  });
+  await page.goto('/global-ai'); await page.getByLabel('Host access token').fill('a'.repeat(64)); await page.getByRole('button', { name: 'Open console' }).click();
+  await page.getByRole('navigation', { name: 'Helper sections' }).getByRole('button', { name: 'Session', exact: true }).click();
+  const session = page.getByRole('region', { name: 'Helper session' }), choice = session.getByLabel('Restart Helper with');
+  await expect(choice).toHaveValue(launched.id); await expect(choice.locator('option')).toHaveText(['Helper (this conversation)', 'Claude Opus max']);
+  await choice.selectOption(other.id);
+  let asked = ''; page.once('dialog', d => { asked = d.message(); void d.accept(); });
+  await session.getByRole('button', { name: 'Restart', exact: true }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Restarted Helper with “Claude Opus max”' })).toBeVisible();
+  expect(asked).toContain('/usr/local/bin/claude --model opus --effort max --permission-mode manual');
+  expect(actions.map(a => a.action)).toEqual(['preview', 'retire', 'start']);
+  expect(actions[0]).toEqual({ action: 'preview', profileId: other.id });
+  expect(actions[1]).toEqual({ action: 'retire', instanceId: 'helper-fixture', confirm: true, stop: true });
+});

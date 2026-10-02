@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -22,7 +22,7 @@ test('private tmux: Git-free Global AI startup is inspectable before agent recog
   await mkdir(config.dataDir, { recursive: true, mode: 0o700 });
   const binary = join(directory, 'codex');
   await writeFile(binary, '#!/bin/sh\nprintf "Fixture startup: resolve login in the native terminal\\n"\nexec /bin/cat\n', { mode: 0o700 });
-  const profile: LaunchProfile = { id: 'fixture', revision: 1, label: 'Fixture Codex', executable: binary, args: [], adapterHint: 'codex', enabled: true };
+  const profile: LaunchProfile = { id: 'fixture', revision: 1, label: 'Fixture Codex', executable: binary, args: [], adapterHint: 'codex', enabled: true, purpose: 'helper' };
   const host = new NativeGlobalHost(config, resolve(process.cwd(), '..')), records = new Map<string, GlobalAIInstance>();
   const reads = new AppReads({ kb: { documents: [] }, featureFlags: () => ({}),
     state: async () => { throw new Error('No fixture state read expected.'); }, workspaces: async () => { throw new Error('No fixture discovery expected.'); }, run: () => undefined });
@@ -54,5 +54,34 @@ test('private tmux: Git-free Global AI startup is inspectable before agent recog
     await run(['kill-window', '-t', extra]);
     await service.retire({ instanceId: second.id, confirm: true, stop: true });
     await assert.rejects(host.inspect(second)); assert.equal((await host.inspect(instance)).dead, false);
+  } finally { await run(['kill-server']).catch(() => {}); await rm(directory, { recursive: true, force: true }); }
+});
+test('private tmux: a Claude Code Helper receives its exact arguments and CLAUDE.md orientation', { skip: !hasTmux }, async () => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'altcli-global-')));
+  const config = loadConfig({ ALTCLI_TOKEN: 'a'.repeat(64), ALTCLI_DATA_DIR: directory, ALTCLI_TMUX_SOCKET: join(directory, 't.sock'),
+    ALTCLI_ENABLE_TERMINAL: 'true', ALTCLI_ENABLE_AGENT_LAUNCH: 'true' });
+  await mkdir(config.dataDir, { recursive: true, mode: 0o700 });
+  // A harmless program named claude, not the provider: it records its argv in its working directory, then echoes input.
+  const binary = join(directory, 'claude');
+  await writeFile(binary, '#!/bin/sh\nprintf "%s\\n" "$@" > argv.txt\nprintf "Fixture startup\\n"\nexec /bin/cat\n', { mode: 0o700 });
+  const profile: LaunchProfile = { id: 'fixture', revision: 1, label: 'Fixture Claude', executable: binary, args: ['--model', 'sonnet'], adapterHint: 'claude', enabled: true, purpose: 'helper' };
+  const host = new NativeGlobalHost(config, resolve(process.cwd(), '..')), records = new Map<string, GlobalAIInstance>();
+  const reads = new AppReads({ kb: { documents: [] }, featureFlags: () => ({}),
+    state: async () => { throw new Error('No fixture state read expected.'); }, workspaces: async () => { throw new Error('No fixture discovery expected.'); }, run: () => undefined });
+  const service = new GlobalAIService({ repository: { all: () => [...records.values()], save: i => { records.set(i.id, structuredClone(i)); } },
+    host, reads, directory: join(config.dataDir, 'global-ai'), profiles: () => [profile], enabled: () => true, launchGuard: work => work() });
+  const run = terminalRunner(config);
+  try {
+    const preview = await service.preview({ profileId: 'fixture' }, 'http://127.0.0.1:8787');
+    const instance = (await service.start({ id: preview.id, digest: preview.digest, requestId: preview.id, confirm: true })).instance!;
+    assert.equal(instance.status, 'started', instance.message);
+    await eventually(async () => /Fixture startup/.test(await host.capture(instance)));
+    // tmux passes the JSON MCP configuration through unchanged, and the program starts in the private directory it is told about.
+    assert.deepEqual((await readFile(join(instance.directory, 'argv.txt'), 'utf8')).split('\n').slice(0, -1), instance.args);
+    assert.ok(instance.args.includes('manual'));
+    assert.match(await readFile(join(instance.directory, 'CLAUDE.md'), 'utf8'), /^# AltCLI Helper/);
+    await assert.rejects(readFile(join(instance.directory, 'AGENTS.md')));
+    await service.retire({ instanceId: instance.id, confirm: true, stop: true });
+    await assert.rejects(host.inspect(instance));
   } finally { await run(['kill-server']).catch(() => {}); await rm(directory, { recursive: true, force: true }); }
 });

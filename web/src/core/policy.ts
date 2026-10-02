@@ -36,12 +36,18 @@ export function lacksCodexNoDaemon(profile: { adapterHint: string; executable: s
 }
 /** A display hint cannot establish how a shell or wrapper passes arguments to Codex. */
 export const isDirectCodexProfile = (profile: { executable: string }): boolean => /(^|\/)codex$/.test(profile.executable);
-/** The only model and reasoning values a Global AI (A1) launch accepts. Settings saves them in the profile with this label. */
+export const isDirectClaudeProfile = (profile: { executable: string }): boolean => /(^|\/)claude$/.test(profile.executable);
+/** The default name of the first Helper profile, which Chat preselects among Helper's launch profiles. */
 export const GLOBAL_AI_PROFILE_LABEL = "Helper";
-/** The label saved before the Helper rename. Such a profile is still found until Settings saves it under the current label. */
+/** The label saved before the Helper rename. Such a profile is still preselected; it keeps its name unless renamed in Settings. */
 const LEGACY_GLOBAL_AI_PROFILE_LABEL = "Global AI";
+/** The names the earlier single-profile Settings → Helper saved its profile under. */
+export const isGlobalAIProfileLabel = (label: string): boolean => label === GLOBAL_AI_PROFILE_LABEL || label === LEGACY_GLOBAL_AI_PROFILE_LABEL;
 export function findGlobalAIProfile<T extends { label: string }>(profiles: T[]): T | undefined {
   return profiles.find((p) => p.label === GLOBAL_AI_PROFILE_LABEL) ?? profiles.find((p) => p.label === LEGACY_GLOBAL_AI_PROFILE_LABEL);
 }
+/** The only model and reasoning values a Global AI (A1) launch accepts. */
 export const GLOBAL_AI_MODEL = /^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$/;
 export const GLOBAL_AI_EFFORTS = ["minimal", "low", "medium", "high", "xhigh"] as const;
+/** Claude Code's --effort levels; Codex's are GLOBAL_AI_EFFORTS. */
+export const GLOBAL_AI_CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;

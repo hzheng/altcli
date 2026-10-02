@@ -5,6 +5,12 @@ import type { LaunchProfile } from '../../contracts/launches.ts';
 import type { PaneIdentity } from '../../contracts/api.ts';
 import { AppReads, APP_TOOLS, fields, GlobalAIError, hash, text } from './reads.ts';
 import { codexProfileArgs } from './codex.ts';
+import { claudeProfileArgs } from './claude.ts';
+
+/** The profile arguments Helper accepts for its CLI, Codex or Claude Code; any other profile or argument is refused. */
+export function helperProfileArgs(profile: LaunchProfile): string[] {
+  return profile.adapterHint === 'claude' ? claudeProfileArgs(profile) : codexProfileArgs(profile);
+}
 
 export interface InstanceRepository {
   all(): GlobalAIInstance[];
@@ -60,9 +66,9 @@ export class GlobalAIService {
     }
   }
   private active(): GlobalAIInstance | null { return this.services.repository.all().find(i => i.status !== 'retired') ?? null; }
-  /** Enabled profiles whose arguments A1 accepts. Listing is advisory: preview validates the chosen profile again. */
+  /** Enabled Helper profiles whose arguments A1 accepts. Listing is advisory: preview validates the chosen profile again. */
   launchableProfiles(): LaunchProfile[] {
-    return this.services.profiles().filter(p => { if (!p.enabled) return false; try { codexProfileArgs(p); return true; } catch { return false; } });
+    return this.services.profiles().filter(p => { if (!p.enabled || p.purpose !== 'helper') return false; try { helperProfileArgs(p); return true; } catch { return false; } });
   }
   instance(id: string): GlobalAIInstance | undefined { return this.services.repository.all().find(i => i.id === id); }
   private checkEnabled() { if (!this.services.enabled()) throw new GlobalAIError('GLOBAL_AI_DISABLED', 'Enable host input, native terminals and agent launch before starting Helper.', 403); }
@@ -95,8 +101,8 @@ export class GlobalAIService {
   async preview(value: unknown, origin: string): Promise<GlobalAIPreview> {
     this.checkEnabled();
     const b = fields(value, ['profileId']);
-    const profile = this.services.profiles().find(p => p.id === text(b.profileId) && p.enabled);
-    if (!profile) throw new GlobalAIError('PROFILE_UNKNOWN', 'Choose an enabled launch profile.');
+    const profile = this.services.profiles().find(p => p.id === text(b.profileId) && p.enabled && p.purpose === 'helper');
+    if (!profile) throw new GlobalAIError('PROFILE_UNKNOWN', 'Choose an enabled Helper profile.');
     const executable = await this.services.host.executable(profile);
     const id = randomUUID(), directory = join(this.services.directory, id), args = this.services.host.args(profile, directory);
     const environment = this.services.host.environmentHash(), endpoint = toolEndpoint(origin), expiresAt = new Date(Date.now() + 120000).toISOString();
@@ -190,7 +196,7 @@ export class GlobalAIService {
           if (error instanceof GlobalAIError) throw new GlobalAIError('GLOBAL_IDENTITY', `${error.message} Nothing was stopped or retired; app tools are revoked.`);
           throw new GlobalAIError('GLOBAL_IDENTITY', 'Stopping Helper could not be verified. It was not retired and app tools are revoked; inspect its original session before trying again.');
         }
-        this.update(instance, { status: 'retired', message: 'Stopped and retired by the owner. Codex keeps its own session history.' });
+        this.update(instance, { status: 'retired', message: 'Stopped and retired by the owner. The CLI keeps its own session history.' });
       }
       if (instance.status !== 'retired') this.update(instance, { status: 'retired', message: 'App access retired by the owner. CLI/session and provider conversation are not deleted or stopped.' });
       return this.view();

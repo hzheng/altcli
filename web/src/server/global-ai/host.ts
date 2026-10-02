@@ -12,8 +12,9 @@ import { terminalRunner, tmuxLiteral } from '../terminal-environment.ts';
 import { childEnvironmentArgs, launchEnvironment } from '../launches.ts';
 import { resolveWorktree } from '../worktree.ts';
 import { GLOBAL_ORIENTATION, codexProfileArgs } from './codex.ts';
+import { claudeProfileArgs } from './claude.ts';
 import { hash, GlobalAIError } from './reads.ts';
-import type { GlobalHost } from './service.ts';
+import { helperProfileArgs, type GlobalHost } from './service.ts';
 
 async function privateDirectory(path: string): Promise<void> {
   await mkdir(path, { recursive: true, mode: 0o700 });
@@ -40,13 +41,18 @@ export class NativeGlobalHost implements GlobalHost {
   }
   environmentHash(): string { return hash(this.environment()); }
   async executable(profile: LaunchProfile): Promise<string> {
-    codexProfileArgs(profile);
+    helperProfileArgs(profile);
     const path = resolveExecutable(profile.executable, this.environment());
-    if (!path) throw new GlobalAIError('CLI_MISSING', 'Codex is not executable on the host PATH. Install/sign in yourself before launching.');
+    if (!path) throw new GlobalAIError('CLI_MISSING', `${profile.adapterHint === 'claude' ? 'Claude Code' : 'Codex'} is not executable on the host PATH. Install/sign in yourself before launching.`);
     return realpath(path);
   }
   args(profile: LaunchProfile, directory: string): string[] {
     const mcp = { command: process.execPath, args: [this.bridge, join(directory, 'connection.json')], enabled: true };
+    // Manual mode retains Claude Code's existing permission rules and hooks; only the AltCLI read server is explicitly allowed here.
+    // tmux starts it in the directory. The variadic --allowedTools stays last, so it cannot take another argument.
+    if (profile.adapterHint === 'claude') return [...claudeProfileArgs(profile), '--permission-mode', 'manual', '--strict-mcp-config',
+      '--mcp-config', JSON.stringify({ mcpServers: { altcli_read: { type: 'stdio', command: mcp.command, args: mcp.args } } }),
+      '--allowedTools', 'mcp__altcli_read'];
     return [...codexProfileArgs(profile), '--cd', directory, '--sandbox', 'read-only',
       '-c', `mcp_servers.altcli_read.command=${JSON.stringify(mcp.command)}`,
       '-c', `mcp_servers.altcli_read.args=${JSON.stringify(mcp.args)}`,
@@ -58,7 +64,7 @@ export class NativeGlobalHost implements GlobalHost {
     if (await resolveWorktree(instance.directory)) throw new GlobalAIError('APP_DIRECTORY', 'Helper must start outside a Git worktree; choose another AltCLI data directory.');
     const script = await lstat(this.bridge);
     if (!script.isFile() || script.isSymbolicLink()) throw new GlobalAIError('MCP_MISSING', 'The installed Helper MCP bridge is missing.');
-    await privateFile(join(instance.directory, 'AGENTS.md'), GLOBAL_ORIENTATION);
+    await privateFile(join(instance.directory, instance.profile.adapterHint === 'claude' ? 'CLAUDE.md' : 'AGENTS.md'), GLOBAL_ORIENTATION);
     await this.descriptor(instance, descriptor);
   }
   async descriptor(instance: GlobalAIInstance, descriptor: { endpoint: string; token: string }): Promise<void> {

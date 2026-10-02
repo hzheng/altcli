@@ -7,8 +7,8 @@ import { findGlobalAIProfile } from '../core/policy';
 import { NativeTerminal } from './NativeTerminal';
 import styles from './GlobalAI.module.css';
 
-/** Console's Helper tab sections; Guide is Console's own general explanation, the others are rendered here. */
-export type HelperSection = 'chat' | 'session' | 'evidence' | 'guide';
+/** Console's Helper tab sections; Settings (GlobalAISettings) and Guide, the general explanation, are Console's; the others are rendered here. */
+export type HelperSection = 'chat' | 'session' | 'settings' | 'evidence' | 'guide';
 type View = GlobalAIView & { profiles: LaunchProfile[]; fallback: string; capturedAt: string; manualHeld: boolean };
 type RunSummary = { id: string; workspace: string; status: string; reason: string };
 const examples = ['Why is this run blocked, and what should I do next?', 'Which runs need my attention?', 'Explain Commit versus Relay in this installed version.'];
@@ -16,13 +16,13 @@ const examples = ['Why is this run blocked, and what should I do next?', 'Which 
 /** Helper's Chat, Session and Evidence sections: the native conversation (or its explicit start flow), its app access, and the read
  * evidence. Not another task composer or autonomous scheduler. All stay mounted, so switching keeps the terminal connected and typing.
  * It uses Console's unlocked token and browser identity, so Lock ends it with the rest of the page. */
-export function GlobalAI({ token, clientInstanceId, section, onSection, onSetup }: {
-  token: string; clientInstanceId: string; section: HelperSection; onSection: (next: HelperSection) => void; onSetup: () => void;
+export function GlobalAI({ token, clientInstanceId, section, onSection, profilesVersion }: {
+  token: string; clientInstanceId: string; section: HelperSection; onSection: (next: HelperSection) => void; profilesVersion: number;
 }) {
   const [view, setView] = useState<View | null>(null), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [profile, setProfile] = useState(''), [preview, setPreview] = useState<GlobalAIPreview | null>(null);
   const [confirmed, setConfirmed] = useState(false), [busy, setBusy] = useState(false), [unknownStart, setUnknownStart] = useState(false);
-  const [runs, setRuns] = useState<RunSummary[]>([]), [evidence, setEvidence] = useState<ToolReply | null>(null);
+  const [runs, setRuns] = useState<RunSummary[]>([]), [evidence, setEvidence] = useState<ToolReply | null>(null), [restartWith, setRestartWith] = useState('');
   const reading = useRef(false), operating = useRef(false);
   const refresh = useCallback(async () => {
     if (reading.current) return;
@@ -30,15 +30,16 @@ export function GlobalAI({ token, clientInstanceId, section, onSection, onSetup 
     try {
       const next = await api<View>(token, 'global-ai');
       setView(next); setError('');
-      // Preselect the profile saved in Settings → Helper; choosing it still launches nothing.
-      setProfile(current => current || (findGlobalAIProfile(next.profiles)?.id ?? ''));
+      // Keep the chosen profile while the host lists it; otherwise preselect the one named Helper, or the first. Choosing launches nothing.
+      setProfile(current => next.profiles.some(p => p.id === current) ? current : (findGlobalAIProfile(next.profiles) ?? next.profiles[0])?.id ?? '');
     } catch (e) { setError(e instanceof Error ? e.message : 'Could not read Helper state.'); }
     finally { reading.current = false; }
   }, [token]);
+  // Also reads again at once when Settings saves the profile, so Chat and the changed-settings notice need not wait for the poll.
   useEffect(() => {
     void refresh(); const timer = setInterval(() => void refresh(), 5000);
     return () => clearInterval(timer);
-  }, [refresh]);
+  }, [refresh, profilesVersion]);
   async function action(body: unknown): Promise<unknown> {
     return api(token, 'global-ai', { body });
   }
@@ -54,23 +55,25 @@ export function GlobalAI({ token, clientInstanceId, section, onSection, onSetup 
     if (name === 'list_runs') setRuns((result.data as { runs: RunSummary[] }).runs);
   };
   const change = () => { setPreview(null); setConfirmed(false); };
-  /** One confirmation of the exact new command, then: stop the old CLI and its session, retire it, and start with the saved profile. */
+  /** One confirmation of the exact new command, then: stop the old CLI and its session, retire it, and start with the chosen profile as saved. */
   const restart = (instanceId: string, profileId: string) => void operate(async () => {
     const next = await action({ action: 'preview', profileId }) as GlobalAIPreview;
-    if (!window.confirm(`Restart Helper with:\n${[next.executable, ...next.args].join(' ')}\n\nThis stops the current Codex and its tmux session, then starts a new conversation that shares AltCLI records for all projects with the model provider. Codex keeps its own session history; the new conversation does not continue the old one.`)) return;
+    if (!window.confirm(`Restart Helper with:\n${[next.executable, ...next.args].join(' ')}\n\nThis stops the current CLI and its tmux session, then starts a new conversation that shares AltCLI records for all projects with the model provider. The CLI keeps its own session history; the new conversation does not continue the old one.`)) return;
     await action({ action: 'retire', instanceId, confirm: true, stop: true });
     setUnknownStart(true);
     try { await action({ action: 'start', id: next.id, digest: next.digest, requestId: crypto.randomUUID(), confirm: true }); }
     catch (e) { if (e instanceof HttpError && e.status < 500) setUnknownStart(false); throw e; }
-    setUnknownStart(false); onSection('chat'); setNotice('Restarted Helper with the saved settings.');
+    setUnknownStart(false); onSection('chat'); setNotice(`Restarted Helper with “${next.profile.label}”.`);
   });
   // A running conversation keeps the profile it was launched with; Settings edits apply only after a restart.
   const launched = view?.instance?.profile, saved = launched && view.profiles.find(p => p.id === launched.id);
+  // Session restarts with this conversation's profile unless another is chosen.
+  const restartId = view?.profiles.some(p => p.id === restartWith) ? restartWith : saved?.id ?? view?.profiles[0]?.id ?? '';
   const commandOf = (p: LaunchProfile) => [p.executable, ...p.args].join(' ');
   const outdated = !!(launched && saved && commandOf(saved) !== commandOf(launched));
   // Usually only the model or effort changed: show the arguments, and the executable only when it differs.
   const shownOf = (p: LaunchProfile) => launched && saved && launched.executable !== saved.executable ? commandOf(p) : p.args.join(' ') || '(no arguments)';
-  const setup = <button type="button" className="inline-link" onClick={onSetup}>Settings → Helper</button>;
+  const setup = <button type="button" className="inline-link" onClick={() => onSection('settings')}>Settings</button>;
   const terminalReady = !!(view?.instance?.identity && view.instance.sessionId && view.nativeState !== 'unavailable');
   const allowance = <p>Uses the selected CLI&apos;s existing sign-in and allowance. No paid fallback is selected. Actual model and remaining quota are unknown.</p>;
   const disabled = view && !view.enabled && <p className={styles.warning}>Starting Helper requires a tmux host with input, native terminal and agent-launch flags enabled. App evidence remains readable.</p>;
@@ -78,8 +81,9 @@ export function GlobalAI({ token, clientInstanceId, section, onSection, onSetup 
     <p className="muted">A separate conversation with read-only app context. No background jobs or automatic approvals.</p>
     {error && <p role="alert" className={styles.warning}>{error}</p>}{notice && <p role="status">{notice}</p>}
     {outdated && <p role="status" className={styles.warning}>Helper settings changed after this conversation started: <code>{shownOf(launched!)}</code> → <code>{shownOf(saved!)}</code>.{' '}
-      <button type="button" className="inline-link" disabled={busy || !view!.enabled} onClick={() => restart(view!.instance!.id, saved!.id)}>Restart with saved settings</button> applies them,
-      or type <code>/model</code> in the terminal to switch this conversation&apos;s model without restarting.</p>}
+      <button type="button" className="inline-link" disabled={busy || !view!.enabled} onClick={() => restart(view!.instance!.id, saved!.id)}>Restart with saved settings</button> applies them
+      {/* /model cannot switch to another CLI. */}
+      {launched!.adapterHint === saved!.adapterHint ? <>, or type <code>/model</code> in the terminal to switch this conversation&apos;s model without restarting.</> : '.'}</p>}
     {!view && <p>Loading host state…</p>}
     {view && <>
       <div hidden={section !== 'chat'}>
@@ -95,10 +99,10 @@ export function GlobalAI({ token, clientInstanceId, section, onSection, onSetup 
           <h2>Start a conversation</h2>
           {allowance}{disabled}
           <label>Launch profile<select aria-label="Helper launch profile" value={profile} disabled={busy || unknownStart} onChange={e => { setProfile(e.target.value); change(); }}>
-            <option value="">Choose a Codex profile</option>{view.profiles.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+            <option value="">Choose a launch profile</option>{view.profiles.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
           </select></label>
-          {!view.profiles.length && <p className={styles.warning}>No profile can launch Helper yet. Choose its model in {setup}; it appears here once saved.</p>}
-          <p>Set the model in {setup}. Only enabled direct Codex profiles limited to model, reasoning effort, --no-daemon and --no-alt-screen are listed. Nothing launches on page load.</p>
+          {!view.profiles.length && <p className={styles.warning}>No profile can launch Helper yet. Create one in {setup}; it appears here once saved.</p>}
+          <p>Create and edit profiles in {setup}. Only enabled direct Codex or Claude Code profiles limited to model and reasoning effort (and Codex&apos;s --no-daemon and --no-alt-screen) are listed. Nothing launches on page load.</p>
           <p>Helper reads AltCLI records (runs, status, branches and agents) for every project on this host. The user-operated CLI is not an OS sandbox.</p>
           <p>Once it starts, ask in its terminal here. For example: {examples.join(' · ')}</p>
           <button type="button" disabled={busy || !profile || !view.enabled || unknownStart} onClick={() => void operate(async () => {
@@ -125,7 +129,11 @@ export function GlobalAI({ token, clientInstanceId, section, onSection, onSetup 
           <p>Shares AltCLI records for every project on this host.</p>
           <details><summary>Launch identity and command</summary><p>{view.instance.id}</p><p>{view.instance.directory}</p><pre>{JSON.stringify([view.instance.executable, ...view.instance.args], null, 2)}</pre></details>
           <div className={styles.tools}>
-            <button type="button" disabled={busy || !saved || !view.enabled} onClick={() => restart(view.instance!.id, saved!.id)}>Restart with saved settings</button>
+            <label>Restart with<select aria-label="Restart Helper with" value={restartId} disabled={busy || !view.profiles.length} onChange={e => setRestartWith(e.target.value)}>
+              {view.profiles.map(p => <option key={p.id} value={p.id}>{p.label}{p.id === launched?.id ? ' (this conversation)' : ''}</option>)}</select></label>
+            <button type="button" disabled={busy || !restartId || !view.enabled} onClick={() => restart(view.instance!.id, restartId)}>Restart</button>
+          </div>
+          <div className={styles.tools}>
             <button type="button" disabled={busy} onClick={() => void operate(async () => { await action({ action: 'revoke' }); setNotice('AltCLI tool access revoked. The CLI and its conversation were not stopped.'); })}>Revoke app tools</button>
             <button type="button" disabled={busy || !view.enabled || view.instance.status !== 'started'} onClick={() => {
               const id = view.instance!.id;
@@ -138,7 +146,7 @@ export function GlobalAI({ token, clientInstanceId, section, onSection, onSetup 
                 void operate(async () => { await action({ action: 'retire', instanceId: id, confirm: true }); change(); setNotice('App access retired; original tmux session and history retained.'); });
             }}>Retire app access</button>
           </div>
-          {!saved && <p>Its launch profile was deleted or can no longer launch Helper, so it cannot restart with saved settings. Retire it, then start with another profile.</p>}
+          {!saved && <p>Its launch profile was deleted or can no longer launch Helper. Restart with another profile, or retire it.</p>}
         </> : <p>No Helper conversation is running.{' '}
           <button type="button" className="inline-link" onClick={() => onSection('chat')}>Start one in Chat</button></p>}
       </section>

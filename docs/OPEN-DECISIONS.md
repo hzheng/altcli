@@ -106,8 +106,8 @@ both flags.
 
 These choices concern the remaining proposed work and acceptance of
 [ADR-0022](adr/ADR-0022-app-wide-ai-instances.md) and
-[ADR-0023](adr/ADR-0023-app-tools-and-delegated-authority.md). A1's current Codex
-instance and read-only MCP contract are documented in [GLOBAL-AI](GLOBAL-AI.md);
+[ADR-0023](adr/ADR-0023-app-tools-and-delegated-authority.md). A1's current Codex or
+Claude Code instance and read-only MCP contract are documented in [GLOBAL-AI](GLOBAL-AI.md);
 installed-provider acceptance remains open. Recording these choices does
 not authorize unattended launch, change human approvals or lift current deferrals.
 The [roadmap](../ROADMAP.md#proposed-app-wide-assistance-and-completion-work) gives

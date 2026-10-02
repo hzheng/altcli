@@ -377,7 +377,7 @@ test('Settings shows the effective host configuration and the console preference
   await sections.getByRole('button', { name: 'Settings', exact: true }).click();
   // Console preferences is the first subtab and opens by default; Host configuration is one click away.
   const subtabs = page.getByRole('navigation', { name: 'Settings sections' });
-  await expect(subtabs.getByRole('button')).toHaveText(['Console preferences', 'Host configuration', 'Helper']);
+  await expect(subtabs.getByRole('button')).toHaveText(['Console preferences', 'Host configuration']);
   await expect(subtabs.getByRole('button', { name: 'Console preferences', exact: true })).toHaveAttribute('aria-pressed', 'true');
   const host = page.getByRole('region', { name: 'Host configuration' });
   await expect(page.getByRole('region', { name: 'Console preferences' })).toBeVisible(); await expect(host).toBeHidden();
@@ -397,7 +397,7 @@ test('Settings shows the effective host configuration and the console preference
   await expect(page.getByRole('heading', { name: 'Helper', exact: true })).toBeVisible();
   // Helper opens on Chat; the general explanation is its Guide section, whose heading keeps Control access.
   const helper = page.getByRole('navigation', { name: 'Helper sections' });
-  await expect(helper.getByRole('button')).toHaveText(['Chat', 'Session', 'Evidence', 'Guide']);
+  await expect(helper.getByRole('button')).toHaveText(['Chat', 'Session', 'Settings', 'Evidence', 'Guide']);
   await expect(helper.getByRole('button', { name: 'Chat', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await helper.getByRole('button', { name: 'Guide', exact: true }).click();
   await expect(page.getByRole('region', { name: 'How this works' })).toContainText('No effect in this page sends commands');

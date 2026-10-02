@@ -8,6 +8,8 @@ import { useTildify } from '../client/home';
 import { isDirectCodexProfile, lacksCodexNoDaemon } from '../core/policy';
 import { LaunchCleanup } from './LaunchCleanup';
 import { prepared, useLatest, useMounted, useOverride, type Override } from './Holds';
+/** Helper's profiles cannot launch a worktree agent. */
+const agentProfiles = (all: LaunchProfile[]) => all.filter(p => p.purpose !== 'helper');
 export function LaunchAgents({token,projectId,tree,sessions,enabled,inputEnabled,override,onChanged,viewEpoch=0,requested=0,busy:outerBusy=false}:{token:string;projectId:string;tree:ProjectWorktree;sessions:SessionRegistration[];enabled:boolean;inputEnabled:boolean;override:Override|null;onChanged:(notice:string)=>Promise<void>;viewEpoch?:number;requested?:number;busy?:boolean}) {
   const [open,setOpen]=useState(false),[profiles,setProfiles]=useState<LaunchProfile[]>([]),[agents,setAgents]=useState<{profileId:string}[]>([]),[preview,setPreview]=useState<LaunchPreview|null>(null),[batches,setBatches]=useState<LaunchBatch[]>([]);
   // Manual input holds launches; one acknowledgement stops and records it before the preview and again before launching.
@@ -19,7 +21,7 @@ export function LaunchAgents({token,projectId,tree,sessions,enabled,inputEnabled
     s.identity.socketPath===item.identity.socketPath&&s.identity.serverPid===item.identity.serverPid&&s.identity.serverStarted===item.identity.serverStarted&&
     s.identity.paneId===item.identity.paneId&&s.identity.panePid===item.identity.panePid)?.label??item.sessionName;
   const refresh=async()=>{setBatches(await api<LaunchBatch[]>(token,'launches'));};
-  useEffect(()=>{if(requested){setOpen(true);void api<LaunchProfile[]>(token,'launch-profiles').then(setProfiles).catch(e=>setError(e.message));}},[requested,token]);
+  useEffect(()=>{if(requested){setOpen(true);void api<LaunchProfile[]>(token,'launch-profiles').then(all=>setProfiles(agentProfiles(all))).catch(e=>setError(e.message));}},[requested,token]);
   // The explicit launch shortcut selects Agents before scrolling to its form.
   useEffect(()=>{if(open&&requested&&requested!==scrolledRequest.current){form.current?.scrollIntoView({block:'start'});scrolledRequest.current=requested;}},[open,requested]);
   useEffect(()=>{setPreview(null);},[viewEpoch,tree.head,tree.branch,enabled,held]);
@@ -47,7 +49,7 @@ export function LaunchAgents({token,projectId,tree,sessions,enabled,inputEnabled
       {inspectId===item.id&&<div><p>Inspect the original operation, all possible sessions and background effects on the host. A missing session does not prove the program never ran. This releases the reservation and retains that uncertainty in history.</p><label>Inspection note<input value={note} maxLength={1000} onChange={e=>setNote(e.target.value)}/></label><button type="button" disabled={!note.trim()||busy} onClick={()=>void act(async()=>{await api(token,`launches/${item.id}/reconcile`,{body:{requestId:crypto.randomUUID(),confirmInspected:true,note}});setInspectId(null);await refresh();await onChanged('Launch reconciled by human inspection. Nothing was replayed.');})}>Record inspected reconciliation</button><button type="button" onClick={()=>setInspectId(null)}>Cancel</button></div>}
     </div>;})}
     </section>}
-    <button type="button" disabled={!enabled||busy||!!tree.error} onClick={()=>void act(async()=>{setOpen(x=>!x);setProfiles(await api<LaunchProfile[]>(token,'launch-profiles'));await refresh();})}>Launch agents…</button>
+    <button type="button" disabled={!enabled||busy||!!tree.error} onClick={()=>void act(async()=>{setOpen(x=>!x);setProfiles(agentProfiles(await api<LaunchProfile[]>(token,'launch-profiles')));await refresh();})}>Launch agents…</button>
     {open&&<section ref={form} aria-label={`Launch agents in ${tree.path}`}><h3>Launch agents in {tree.branch??'detached HEAD'}</h3><p className="mono">{tilde(tree.path)}</p>
       {!profiles.some(p=>p.enabled)&&<p>Create an enabled Launch profile in Settings first.</p>}
       {proceed.node}

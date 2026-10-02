@@ -275,6 +275,22 @@ test('profile previews freeze revisions; launch confirmations are idempotent and
   const next=await plane.launches.preview(input);await plane.launches.profile({label:'Changed',executable:'codex',args:[],adapterHint:'codex',enabled:true,expectedRevision:profile.revision},profile.id);
   await assert.rejects(plane.launches.confirm({requestId:next.requestId,previewDigest:next.digest,confirm:true}),/changed/);assert.equal(plane.launches.batches().length,1);
 });
+test('agent and Helper profiles stay apart: purpose defaults to agent, never changes, and a Helper profile launches no worktree agent',async()=>{
+  const agent=(await plane.launches.profile({label:'Agent Codex',executable:'codex',args:['--no-daemon'],adapterHint:'codex',enabled:true}))!;assert.equal(agent.purpose,'agent');
+  const helper=(await plane.launches.profile({label:'Opus',executable:'claude',args:['--model','opus'],adapterHint:'claude',enabled:true,purpose:'helper'}))!;
+  // A Helper profile is always one Helper can launch, and an update keeps the purpose the profile was created with.
+  await assert.rejects(plane.launches.profile({label:'Bypass',executable:'claude',args:['--dangerously-skip-permissions'],adapterHint:'claude',enabled:true,purpose:'helper'}),{code:'PROFILE_ARGS'});
+  await assert.rejects(plane.launches.profile({label:'Agent Codex',executable:'codex',args:['--no-daemon'],adapterHint:'codex',enabled:true,purpose:'helper',expectedRevision:agent.revision},agent.id),{code:'PROFILE_PURPOSE'});
+  assert.equal((await plane.launches.profile({label:'Opus max',executable:'claude',args:['--model','opus','--effort','max'],adapterHint:'claude',enabled:true,expectedRevision:helper.revision},helper.id))!.purpose,'helper');
+  const p=await plane.projects.add({path:'/demo/new'});const tree=(await plane.projects.discover([],[])).find(x=>x.id===p.id)!.worktrees[0]!;
+  await assert.rejects(plane.launches.preview({projectId:p.id,items:[{worktreeId:tree.id,profileId:helper.id,count:1}]}),{code:'PROFILE_PURPOSE'});
+  // Rows saved before purposes existed are agent profiles, except the one the earlier Settings → Helper saved: so named, and launchable by Helper.
+  try {
+    for(const [id,label,executable,args] of [['legacy-helper','Global AI','codex',['--no-daemon','-m','gpt-old']],['legacy-wrapper','Helper','/bin/zsh',['-lc','codex']],['legacy-agent','Codex','codex',['--no-daemon']]] as const)
+      store.db.prepare('INSERT INTO launch_profiles(id,value) VALUES(?,?)').run(id,JSON.stringify({id,revision:1,label,executable,args,adapterHint:'codex',enabled:true}));
+    assert.deepEqual(plane.launches.profiles().filter(x=>x.id.startsWith('legacy-')).map(x=>[x.id,x.purpose]),[['legacy-helper','helper'],['legacy-wrapper','agent'],['legacy-agent','agent']]);
+  } finally { store.db.prepare("DELETE FROM launch_profiles WHERE id LIKE 'legacy-%'").run(); }
+});
 test('short session names stay unique across worktrees: live names are skipped, and a name reserved after the live read refuses the confirm',async()=>{
   const first=await plane.projects.add({path:'/demo/first'}),second=await plane.projects.add({path:'/demo/second'});const trees=await plane.projects.discover([],[]);
   const tree=(id:string)=>trees.find(x=>x.id===id)!.worktrees[0]!;

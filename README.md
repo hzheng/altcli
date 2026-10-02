@@ -125,7 +125,7 @@ not stop a run. A backend restart pauses owned runs without replaying commands.
 | Native terminal and explicit launch | Implemented; setup enables both host flags (a missing flag means off); installed-host/mobile acceptance remains open |
 | Image attachments | Paste or pick PNG/JPEG in a Terminal-mode card, then Insert its host path (never Enter); plain Send, committed work and a Plan brief carry images to Claude Code and Codex. Private host storage; installed-host and device acceptance open |
 | Native iOS / supervisor | Deferred |
-| Global AI / Background assistant | Global AI A1 implemented: a user-operated Codex terminal with read-only app tools ([guide](docs/GLOBAL-AI.md)); installed-provider and device acceptance open. Background assistant and delegated tools proposed, not implemented ([ADR-0022](docs/adr/ADR-0022-app-wide-ai-instances.md), [ADR-0023](docs/adr/ADR-0023-app-tools-and-delegated-authority.md)) |
+| Global AI / Background assistant | Global AI A1 implemented: a user-operated Codex or Claude Code terminal with read-only app tools ([guide](docs/GLOBAL-AI.md)); installed-provider and device acceptance open. Background assistant and delegated tools proposed, not implemented ([ADR-0022](docs/adr/ADR-0022-app-wide-ai-instances.md), [ADR-0023](docs/adr/ADR-0023-app-tools-and-delegated-authority.md)) |
 
 **Background-work evidence:** Claude uses `UserPromptSubmit` and the current
 Stop payload, including background-task and cron information when available.
@@ -339,8 +339,8 @@ worktree root, integration branches, adapter, input, allowed origins) with the
 environment variable behind each value; values are read when the host starts, so a
 change means editing `web/.env.local` or the shell and restarting. Settings also
 holds this page's console preferences, such as launch profiles and staying unlocked.
-**Helper** holds **Chat**, a Codex conversation with read-only app tools for this
-host's projects ([guide](docs/GLOBAL-AI.md)), with its **Session** and **Evidence**, and **Guide**, which explains the console. Paths under the host user's home directory
+**Helper** holds **Chat**, a Codex or Claude Code conversation with read-only app tools for this
+host's projects ([guide](docs/GLOBAL-AI.md)), with its **Session**, **Settings** (named profiles, each a CLI, model and effort) and **Evidence**, and **Guide**, which explains the console. Paths under the host user's home directory
 are shown with a leading `~`; hover a path for its full form.
 
 Switching between tabs, agents, Parallel and Focus, Plan and
