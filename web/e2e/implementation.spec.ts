@@ -75,7 +75,7 @@ test('a held peer result names the queued reviewer and continues its checkpoint 
   await expect(result).toContainText('Latest validated result from Claude'); await expect(result).toContainText('commit bbbbbbbbbbbb');
   await result.locator('summary').click(); await expect(result).toContainText('Fixed all three image findings.');
   const queued = page.getByRole('status', { name: 'Queued handoff' });
-  await expect(queued).toContainText('Queued: review by Codex'); await expect(queued).toContainText('even when typing in another checkout');
+  await expect(queued).toContainText('Queued: review by Codex'); await expect(queued).toContainText('Manual terminal input covering this worktree holds automatic handoffs');
   await expect(queued).toContainText('Take control ends this run');
   const checkpoint = page.getByRole('region', { name: 'Input checkpoint' });
   await expect(checkpoint.getByRole('list', { name: 'Consequences of continuing' })).toContainText('Typing stops');

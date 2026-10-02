@@ -19,7 +19,7 @@ export interface NativeTerminalHandle {
   thaw: (frozen: FrozenWriter) => boolean;
 }
 const BADGES = {
-  'Typing enabled': ['⌨️', 'Terminal mode: keys, paste and mouse go to this pane, independently of other terminals. Manual input holds automation across this tmux server until it is stopped and reconciled.'],
+  'Typing enabled': ['⌨️', 'Terminal mode: keys, paste and mouse go to this pane, independently of other terminals. Manual input holds this worktree until it is stopped and reconciled. An unverified worktree uses a server-wide hold. Browser input goes to this pane; use a desktop tmux client for session navigation.'],
   Disconnected: ['🔌', 'Not connected to this pane. Switch to Terminal, or Reconnect to watch it.'],
   'Manual CLI/shell': ['⚠️', 'The registered CLI process in this pane was replaced, for example it exited to a shell. Inspect the pane before sending.'],
   'Observing · manual input unresolved': ['⚠️', 'Display mode: view only. Earlier manual input is not reconciled; automated work waits until an action’s acknowledgement or Control access records it.'],

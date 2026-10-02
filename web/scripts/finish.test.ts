@@ -184,9 +184,11 @@ test('hard refusals: a running or waiting run, an uncertain delivery, manual inp
   owner = null;
   store.db.prepare('INSERT INTO keyboard_sessions(id,value) VALUES (?,?)').run('manual', JSON.stringify({ id: 'manual', revision: 1, live: false, reconciliationRequired: true }));
   assert.match((await finish.preview(target)).blockers.join(' '), /Manual terminal input/);
-  store.db.prepare('DELETE FROM keyboard_sessions').run();
+  store.db.prepare('UPDATE keyboard_sessions SET value=? WHERE id=?').run(JSON.stringify({id:'manual',revision:1,live:false,reconciliationRequired:true,scope:{root:'/other',gitDir:'/other/.git',indexPath:'/other/.git/index'}}),'manual');
+  assert.ok(!(await finish.preview(target)).blockers.some(b=>b.includes('Manual terminal input')));
   const other = await finish.preview(target); const first = await finish.confirm(confirmOf(other, 'discard'));
   assert.equal(first.status, 'awaiting_git');
+  assert.equal(authority.pending().length,1); // This unrelated period survives the close.
   const pane = host.add('$6', randomUUID(), path, proc('600', 'codex')); recordLaunch((await resolveWorktree(path))!, pane);
   assert.match((await finish.preview(target)).blockers.join(' '), /owns this project/);
   assert.deepEqual(host.killed, ['$3']);

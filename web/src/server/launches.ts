@@ -15,6 +15,7 @@ import { resolveExecutable, type Config } from './config.ts';
 import type { Store } from './store.ts';
 import type { ProjectCatalog } from './projects.ts';
 import type { InputAuthority } from './input-authority.ts';
+import { scopesFor } from '../core/input-scope.ts';
 import { terminalEnvironment, terminalRunner, tmuxLiteral } from './terminal-environment.ts';
 import { inspectPane } from './adapters/tmux.ts';
 import { inspectAttach, type AttachTarget } from './tmux-attach.ts';
@@ -106,7 +107,7 @@ export class LaunchService {
   }
   private assertAvailable(tree:WorktreeIdentity) {if(this.store.worktreeCreations().some(op=>op.input.source.root===tree.root && ['applying','uncertain'].includes(op.status)))throw new AppError('LAUNCH_BUSY','Source worktree setup is unresolved.',409);this.projects.assertWorktreeReady(tree.root);this.guard(tree);if(this.store.db.prepare('SELECT 1 FROM launch_reservations WHERE index_path=?').get(tree.indexPath))throw new AppError('LAUNCH_BUSY','An earlier launch owns this checkout. Inspect it first.',409);}
   async preview(value:unknown):Promise<LaunchPreview> {
-    this.enabled();this.authority.assertAutomated();const b=terminalFields(value,['projectId','items']);const projectId=terminalText(b.projectId);
+    this.enabled();const b=terminalFields(value,['projectId','items']);const projectId=terminalText(b.projectId);
     if(!Array.isArray(b.items)||!b.items.length||b.items.length>6)throw new AppError('LAUNCH_ITEMS','Choose one to six instances.');
     const items:LaunchItem[]=[], blockers:string[]=[];
     // Short names: profile and branch only, numbered when taken. Confirmation rechecks them before anything is reserved.
@@ -116,7 +117,7 @@ export class LaunchService {
       const tree=await this.projects.launchWorktree(projectId,terminalText(i.worktreeId));const profile=this.profiles().find(p=>p.id===i.profileId);
       if(profile?.purpose==='helper')throw new AppError('PROFILE_PURPOSE','A Helper profile cannot launch a worktree agent. Choose an agent profile.',409);
       if(!profile?.enabled)throw new AppError('PROFILE_CHANGED','Choose an enabled profile.',409);
-      try{this.assertAvailable(tree.identity!);}catch(e){blockers.push(messageOf(e));}
+      try{this.authority.assertAutomated(scopesFor(tree.identity));this.assertAvailable(tree.identity!);}catch(e){blockers.push(messageOf(e));}
       const executable=await this.resolved(profile);const project=this.projects.record(projectId);
       for(let n=0;n<count;n++){const id=randomUUID(),sessionName=uniqueSessionName(`${slug(profile.label)}-${slug(tree.branch??'detached')}`,taken);taken.add(sessionName);
         items.push({id,projectId,worktreeId:tree.id,worktree:tree.identity!,commonDir:project.commonDir,branch:tree.branch,head:tree.head!,profile,executable,sessionName,environmentDigest:digest(launchEnvironment()),
@@ -133,7 +134,7 @@ export class LaunchService {
     const b=terminalFields(value,['requestId','previewDigest','confirm']);const id=requestId(b.requestId), previewDigest=terminalText(b.previewDigest);
     if(b.confirm!==true)throw new AppError('CONFIRM_REQUIRED','Confirm the captured launch preview.');
     const prior=this.batches().find(x=>x.requestId===id);if(prior){if(prior.previewDigest!==previewDigest)throw new AppError('ID_CONFLICT','Launch confirmation changed.',409);return prior;}
-    this.enabled();return this.authority.automated(async()=>{
+    this.enabled();const scopes=this.previews.get(id)?.items.map(i=>i.worktree.indexPath)??null;return this.authority.automated(async()=>{
       const preview=this.previews.get(id);if(!preview || preview.digest!==previewDigest || Date.parse(preview.expiresAt)<Date.now() || preview.blockers.length)throw new AppError('LAUNCH_PREVIEW_CHANGED','Preview again before launching.',409);
       for(const item of preview.items){const tree=await this.projects.launchWorktree(item.projectId,item.worktreeId);this.assertAvailable(tree.identity!);
         if(!isDeepStrictEqual(tree.identity,item.worktree)||tree.branch!==item.branch||tree.head!==item.head||!isDeepStrictEqual(this.profiles().find(p=>p.id===item.profile.id),item.profile)||await this.resolved(item.profile)!==item.executable||digest(launchEnvironment())!==item.environmentDigest)throw new AppError('LAUNCH_PREVIEW_CHANGED','A checkout, profile, executable or environment changed. Preview again.',409);
@@ -144,7 +145,7 @@ export class LaunchService {
       let claimed=false;
       const batch=this.store.db.transaction(()=>{
         const duplicate=this.batches().find(x=>x.requestId===id);if(duplicate)return duplicate;
-        this.enabled();this.authority.assertAutomated();
+        this.enabled();this.authority.assertAutomated(scopes);
         // Launches for other worktrees can reserve the same short name between preview and this transaction.
         const held=this.heldNames(id,listedAt);if(preview.items.some(i=>held.has(i.sessionName)))throw new AppError('LAUNCH_PREVIEW_CHANGED','Another launch reserved a previewed session name. Preview again.',409);
         for(const i of preview.items){this.assertAvailable(i.worktree);if(!isDeepStrictEqual(this.profiles().find(p=>p.id===i.profile.id),i.profile)||digest(launchEnvironment())!==i.environmentDigest)throw new AppError('LAUNCH_PREVIEW_CHANGED','Profile or environment changed before reservation.',409);
@@ -156,7 +157,7 @@ export class LaunchService {
       if(!claimed)return batch;
       for(const item of batch.items)await this.start(batch,item);
       return batch;
-    });
+    },scopes);
   }
   private async start(batch:LaunchBatch,item:LaunchInstance) {
     const run=terminalRunner(this.config);
@@ -238,7 +239,7 @@ export class LaunchService {
   private cleanupGate(item: LaunchInstance) {
     if(!this.config.inputEnabled)throw new AppError('READ_ONLY','The host has disabled input.',403);
     this.guard(item.worktree);this.projects.assertWorktreeReady(item.worktree.root,true);
-    if(item.status==='applying'||this.authority.busy)throw new AppError('LAUNCH_BUSY','Wait for the in-flight operation to settle.',409);
+    if(item.status==='applying'||this.authority.busyFor(scopesFor(item.worktree)))throw new AppError('LAUNCH_BUSY','Wait for the in-flight operation to settle.',409);
     const identity=item.identity??item.placeholder;
     const targetsPane=this.authority.pending().some(m=>m.targets.some(target=>{
       if('launchId' in target)return target.launchId===item.id;
@@ -322,7 +323,7 @@ export class LaunchService {
     const note=terminalText(b.note,1000);const {batch,item}=this.lookup(id);
     if(item.cleanup&&!item.closed)throw new AppError('LAUNCH_BUSY','Inspect the pending cleanup; reconciliation cannot discard its ownership.',409);
     if(item.humanDecision){if(item.humanDecision.requestId!==b.requestId||item.humanDecision.note!==note)throw new AppError('LAUNCH_CHANGED','This instance was already reconciled.',409);return item;}
-    if(item.status==='applying'||this.authority.busy)throw new AppError('LAUNCH_BUSY','Wait for the in-flight operation to settle.',409);
+    if(item.status==='applying'||this.authority.busyFor(scopesFor(item.worktree)))throw new AppError('LAUNCH_BUSY','Wait for the in-flight operation to settle.',409);
     this.update(batch,item,{status:'reconciled',message:'Human acknowledged possible prior effects. History retained; a new launch needs new consent.',humanDecision:{requestId:b.requestId as string,note,at:new Date().toISOString()}});return item;
   }
   async capture(id: string): Promise<{text: string}> {

@@ -17,6 +17,7 @@ interface ActionProps { project: Project; tree: ProjectWorktree; token: string; 
   noticeId?: string;
   /** Holds on this worktree (controller run, delivery, manual input) that the shared acknowledgement clears. */
   override?: Override | null;
+  integrationOverride?: (targetRoot: string) => Override | null;
   /** The shared acknowledgement as each action consumes it. */
   proceed?: Proceed }
 const nameFor = (tree: ProjectWorktree) => tree.branch ?? tree.path.split('/').filter(Boolean).pop() ?? tree.path;
@@ -71,9 +72,10 @@ const localReason = (unknown: boolean, busy: boolean, what: string) =>
 const describedBy = (...ids: (string | false | undefined)[]) => ids.filter(Boolean).join(' ') || undefined;
 
 /** One squash commit on the integration branch, made in the checkout that has it checked out. The task worktree is untouched. */
-export function IntegrateWorktree({ project, tree, token, disabled, disabledReason, noticeId, onChanged, proceed }: ActionProps) {
+export function IntegrateWorktree({ project, tree, token, disabled, disabledReason, noticeId, onChanged, proceed, integrationOverride }: ActionProps) {
   const tilde = useTildify();
   const [preview, setPreview] = useState<WorktreeIntegrationPreview | null>(null); const [message, setMessage] = useState('');
+  const squashOverride = useOverride(preview ? integrationOverride?.(preview.target.root) : null, 'this squash');
   const [choosing, setChoosing] = useState(false); const [through, setThrough] = useState('');
   const [commits, setCommits] = useState<WorktreeIntegrationPreview['commits']>([]); const controlId = useId();
   const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [unknown, setUnknown] = useState(false);
@@ -102,7 +104,7 @@ export function IntegrateWorktree({ project, tree, token, disabled, disabledReas
   async function integrate() {
     if (!preview || !current || busy || held || unknown || disabled || !messageValid) return;
     setBusy(true); setError('');
-    if (!await prepared(proceed, setError, () => mounted.current)) { setBusy(false); return; }
+    if (!await prepared(integrationOverride ? squashOverride : proceed, setError, () => mounted.current)) { setBusy(false); return; }
     try {
       // Compact consent: the digest stands for the previewed operation, so the request stays small however many commits were listed.
       const result = await api<WorktreeIntegration>(token, 'projects/worktrees/integration', { body: { projectId: project.id, worktreeId: tree.id, through: preview.through, ...(preview.acknowledgeActivity ? { acknowledgeActivity: true } : {}), requestId: preview.requestId, consent: preview.consent, message, confirm: true } });
@@ -139,6 +141,7 @@ export function IntegrateWorktree({ project, tree, token, disabled, disabledReas
         <button type="button" disabled={blocked || !!blockedReason || !activity.accepted} onClick={() => void inspect(true)}>Preview batch anyway</button></div>}
     </div>}
     {preview && <div className="notice" role="region" aria-label={`Squash ${name}`}>
+      {squashOverride.node}
       <p>Squash {preview.commitCount} commit{preview.commitCount === 1 ? '' : 's'} from <span className="mono">{preview.branch}</span> (<span className="mono">{preview.mergeBase.slice(0, 7)}..{preview.through.slice(0, 7)}</span>) into <span className="mono">{refName(preview.targetRef)}</span> at <span className="mono">{short(preview.targetHead)}</span>, in <span className="mono">{tilde(preview.target.root)}</span>. Merged without conflicts; the new commit's tree will be <span className="mono">{short(preview.tree)}</span>.</p>
       <p>{preview.previousCommit ? `Continues after squash ${short(preview.previousCommit)}. ` : ''}{preview.through !== preview.head ? 'Later task commits will remain for another batch.' : 'This batch reaches the current task HEAD.'}</p>
       <p className="mono commands">{preview.commands.join('\n')}</p>

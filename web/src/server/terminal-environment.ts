@@ -14,13 +14,15 @@ export function terminalEnvironment(source: Record<string, string | undefined> =
 /** tmux interprets a trailing semicolon even when invoked with execFile's argv. */
 export const tmuxLiteral = (arg: string): string => arg.endsWith(';') ? `${arg.slice(0, -1)}\\;` : arg;
 export function terminalRunner(config: Pick<Config, 'tmuxBin' | 'tmuxSocket'>) {
-  return (args: string[]): Promise<string> => new Promise((done, fail) => {
-    execFile(config.tmuxBin, [...(config.tmuxSocket ? ['-S', config.tmuxSocket] : []), ...args],
+  return (args: string[], input?: Buffer | string): Promise<string> => new Promise((done, fail) => {
+    const child = execFile(config.tmuxBin, [...(config.tmuxSocket ? ['-S', config.tmuxSocket] : []), ...args],
       // Next's ambient ProcessEnv requires NODE_ENV; the child deliberately omits it.
       { shell: false, env: terminalEnvironment() as NodeJS.ProcessEnv, encoding: 'utf8', timeout: 5000, maxBuffer: 1024 * 1024 }, (error, stdout) => {
         // argv and environment can contain sensitive data. Do not expose stderr or Error.command.
         if (error) fail(new AppError('TERMINAL_INSPECTION', 'tmux could not verify this operation. Inspect its recorded state; nothing is retried automatically.', 409));
         else done(stdout);
       });
+    child.stdin?.on('error', () => {}); // The exit callback reports a closed pipe as an uncertain operation.
+    child.stdin?.end(input);
   });
 }

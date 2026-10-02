@@ -198,8 +198,11 @@ Validate the actual file schema as well as hashes: expected regular file, bounde
 
 ## Native keyboard and launch permissions
 
-An authenticated keyboard or launch user has host-shell power. Native tmux keys
-can navigate and create shells; executable profiles can run arbitrary programs.
+An authenticated keyboard or launch user has host-shell power. Browser input stays
+on its original pane, while desktop tmux clients can navigate and create shells;
+executable profiles can run arbitrary programs. Worktree-scoped manual holds do not
+isolate absolute paths, shared Git state or ports. Unknown targets and pre-change
+periods retain a global hold.
 This is not a sandbox. Keep the token and tailnet access limited to the owner.
 
 The WebSocket upgrade requires exact Origin and Host; the short-lived, single-use

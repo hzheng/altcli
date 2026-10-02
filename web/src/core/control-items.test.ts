@@ -23,6 +23,13 @@ describe('controlItems', () => {
     // Taking control clears earlier manual input by accepting its possible effects, and says so.
     expect(held.items.find((item) => item.id === 'manual')).toMatchObject({ takeControl: true, text: expect.stringContaining('may have run commands') });
   });
+  it('describes a worktree-scoped hold as the checkout\'s, including a run it reaches elsewhere', () => {
+    const scoped = controlItems({ ...base, manual: [{ live: false, runs: 1, scope: '/demo/project' }], otherWorktrees: ['/demo/other'] });
+    expect(scoped.items.map((item) => [item.id, item.scope])).toEqual([['manual', 'checkout'], ['scope', 'checkout']]);
+    expect(scoped.items.find((item) => item.id === 'manual')!.text).toContain('lifts the checkout hold');
+    const reach = scoped.items.find((item) => item.id === 'scope')!.text;
+    expect(reach).toContain('/demo/other'); expect(reach).not.toContain('server-wide');
+  });
   it('keeps this browser\'s own keyboard informational', () => {
     const mine = controlItems({ ...base, keyboard: { kind: 'this-browser', label: 'Codex' }, manual: [{ live: true, runs: 0 }] });
     expect(mine).toMatchObject({ summary: 'you · typing in Codex (this browser)', attention: false });

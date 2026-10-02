@@ -29,9 +29,10 @@ off, so add them to an older file. With the host flags enabled,
 Console observes terminals automatically. Each terminal's **Terminal / Display** toggle switches
 between typing in that pane and only watching it; there is no Claim keyboard dialog, and toggling
 again resets a failed connection. Several terminals and browsers can write independently,
-including to the same pane (where native input can interleave). Input holds AltCLI
-dispatch/setup/launch across the tmux server. Focus, observation and clicks in Display grant
-nothing. Automatically sized tmux windows use captured observation to avoid resizing workers;
+including to the same pane (where native input can interleave). Input goes only to that pane and
+holds AltCLI dispatch/setup/launch in its agent's worktree; an unverified worktree, or a period begun
+before schema 21, holds every worktree. Use a desktop tmux client for tmux bindings and navigation.
+Focus, observation and clicks in Display grant nothing. Automatically sized tmux windows use captured observation to avoid resizing workers;
 Terminal still opens a normal native writer. Each terminal's own Display toggle stops its writer; the
 toggle is also the pane's typing/viewing indicator. Held workflow checkpoint review remains explicit.
 
@@ -398,7 +399,8 @@ another command meanwhile. **Pause the controller** stays available while it dri
 run and does not send Ctrl-C or stop background jobs), and a paused run's valid checkpoint or
 handoff can continue instead with one click. A paused committed handoff shows the
 validated peer result and the next agent queued to review or revise it. Manual terminal
-input holds handoffs across the tmux server, including other checkouts. **Review input
+input holds handoffs in the typed agent's worktree (every worktree when that cannot be verified);
+runs in other worktrees continue. **Review input
 and continue** lists any remaining manual-input consequences, stops and records that
 input, then reviews the saved checkpoint while keeping the run. A failed step or changed
 checkpoint or view cancels continuation; **Take control** instead ends the run and its

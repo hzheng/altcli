@@ -8,7 +8,8 @@ import { sameRequest, suggestAgentType } from "../core/policy.ts";
 import type { Group } from "../contracts/implementation.ts";
 import type { WorktreeIdentity } from "../contracts/workflow.ts";
 import type { ManagedWorkspace, ProjectRecord, TaskFinish, WorktreeCreation, WorktreeDiscard, WorktreeIntegration, WorktreeRemoval, WorktreeRename, WorktreeUpdate } from '../contracts/projects.ts';
-import { planRegistry, REGISTRY_SCHEMA, settlementBlockers, upgradeBlocked } from './upgrade.ts';
+import { planRegistry, REGISTRY_SCHEMA, STORE_SCHEMA, settlementBlockers, upgradeBlocked } from './upgrade.ts';
+export { STORE_SCHEMA } from './upgrade.ts';
 export class Store {
   readonly db: Database.Database;
   constructor(directory: string) {
@@ -19,7 +20,7 @@ export class Store {
     chmodSync(path, 0o600);
     this.db.pragma("busy_timeout = 5000");
     const version = this.db.pragma("user_version", { simple: true }) as number;
-    if (version > REGISTRY_SCHEMA) { this.db.close(); throw new Error("Unsupported database version. Do not downgrade this store."); }
+    if (version > STORE_SCHEMA) { this.db.close(); throw new Error("Unsupported database version. Do not downgrade this store."); }
     // ADR-0024: upgrade only a settled store, checked before anything here writes, and keep a private copy of the old schema.
     if (version >= 1 && version < REGISTRY_SCHEMA) {
       const blockers = settlementBlockers(this.db);
@@ -81,8 +82,11 @@ export class Store {
         for (const batch of plan.launches) this.db.prepare('UPDATE launches SET value=? WHERE id=?').run(JSON.stringify(batch), batch.requestId);
       }
       // 18: older servers must not interpret a concurrent manual-input period. 19: nor dispatch runs without their pinned images.
-      // 20: nor ignore recorded repositories and task workspaces.
-      this.db.exec(`PRAGMA user_version = ${REGISTRY_SCHEMA}`);
+      // 20: nor ignore recorded repositories and task workspaces. 21: nor ignore scoped keyboard authority.
+      if (version < 21) for (const row of this.db.prepare('SELECT id,value FROM keyboard_sessions').all() as { id: string; value: string }[]) {
+        this.db.prepare('UPDATE keyboard_sessions SET value=? WHERE id=?').run(JSON.stringify({ ...JSON.parse(row.value), scope: null }), row.id);
+      }
+      this.db.exec(`PRAGMA user_version = ${STORE_SCHEMA}`);
     })();
   }
   /** v1 had one global reservation in `control` and sessions without agentType. */

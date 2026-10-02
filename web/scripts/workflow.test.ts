@@ -52,6 +52,17 @@ async function complete(commandId: string, more: Partial<HookEvent> = {}) {
 }
 function stopped(runId: string) { plane.action(parseRunAction({ runId, action: 'takeover', confirmReady: true })); }
 
+test('manual input in another worktree leaves a Stage relay completion and automatic handoff running',async()=>{
+  const command=start({pairId:pair().id,autoContinue:true});await plane.submit(command);
+  const other=(await plane.state()).sessions.find(s=>s.worktree?.root==='/demo/other')!;
+  const manual=await plane.terminals.services.begin({protocol:2,target:{agentId:other.id,registrationId:other.registrationId},clientInstanceId:randomUUID(),cols:80,rows:24},randomUUID(),randomUUID());
+  assert.equal(manual.scope?.indexPath,other.worktree!.indexPath);assert.deepEqual(manual.runs,[]);
+  await complete(command.requestId);
+  const run=plane.workflow.run(command.requestId)!;
+  assert.equal(run.status,'running');assert.notEqual(run.currentCommandId,command.requestId);
+  assert.deepEqual(sent.map(s=>s.agent),['codex','claude']);assert.equal(plane.authority.get(manual.id).live,true);
+});
+
 test('workspace groups and unbound agents are automatic, stable and read-only', async () => {
   const before = store.db.prepare('SELECT total_changes() AS count').get();
   const first = await plane.state(); const second = await plane.state();

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { closeSync, fstatSync, readdirSync, statSync, type Stats } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
@@ -45,6 +46,8 @@ function exitWatcher(pid: number): Promise<number | null> {
 export interface Attachment {
   /** The first synchronized native redraw has reached the output callback. */
   ready?: Promise<void>;
+  /** A server-derived image reference; bracket markers depend on the original pane program. */
+  paste?: (reference: Buffer) => Promise<void>;
   pid: number; write(data: Buffer): void | Promise<void>; resize(cols: number, rows: number): void;
   pause(): void; resume(): void; close(): Promise<void>;
   /** `size` is the effective tmux window, which other clients may also influence. */
@@ -103,19 +106,75 @@ export async function attachTmux(config: Config, target: AttachTarget, writer: b
   });
   await watcher; // Identified while the child runs, before anyone can close it.
   const run = terminalRunner(config);
+  // xterm emits a complete paste event, but the browser sends it in ordered 4 KiB frames.
+  // Keep those bytes in this attachment only; close/replacement discards an incomplete paste.
+  let pendingPaste: Buffer | null = null;
+  const paneBytes = async (bytes: Buffer, bracket: boolean) => {
+    if (ended) throw new AppError('TARGET_CHANGED', 'The terminal attachment ended. Reconnect before inserting.');
+    const buffer = `altcli-paste-${randomUUID()}`;
+    // A private ephemeral buffer preserves the program's paste mode without client bindings or Enter.
+    try {
+      await run(['load-buffer', '-b', buffer, '-'], bytes);
+      if (ended) throw new AppError('TARGET_CHANGED', 'The terminal attachment ended before inserting.');
+      await run(['paste-buffer', ...(bracket ? ['-p'] : []), '-r', '-d', '-b', buffer, '-t', target.identity.paneId]);
+    } catch (error) { await run(['delete-buffer', '-b', buffer]).catch(() => {}); throw error; }
+  };
+  const paste = async (reference: Buffer) => {
+    if ((await run(['display-message', '-p', '-t', target.identity.paneId, '#{pane_in_mode}'])).trim() !== '0')
+      throw new AppError('PANE_MODE', 'Leave copy mode before inserting a paste.', 409);
+    return paneBytes(reference.subarray(6, -6), true);
+  };
   return {
-    ready, pid: child.pid,
-    write: bytes => {
+    ready, pid: child.pid, ...(writer && paneInput ? { paste } : {}),
+    write: async bytes => {
       if (ended) throw new AppError('TARGET_CHANGED', 'The terminal attachment ended. Reconnect before typing.', 409);
-      // Helper has no workspace hold. Send its exact bytes to its pane rather than through tmux's client key bindings:
-      // a prefix or a client switch, even within one frame, must never redirect input to a workspace session.
-      if (writer && paneInput) return run(['send-keys', '-H', '-t', target.identity.paneId, ...Array.from(bytes, b => b.toString(16).padStart(2, '0'))]).then(() => {});
+      // A desktop client can enter copy mode. Cancel it explicitly; never invoke its custom key bindings
+      // or send unseen bytes to the program underneath it. No setting is changed to obtain access.
+      if (writer && paneInput && (await run(['display-message', '-p', '-t', target.identity.paneId, '#{pane_in_mode}'])).trim() !== '0') {
+        if (!pendingPaste && bytes.length === 1 && [0x71, 0x1b, 0x03].includes(bytes[0]!)) {
+          await run(['send-keys', '-X', '-t', target.identity.paneId, 'cancel']); return;
+        }
+        throw new AppError('PANE_MODE', 'Leave copy mode with Escape, Ctrl+C or q before typing.', 409);
+      }
+      // The display can request mouse reports for tmux itself. Forward only reports requested by
+      // the original pane program, with pane-relative coordinates; clicking another pane never navigates.
+      const mouse = !pendingPaste && /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/.exec(bytes.toString('latin1'));
+      const legacyMouse = !pendingPaste && bytes.length === 6 && bytes.subarray(0, 3).equals(Buffer.from('\x1b[M'));
+      if (writer && paneInput && (mouse || legacyMouse)) {
+        const [any, sgr, utf8, all, button, left, top, width, height, status, position, inMode] =
+          (await run(['display-message', '-p', '-t', target.identity.paneId,
+            '#{mouse_any_flag}\t#{mouse_sgr_flag}\t#{mouse_utf8_flag}\t#{mouse_all_flag}\t#{mouse_button_flag}\t#{pane_left}\t#{pane_top}\t#{pane_width}\t#{pane_height}\t#{status}\t#{status-position}\t#{pane_in_mode}'])).trim().split('\t');
+        if (any !== '1' || inMode !== '0') return;
+        let code = mouse ? Number(mouse[1]) : bytes[3]! - 32;
+        const released = mouse ? mouse[4] === 'm' : (code & 3) === 3;
+        const x = (mouse ? Number(mouse[2]) : bytes[4]! - 32) - Number(left);
+        const y = (mouse ? Number(mouse[3]) : bytes[5]! - 32) - Number(top) - (position === 'top' ? status === 'on' ? 1 : status === 'off' ? 0 : Number(status) : 0);
+        if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y) || x < 1 || y < 1 || x > Number(width) || y > Number(height)) return;
+        if ((code & 32) && all !== '1' && (button !== '1' || (code & 3) === 3)) return;
+        if (sgr === '1') bytes = Buffer.from(`\x1b[<${code};${x};${y}${released ? 'm' : 'M'}`);
+        else {
+          if (released) code = (code & ~3) | 3;
+          if (x > (utf8 === '1' ? 2015 : 223) || y > (utf8 === '1' ? 2015 : 223)) return;
+          bytes = utf8 === '1' ? Buffer.from(`\x1b[M${String.fromCharCode(code + 32, x + 32, y + 32)}`)
+            : Buffer.from([27, 91, 77, code + 32, x + 32, y + 32]);
+        }
+      }
+      // Workspace and Helper writers use the original pane, bypassing tmux client key bindings.
+      // A prefix or a client switch, even within one frame, must never redirect input elsewhere.
+      if (writer && paneInput && (pendingPaste || bytes.subarray(0, 6).equals(Buffer.from('\x1b[200~')))) {
+        pendingPaste = pendingPaste ? Buffer.concat([pendingPaste, bytes]) : bytes;
+        if (pendingPaste.length > 256 * 1024) throw new AppError('TERMINAL_INPUT', 'Paste exceeds the input limit. Reconnect before typing.');
+        if (!pendingPaste.subarray(-6).equals(Buffer.from('\x1b[201~'))) return;
+        const complete = pendingPaste; pendingPaste = null; return paste(complete);
+      }
+      // paste-buffer writes only this pane; send-keys would broadcast with synchronize-panes enabled.
+      if (writer && paneInput) return paneBytes(bytes, false);
       child.write(bytes);
     },
     resize: (c, r) => child.resize(c, r), pause: () => child.pause(), resume: () => child.resume(),
     async close() {
       if (ended) return;
-      child.kill('SIGTERM');
+      pendingPaste = null; child.kill('SIGTERM');
       const timer = setTimeout(() => { if (!ended) child.kill('SIGKILL'); }, 1000);
       try { await exit; } finally { clearTimeout(timer); }
     },
@@ -125,8 +184,7 @@ export async function attachTmux(config: Config, target: AttachTarget, writer: b
       if (!writer) await assertObserverSize(config, target.sessionId);
       const clients = (await run(['list-clients', '-F', '#{client_pid}\t#{session_id}\t#{pane_id}\t#{pane_current_command}\t#{window_width}x#{window_height}\t#{session_name}'])).trimEnd().split('\n');
       const current = clients.map(line => line.split('\t')).find(parts => parts[0] === String(child.pid));
-      // Only a writer covered by the server-wide keyboard hold may follow deliberate session navigation.
-      // A read-only observer cannot navigate, so a changed session means tmux moved it after a loss.
+      // Pane-directed writers and observers cannot follow tmux navigation or a replacement target.
       if (!current || current.length !== 6 || ((!writer || paneInput) && current[1] !== target.sessionId) || (paneInput && current[2] !== target.identity.paneId)) throw new AppError('TARGET_CHANGED', 'The attached client changed sessions or panes, or exited. Reconnect as an observer.', 409);
       return { sessionId: current[1]!, paneId: current[2]!, command: current[3]!, size: current[4]!, label: current[5]! };
     },

@@ -9,6 +9,8 @@ import { idOf } from './ids.ts';
 
 /** The schema that records registered repositories and app-created task workspaces (ADR-0024). */
 export const REGISTRY_SCHEMA = 20;
+/** Worktree-scoped manual input; all older periods remain global. */
+export const STORE_SCHEMA = 21;
 /** Unresolved work that only the backend version which started it can settle. */
 export interface UpgradeBlocker { kind: string; id: string; detail: string }
 
@@ -137,7 +139,7 @@ export function inspectUpgrade(path: string): UpgradeReport {
     const plan = pending ? planRegistry(db) : null;
     const workspaces = { active: 0, pending: 0, retired: 0 };
     for (const workspace of plan?.workspaces ?? []) workspaces[workspace.status]++;
-    return { version, target: REGISTRY_SCHEMA, blockers: pending ? settlementBlockers(db) : [], repositories: plan?.projects.length ?? 0, workspaces,
+    return { version, target: STORE_SCHEMA, blockers: pending ? settlementBlockers(db) : [], repositories: plan?.projects.length ?? 0, workspaces,
       linkedLaunches: plan?.launches.flatMap((batch) => batch.items).filter((item) => item.workspaceId).length ?? 0 };
   } finally { db.close(); }
 }

@@ -38,7 +38,7 @@ export function holdConsequences(h: Holds, describe: (target: TerminalTarget) =>
   if (writers.length) lines.push(`Typing stops in ${writers.map(w => `${describe(w.target)} (${w.clientInstanceId === clientInstanceId ? 'this browser' : 'another browser or tab'})`).join(', ')}. Keys not yet sent are dropped; those terminals switch to Display.`);
   if (h.manual.length) {
     const bytes = h.manual.reduce((n, m) => n + m.bytes, 0), paused = h.manual.reduce((n, m) => n + m.runs.length, 0);
-    lines.push(`Manual terminal input (${bytes} byte${bytes === 1 ? '' : 's'}${h.manual.some(m => m.recoveryRequired) ? ', some of it uncertain' : ''}) is recorded as accepted. It may have run commands or left background work AltCLI cannot see. The server-wide automation hold lifts${paused ? `; ${paused} run${paused === 1 ? '' : 's'} it paused stay paused for checkpoint review` : ''}.`);
+    lines.push(`Manual terminal input (${bytes} byte${bytes === 1 ? '' : 's'}${h.manual.some(m => m.recoveryRequired) ? ', some of it uncertain' : ''}) is recorded as accepted. It may have run commands or left background work AltCLI cannot see. The listed manual-input holds lift${paused ? `; ${paused} run${paused === 1 ? '' : 's'} it paused stay paused for checkpoint review` : ''}.`);
   }
   return lines;
 }
@@ -54,7 +54,7 @@ export async function clearHolds(token: string, h: Holds, handle: (writer: Manua
       done.push(`ended the controller’s run for ${run.label}`);
     }
     if (h.delivery) { await api(token, 'control/release', { body: { expectedCommandId: h.delivery, confirmReady: true } }); done.push('released the older delivery hold'); }
-    // Every writer stops before any record is reconciled: the server settles nothing while one is live.
+    // Every writer stops before any record is reconciled: overlapping live writers prevent reconciliation.
     const stopped: ManualSession[] = [];
     for (const manual of h.manual) {
       const live = manual.writers.filter(w => w.live);

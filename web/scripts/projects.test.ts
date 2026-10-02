@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { ProjectCatalog } from '../src/server/projects.ts';
-import { Store } from '../src/server/store.ts';
+import { Store, STORE_SCHEMA } from '../src/server/store.ts';
 import { loadConfig, type Config } from '../src/server/config.ts';
 import { resolveWorktree } from '../src/server/worktree.ts';
 import { WorkflowStore } from '../src/server/workflow-store.ts';
@@ -430,6 +430,18 @@ async function squashPlane() {
   };
   await settle(); return { plane, adapter, panes, started, settle };
 }
+test('squash admission checks both checkout scopes and ignores an unrelated manual period', async () => {
+  const { target } = await taskFixture(); const { plane } = await squashPlane();
+  const preview = await plane.previewIntegration(target);
+  const save = (scope: unknown) => store.db.prepare('INSERT OR REPLACE INTO keyboard_sessions(id,value) VALUES (?,?)').run('scope-fixture', JSON.stringify({id:'scope-fixture',revision:1,live:false,reconciliationRequired:true,scope}));
+  for (const scope of [preview.worktree, preview.target, null]) {
+    save(scope);await assert.rejects(plane.integrateWorktree(confirmSquash(preview)), {code:'MANUAL_INPUT_HELD'});
+    assert.equal(store.worktreeIntegrations().length,0);
+  }
+  save({root:'/elsewhere',gitDir:'/elsewhere/.git',indexPath:'/elsewhere/.git/index'});
+  assert.equal((await plane.integrateWorktree(confirmSquash(preview))).status,'integrated');
+  assert.equal(plane.authority.pending().length,1);
+});
 for (const mode of ['idle', 'background', 'foreground', 'unknown', 'interpreter'] as const)
 test(`squash checks ${mode} shell process evidence`, async () => {
   const { target, request } = await taskFixture(); const { plane, adapter, panes } = await squashPlane();
@@ -998,14 +1010,14 @@ test('the store version advances for the new operation owners: unresolved integr
   store.saveWorktreeIntegration({ input: integration, status: 'uncertain', message: 'fixture', updatedAt: new Date().toISOString(), commit: null });
   const discard = { ...await catalog.previewDiscard(target), confirmBranch: 'feature/finished', confirm: true as const };
   store.saveWorktreeDiscard({ input: discard, status: 'uncertain', message: 'fixture', updatedAt: new Date().toISOString() });
-  assert.equal(store.db.pragma('user_version', { simple: true }), 20);
+  assert.equal(store.db.pragma('user_version', { simple: true }), STORE_SCHEMA);
   store.close(); store = new Store(config.dataDir); catalog = new ProjectCatalog(store, config);
-  assert.equal(store.db.pragma('user_version', { simple: true }), 20);
+  assert.equal(store.db.pragma('user_version', { simple: true }), STORE_SCHEMA);
   assert.deepEqual(store.worktreeIntegrations().map((op) => [op.input.requestId, op.status]), [[integration.requestId, 'uncertain']]);
   assert.deepEqual(store.worktreeDiscards().map((op) => [op.input.requestId, op.status]), [[discard.requestId, 'uncertain']]);
   assert.throws(() => catalog.assertWorktreeReady(root), /squash integration/); assert.throws(() => catalog.assertWorktreeReady(request.path), /discard/);
   await assert.rejects(catalog.create(await input('another')), /owns this project/);
-  store.db.pragma('user_version = 21'); store.close();
+  store.db.pragma(`user_version = ${STORE_SCHEMA + 1}`); store.close();
   assert.throws(() => new Store(config.dataDir), /Unsupported database version/);
   store = new Store(join(directory, 'fresh-metadata')); // afterEach closes this one
 });
@@ -1185,7 +1197,7 @@ test('v10 full-branch squash records remain valid batch boundaries after upgrade
   const legacy = JSON.parse(JSON.stringify(result)); delete legacy.input.through; delete legacy.input.previousCommit;
   store.saveWorktreeIntegration(legacy); store.db.pragma('user_version = 10'); store.close();
   store = new Store(config.dataDir); catalog = new ProjectCatalog(store, config);
-  assert.equal(store.db.pragma('user_version', { simple: true }), 20);
+  assert.equal(store.db.pragma('user_version', { simple: true }), STORE_SCHEMA);
   assert.equal((await catalog.previewRemoval(target)).integratedCommit, result.commit);
   writeFileSync(join(request.path, 'later.txt'), 'later batch\n'); git(request.path, 'add', '.'); git(request.path, 'commit', '-m', 'later');
   const next = await catalog.previewIntegration(target);

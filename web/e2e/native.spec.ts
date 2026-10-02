@@ -1,6 +1,6 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import type { WorkflowState } from '../src/contracts/workflow';
-import { backToControl, expand, expandAgents, openAccess, openCard, pane, readiness, showSurface } from './ui';
+import { backToControl, expand, expandAgents, expandWorktree, takeControl, openAccess, openCard, pane, readiness, showSurface } from './ui';
 const headers={Authorization:`Bearer ${'a'.repeat(64)}`};
 async function state(request:APIRequestContext):Promise<WorkflowState>{return (await request.get('/api/v1/state',{headers})).json();}
 async function post(request:APIRequestContext,path:string,data:unknown){const r=await request.post(`/api/v1/${path}`,{headers,data});expect(r.ok(),await r.text()).toBe(true);return r.json();}
@@ -52,6 +52,26 @@ test.beforeEach(async({request})=>{
 });
 // Finish intercepted polling requests before Playwright closes the page, then clear keyboard records.
 test.afterEach(async({page,request})=>{await page.unrouteAll({behavior:'wait'});await reconcileFixtureKeyboard(request);});
+test('a worktree hold stays visible in status but does not enter another workspace acknowledgement',async({page,request})=>{
+  const other=await post(request,'sessions',{paneId:'%3',label:'Other Codex'});
+  try {
+    await openKeyboard(page);const original=(await state(request)).manualSessions![0]!;
+    await page.getByRole('navigation',{name:'Sections'}).getByRole('button',{name:'Projects',exact:true}).click();
+    await page.getByRole('button',{name:'Project other',exact:true}).click();await expandWorktree(page,'other');
+    await page.getByRole('button',{name:'Open other',exact:true}).click();
+    await expect(page.locator('.context-bar')).toContainText('/demo/other');
+    await expect(page.locator('.page-heading').getByRole('img',{name:'Input: 0 active',exact:true})).toBeVisible();
+    await takeKeyboard(page,'Other Codex');
+    await expect.poll(async()=>((await state(request)).manualSessions??[]).length).toBe(2);
+    await chooseKeyboard(page,'Nobody (observe only)');
+    await openAccess(page);await takeControl(page);
+    await expect.poll(async()=>((await state(request)).manualSessions??[]).map(m=>m.id)).toEqual([original.id]);
+  } finally {
+    await reconcileFixtureKeyboard(request);
+    const removed=await request.delete(`/api/v1/sessions/${other.session.id}`,{headers});
+    expect(removed.ok(),await removed.text()).toBe(true);
+  }
+});
 test('terminal status is informational; focus and keys in Display admit nothing, and the Terminal toggle starts a writer',async({page,request},info)=>{
   await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
   const status=page.locator('.page-heading').getByRole('img',{name:'Input: 0 active',exact:true});

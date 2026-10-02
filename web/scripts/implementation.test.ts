@@ -5,7 +5,7 @@ import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, realpa
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Store } from '../src/server/store.ts';
+import { Store, STORE_SCHEMA } from '../src/server/store.ts';
 import { Controller } from '../src/server/controller.ts';
 import { ControlPlane } from '../src/server/control-plane.ts';
 import { MockAdapter, mockSessions } from '../src/server/adapters/mock.ts';
@@ -614,7 +614,7 @@ test('v4 migration preserves historical pair IDs and creates versioned groups', 
   store.db.prepare('DELETE FROM groups').run(); store.db.pragma('user_version = 4'); store.close();
   store = new Store(join(directory, 'metadata'));
   assert.equal(store.groups()[0]!.id, group.id); assert.equal(store.groups()[0]!.legacyPairId, group.id);
-  assert.deepEqual(store.groups()[0]!.members, ['codex', 'claude']); assert.equal(store.db.pragma('user_version', { simple: true }), 20);
+  assert.deepEqual(store.groups()[0]!.members, ['codex', 'claude']); assert.equal(store.db.pragma('user_version', { simple: true }), STORE_SCHEMA);
 });
 test('a relay note reaches only the peer\'s review assignment and needs a relay', async () => {
   const input = request({ reviewNote: 'Please check the retry path first.' }); await plane.submitImplementation(input);

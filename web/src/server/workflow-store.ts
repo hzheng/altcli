@@ -257,9 +257,9 @@ export class WorkflowStore {
   }
   claim(id: string): Execution | null {
     return this.store.db.transaction(() => {
-      if (this.store.db.prepare(`SELECT 1 FROM keyboard_sessions WHERE json_extract(value,'$.live')=1 OR json_extract(value,'$.reconciliationRequired')=1 LIMIT 1`).get()) return null;
       const turn = this.execution(id); const run = turn && this.run(turn.runId);
       if (!turn || !run || run.interaction?.active || run.status !== 'running' || run.currentCommandId !== id || turn.status !== 'planned' || (run.implementation && run.implementation.setup !== 'ready')) return null;
+      if (this.store.db.prepare(`SELECT 1 FROM keyboard_sessions WHERE (json_extract(value,'$.live')=1 OR json_extract(value,'$.reconciliationRequired')=1) AND (json_extract(value,'$.scope.indexPath') IS NULL OR json_extract(value,'$.scope.indexPath')=?) LIMIT 1`).get(run.lockKey)) return null;
       turn.status = 'dispatching'; this.saveExecution(turn); return turn;
     }).immediate();
   }

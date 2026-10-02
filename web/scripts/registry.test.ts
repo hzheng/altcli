@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, wr
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
-import { Store } from '../src/server/store.ts';
+import { Store, STORE_SCHEMA } from '../src/server/store.ts';
 import { WorkflowStore } from '../src/server/workflow-store.ts';
 import { ProjectCatalog } from '../src/server/projects.ts';
 import { loadConfig, type Config } from '../src/server/config.ts';
@@ -62,12 +62,12 @@ const saveSession = (identity: WorktreeIdentity, minute: number) => store.db.pre
   label: 'hand-started', agentType: 'claude', repository: identity.root, expectedCommand: 'claude', identity: { paneId: '%1', panePid: '1', serverPid: '2', serverStarted: '3', socketPath: '/tmp/t' },
   relayPrompt: 'relay', registeredAt: at(minute), registrationId: randomUUID(), worktree: identity, cwd: identity.root }));
 
-test('a fresh store starts at the registry schema with no upgrade backup; a newer store is refused', () => {
-  assert.equal(store.db.pragma('user_version', { simple: true }), REGISTRY_SCHEMA);
+test('a fresh store starts at the current schema with no upgrade backup; a newer store is refused', () => {
+  assert.equal(store.db.pragma('user_version', { simple: true }), STORE_SCHEMA);
   assert.deepEqual(store.managedWorkspaces(), []); assert.deepEqual(backups(), []);
-  store.db.pragma(`user_version = ${REGISTRY_SCHEMA + 1}`); store.close();
+  store.db.pragma(`user_version = ${STORE_SCHEMA + 1}`); store.close();
   assert.throws(() => new Store(metadata()), /Unsupported database version/);
-  assert.equal(dump().version, REGISTRY_SCHEMA + 1);
+  assert.equal(dump().version, STORE_SCHEMA + 1);
 });
 
 test('the upgrade gate names every kind of unresolved work and ignores settled history', () => {
@@ -123,7 +123,7 @@ test('the upgrade gate retains inspected launch uncertainty after its reservatio
   prior.prepare('UPDATE launches SET value=? WHERE id=?').run(JSON.stringify({ ...batch,
     items: batch.items.map((item) => ({ ...item, status: 'reconciled' })) }), batch.requestId);
   prior.close(); store = new Store(metadata());
-  assert.equal(store.db.pragma('user_version', { simple: true }), REGISTRY_SCHEMA);
+  assert.equal(store.db.pragma('user_version', { simple: true }), STORE_SCHEMA);
 });
 
 test('an unsettled store refuses the upgrade before anything changes; once settled it upgrades once with a private backup', () => {
@@ -134,12 +134,12 @@ test('an unsettled store refuses the upgrade before anything changes; once settl
     && error.message.includes(`worktree-creation ${pending.input.requestId} (uncertain)`) && error.message.includes('upgrade:check') && error.message.includes('Nothing was changed'));
   assert.deepEqual(dump(), before); assert.deepEqual(backups(), []);
   const report = inspectUpgrade(database());
-  assert.deepEqual([report.version, report.target, report.blockers.map((b) => b.id), report.repositories], [19, REGISTRY_SCHEMA, [pending.input.requestId], 1]);
+  assert.deepEqual([report.version, report.target, report.blockers.map((b) => b.id), report.repositories], [19, STORE_SCHEMA, [pending.input.requestId], 1]);
   assert.deepEqual(dump(), before); // the preview opens read-only
   // The previous version settles it; then this version upgrades.
   const raw = new Database(database()); raw.prepare('UPDATE worktree_creations SET status=?, value=? WHERE id=?').run('failed', JSON.stringify({ ...pending, status: 'failed' }), pending.input.requestId); raw.close();
   store = new Store(metadata());
-  assert.equal(store.db.pragma('user_version', { simple: true }), REGISTRY_SCHEMA);
+  assert.equal(store.db.pragma('user_version', { simple: true }), STORE_SCHEMA);
   assert.deepEqual(store.projects()[0]!.settings, { revision: 1, confirmation: 'pending', base: null, integrationBranch: null, launchDefaults: [], confirmedAt: null });
   const [backup] = backups(); assert.ok(backup?.startsWith('altcli-schema-19-')); assert.equal(statSync(join(metadata(), backup!)).mode & 0o777, 0o600);
   const saved = dump(join(metadata(), backup!)); assert.equal(saved.version, 19); assert.deepEqual(saved.rows.worktree_creations, dump().rows.worktree_creations);

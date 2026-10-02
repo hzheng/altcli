@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { WebSocket } from 'ws';
 import Database from 'better-sqlite3';
-import { Store } from '../src/server/store.ts';
+import { Store, STORE_SCHEMA } from '../src/server/store.ts';
 import { Controller } from '../src/server/controller.ts';
 import { ControlPlane } from '../src/server/control-plane.ts';
 import { InputAuthority } from '../src/server/input-authority.ts';
@@ -27,13 +27,87 @@ beforeEach(()=>{directory=mkdtempSync(join(tmpdir(),'altcli-broker-'));store=new
   plane=new ControlPlane(new Controller(loadConfig({ALTCLI_ADAPTER:'mock',ALTCLI_TOKEN:'a'.repeat(64),ALTCLI_DATA_DIR:directory,ALTCLI_ENABLE_TERMINAL:'true',ALTCLI_ENABLE_LEGACY_RELAY:'true',ALTCLI_ENABLE_AGENT_LAUNCH:'true'}),store,new MockAdapter()));});
 afterEach(async()=>{await plane.terminals.shutdown();store.close();rmSync(directory,{recursive:true,force:true});});
 const settle=()=>new Promise(r=>setTimeout(r,10));
-async function connect():Promise<{opened:TerminalConnection;socket:Socket;generation:string}>{
-  const s=(await plane.state()).sessions[0]!;const opened=await plane.terminals.open({protocol:2,target:{agentId:s.id,registrationId:s.registrationId},cols:80,rows:24,clientInstanceId:randomUUID()});
+async function connect(root = '/demo/project'):Promise<{opened:TerminalConnection;socket:Socket;generation:string}>{
+  const s=(await plane.state()).sessions.find(s=>s.worktree?.root===root)!;const opened=await plane.terminals.open({protocol:2,target:{agentId:s.id,registrationId:s.registrationId},cols:80,rows:24,clientInstanceId:randomUUID()});
   const socket=new Socket();plane.terminals.connect(socket as unknown as WebSocket);socket.frame({ticket:opened.ticket});
   for(let n=0;n<400&&socket.readyState===1&&!socket.frames.some(f=>f.type==='reset');n++)await settle();
   const reset=socket.frames.find(f=>f.type==='reset');assert.ok(reset?.type==='reset');return {opened,socket,generation:reset.generation};
 }
 const grant=(c:Awaited<ReturnType<typeof connect>>)=>plane.terminals.keyboard(c.opened.connectionId,{requestId:randomUUID(),expectedBootId:plane.authority.bootId,expectedGeneration:c.generation,action:'acquire'});
+test('worktree writers have independent periods, snapshots, admission and reconciliation',async()=>{
+  const a=await connect(), b=await connect('/demo/other');
+  const first=await grant(a), ma=first.manualSession!;
+  assert.equal(ma.scope?.indexPath,'/demo/project/.git/index');
+  assert.ok(ma.panes.length && ma.panes.every(p=>p.cwd==='/demo/project'));
+  await assert.rejects(plane.authority.automated(async()=>{},['/demo/project/.git/index']),/Manual terminal input/);
+  await plane.authority.automated(async()=>{},['/demo/other/.git/index']);
+  const second=await grant(b), mb=second.manualSession!;
+  assert.notEqual(ma.id,mb.id);assert.equal(plane.authority.pending().length,2);
+  assert.ok(mb.panes.length && mb.panes.every(p=>p.cwd==='/demo/other'));
+  const released=await plane.terminals.keyboard(a.opened.connectionId,{requestId:randomUUID(),expectedBootId:plane.authority.bootId,expectedGeneration:first.generation,action:'releaseSettled',confirmReady:true});
+  assert.equal(released.manualSession!.reconciliationRequired,false);
+  assert.equal(plane.authority.get(mb.id).live,true);
+  await plane.authority.automated(async()=>{},['/demo/project/.git/index']);
+  await assert.rejects(plane.authority.automated(async()=>{},['/demo/other/.git/index']),/Manual terminal input/);
+});
+test('manual input in one worktree permits a standalone delivery in another',async()=>{
+  const c=await connect();await grant(c);
+  const state=await plane.state(), group=state.groups.find(g=>g.cwd==='/demo/other')!;
+  const agent=state.sessions.find(s=>group.members.includes(s.id))!;
+  const input={requestId:randomUUID(),groupId:group.id,groupRevision:group.revision,registrations:{[agent.id]:agent.registrationId},agentId:agent.id,policy:'solo' as const,text:'Independent checkout',confirmReady:true as const};
+  const record=await plane.submitStandalone(input);assert.equal(record.status,'delivered');
+  assert.equal(plane.workflow.runs().find(r=>r.currentCommandId===record.id)!.interaction?.active,undefined);
+  assert.equal(plane.authority.pending()[0]!.live,true);
+});
+test('a global period overlaps both worktrees and releasing it preserves a scoped hold',async()=>{
+  const a=await connect(), first=await grant(a);
+  await plane.terminals.keyboard(a.opened.connectionId,{requestId:randomUUID(),expectedBootId:plane.authority.bootId,expectedGeneration:first.generation,action:'release'});
+  const local=plane.authority.get(first.manualSession!.id);
+  const global=plane.authority.save({...local,id:randomUUID(),scope:null,revision:0,writers:[],runs:[]});
+  assert.equal(plane.authority.blockedFor(['/demo/other/.git/index']),true);
+  await plane.reconcileManual({requestId:randomUUID(),manualSessionId:global.id,expectedRevision:global.revision,confirmInspected:true,note:'Inspected the global period.'});
+  assert.equal(plane.authority.get(local.id).reconciliationRequired,true);
+  assert.equal(plane.authority.blockedFor(['/demo/project/.git/index']),true);
+  assert.equal(plane.authority.blockedFor(['/demo/other/.git/index']),false);
+});
+test('operation admission excludes overlapping scopes and retains every concurrent global owner',async()=>{
+  let endA!:()=>void,endB!:()=>void;
+  const a=plane.authority.automated(()=>new Promise<void>(r=>{endA=r;}),['/demo/project/.git/index']);
+  await plane.authority.acquire(async()=>{},['/demo/other/.git/index']);
+  await assert.rejects(plane.authority.acquire(async()=>{},['/demo/project/.git/index']),/in flight/);
+  endA();await a;
+  const first=plane.authority.automated(()=>new Promise<void>(r=>{endA=r;}));
+  const second=plane.authority.automated(()=>new Promise<void>(r=>{endB=r;}));
+  endA();await first;
+  await assert.rejects(plane.authority.acquire(async()=>{},['/demo/other/.git/index']),/in flight/);
+  endB();await second;
+  await plane.authority.acquire(async()=>{},['/demo/other/.git/index']);
+});
+test('schema 20 input remains global after migration and new writers join it without narrowing its evidence',async()=>{
+  const c=await connect(),owned=await grant(c);await plane.terminals.shutdown();
+  const before=plane.authority.get(owned.manualSession!.id),config=plane.config;
+  store.db.pragma('user_version = 20');store.close();store=new Store(directory);
+  plane=new ControlPlane(new Controller(config,store,new MockAdapter()));
+  const recovered=plane.authority.get(before.id);
+  assert.equal(recovered.scope,null);assert.equal(recovered.reconciliationRequired,true);
+  assert.deepEqual(recovered.panes,before.panes);assert.deepEqual(recovered.runs,before.runs);
+  assert.equal(plane.authority.blockedFor(['/demo/other/.git/index']),true);
+  const other=await connect('/demo/other'),joined=await grant(other);
+  assert.equal(joined.manualSession!.id,before.id);assert.equal(joined.manualSession!.scope,null);
+  assert.ok(joined.manualSession!.panes.some(p=>p.cwd==='/demo/other'));
+});
+test('workspace writers request pane-directed attachment and close when their display moves',async()=>{
+  let moved=false;const modes:boolean[]=[];let written=0;
+  plane.terminals.services.attach=async(_config,target,writer,_cols,_rows,_data,_exit,paneInput)=>{
+    if(writer)modes.push(paneInput===true);
+    return {pid:1,write:()=>{written++;},resize:()=>{},pause:()=>{},resume:()=>{},close:async()=>{},active:async()=>{
+      if(moved)throw new Error('display changed');return {paneId:target.identity.paneId,sessionId:target.sessionId,label:target.label,command:'fixture'};
+    }};
+  };
+  const c=await connect(),owned=await grant(c);assert.deepEqual(modes,[true]);
+  moved=true;await assert.rejects(plane.terminals.input(c.opened.connectionId,{generation:owned.generation,seq:1,encoding:'utf8',data:'never redirected'}));
+  assert.equal(written,0);assert.equal(plane.authority.get(owned.manualSession!.id).reconciliationRequired,true);
+});
 async function settledStart() {
   const c=await connect(),owned=await grant(c);
   const requestId=randomUUID();
@@ -46,6 +120,19 @@ async function externalStart() {
   const s=(await plane.state()).sessions.find(s=>s.id==='codex')!;
   await plane.recordEvent({source:'codex',event:'turn_started',paneId:s.identity.paneId,socketPath:s.identity.socketPath,identity:s.identity,prompt:'External work after settlement.',sessionId:'external',sourceTurnId:randomUUID(),startedAt:new Date().toISOString()});
 }
+test('a scoped settlement cannot authorize a different checkout with the same request ID',async()=>{
+  const {input}=await settledStart(),state=await plane.state(),group=state.groups.find(g=>g.cwd==='/demo/other')!;
+  const agent=state.sessions.find(s=>group.members.includes(s.id))!;
+  await assert.rejects(plane.submitStandalone({...input,groupId:group.id,groupRevision:group.revision,registrations:{[agent.id]:agent.registrationId},agentId:agent.id,policy:'solo'}),/settlement.*changed/i);
+  assert.equal(plane.workflow.runs().length,0);
+});
+test('settlement stays valid across unrelated native activity and keyboard changes',async()=>{
+  const {input}=await settledStart();
+  const other=await connect('/demo/other');await grant(other);
+  const s=(await plane.state()).sessions.find(s=>s.worktree?.root==='/demo/other')!;
+  await plane.recordEvent({source:'codex',event:'turn_started',paneId:s.identity.paneId,socketPath:s.identity.socketPath,identity:s.identity,prompt:'Unrelated activity',sessionId:'other',sourceTurnId:randomUUID(),startedAt:new Date().toISOString()});
+  assert.equal((await plane.submitStandalone(input)).status,'delivered');
+});
 test('settlement evidence rejects new native activity before handoff admission',async()=>{
   const {input}=await settledStart();await externalStart();
   await assert.rejects(plane.submitStandalone(input),/settlement.*changed/i);
@@ -231,14 +318,14 @@ test('human reconciliation cannot release delivery, setup or launch reservations
   const c=await connect(), owned=await grant(c);
   await plane.terminals.keyboard(c.opened.connectionId,{requestId:randomUUID(),expectedBootId:plane.authority.bootId,expectedGeneration:owned.generation,action:'release'});
   const m=plane.authority.pending()[0]!,input={requestId:randomUUID(),manualSessionId:m.id,expectedRevision:m.revision,confirmInspected:true as const,note:'Inspected fixture host.'};
-  store.db.prepare('INSERT INTO reservations(repository,active_id) VALUES (?,?)').run('/demo/other',randomUUID());
-  await assert.rejects(plane.reconcileManual(input),/delivery, setup or launch is unresolved/);store.db.exec('DELETE FROM reservations');
+  store.db.prepare('INSERT INTO reservations(repository,active_id) VALUES (?,?)').run('/demo/project',randomUUID());
+  await assert.rejects(plane.reconcileManual(input),/delivery, setup or launch .*unresolved/);store.db.exec('DELETE FROM reservations');
   for(const status of ['applying','uncertain']) {
-    store.db.prepare('INSERT INTO worktree_removals(id,value) VALUES (?,?)').run(randomUUID(),JSON.stringify({status}));
-    await assert.rejects(plane.reconcileManual(input),/delivery, setup or launch is unresolved/);store.db.exec('DELETE FROM worktree_removals');
+    store.db.prepare('INSERT INTO worktree_removals(id,value) VALUES (?,?)').run(randomUUID(),JSON.stringify({status,input:{worktree:m.scope}}));
+    await assert.rejects(plane.reconcileManual(input),/delivery, setup or launch .*unresolved/);store.db.exec('DELETE FROM worktree_removals');
   }
-  store.db.prepare('INSERT INTO launch_reservations(index_path,launch_id) VALUES (?,?)').run('/demo/other/.git/index',randomUUID());
-  await assert.rejects(plane.reconcileManual(input),/delivery, setup or launch is unresolved/);store.db.exec('DELETE FROM launch_reservations');
+  store.db.prepare('INSERT INTO launch_reservations(index_path,launch_id) VALUES (?,?)').run('/demo/project/.git/index',randomUUID());
+  await assert.rejects(plane.reconcileManual(input),/delivery, setup or launch .*unresolved/);store.db.exec('DELETE FROM launch_reservations');
   assert.equal(plane.authority.get(m.id).reconciliationRequired,true);
   const result=await plane.reconcileManual(input);assert.equal(result.reconciliationRequired,false);
   assert.deepEqual(await plane.reconcileManual(input),result);
@@ -316,6 +403,18 @@ test('a discovered project launches without path re-entry and is remembered only
   assert.equal(store.projects().length,0,'preview must not persist project selection');
   const batch=await plane.launches.confirm({requestId:preview.requestId,previewDigest:preview.digest,confirm:true});
   assert.equal(batch.items[0]!.status,'running');assert.equal(store.projects()[0]!.id,p.id);
+});
+test('launch admission uses the selected worktree while unrelated manual input remains live',async()=>{
+  const c=await connect();await grant(c);
+  const profile=(await plane.launches.profile({label:'Scoped launch',executable:'codex',args:[],adapterHint:'codex',enabled:true}))!;
+  const projects=(await plane.workspaces()).projects!;
+  for(const root of ['/demo/project','/demo/other']){
+    const project=projects.find(p=>p.worktrees.some(w=>w.path===root))!,tree=project.worktrees.find(w=>w.path===root)!;
+    const preview=await plane.launches.preview({projectId:project.id,items:[{worktreeId:tree.id,profileId:profile.id,count:1}]});
+    if(root==='/demo/project')assert.ok(preview.blockers.some(b=>b.includes('Manual terminal input')));
+    else {assert.deepEqual(preview.blockers,[]);assert.equal((await plane.launches.confirm({requestId:preview.requestId,previewDigest:preview.digest,confirm:true})).items[0]!.status,'running');}
+  }
+  assert.equal(plane.authority.pending()[0]!.live,true);
 });
 test('renderer credit bounds output, pauses only the attachment, resumes below low water, and closes a stalled renderer',async()=>{
   let output!:(bytes:Buffer)=>void, paused=0, resumed=0, closed=0;
@@ -437,7 +536,7 @@ test('a version 17 store with unsettled manual input refuses the upgrade unchang
   for(const id of [legacy.id,older.id])raw.prepare('UPDATE keyboard_sessions SET value=? WHERE id=?').run(JSON.stringify({...JSON.parse((before.find((r)=>(r as {id:string}).id===id) as {value:string}).value),live:false,reconciliationRequired:false}),id);
   raw.close();store=new Store(directory);
   plane=new ControlPlane(new Controller(config,store,new MockAdapter()));
-  assert.equal(store.db.pragma('user_version',{simple:true}),20);assert.deepEqual(plane.authority.pending(),[]);assert.equal(plane.authority.blocked,false);
+  assert.equal(store.db.pragma('user_version',{simple:true}),STORE_SCHEMA);assert.deepEqual(plane.authority.pending(),[]);assert.equal(plane.authority.blocked,false);
   for(const id of [legacy.id,settled.id,older.id]){const period=plane.authority.get(id);assert.equal(period.recoveryRequired,false);assert.equal(period.writers[0]!.live,false);assert.deepEqual(period.panes,legacy.panes);assert.equal(period.revision,legacy.revision);}
   assert.equal(plane.authority.get(legacy.id).bytes,17);assert.equal(plane.authority.get(older.id).bytes,3);
   const [backup]=readdirSync(directory).filter(name=>name.startsWith('altcli-schema-17-'));assert.ok(backup);assert.equal(statSync(join(directory,backup)).mode&0o777,0o600);

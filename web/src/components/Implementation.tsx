@@ -19,7 +19,7 @@ export function HandoffProgress({ run }: { run: RelayRun }) {
     {next && <div className="notice" role="status" aria-label="Queued handoff">
       <p><strong>Queued: {next.action === 'work' ? 'work' : 'review'} by {label(next.agentId)}.</strong> This turn has not been sent.</p>
       {inputHeld && <>
-        <p>{run.interaction?.origin === 'keyboard' ? 'Manual terminal input anywhere on this tmux server holds automatic handoffs, even when typing in another checkout. Stopping typing does not resume this run.' : 'Terminal input holds this run until you review its validated checkpoint.'}</p>
+        <p>{run.interaction?.origin === 'keyboard' ? 'Manual terminal input covering this worktree holds automatic handoffs. Stopping typing does not resume this run.' : 'Terminal input holds this run until you review its validated checkpoint.'}</p>
         <p>Use <strong>Review input and continue</strong> below once the input checkpoint is ready.{run.interaction?.disposition === 'waiting' && ' Then use Next turn to send the saved handoff.'} <strong>Take control</strong> ends this run and cancels its queued handoff.</p>
       </>}
     </div>}

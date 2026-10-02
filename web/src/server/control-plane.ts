@@ -33,6 +33,8 @@ import type { RelayRun } from '../contracts/workflow.ts';
 import { InteractionStore } from './interaction-store.ts';
 import { parseCheckpoint, parseInteraction } from '../core/interaction-validation.ts';
 import { InputAuthority } from './input-authority.ts';
+import { scopesFor, type InputScopes } from '../core/input-scope.ts';
+import type { WorktreeIdentity } from '../contracts/workflow.ts';
 import { LaunchService } from './launches.ts';
 import { MockAdapter } from './adapters/mock.ts';
 import { TerminalBroker } from './terminal-broker.ts';
@@ -60,10 +62,9 @@ export class ControlPlane {
   readonly transport: Controller;
   readonly projects: ProjectCatalog;
   private readonly activity: AgentActivityTracker;
-  private nativeRevision = 0;
+  private readonly scopedNative = new Map<string | null, { revision: number; active: number }>();
   private lifecycleRevision = 0;
   private lifecycleObservations = 0;
-  private nativeObservations = 0;
   /** Claude's Stop blocks its CLI until our HTTP response returns and the reporting hook exits. */
   private readonly completingHooks = new Map<string, { commandId: string; reporters: Set<string> }>();
   /** Ephemeral identity proposals. Discovery never writes registrations or starts work. */
@@ -94,9 +95,10 @@ export class ControlPlane {
     this.launches = new LaunchService(this.config, this.store, this.projects, this.authority, tree => {
       if(this.workflow.owner(tree.indexPath) || this.store.activeFor(tree.root)) throw new AppError('WORKTREE_BUSY', 'A run or delivery owns this checkout.', 409);
     }, async () => { this.syncMockLaunches(); return sessionNamesOf(await this.adapter.listPanes()); });
-    this.transport.inputGuard = () => this.authority.assertAutomated();
+    this.transport.inputGuard = agentId => this.authority.assertAutomated(this.agentScopes(agentId));
     this.terminals = new TerminalBroker({ config: this.config, authority: this.authority,
-      resolve: target => this.terminalTarget(target), begin: (input, id, generation, prior) => this.beginKeyboard(input, id, generation, prior),
+      resolve: target => this.terminalTarget(target), begin: (input, id, generation, prior, scope) => this.beginKeyboard(input, id, generation, prior, scope),
+      scope: target => this.keyboardScope(target),
       exempt: target => this.inputExempt(target),
       reconcile: (input, handoffRequestId) => this.reconcileManual(input, handoffRequestId),
       image: (target, attach, attachmentId) => this.nativeImage(target, attach, attachmentId),
@@ -127,13 +129,47 @@ export class ControlPlane {
   private ownedRuns(): RelayRun[] {
     return (this.store.db.prepare('SELECT run_id FROM workflow_owners').all() as { run_id: string }[]).map(row => this.workflow.run(row.run_id)!);
   }
-  private assertNativeBoundary(): void {
-    const setup = [...this.store.worktreeCreations(), ...this.store.worktreeRemovals(), ...this.store.worktreeIntegrations(), ...this.store.worktreeDiscards()];
-    if (this.store.reservations().length || setup.some(op => ['applying', 'uncertain'].includes(op.status)) || this.finish.busy() ||
-      this.store.db.prepare('SELECT 1 FROM launch_reservations LIMIT 1').get() ||
-      this.ownedRuns().some(run => (run.implementation && run.implementation.setup !== 'ready') || this.interactions.pending(run.id))) {
-      throw new AppError('INPUT_BUSY', 'A delivery, setup or launch is unresolved. Inspect its owner before native input or reconciliation.', 409);
+  private agentScopes(agentId: string): InputScopes {
+    const session = this.discovered.get(agentId) ?? this.store.sessions().find(s => s.id === agentId) as ManagedSession | undefined;
+    return scopesFor(session?.worktree);
+  }
+  private runScopes(runId: string): InputScopes { const run = this.workflow.run(runId); return run ? [run.lockKey] : null; }
+  private async groupScopes(groupId: string): Promise<InputScopes> {
+    const discovery = await this.workspaces();
+    const group = this.workspaceGroups(discovery).find(g => g.id === groupId);
+    const scopes = group?.members.map(id => this.agentScopes(id));
+    return scopes?.length && scopes.every(s => s !== null) ? scopes.flatMap(s => s!) : null;
+  }
+  private nativeIn(scopes: InputScopes, states = this.scopedNative): { revision: number; active: number } {
+    let revision = 0, active = 0;
+    for (const [key, state] of states) if (key === null || scopes === null || scopes.includes(key)) {
+      revision += state.revision; active += state.active;
     }
+    return { revision, active };
+  }
+  private assertNativeBoundary(scope: WorktreeIdentity | null = null): void {
+    const covers = (tree: WorktreeIdentity) => !scope || tree.indexPath === scope.indexPath;
+    const setup = [...this.store.worktreeCreations().filter(op => covers(op.input.source) || op.input.path === scope?.root),
+      ...[...this.store.worktreeRemovals(), ...this.store.worktreeDiscards(), ...this.store.worktreeUpdates(), ...this.store.worktreeRenames()].filter(op => covers(op.input.worktree)),
+      ...this.store.worktreeIntegrations().filter(op => covers(op.input.worktree) || covers(op.input.target))];
+    const launches = this.store.db.prepare('SELECT index_path FROM launch_reservations').all() as { index_path: string }[];
+    if (this.store.reservations().some(r => !scope || r.repository === scope.root) || setup.some(op => ['applying', 'uncertain'].includes(op.status)) ||
+      this.store.taskFinishes().some(op => covers(op.preview.worktree) && ['applying', 'uncertain', 'git_applying', 'git_uncertain'].includes(op.status)) ||
+      launches.some(r => !scope || r.index_path === scope.indexPath) ||
+      this.ownedRuns().some(run => (!scope || run.lockKey === scope.indexPath) && ((run.implementation && run.implementation.setup !== 'ready') || this.interactions.pending(run.id)))) {
+      throw new AppError('INPUT_BUSY', 'A delivery, setup or launch in this scope is unresolved. Inspect its owner before native input or reconciliation.', 409);
+    }
+  }
+  /** Resolve the original target afresh; an unverifiable worktree keeps the global barrier. */
+  private async keyboardScope(target: TerminalTarget): Promise<WorktreeIdentity | null> {
+    const attached = await this.terminalTarget(target);
+    const recorded = 'launchId' in target ? this.launches.batches().flatMap(b => b.items).find(i => i.id === target.launchId)?.worktree
+      : this.workspaceSessions(await this.workspaces()).find(s => s.id === target.agentId && s.registrationId === target.registrationId)?.worktree;
+    if (!recorded) return null;
+    const pane = await this.adapter.inspect(attached.identity.paneId);
+    if (!isDeepStrictEqual(pane.identity, attached.identity)) throw new AppError('TARGET_CHANGED', 'The keyboard target changed during inspection.', 409);
+    const actual = this.config.mode === 'mock' ? { root: pane.cwd, gitDir: `${pane.cwd}/.git`, indexPath: `${pane.cwd}/.git/index` } : await resolveWorktree(pane.cwd).catch(() => null);
+    return actual && sameWorktree(actual, recorded) ? recorded : null;
   }
   /** Every workspace terminal joins the manual-input barrier; app-role subclasses may exempt their own. */
   inputExempt(_target: TerminalTarget): boolean { return false; }
@@ -159,8 +195,17 @@ export class ControlPlane {
     }
     return this.attachments.reference(attachmentId, session.worktree?.root ?? session.repository);
   }
-  private async manualSnapshot(): Promise<ManualPane[]> {
-    const panes = await this.adapter.listPanes();
+  private async manualSnapshot(scope: WorktreeIdentity | null = null, original: ManualPane[] = []): Promise<ManualPane[]> {
+    let panes = await this.adapter.listPanes();
+    if (scope) {
+      const selected = await Promise.all(panes.map(async pane => {
+        if (original.some(p => p.identity.socketPath === pane.identity.socketPath && p.identity.paneId === pane.identity.paneId)) return true;
+        if ([...this.store.sessions() as ManagedSession[], ...this.discovered.values()].some(s => s.worktree?.indexPath === scope.indexPath && isDeepStrictEqual(s.identity, pane.identity))) return true;
+        const tree = this.config.mode === 'mock' ? { root: pane.cwd, gitDir: `${pane.cwd}/.git`, indexPath: `${pane.cwd}/.git/index` } : await resolveWorktree(pane.cwd).catch(() => null);
+        return tree?.indexPath === scope.indexPath;
+      }));
+      panes = panes.filter((_, i) => selected[i]);
+    }
     if (panes.length > 64) throw new AppError('INPUT_INVENTORY', 'Manual reconciliation supports at most 64 panes on this server.', 409);
     // An exited (remain-on-exit) pane has no process tree to read; its pane_pid is gone or could be reused.
     const snapshots = await Promise.all(panes.map(async pane => ({ identity: pane.identity, cwd: pane.cwd, command: pane.command, dead: pane.dead,
@@ -168,16 +213,21 @@ export class ControlPlane {
       processes: this.config.mode === 'mock' || pane.dead ? [] : await paneProcesses(pane.identity.panePid) })));
     return snapshots.sort((a, b) => a.identity.paneId.localeCompare(b.identity.paneId));
   }
-  private async beginKeyboard(input: TerminalOpen, connectionId: string, generation: string, prior?: ManualSession): Promise<ManualSession> {
-    this.assertNativeBoundary();
-    const revision = this.nativeRevision;
+  private async beginKeyboard(input: TerminalOpen, connectionId: string, generation: string, prior?: ManualSession, scope?: WorktreeIdentity | null): Promise<ManualSession> {
+    if (scope === undefined) scope = await this.keyboardScope(input.target);
+    this.assertNativeBoundary(scope);
+    const scopes = scopesFor(scope);
+    const revision = this.nativeIn(scopes).revision;
+    if (scope && !isDeepStrictEqual(await this.keyboardScope(input.target), scope)) throw new AppError('TARGET_CHANGED', 'The keyboard worktree changed. Reconnect before typing.', 409);
     const resolved = await this.terminalTarget(input.target);
-    const panes = prior?.panes ?? await this.manualSnapshot();
-    const runs = this.ownedRuns();
+    const inventory = prior?.panes.some(p => isDeepStrictEqual(p.identity, resolved.identity)) ? prior.panes : await this.manualSnapshot(scope, prior?.panes);
+    const panes = prior ? [...prior.panes, ...inventory.filter(p => isDeepStrictEqual(p.identity, resolved.identity) && !prior!.panes.some(old => isDeepStrictEqual(old.identity, p.identity)))] : inventory;
+    const affectedRuns = () => this.ownedRuns().filter(run => !scope || run.lockKey === scope.indexPath || run.participants.some(p => 'agentId' in input.target && p.id === input.target.agentId));
+    const runs = affectedRuns();
     const expected = JSON.stringify(runs);
     return this.store.db.transaction(() => {
-      this.assertNativeBoundary();
-      if (this.nativeObservations || revision !== this.nativeRevision || JSON.stringify(this.ownedRuns()) !== expected) throw new AppError('INPUT_CHANGED', 'Activity changed during keyboard inspection. Recheck.', 409);
+      this.assertNativeBoundary(scope);
+      if (this.nativeIn(scopes).active || revision !== this.nativeIn(scopes).revision || JSON.stringify(affectedRuns()) !== expected) throw new AppError('INPUT_CHANGED', 'Activity changed during keyboard inspection. Recheck.', 409);
       // Existing writers can type during target inspection. Join the latest aggregate,
       // never overwrite their byte evidence, revisions or a disconnect with the old copy.
       if (prior) {
@@ -193,7 +243,7 @@ export class ControlPlane {
         else if (run.status === 'paused') this.interactions.invalidate(run.id, 'Keyboard acquisition cannot restore an already paused run.');
       }
       const now = new Date().toISOString();
-      return this.authority.save({ id: prior?.id ?? randomUUID(), revision: prior?.revision ?? 0, bootId: this.authority.bootId,
+      return this.authority.save({ scope, id: prior?.id ?? randomUUID(), revision: prior?.revision ?? 0, bootId: this.authority.bootId,
         clientInstanceId: prior?.clientInstanceId ?? input.clientInstanceId, connectionId: prior?.connectionId ?? connectionId,
         generation: prior?.generation ?? generation, target: prior?.target ?? input.target, live: true, reconciliationRequired: true,
         targets: [...(prior?.targets ?? []), ...(prior?.targets.some(t => isDeepStrictEqual(t, input.target)) ? [] : [input.target])],
@@ -201,7 +251,7 @@ export class ControlPlane {
           { connectionId, clientInstanceId: input.clientInstanceId, generation, target: input.target, identity: resolved.identity, sessionId: resolved.sessionId,
             revision: 1, live: true, bytes: 0, inputMayHaveOccurred: false }],
         inputMayHaveOccurred: prior?.inputMayHaveOccurred ?? false, bytes: prior?.bytes ?? 0, createdAt: prior?.createdAt ?? now, updatedAt: now,
-        reason: 'Keyboard granted; dispatch, setup and launch are held across this server.', panes: prior?.panes ?? panes,
+        reason: scope ? `Keyboard input holds ${scope.root}.` : 'Keyboard input holds every worktree on this server.', panes,
         runs: [...(prior?.runs ?? []), ...runs.filter(r => !known.has(r.id)).map(r => ({ id: r.id, commandId: r.currentCommandId, priorStatus: r.status }))] });
     }).immediate();
   }
@@ -209,10 +259,11 @@ export class ControlPlane {
     const input = parseManualReconcile(value);
     const duplicate = this.authority.duplicate<ManualSession>(input.requestId, input); if (duplicate) return duplicate;
     const manual = this.authority.get(input.manualSessionId);
-    if (this.authority.pending().some(s => s.live) || manual.revision !== input.expectedRevision || !manual.reconciliationRequired || this.authority.busy) throw new AppError('MANUAL_CHANGED', 'Release the keyboard and inspect the current manual input record.', 409);
-    this.assertNativeBoundary(); const nativeRevision = this.nativeRevision;
+    const scope = manual.scope ?? null, scopes = scopesFor(scope);
+    if (this.authority.pending(scopes).some(s => s.live) || manual.revision !== input.expectedRevision || !manual.reconciliationRequired || this.authority.busyFor(scopes)) throw new AppError('MANUAL_CHANGED', 'Release the keyboard and inspect the current manual input record.', 409);
+    this.assertNativeBoundary(scope); const nativeRevision = this.nativeIn(scopes).revision;
     if ('confirmReady' in input) {
-      const panes = await this.manualSnapshot();
+      const panes = await this.manualSnapshot(scope, manual.panes);
       if (!isDeepStrictEqual(panes.map(p => p.identity), manual.panes.map(p => p.identity))) throw new AppError('INPUT_INVENTORY', 'Pane identities changed during manual input. Inspect the host and record a human decision if settled checks cannot establish safety.', 409);
       const sessions = await this.checkoutSessions();
       for (const pane of panes) {
@@ -236,27 +287,28 @@ export class ControlPlane {
     }
     return this.store.db.transaction(() => {
       const prior = this.authority.duplicate<ManualSession>(input.requestId, input); if (prior) return prior;
-      this.assertNativeBoundary();
-      if (this.authority.busy || this.authority.pending().some(s => s.live) || this.authority.get(manual.id).revision !== manual.revision || this.nativeObservations || this.nativeRevision !== nativeRevision) throw new AppError('MANUAL_CHANGED', 'New input or activity invalidated reconciliation.', 409);
-      // This decision releases only the server barrier. Run holds, checkpoints and faults remain untouched.
+      this.assertNativeBoundary(scope);
+      if (this.authority.busyFor(scopes) || this.authority.pending(scopes).some(s => s.live) || this.authority.get(manual.id).revision !== manual.revision || this.nativeIn(scopes).active || this.nativeIn(scopes).revision !== nativeRevision) throw new AppError('MANUAL_CHANGED', 'New input or activity invalidated reconciliation.', 409);
+      // This decision releases only this period. Run holds, checkpoints and faults remain untouched.
       const settled = { ...manual, reconciliationRequired: false, recoveryRequired: false };
       delete settled.settlement;
       const result = this.authority.save({ ...settled,
-        ...('confirmReady' in input && handoffRequestId ? { settlement: { requestId: handoffRequestId, nativeRevision, keyboardRevision: this.authority.revision + 1 } } : {}),
+        ...('confirmReady' in input && handoffRequestId ? { settlement: { requestId: handoffRequestId, nativeRevision, keyboardRevision: this.authority.revisionFor(scopes) + 1 } } : {}),
         ...('confirmInspected' in input
         ? { humanDecision: { requestId: input.requestId, note: input.note, at: new Date().toISOString() },
-          reason: 'Human inspection recorded possible prior and background effects. Server barrier released; affected runs still require checkpoint review or takeover.' }
+          reason: 'Human inspection recorded possible prior and background effects. This period released; affected runs still require checkpoint review or takeover.' }
         : { reason: 'Manual input recorded settled after inspection. Review each saved workflow checkpoint explicitly.' }) });
       this.authority.decide(input.requestId, input, result); return result;
     }).immediate();
   }
-  private assertKeyboardSettlement(input: Pick<ImplementationStart, 'requestId' | 'keyboardSettlement'>): void {
+  private assertKeyboardSettlement(input: Pick<ImplementationStart, 'requestId' | 'keyboardSettlement' | 'agentId'>): void {
     if (!input.keyboardSettlement) return;
     const evidence = input.keyboardSettlement;
     const manual = this.authority.sessions().find(s => s.id === evidence.manualSessionId);
-    if (!manual || manual.revision !== evidence.revision || manual.bootId !== this.authority.bootId || manual.live || manual.reconciliationRequired ||
-      manual.settlement?.requestId !== input.requestId || manual.settlement.nativeRevision !== this.nativeRevision ||
-      manual.settlement.keyboardRevision !== this.authority.revision || this.nativeObservations) {
+    const targetScopes = this.agentScopes(input.agentId);
+    if (!manual || (manual.scope && !targetScopes?.includes(manual.scope.indexPath)) || manual.revision !== evidence.revision || manual.bootId !== this.authority.bootId || manual.live || manual.reconciliationRequired ||
+      manual.settlement?.requestId !== input.requestId || manual.settlement.nativeRevision !== this.nativeIn(scopesFor(manual.scope)).revision ||
+      manual.settlement.keyboardRevision !== this.authority.revisionFor(scopesFor(manual.scope)) || this.nativeIn(scopesFor(manual.scope)).active) {
       throw new AppError('SETTLEMENT_CHANGED', 'Keyboard settlement changed. Inspect the agents and confirm readiness again.', 409);
     }
   }
@@ -327,7 +379,7 @@ export class ControlPlane {
     return { ...discovery, projects: await this.projects.discover(discovery.workspaces, sessions) };
   }
   async previewWorktree(input: WorktreePreviewInput) { await this.workspaces(); return this.projects.preview(input); }
-  async createWorktree(input: WorktreeCreateInput) { return this.authority.automated(() => this.createWorktreeAdmitted(input)); }
+  async createWorktree(input: WorktreeCreateInput) { return this.authority.automated(() => this.createWorktreeAdmitted(input), scopesFor(input.source)); }
   private async createWorktreeAdmitted(input: WorktreeCreateInput) { await this.workspaces(); return this.projects.create(input); }
   private async removalGuard(worktree: NonNullable<ManagedSession['worktree']>): Promise<void> {
     const panes = await this.adapter.listPanes(); // An unavailable inventory is not an empty checkout.
@@ -346,13 +398,13 @@ export class ControlPlane {
     const preview = await this.projects.previewRemoval(input);
     await this.removalGuard(preview.worktree); return preview;
   }
-  async removeWorktree(input: WorktreeRemoveInput) { return this.authority.automated(() => this.removeWorktreeAdmitted(input)); }
+  async removeWorktree(input: WorktreeRemoveInput) { return this.authority.automated(() => this.removeWorktreeAdmitted(input), scopesFor(input.worktree)); }
   private async removeWorktreeAdmitted(input: WorktreeRemoveInput) {
     await this.workspaces(); return this.projects.remove(input, (worktree) => this.removalGuard(worktree), (worktree) => this.archiveJournal(worktree.root));
   }
   /** Squash shares the checkout with every pane, including unselected agents and subdirectories. Native idle/ready is
    * only turn evidence: fresh process evidence must also exclude surviving writers before each Git mutation. */
-  private async integrationGuard(target: NonNullable<ManagedSession['worktree']>, source: NonNullable<ManagedSession['worktree']>, revision: number, acknowledged = false): Promise<void> {
+  private async integrationGuard(target: NonNullable<ManagedSession['worktree']>, source: NonNullable<ManagedSession['worktree']>, revision: Map<string | null, { revision: number; active: number }>, acknowledged = false): Promise<void> {
     const ownership = () => {
       if (this.workflow.owner(target.indexPath) || this.store.activeFor(target.root)) throw new AppError('WORKTREE_BUSY', 'A run or unresolved delivery owns the integration checkout. Inspect and take over before squashing into it.', 409);
       if (this.workflow.owner(source.indexPath) || this.store.activeFor(source.root)) throw new AppError('WORKTREE_BUSY', 'A run or unresolved delivery owns the task worktree. Let it finish or take over before squashing its branch.', 409);
@@ -374,7 +426,9 @@ export class ControlPlane {
   }
   /** Every pane must be a settled CLI, idle shell or the verified AltCLI host launch chain, with fresh process evidence
    * excluding surviving work. Native idle/ready alone is only turn evidence; host children are still work. */
-  private async settledWriters(trees: NonNullable<ManagedSession['worktree']>[], revision: number, code: string, requirement: string): Promise<void> {
+  private async settledWriters(trees: NonNullable<ManagedSession['worktree']>[], revision: Map<string | null, { revision: number; active: number }>, code: string, requirement: string): Promise<void> {
+    const scopes = trees.map(tree => tree.indexPath);
+    const nativeChanged = () => this.nativeIn(scopes).active || this.nativeIn(scopes).revision !== this.nativeIn(scopes, revision).revision;
     const unknown = (detail = 'Current activity or process evidence is unavailable or changed.') => new AppError(code, `${requirement} ${detail} Inspect the panes and stop background work, then Recheck.`, 409);
     const hostProcesses = async (panePid: string) => {
       const initial = await this.adapter.hostProcesses(panePid);
@@ -399,7 +453,7 @@ export class ControlPlane {
       return result.sort((a, b) => JSON.stringify(a.pane.identity).localeCompare(JSON.stringify(b.pane.identity)));
     };
     try {
-      if (this.nativeObservations || revision !== this.nativeRevision) throw unknown();
+      if (nativeChanged()) throw unknown();
       const panes = await inventory();
       for (const { pane, cwd, tree } of panes) {
         const host = await hostProcesses(pane.identity.panePid);
@@ -421,24 +475,37 @@ export class ControlPlane {
         if (host && !isDeepStrictEqual(await hostProcesses(pane.identity.panePid), host)) throw unknown();
       }
       const scope = (rows: typeof panes) => rows.map(({ pane, cwd }) => [pane.identity, cwd, pane.command, pane.dead]);
-      if (!isDeepStrictEqual(scope(await inventory()), scope(panes)) || this.nativeObservations || revision !== this.nativeRevision) throw unknown();
+      if (!isDeepStrictEqual(scope(await inventory()), scope(panes)) || nativeChanged()) throw unknown();
     } catch (error) { if (error instanceof AppError && error.code === code) throw error; throw unknown(); }
   }
   async previewIntegration(input: WorktreeIntegrationInput) {
-    const revision = this.nativeRevision;
+    const revision = new Map([...this.scopedNative].map(([key, state]) => [key, { ...state }]));
     await this.workspaces();
     const preview = await this.projects.previewIntegration(input);
     await this.integrationGuard(preview.target, preview.worktree, revision, preview.acknowledgeActivity === true); return preview;
   }
-  async integrateWorktree(input: WorktreeIntegrateRequest) { return this.authority.automated(() => this.integrateWorktreeAdmitted(input)); }
+  private async updateScopes(input: WorktreeUpdateRequest): Promise<InputScopes> {
+    const prior = this.store.worktreeUpdates().find(op => op.input.requestId === input.requestId);
+    if (prior) return scopesFor(prior.input.worktree);
+    await this.workspaces();
+    return scopesFor((await this.projects.launchWorktree(input.projectId, input.worktreeId)).identity);
+  }
+  private async integrationScopes(input: WorktreeIntegrateRequest): Promise<InputScopes> {
+    const prior = this.store.worktreeIntegrations().find(op => op.input.requestId === input.requestId);
+    await this.workspaces();
+    const preview = prior?.input ?? await this.projects.previewIntegration({ projectId: input.projectId, worktreeId: input.worktreeId,
+      ...(input.through ? { through: input.through } : {}), ...(input.acknowledgeActivity ? { acknowledgeActivity: true } : {}) });
+    return [preview.worktree.indexPath, preview.target.indexPath];
+  }
+  async integrateWorktree(input: WorktreeIntegrateRequest) { return this.authority.automated(() => this.integrateWorktreeAdmitted(input), await this.integrationScopes(input)); }
   private async integrateWorktreeAdmitted(input: WorktreeIntegrateRequest) {
     // One revision spans the entire operation: even a turn that starts and finishes between checks invalidates it.
-    const revision = this.nativeRevision;
+    const revision = new Map([...this.scopedNative].map(([key, state]) => [key, { ...state }]));
     const acknowledged = (input as { acknowledgeActivity?: unknown }).acknowledgeActivity === true; // parsed strictly by integrate
     await this.workspaces(); return this.projects.integrate(input, async (target, source) => this.integrationGuard(target, source, revision, acknowledged));
   }
   async reconcileIntegration(requestId: string) {
-    const revision = this.nativeRevision;
+    const revision = new Map([...this.scopedNative].map(([key, state]) => [key, { ...state }]));
     // Inspection applies the confirmed decision: an acknowledged squash is not refused for activity it accepted.
     const acknowledged = this.store.worktreeIntegrations().find((op) => op.input.requestId === requestId)?.input.acknowledgeActivity === true;
     return this.projects.reconcileIntegration(requestId, (target, source) => this.integrationGuard(target, source, revision, acknowledged));
@@ -450,7 +517,7 @@ export class ControlPlane {
     const preview = await this.projects.previewUpdate(input);
     await this.changeGuard(preview.worktree, ALIGN_ACTION[preview.mode]); return preview;
   }
-  async updateWorktree(input: WorktreeUpdateRequest) { return this.authority.automated(() => this.updateWorktreeAdmitted(input)); }
+  async updateWorktree(input: WorktreeUpdateRequest) { return this.authority.automated(() => this.updateWorktreeAdmitted(input), await this.updateScopes(input)); }
   private async updateWorktreeAdmitted(input: WorktreeUpdateRequest) {
     await this.workspaces();
     return this.projects.update(input, (worktree) => this.changeGuard(worktree, ALIGN_ACTION[input.mode ?? 'update']), (worktree) => this.archiveJournal(worktree.root));
@@ -464,7 +531,7 @@ export class ControlPlane {
     const preview = await this.projects.previewRename(input, this.sessionRenames);
     await this.changeGuard(preview.worktree, 'Rename'); return preview;
   }
-  async renameWorktree(input: WorktreeRenameConfirm) { return this.authority.automated(() => this.renameWorktreeAdmitted(input)); }
+  async renameWorktree(input: WorktreeRenameConfirm) { return this.authority.automated(() => this.renameWorktreeAdmitted(input), scopesFor(input.worktree)); }
   private async renameWorktreeAdmitted(input: WorktreeRenameConfirm) {
     await this.workspaces();
     return this.projects.rename(input, (worktree) => this.changeGuard(worktree, 'Rename'), this.sessionRenames, (confirmed, renames) => this.followBranchRename(confirmed, renames));
@@ -488,12 +555,12 @@ export class ControlPlane {
     const preview = await this.projects.previewDiscard(input);
     await this.removalGuard(preview.worktree); return preview;
   }
-  async discardWorktree(input: WorktreeDiscardConfirm) { return this.authority.automated(() => this.discardWorktreeAdmitted(input)); }
+  async discardWorktree(input: WorktreeDiscardConfirm) { return this.authority.automated(() => this.discardWorktreeAdmitted(input), scopesFor(input.worktree)); }
   private async discardWorktreeAdmitted(input: WorktreeDiscardConfirm) {
     await this.workspaces(); return this.projects.discard(input, (worktree) => this.removalGuard(worktree), (worktree) => this.archiveJournal(worktree.root));
   }
   /** No occupancy guard: the checkout is verified gone before the remaining branch deletion, and its pending discard refuses new runs. */
-  async finishDiscard(input: WorktreeDiscardFinish) { return this.authority.automated(() => this.finishDiscardAdmitted(input)); }
+  async finishDiscard(input: WorktreeDiscardFinish) { return this.authority.automated(() => this.finishDiscardAdmitted(input), scopesFor(this.store.worktreeDiscards().find(op => op.input.requestId === input.requestId)?.input.worktree)); }
   private async finishDiscardAdmitted(input: WorktreeDiscardFinish) {
     await this.workspaces(); return this.projects.finishDiscard(input);
   }
@@ -755,7 +822,7 @@ export class ControlPlane {
     this.transport.removePair(id);
     this.store.removeGroup(id);
   }
-  async submit(input: StartInput): Promise<CommandRecord> { return this.authority.automated(() => this.submitAdmitted(input)); }
+  async submit(input: StartInput): Promise<CommandRecord> { return this.authority.automated(() => this.submitAdmitted(input), this.agentScopes(input.agentId)); }
   private async submitAdmitted(input: StartInput): Promise<CommandRecord> {
     // An existing request returns its recorded result even if the host has since disabled Stage relay.
     const fresh = !this.workflow.execution(input.requestId);
@@ -813,7 +880,7 @@ export class ControlPlane {
     if (unsupported.length) throw new AppError('IMAGE_UNSUPPORTED', `Images are verified only for Claude Code and Codex recipients; ${unsupported.map((r) => r.label).join(', ')} cannot receive them. Remove the images or choose other agents.`, 409);
     return this.attachments.describe(ids, workspace);
   }
-  async submitStandalone(input: StandaloneStart): Promise<CommandRecord> { return this.authority.automated(() => this.submitStandaloneAdmitted(input)); }
+  async submitStandalone(input: StandaloneStart): Promise<CommandRecord> { return this.authority.automated(() => this.submitStandaloneAdmitted(input), await this.groupScopes(input.groupId)); }
   private async submitStandaloneAdmitted(input: StandaloneStart): Promise<CommandRecord> {
     if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'Input is disabled by the host.', 403);
     const existing = this.workflow.execution(input.requestId);
@@ -845,7 +912,7 @@ export class ControlPlane {
     if (!group || (input.recipient && !group.members.includes(input.recipient))) throw new AppError('INVALID_GROUP', 'Recheck the selected workspace group and recipient before previewing.', 409);
     return previewCommittedRange(group.repository, input, (agentId, shas) => this.workflow.publishedBy(agentId, shas));
   }
-  async submitImplementation(input: ImplementationStart): Promise<CommandRecord> { return this.authority.automated(() => this.submitImplementationAdmitted(input)); }
+  async submitImplementation(input: ImplementationStart): Promise<CommandRecord> { return this.authority.automated(() => this.submitImplementationAdmitted(input), await this.groupScopes(input.groupId)); }
   private async submitImplementationAdmitted(input: ImplementationStart): Promise<CommandRecord> {
     if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'Input is disabled by the host.', 403);
     const existing = this.workflow.execution(input.requestId);
@@ -944,7 +1011,7 @@ export class ControlPlane {
       } catch (error) { this.workflow.setupResult(runId, false, messageOf(error)); throw error; }
     }
   }
-  async submitPlan(input: PlanStart): Promise<CommandRecord> { return this.authority.automated(() => this.submitPlanAdmitted(input)); }
+  async submitPlan(input: PlanStart): Promise<CommandRecord> { return this.authority.automated(() => this.submitPlanAdmitted(input), await this.groupScopes(input.groupId)); }
   private async submitPlanAdmitted(input: PlanStart): Promise<CommandRecord> {
     if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'Input is disabled by the host.', 403);
     const existing = this.workflow.execution(input.requestId);
@@ -983,7 +1050,7 @@ export class ControlPlane {
     if (!receipt) throw new AppError('RUN_PAUSED', 'Planning delivery is pending or paused. Inspect the run; nothing was replayed.', 409);
     return receipt;
   }
-  async decidePlan(input: PlanDecision, authority: 'human' | 'automatic' = 'human'): Promise<void> { return this.authority.automated(() => this.decidePlanAdmitted(input, authority)); }
+  async decidePlan(input: PlanDecision, authority: 'human' | 'automatic' = 'human'): Promise<void> { return this.authority.automated(() => this.decidePlanAdmitted(input, authority), this.runScopes(input.runId)); }
   private async decidePlanAdmitted(input: PlanDecision, authority: 'human' | 'automatic' = 'human'): Promise<void> {
     if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'Input is disabled by the host.', 403);
     const run = this.workflow.run(input.runId); const plan = run?.planning;
@@ -1009,8 +1076,8 @@ export class ControlPlane {
   }
   /** Exactly one caller can claim a planned turn; browsers never create continuation commands. */
   private async pump(runId: string): Promise<void> {
-    if (this.authority.blocked || this.completingHooks.has(runId)) return;
-    return this.authority.automated(() => this.pumpAdmitted(runId));
+    if (this.authority.blockedFor(this.runScopes(runId)) || this.completingHooks.has(runId)) return;
+    return this.authority.automated(() => this.pumpAdmitted(runId), this.runScopes(runId));
   }
   private async pumpAdmitted(runId: string): Promise<void> {
     if (this.completingHooks.has(runId)) return;
@@ -1150,11 +1217,13 @@ export class ControlPlane {
   }
   private async recordObservedEvent(input: HookEvent): Promise<HookReceipt> {
     const observed = [...this.store.sessions() as ManagedSession[], ...this.discovered.values()].find((s) => s.identity.socketPath === input.socketPath && s.identity.paneId === input.paneId);
-    this.nativeRevision++; this.nativeObservations++;
+    const key = observed?.worktree?.indexPath ?? null;
+    const native = this.scopedNative.get(key) ?? { revision: 0, active: 0 }; this.scopedNative.set(key, native);
+    native.revision++; native.active++;
     try {
       await this.observeCheckpointActivity(input);
       await this.activity.record(input, observed);
-    } finally { this.nativeRevision++; this.nativeObservations--; }
+    } finally { native.revision++; native.active--; }
     if (input.event === 'turn_interrupted' && input.commandId) {
       try {
         const pane = await this.adapter.inspect(input.paneId);
@@ -1236,7 +1305,7 @@ export class ControlPlane {
       if (this.completingHooks.get(runId) === barrier) this.completingHooks.delete(runId);
     }
   }
-  async submitInteraction(value: InteractionInput): Promise<InteractionRecord> { return this.authority.automated(() => this.submitInteractionAdmitted(value)); }
+  async submitInteraction(value: InteractionInput): Promise<InteractionRecord> { return this.authority.automated(() => this.submitInteractionAdmitted(value), this.runScopes(value.runId)); }
   private async submitInteractionAdmitted(value: InteractionInput): Promise<InteractionRecord> {
     const input = parseInteraction(value);
     if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'Input is disabled by the host.', 403);
@@ -1295,8 +1364,8 @@ export class ControlPlane {
   }
   private async captureCheckpoint(id: string): Promise<void> {
     if (this.completingHooks.has(id)) return;
-    const revision = this.nativeRevision;
-    const run = this.workflow.run(id); if (!run || this.nativeObservations || this.interactions.pending(id)) return;
+    const scopes = this.runScopes(id), revision = this.nativeIn(scopes).revision;
+    const run = this.workflow.run(id); if (!run || this.nativeIn(scopes).active || this.interactions.pending(id)) return;
     const kind = run.status === 'waiting' && !run.interaction?.active ? 'waiting' : run.interaction?.active && !run.interaction.fault && run.interaction.disposition ? 'interaction' : null;
     const result = kind && this.checkpointResult(run); if (!kind || !result) return;
     const existing = this.interactions.checkpoint(id);
@@ -1309,7 +1378,7 @@ export class ControlPlane {
       const processes = Object.fromEntries(await Promise.all(sessions.map(async (s) => [s.id, await this.adapter.processes(s)] as const)));
       const fingerprint = await this.readWorktree(run.repository);
       const branch = this.config.mode === 'mock' ? null : await currentBranch(run.repository);
-      if (this.nativeObservations || this.nativeRevision !== revision || JSON.stringify(this.workflow.run(id)) !== expected || this.interactions.pending(id)) return;
+      if (this.nativeIn(scopes).active || this.nativeIn(scopes).revision !== revision || JSON.stringify(this.workflow.run(id)) !== expected || this.interactions.pending(id)) return;
       this.interactions.saveCheckpoint({ runId: id, commandId: run.currentCommandId, revision: (existing?.revision ?? 0) + 1, capturedAt: new Date().toISOString(), kind, fingerprint, branch, result, sessions, processes, external: {}, fault: false, reason: null });
     } catch { /* Missing evidence never creates a recoverable boundary. */ }
   }
@@ -1379,7 +1448,7 @@ export class ControlPlane {
       } catch { /* Unknown remains a blocker. */ }
     }
   }
-  async reconcileCheckpoint(value: CheckpointInput): Promise<void> { return this.authority.automated(() => this.reconcileCheckpointAdmitted(value)); }
+  async reconcileCheckpoint(value: CheckpointInput): Promise<void> { return this.authority.automated(() => this.reconcileCheckpointAdmitted(value), this.runScopes(value.runId)); }
   private async reconcileCheckpointAdmitted(value: CheckpointInput): Promise<void> {
     const input = parseCheckpoint(value);
     if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'Input is disabled by the host.', 403);
@@ -1390,8 +1459,8 @@ export class ControlPlane {
       (input.action === 'restore' ? cp.kind !== 'waiting' || !Object.keys(cp.external).length : cp.kind !== 'interaction') ||
       Object.values(cp.external).some((e) => e.state !== 'clear') || this.interactions.pending(run.id) || this.store.activeFor(run.repository) || this.checkpointResult(run) !== cp.result) throw new AppError('CHECKPOINT_CHANGED', 'This checkpoint is incomplete, changed or uncertain. Inspect it; takeover may be required.', 409);
     const expected = JSON.stringify(run);
-    const nativeRevision = this.nativeRevision;
-    if (this.nativeObservations) throw new AppError('CHECKPOINT_CHANGED', 'Native activity is still being observed.', 409);
+    const scopes = this.runScopes(run.id), nativeRevision = this.nativeIn(scopes).revision;
+    if (this.nativeIn(scopes).active) throw new AppError('CHECKPOINT_CHANGED', 'Native activity is still being observed.', 409);
     const sessions = await this.checkpointMembers(run);
     if (!isDeepStrictEqual(sessions, cp.sessions)) throw new AppError('TARGET_CHANGED', 'Checkout agent identities changed.', 409);
     if (run.planning) { await assertPlanArtifacts(run.planning); if (!run.implementation) await assertPlanBaseline(run.planning); }
@@ -1403,7 +1472,7 @@ export class ControlPlane {
     if (await this.readWorktree(run.repository) !== cp.fingerprint || (this.config.mode !== 'mock' && await currentBranch(run.repository) !== cp.branch)) throw new AppError('CHECKPOINT_CHANGED', 'The checkout changed after the validated result.', 409);
     this.store.db.transaction(() => {
       if (this.interactions.duplicateDecision(input)) return;
-      if (this.nativeObservations || this.nativeRevision !== nativeRevision || JSON.stringify(this.workflow.run(run.id)) !== expected || this.interactions.checkpoint(run.id)?.revision !== cp.revision || this.interactions.pending(run.id)) throw new AppError('CHECKPOINT_CHANGED', 'New activity invalidated this confirmation.', 409);
+      if (this.nativeIn(scopes).active || this.nativeIn(scopes).revision !== nativeRevision || JSON.stringify(this.workflow.run(run.id)) !== expected || this.interactions.checkpoint(run.id)?.revision !== cp.revision || this.interactions.pending(run.id)) throw new AppError('CHECKPOINT_CHANGED', 'New activity invalidated this confirmation.', 409);
       if (input.action === 'restore') this.workflow.restoreCheckpoint(run.id, input.commandId);
       else this.workflow.reconcileInput(run.id, input.commandId);
       this.interactions.decide(input);
@@ -1412,9 +1481,9 @@ export class ControlPlane {
   }
   action(input: RunAction): void | Promise<void> {
     if (input.action === 'pause') { this.interactions.invalidate(input.runId, 'Explicit human pause requires takeover.'); this.workflow.pause(input.runId); }
-    else if (input.action === 'recheck') return this.authority.automated(() => this.recheckHandoff(input));
+    else if (input.action === 'recheck') return this.authority.automated(() => this.recheckHandoff(input), this.runScopes(input.runId));
     else if (input.action === 'continue') {
-      this.authority.assertAutomated();
+      this.authority.assertAutomated(this.runScopes(input.runId));
       const owned = this.workflow.run(input.runId); if (owned) this.projects.assertWorktreeReady(owned.repository);
       if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'Input is disabled by the host.', 403);
       if (input.confirmReady !== true || !input.expectedCommandId) throw new AppError('READINESS_REQUIRED', 'Confirm readiness for the current manual handoff.');

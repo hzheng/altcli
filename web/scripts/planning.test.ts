@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { contextKey } from '../../hooks/protocol.mjs';
-import { Store } from '../src/server/store.ts';
+import { Store, STORE_SCHEMA } from '../src/server/store.ts';
 import { Controller } from '../src/server/controller.ts';
 import { ControlPlane } from '../src/server/control-plane.ts';
 import { MockAdapter, mockSessions } from '../src/server/adapters/mock.ts';
@@ -500,7 +500,7 @@ test('v5 upgrade preserves stored runs and groups and marks phase-aware data as 
   // Upgrades start from a settled store (ADR-0024; refusal is covered in registry.test.ts): the human took this run over first.
   const input = request(); await plane.submitPlan(input); plane.workflow.takeover(input.requestId); const saved = run(input.requestId); const groups = store.groups();
   store.db.pragma('user_version = 5'); store.close(); store = new Store(join(directory, 'metadata'));
-  assert.equal(store.db.pragma('user_version', { simple: true }), 20); assert.deepEqual(store.groups(), groups);
+  assert.equal(store.db.pragma('user_version', { simple: true }), STORE_SCHEMA); assert.deepEqual(store.groups(), groups);
   const record = store.db.prepare('SELECT value FROM workflow_runs WHERE id=?').get(input.requestId) as { value: string };
   assert.deepEqual(JSON.parse(record.value), saved);
 });

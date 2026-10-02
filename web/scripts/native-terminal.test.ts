@@ -95,10 +95,10 @@ test('private tmux: observer isolation, native bytes, resize, exact client ident
     assert.ok(!before.some(p => p.pid === String(observer!.pid)), 'attach is not pane background work');
     await observer.close(); observer = undefined;
     await run(['set-option', '-w', '-t', '%0', 'window-size', 'latest']);
-    writer = await attachTmux(config, target, true, 90, 25, () => {}, () => {});
+    writer = await attachTmux(config, target, true, 90, 25, () => {}, () => {}, true);
     await eventually(async () => { try { return (await writer!.active()).paneId === '%0'; } catch { return false; } });
     const bytes = Buffer.from('é次🙂\x1b[A\x1b\t\x03\x04\x12\x15\x1b[200~line1\nline2\x1b[201~');
-    writer.write(bytes);
+    await writer.write(bytes);
     await eventually(async () => (await readFile(join(dir, 'bytes'))).length === bytes.length);
     assert.deepEqual(await readFile(join(dir, 'bytes')), bytes);
     writer.resize(70, 20); await delay(100);
@@ -107,7 +107,7 @@ test('private tmux: observer isolation, native bytes, resize, exact client ident
     await run(['copy-mode', '-t', '%0']);
     assert.equal((await inspectPane(run, '%0')).inMode, true);
     assert.equal((await writer.active()).paneId, '%0', 'copy mode keeps the native writer attached');
-    writer.write(Buffer.from('q'));
+    await writer.write(Buffer.from('q'));
     await eventually(async () => !(await inspectPane(run, '%0')).inMode);
     assert.deepEqual(await readFile(join(dir, 'bytes')), bytes, 'leaving copy mode must not type q into the worker');
     await writer.close(); writer = undefined;
@@ -119,7 +119,7 @@ test('private tmux: observer isolation, native bytes, resize, exact client ident
   } finally { await writer?.close(); await observer?.close(); await desktop?.close(); await run(['kill-server']).catch(() => {}); await rm(dir, { recursive: true, force: true }); }
 });
 
-test('private tmux: Helper bytes stay on its own pane, including tmux shortcuts and a navigated display client', async () => {
+test('private tmux: pane-directed Helper and workspace bytes stay on their original pane despite tmux shortcuts or a moved display', async () => {
   const dir = await realpath(await mkdtemp(join(tmpdir(), 'altcli-helper-input-')));
   const config = loadConfig({ ALTCLI_TOKEN: 'a'.repeat(64), ALTCLI_DATA_DIR: join(dir, 'data'), ALTCLI_TMUX_SOCKET: join(dir, 't.sock') });
   const run = createRunner(config.tmuxBin, config.tmuxSocket);
@@ -154,6 +154,53 @@ test('private tmux: Helper bytes stay on its own pane, including tmux shortcuts 
   } finally { await writer?.close(); await run(['kill-server']).catch(() => {}); await rm(dir, { recursive: true, force: true }); }
 });
 
+test('private tmux: synchronized panes cannot broadcast a browser writer into another pane',async()=>{
+  const dir=await realpath(await mkdtemp(join(tmpdir(),'altcli-sync-input-'))),socket=join(dir,'t.sock');
+  const config=loadConfig({ALTCLI_TOKEN:'a'.repeat(64),ALTCLI_DATA_DIR:join(dir,'data'),ALTCLI_TMUX_SOCKET:socket});
+  const run=createRunner('tmux',socket);let writer:Attachment|undefined;
+  try {
+    await writeFile(join(dir,'reader.sh'),'#!/bin/sh\nstty raw -echo\nprintf "Ready\\r\\n"\nexec /bin/cat > "$1"\n');
+    await run(['-f','/dev/null','new-session','-d','-s','sync','-c',dir,'/bin/sh',join(dir,'reader.sh'),join(dir,'one')]);
+    await run(['split-window','-d','-t','%0','-c',dir,'/bin/sh',join(dir,'reader.sh'),join(dir,'two')]);
+    await eventually(async()=>(await inspectPane(run,'%0')).command==='cat'&&(await inspectPane(run,'%1')).command==='cat');
+    const target=await inspectAttach(config,(await inspectPane(run,'%0')).identity);
+    writer=await attachTmux(config,target,true,80,24,()=>{},()=>{},true);await writer.ready;
+    await run(['set-window-option','-t','%0','synchronize-panes','on']);
+    const bytes=Buffer.from('only here\x02:next-window\r\x00é');await writer.write(bytes);
+    await eventually(async()=>(await readFile(join(dir,'one'))).length===bytes.length);
+    assert.deepEqual(await readFile(join(dir,'one')),bytes);assert.equal((await readFile(join(dir,'two'))).length,0);
+    assert.equal((await inspectPane(run,'%0')).synchronized,true);
+  } finally {await writer?.close();await run(['kill-server']).catch(()=>{});await rm(dir,{recursive:true,force:true});}
+});
+
+test('private tmux: mouse reports reach only a requesting original pane, with pane-relative coordinates', async () => {
+  const dir=await realpath(await mkdtemp(join(tmpdir(),'altcli-pane-mouse-')));
+  const config=loadConfig({ALTCLI_TOKEN:'a'.repeat(64),ALTCLI_DATA_DIR:join(dir,'data'),ALTCLI_TMUX_SOCKET:join(dir,'t.sock')});
+  const run=createRunner('tmux',config.tmuxSocket);let writer:Attachment|undefined;
+  try {
+    await writeFile(join(dir,'reader.sh'),'#!/bin/sh\nstty raw -echo\nprintf "Ready\\r\\n"\nexec /bin/cat > bytes\n');
+    await run(['-f','/dev/null','new-session','-d','-s','mouse','-c',dir,'/bin/sh',join(dir,'reader.sh')]);
+    await run(['split-window','-hbd','-t','%0','/bin/sleep','300']);
+    await run(['set-option','-t','mouse','status-position','top']);
+    await eventually(async()=>(await inspectPane(run,'%0')).command==='cat');
+    const target=await inspectAttach(config,(await inspectPane(run,'%0')).identity);
+    writer=await attachTmux(config,target,true,80,24,()=>{},()=>{},true);await writer.ready;
+    const [left,top]=(await run(['display-message','-p','-t','%0','#{pane_left}\t#{pane_top}'])).trim().split('\t').map(Number);
+    assert.ok(left!>0);
+    const point=`${left!+3};${top!+5}`; // One status row above the window.
+    await writer.write(Buffer.from(`\x1b[<0;${point}M`));assert.equal((await readFile(join(dir,'bytes'))).length,0);
+    // Output from the program, simulated through its tty, enables its own mouse reporting.
+    const tty=(await run(['display-message','-p','-t','%0','#{pane_tty}'])).trim();
+    await writeFile(tty,'\x1b[?1000h\x1b[?1006h');
+    await eventually(async()=>(await run(['display-message','-p','-t','%0','#{mouse_sgr_flag}'])).trim()==='1');
+    await writer.write(Buffer.from(`\x1b[<0;${point}M`));await writer.write(Buffer.from(`\x1b[<0;${point}m`));
+    await writer.write(Buffer.from('\x1b[<0;3;4M')); // The other pane never receives or redirects a click.
+    await writer.write(Buffer.from('\x1b[<0;500;500M'));await writer.write(Buffer.from(`\x1b[<35;${point}M`));
+    await eventually(async()=>(await readFile(join(dir,'bytes'))).length===18);
+    assert.equal(await readFile(join(dir,'bytes'),'utf8'),'\x1b[<0;3;4M\x1b[<0;3;4m');
+  } finally {await writer?.close();await run(['kill-server']).catch(()=>{});await rm(dir,{recursive:true,force:true});}
+});
+
 test('private tmux: an image reference reaches the pane as one bracketed paste only where the program enabled it, never with Enter', async () => {
   const dir = await realpath(await mkdtemp(join(tmpdir(), 'altcli-image-ref-')));
   const config = loadConfig({ ALTCLI_TOKEN: 'a'.repeat(64), ALTCLI_DATA_DIR: join(dir, 'data'), ALTCLI_TMUX_SOCKET: join(dir, 't.sock') });
@@ -169,13 +216,22 @@ test('private tmux: an image reference reaches the pane as one bracketed paste o
       await eventually(async () => (await inspectPane(run, paneId)).command === 'cat');
       await run(['select-window', '-t', paneId]);
       const target = await inspectAttach(config, (await inspectPane(run, paneId)).identity);
-      const writer = await attachTmux(config, target, true, 100, 30, () => {}, () => {}); attachments.push(writer);
+      const writer = await attachTmux(config, target, true, 100, 30, () => {}, () => {}, true); attachments.push(writer);
       await eventually(async () => { try { return (await writer.active()).paneId === paneId; } catch { return false; } });
-      writer.write(reference);
+      // Exercise text paste split across HTTP-sized frames, including a split end marker.
+      await writer.write(reference.subarray(0, reference.length - 3));
+      await writer.write(reference.subarray(reference.length - 3));
       await eventually(async () => (await readFile(join(dir, `${name}.bytes`))).length === expected.length);
       await delay(100);
       assert.deepEqual(await readFile(join(dir, `${name}.bytes`)), expected);
       assert.ok(!(await readFile(join(dir, `${name}.bytes`))).includes(0x0d));
+      // Image Insert uses the paste entry point; copy mode must not hide input into the program.
+      await run(['copy-mode', '-t', paneId]);
+      await assert.rejects(writer.paste!(reference), /Leave copy mode/);
+      assert.deepEqual(await readFile(join(dir, `${name}.bytes`)), expected);
+      await writer.write(Buffer.from('q')); await writer.paste!(reference);
+      await eventually(async () => (await readFile(join(dir, `${name}.bytes`))).length === expected.length * 2);
+      assert.deepEqual(await readFile(join(dir, `${name}.bytes`)), Buffer.concat([expected, expected]));
       await writer.close();
     }
   } finally { for (const a of attachments) await a.close().catch(() => {}); await run(['kill-server']).catch(() => {}); await rm(dir, { recursive: true, force: true }); }

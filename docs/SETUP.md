@@ -91,6 +91,14 @@ captures before setting `ALTCLI_ENABLE_INPUT=true` and restarting the backend.
 After configuration or server-code changes, settle active deliveries before
 restarting; hot reload retains the running controller.
 
+### Upgrade to store schema 21
+
+At a settled backend restart, schema 21 enables worktree-scoped manual input and pane-directed
+browser writers. Existing manual-input periods keep global scope and their original evidence until
+explicitly reconciled; restarting clears no hold. An older backend refuses this store. The read-only
+`npm --prefix web run upgrade:check` reports the schema. Upgrading from before schema 20 still
+requires the settled-store gate and backup described below. Do not restart during an active delivery.
+
 ### Upgrade to store schema 20
 
 Versions that record repositories and task workspaces

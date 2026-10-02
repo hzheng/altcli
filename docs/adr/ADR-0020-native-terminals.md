@@ -2,11 +2,13 @@
 
 > October 1, 2026: [ADR-0024](ADR-0024-registered-repositories-and-managed-workspaces.md) moves app terminals to a dedicated tmux endpoint and adds a copyable attach command, in later increments; concurrent writers and the manual barrier are unchanged, and navigating never enrolls a destination.
 
+> October 1, 2026 amendment, **implemented locally**: manual-input periods, holds and gates become scoped to the target agent's worktree, and workspace writers send input only to their own pane ([below](#october-1-amendment-worktree-scoped-manual-input), D55). The [protocol](../TERMINAL-PROTOCOL.md) describes the current runtime; earlier global-barrier and navigation text below is superseded.
+
 Status: accepted direction; implementation proposal. Setup enables its flag; a missing flag means off.
 
 ## Current contract and amendment precedence
 
-The latest September 29 follow-up below governs current input: **Terminal / Display**
+The October 1 scope amendment and September 29 controls below govern current input: **Terminal / Display**
 is the only acquisition control, multiple connections may write even to one pane,
 and new writers may join a recovery period while automation remains held. Native
 interleaving is an accepted risk; application-caused duplication, misrouting,
@@ -17,12 +19,12 @@ browser handoff rules are retained below as dated history, not current instructi
 Use xterm.js over a ticket-authenticated WebSocket owned by the same Next
 ControlPlane. The per-card HTTP streaming candidate failed the six-connection
 browser control-capacity gate. Use node-pty and native tmux attachment, preserving
-raw bytes, terminal sizing and tmux navigation.
+CLI bytes and terminal sizing, with browser input bound to its original pane.
 
 Observation defaults read-only. The human approved captured-text fallback wherever
 native observation could resize workers after the tmux 3.5a probe exposed the
 all-clients-ignored sizing behavior. Do not change discovered/global options.
-Writable input uses per-connection grants under one server-wide manual-input barrier.
+Writable input uses per-connection grants under worktree-scoped manual-input barriers, with a global fallback for unknown targets and pre-change periods.
 The one exception is Global AI's own app-role terminal: no project, run or automated
 delivery uses it, so its input stays outside the barrier. Its input bytes are directed
 to its own pane, independently of its read-only display client, so tmux client
@@ -41,17 +43,14 @@ settled activity; until then the controller card says which agents are unsettled
 recovery. Members of a paused relay show the pause rather than an idle or waiting-for-partner badge; a
 working member keeps its native state.
 
-A writer's deliberate tmux session navigation is followed and labelled; it never
-changes the workflow target, and the server-wide hold already covers it. Observers
-never follow. Loss of the original target closes the attachment without falling
-back to another session.
+Workspace writers and observers never follow tmux navigation. A moved display client or loss of the original target closes the attachment without fallback or replay. Desktop clients retain native navigation.
 
 Strict settlement requires agent activity only for agent panes and process
 evidence for every pane. Non-agent directory changes alone are allowed. When
 strict checks cannot settle the record, an explicit human inspection decision
-with a bounded note may release the server barrier, acknowledging possible prior
-and background effects. Refuse it while any keyboard, delivery, setup or launch
-operation remains live or unresolved. Keep every affected run's keyboard hold,
+with a bounded note may release that period’s barrier, acknowledging possible prior
+and background effects. Refuse it while a keyboard, delivery, setup or launch
+operation in an overlapping scope remains live or unresolved. Keep every affected run's keyboard hold,
 checkpoint and fault; its review or takeover stays separate. Recovery is available
 even with no remaining agents or with feature flags off.
 The checkpoint's explicit **Review input and continue** action may acknowledge displayed
@@ -72,6 +71,65 @@ The shared Control frame retains separate drafts/composers per agent. Parallel s
 them all and holds selection; Focus shows one and follows the next working agent.
 The Agent selector chooses the viewed agent and recipient together; selection
 revokes readiness and sends nothing. Plan setup addresses the whole group.
+
+## October 1 amendment: worktree-scoped manual input
+
+Status: accepted by the owner on October 1, 2026; implemented locally with store schema 21.
+The [protocol](../TERMINAL-PROTOCOL.md) and guides describe this runtime. Installed-host and physical-device acceptance remain open.
+
+**Context.** The barrier is server-wide because a workspace writer is a full tmux client: a prefix
+binding, the command prompt or a client switch can carry its bytes into any session, so the server
+cannot bound where input lands. Automated runs in different worktrees already overlap with no barrier
+between them, yet manual input anywhere holds every owned run. On the owner's host, from September 30
+(when periods began recording their written panes) to October 1, four of six periods that held a run
+held one in a worktree nobody typed in; on October 1, input to a Codex pane in the `main` checkout held
+a validated `feature/ui` Implementation turn and its automatic review handoff.
+
+**Decision.**
+
+- **Pane-directed workspace input.** A workspace writer uses Helper's input path: its display client
+  attaches `read-only` (still an ordinary sizing client, not `ignore-size`), and each ordered input
+  frame is written to the exact original pane, never through the client's key bindings. Tmux prefixes
+  and client bindings reach the CLI. A display client that tmux moves to another session or pane
+  closes the writer; nothing falls back or is replayed. This supersedes writer navigation above.
+- **Scope.** A period's scope is the target agent's verified worktree, identified by the Git index
+  identity that keys run ownership, never by path prefix or current directory. A writer joins an
+  unreconciled period whose scope covers its target, a server-wide one included, and otherwise starts
+  one for its scope, so without a server-wide period, writers in different worktrees form independent
+  periods. A target without a verified worktree identity keeps the server-wide barrier. A server-wide
+  period overlaps every worktree for holds, operation admission and settlement.
+- **Holds.** For a worktree-scoped period, admission captures checkpoints and places keyboard holds
+  only on owned runs whose lock key is the scope or whose frozen participants include a target.
+  Runs in other worktrees continue, including the automatic continuation of a validated turn.
+- **Gates.** Live or unreconciled input blocks dispatch, setup, launch and Finish branch only for the
+  scopes it covers; an operation waits on each scope it writes or checks for settlement (a squash:
+  the task worktree and the integration checkout). Keyboard admission into a scope waits only for
+  in-flight delivery, setup, launch or Finish operations acting on that scope. A pre-upgrade staging
+  owner refuses native input only into its own worktree.
+- **Evidence and recovery.** The original snapshot and strict settlement cover the panes in the
+  scope: every pane whose agent or directory belongs to that worktree, including each written pane.
+  Reconciliation, readiness acknowledgements, checkpoint review and Take control act on the periods
+  of their own scope, and the ⌨️ status lists each scope's hold. Reconciling one period preserves every
+  other period and its holds, including when server-wide and worktree-scoped periods overlap.
+  Everything else here (no persisted keystrokes, no replay, explicit checkpoint review, faulted Stage
+  relay holds, recovery after disconnect or restart) applies per scope.
+- **Images.** Insert keeps its rechecks and one bracketed paste without Enter to the exact pane; the
+  markers still reach only a program that enabled bracketed paste.
+- **Rollout.** Adopt at a settled backend restart. A period recorded before the change keeps
+  server-wide scope until it is reconciled, because its writers could navigate; its evidence is never
+  reinterpreted as scoped.
+- **Unchanged.** Helper stays outside every scope. Desktop tmux clients, including ADR-0024's attach
+  command, keep native navigation and remain outside the app's input evidence, as today.
+
+**Consequences.** Browser workspace terminals lose tmux's own bindings: session, window and pane
+navigation, the command prompt and prefix-driven copy mode; use a desktop tmux client for those.
+The owner accepts the remaining cross-worktree risk: input to one worktree's pane can still affect
+another through absolute paths, the shared Git common directory (refs, stash, configuration, hooks),
+shared ports or the AltCLI server's own pane, as automated runs already can. Existing evidence still
+refuses a moved branch or base (commit-handoff lineage, Stage relay's branch and commit binding), but
+uncommitted edits made from another worktree are not attributed. Idle release and extra terminal
+services remain [open](../OPEN-DECISIONS.md#terminal-input-follow-ups); exit evidence is in the
+[roadmap](../../ROADMAP.md#native-terminals-and-agent-launch).
 
 ## Earlier strict browser handoff
 

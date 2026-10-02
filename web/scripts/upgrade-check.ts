@@ -3,12 +3,13 @@
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { inspectUpgrade, REGISTRY_SCHEMA } from '../src/server/upgrade.ts';
+import { inspectUpgrade, REGISTRY_SCHEMA, STORE_SCHEMA } from '../src/server/upgrade.ts';
 const directory = process.argv[2] ?? resolve(process.env.ALTCLI_DATA_DIR ?? join(homedir(), '.local', 'share', 'altcli'), process.env.ALTCLI_ADAPTER ?? 'tmux');
 const path = join(directory, 'altcli.sqlite3');
-if (!existsSync(path)) { console.log(`No store at ${path}. A new store starts at schema ${REGISTRY_SCHEMA}.`); process.exit(0); }
+if (!existsSync(path)) { console.log(`No store at ${path}. A new store starts at schema ${STORE_SCHEMA}.`); process.exit(0); }
 const report = inspectUpgrade(path);
-if (report.version >= REGISTRY_SCHEMA) { console.log(`${path} is already at schema ${report.version}.`); process.exit(0); }
+if (report.version >= STORE_SCHEMA) { console.log(`${path} is already at schema ${report.version}.`); process.exit(0); }
+if (report.version >= REGISTRY_SCHEMA) { console.log(`${path}: schema ${report.version} upgrades to ${STORE_SCHEMA}; existing manual-input periods remain server-wide and require reconciliation.`); process.exit(0); }
 console.log(`${path}: schema ${report.version}; this version upgrades it to ${report.target} only when nothing below is unresolved.`);
 for (const b of report.blockers) console.log(`  unresolved ${b.kind} ${b.id}: ${b.detail}`);
 console.log(report.blockers.length ? 'Settle these with the previous AltCLI version, stop it, then start this version.' : 'Nothing is unresolved; the upgrade can proceed.');

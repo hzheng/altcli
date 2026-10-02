@@ -278,8 +278,8 @@ do not gate the remaining terminal and launch acceptance.
 | --- | --- | --- |
 | M0: transport and host | One Next/ControlPlane owner, authenticated WebSocket, PTY/tmux attachment and isolated probes implemented. | Run the native CI matrix on the supported Linux/macOS hosts. |
 | M1: observation and layout | In-place terminals and labelled snapshot fallback implemented. Terminal / Display is each connection's only typing control; exceptional badges show disconnect, replaced CLI or held/unresolved input. The status line reports the actual destination and window size. Outside Plan, Terminal / Control switches between surfaces in one frame; Plan retains its optional side placement and phone drawer. Parallel shows separate per-agent composers/drafts and holds selection; Focus shows one and follows a working agent. The Agent selector chooses the viewed agent and active Control recipient together; focus and native keyboard authority are separate. Agents sits immediately left of local Settings. Control access gathers stops, recovery, takeover and continuation. | Physical-device rendering and accessibility acceptance. |
-| M2: native input | Direct input with concurrent writers, literal keys/Unicode, touch modifiers, guarded text paste, in-page expansion, bounded resize and optional screen-reader mode implemented. Late input responses cannot affect a replacement keyboard generation; leaving the surface drops unsent queued text. A writer follows deliberate tmux session navigation with an updated label (observers never follow; target loss closes), and control-pane drafts including the Plan brief stay editable under a keyboard hold. | Installed CLI menus/questions and physical Safari/IME. |
-| M3: holds and recovery | Durable server-wide manual barriers, original checkpoints, batch stop, disconnect and explicit human reconciliation implemented. | Supervised installed-provider completion/restoration and host restart demonstration. |
+| M2: native input | Direct input with concurrent writers, literal keys/Unicode, touch modifiers, guarded text paste, in-page expansion, bounded resize and optional screen-reader mode implemented. Late input responses cannot affect a replacement keyboard generation; leaving the surface drops unsent queued text. Input goes only to the original pane, so tmux bindings and navigation stay with desktop clients (writers and observers never follow; a moved client or target loss closes), and control-pane drafts including the Plan brief stay editable under a keyboard hold. | Installed CLI menus/questions and physical Safari/IME. |
+| M3: holds and recovery | Durable scoped manual barriers (global fallback), original checkpoints, batch stop, disconnect and explicit human reconciliation implemented. | Supervised installed-provider completion/restoration and host restart demonstration. |
 | M4: profiles and launch | Repository-directory entry, versioned literal argv profiles, batch launch, partial-result inspection and a separate launch action after verified worktree creation implemented. | Real installed CLI startup, readiness and workflow demonstration in a disposable checkout. |
 | M4A/M4B: image attachments | M4A: terminal paste/picker, private bounded uploads and an explicit Insert of the verified reference without Enter. M4B: images on plain Send, new committed work and a Plan brief, frozen, pinned and carried to every recipient. | A probe observed native insertion and manifest reads with Claude Code 2.1.285 and Codex 0.159.0. Physical Safari/iPhone clipboard and picker, the deployed origin, and end-to-end relay/Plan runs with installed agents remain. |
 | M5: remote/mobile/security | Automated browser, ownership and private-tmux checks exist; exact observed results are in their commit messages. | Actual private HTTPS/WSS proxy, physical iPhone, network switching, two-device input and installed-host fault acceptance. |
@@ -311,6 +311,34 @@ admit new writers while keeping their automation barrier. Current acknowledged
 browser actions can stop listed remote writers and record human inspection;
 checkpoint continuation remains a separate checked action. The
 [protocol](docs/TERMINAL-PROTOCOL.md) describes the current contract.
+
+**Worktree-scoped manual input (implemented locally October 1, 2026).** The
+[ADR-0020 amendment](docs/adr/ADR-0020-native-terminals.md#october-1-amendment-worktree-scoped-manual-input)
+(D55) scopes periods, holds and gates to the target agent's worktree and sends workspace input
+only to its pane. Schema 21 preserves every pre-change period as global. Local regression coverage
+includes the behaviors below; installed-provider, deployed-host and physical-device acceptance remain open:
+
+- Input to one worktree's agent while another worktree's run completes: that run continues
+  automatically; runs in the typed worktree hold as today.
+- Writers in two worktrees form two periods; reconciling one leaves the other held.
+- A target without a verified worktree holds all worktrees; reconciling either a server-wide or
+  worktree-scoped period preserves the other's holds.
+- A prefix key, command-prompt binding or client switch from a browser writer never reaches another
+  session; a display client moved by tmux closes its writer without replay.
+- Keys, IME, emoji, mouse reports, text paste and image Insert behave as before with no stray escape
+  bytes, bracketed-paste markers only where the program enabled them, and leaving copy mode still works.
+- Squash, update, rebase, reset, rename, removal, discard, launch and Finish branch wait only on the
+  scopes they act on; a squash waits on both checkouts.
+- An unreconciled pre-change period stays server-wide across the upgrade until reconciled, and a
+  writer in any worktree joins it instead of starting an overlapping period.
+- Overlapping runs, multiple clients, disconnect and restart per scope.
+
+Local validation used the workflow, Vitest, type-check and build components of
+`./scripts/check.sh --e2e`, Playwright's mock desktop/phone viewports, and
+`npm --prefix web run test:native` against disposable tmux sockets and Git repositories.
+The handoff commit records exact results and component reruns. The build retains its existing
+dynamic-filesystem tracing warnings. Activation requires a settled backend restart;
+installed-provider and physical-device demonstrations remain pending.
 
 Use [TESTING](docs/TESTING.md#terminal-and-launch-release-checklist) for the
 remaining demonstrations; commit messages record the commands that

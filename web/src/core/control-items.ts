@@ -14,7 +14,7 @@ export interface ControlInput {
   /** Aggregate server-reported writers, or null when no manual period exists. */
   keyboard: { kind: 'this-browser' | 'this-browser-elsewhere' | 'other-browser' | 'unresolved'; label: string } | null;
   /** Manual-input records: a live period has one or more writers; stopped periods need reconciliation. */
-  manual: { live: boolean; runs: number }[];
+  manual: { live: boolean; runs: number; scope?: string }[];
   /** This checkout's owned run, if any. */
   run: { status: string } | null;
   /** Other worktrees whose runs a server-wide hold affects. */
@@ -35,11 +35,13 @@ export function controlItems(input: ControlInput): ControlSummary {
   const items: ControlItem[] = [];
   const add = (id: string, scope: ControlScope, attention: boolean, takeControl: boolean, text: string) => items.push({ id, scope, attention, takeControl, text });
   const k = input.keyboard;
+  const manualScope = input.manual.some(m => !m.scope) ? 'server' : 'checkout';
   const unresolved = input.manual.filter((m) => !m.live);
-  if (k?.kind === 'this-browser') add('keyboard', 'server', false, false, `You are typing in ${k.label} in this browser. AltCLI dispatch, setup and launch wait until input is stopped and reconciled; checking an action’s acknowledgement does both.`);
-  else if (k && k.kind !== 'unresolved') add('keyboard', 'server', true, false, `Input is active in ${k.label}. Every terminal can type at the same time; automation waits until every writer is stopped and manual input is reconciled, which an action’s acknowledgement does.`);
-  if (unresolved.length) add('manual', 'server', true, true, `Earlier manual terminal input (${unresolved.length === 1 ? 'one record' : `${unresolved.length} records`}) may have run commands or left background work that AltCLI cannot see. Taking control, or checking an action’s acknowledgement, records that you accept this and lifts the server-wide hold.`);
-  if ((k || input.manual.length) && input.otherWorktrees.length) add('scope', 'server', false, false, `This server-wide hold also affects runs in ${list(input.otherWorktrees)}.`);
+  if (k?.kind === 'this-browser') add('keyboard', manualScope, false, false, `You are typing in ${k.label} in this browser. AltCLI dispatch, setup and launch wait until input is stopped and reconciled; checking an action’s acknowledgement does both.`);
+  else if (k && k.kind !== 'unresolved') add('keyboard', manualScope, true, false, `Input is active in ${k.label}. Every terminal can type at the same time; automation waits until every writer is stopped and manual input is reconciled, which an action’s acknowledgement does.`);
+  if (unresolved.length) add('manual', manualScope, true, true, `Earlier manual terminal input (${unresolved.length === 1 ? 'one record' : `${unresolved.length} records`}) may have run commands or left background work that AltCLI cannot see. Taking control, or checking an action’s acknowledgement, records that you accept this and lifts the ${manualScope === 'server' ? 'server-wide' : 'checkout'} hold.`);
+  // A worktree-scoped period reaches another worktree only through a run whose frozen participants include its target.
+  if ((k || input.manual.length) && input.otherWorktrees.length) add('scope', manualScope, false, false, `${manualScope === 'server' ? 'This server-wide hold' : 'This worktree’s manual-input hold'} also affects runs in ${list(input.otherWorktrees)}.`);
   const status = input.run?.status;
   if (status === 'running') add('workflow', 'checkout', false, true, 'The controller is driving this checkout. Taking control ends its run without interrupting the agent, which may still be working: check its terminal before typing or sending.');
   else if (status === 'waiting') add('workflow', 'checkout', true, true, 'The controller is waiting for your Next turn. Taking control ends its run instead of continuing it.');

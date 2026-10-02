@@ -8,6 +8,8 @@ import { parseKeyboard, parseKeyboardBatch, parseNativeInput, parseTerminalOpen,
 import { AppError, messageOf } from '../core/errors.ts';
 import type { Config } from './config.ts';
 import { InputAuthority } from './input-authority.ts';
+import { scopesFor } from '../core/input-scope.ts';
+import type { WorktreeIdentity } from '../contracts/workflow.ts';
 import { assertObserverSize, attachTmux, type Attachment, type AttachTarget } from './tmux-attach.ts';
 import type { TerminalGateway } from './terminal-gateway.ts';
 
@@ -29,7 +31,8 @@ export interface TerminalServices {
   config: Config; authority: InputAuthority;
   attach?: typeof attachTmux; // Injectable native boundary for fault/flow-control fixtures.
   resolve(target: TerminalTarget): Promise<AttachTarget>;
-  begin(input: TerminalOpen, connectionId: string, generation: string, prior?: ManualSession): Promise<ManualSession>;
+  begin(input: TerminalOpen, connectionId: string, generation: string, prior?: ManualSession, scope?: WorktreeIdentity | null): Promise<ManualSession>;
+  scope?(target: TerminalTarget): Promise<WorktreeIdentity | null>;
   /** An app-role terminal (Global AI) that no project or run uses. Its input stays outside the server-wide manual-input barrier. */
   exempt?(target: TerminalTarget): boolean;
   reconcile(input: ManualReconcile, handoffRequestId?: string): Promise<ManualSession>;
@@ -231,7 +234,7 @@ export class TerminalBroker implements TerminalGateway {
       c.rateBytes += prepared.bytes.length;
       this.services.pinImage(prepared.descriptor, `${c.id}:${input.generation}:${input.seq}`);
       this.authority.markInput(c.manualId, c.id, c.generation, prepared.bytes.length);
-      try { await c.attachment.write(prepared.bytes); }
+      try { await (c.attachment.paste ? c.attachment.paste(prepared.bytes) : c.attachment.write(prepared.bytes)); }
       catch { void this.close(c.id, 'An image reference may have been inserted. Inspect it; never resend.'); throw new AppError('INPUT_UNCERTAIN', 'An image reference may have been inserted. Inspect it; never resend.', 409); }
       c.inputSeq = input.seq; c.receipts.set(input.seq, digest);
       while (c.receipts.size > 64) c.receipts.delete(c.receipts.keys().next().value!);
@@ -264,7 +267,7 @@ export class TerminalBroker implements TerminalGateway {
       }
     };
     // Finishing Helper input is local to its pane and must not delay another terminal's keyboard grant or reconciliation.
-    if (c.free) await end(); else await this.authority.draining(end);
+    if (c.free) await end(); else await this.authority.draining(end, scopesFor(c.manualId ? this.authority.get(c.manualId).scope : null));
   }
   async keyboard(id: string, value: unknown): Promise<KeyboardResult> {
     const work = this.decisionTail.catch(() => {}).then(() => this.keyboardDecision(id, value));
@@ -289,23 +292,26 @@ export class TerminalBroker implements TerminalGateway {
     }
     if (input.action === 'acquire') {
       this.enabled(true);
+      const targetScope = await this.services.scope?.(c.input.target) ?? null;
+      const global = this.authority.pending().find(s => !s.scope);
+      const scope = global ? null : targetScope;
       return this.authority.acquire(async () => {
         // New input joins the newest unsettled period, even one that needs recovery or began before a restart:
         // typing never waits for reconciliation. Its evidence and recovery flag stay, so automation remains held.
-        const owner = this.authority.pending().at(-1);
+        const owner = global ?? this.authority.pending().find(s => (s.scope?.indexPath ?? null) === (scope?.indexPath ?? null));
         if (c.writer) throw new AppError('KEYBOARD_HELD', 'This connection is already writable.', 409);
         this.current(id); const generation = randomUUID();
-        const record = await this.services.begin(c.input, c.id, generation, owner && this.authority.get(owner.id));
+        const record = await this.services.begin(c.input, c.id, generation, owner && this.authority.get(owner.id), scope);
         c.manualId = record.id;
         try {
-          this.enabled(true); this.current(id); await this.startAttachment(c, true); this.enabled(true); this.current(id);
+          this.enabled(true); this.current(id); await this.startAttachment(c, true, true); this.enabled(true); this.current(id);
           c.writer = true; c.lastRenew = Date.now();
           const saved = this.authority.updateWriter(record.id, c.id, { generation: c.generation });
-          const result = { generation: c.generation, manualSession: saved, writer: true, reason: 'Keyboard here; dispatch, setup and launch are held across this server.' };
+          const result = { generation: c.generation, manualSession: saved, writer: true, reason: saved.reason };
           this.emit(c, { type: 'keyboard', generation: c.generation, manualSessionId: record.id, writer: true, reason: result.reason });
           this.authority.decide(input.requestId, request, result); return result;
         } catch (error) { this.authority.release(record.id, c.id, 'Keyboard setup did not settle; inspect before automating.', true); await this.close(c.id, 'Input setup did not settle; inspect before reconnecting.'); throw error; }
-      });
+      }, scopesFor(scope));
     }
     if (input.expectedRevision !== undefined) {
       const manual = c.manualId ? this.authority.get(c.manualId) : null;

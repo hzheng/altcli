@@ -390,11 +390,11 @@ or handoff continuation and **Mark <agent> Ready**, and explains every hold. It 
 first: each action's readiness check beside it lists the consequences of any hold and clears those
 holds when the action runs. Terminal observation opens automatically. A terminal's **Terminal /
 Display** toggle enables or ends input on that connection, and toggling again resets a failed one;
-several terminals and browsers can write independently under one server-wide automation barrier.
+several terminals and browsers can write independently. Each verified worktree has its own manual-input barrier; an unknown target or an older period holds every worktree. Input stays on the original pane; use a desktop client for tmux bindings and navigation.
 Focus grants nothing.
-The heading reports active input connections. Each terminal's Display toggle stops its own writer
+The heading reports this worktree’s input connections and lists all held scopes. Each terminal's Display toggle stops its own writer
 while retaining the manual barrier; Control access has no separate keyboard list. An acknowledged action
-stops every writer, local and remote, and records the manual input as accepted by human inspection
+stops the listed writers, local and remote, in the periods covering that action’s worktree (both checkouts for squash), and records the manual input as accepted by human inspection
 before it starts. Disconnect, Lock and restart mark the period for recovery; new writers may still
 join it, and automation waits until it is reconciled. Each original workflow checkpoint review
 remains explicit; faulted/originally paused runs need existing takeover. Input does not interrupt

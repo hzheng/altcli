@@ -75,8 +75,11 @@ Infrastructure status cannot hide project writes or exempt them from ownership.
 
 The background agent should use [app tools](ADR-0023-app-tools-and-delegated-authority.md),
 not a human keyboard grant to perform app actions. Avoid broad process-name
-exclusions from activity evidence. Global AI is human-operated and its native
-input may create the existing server-wide barrier. Its effectful-tool
+exclusions from activity evidence. Global AI is human-operated, and its own
+terminal is outside the manual-input barrier: no project, run or automated
+delivery uses its private session and directory, and its input goes only to its
+own pane, so typing there creates no manual-input record and holds no automation
+([GLOBAL-AI](../GLOBAL-AI.md#native-input-and-recovery)). Its effectful-tool
 self-interference and an optional auxiliary socket remain
 [open choices](../OPEN-DECISIONS.md#proposed-app-wide-assistance-and-completion-choices);
 neither a role nor a socket establishes OS isolation or bypasses another writer.

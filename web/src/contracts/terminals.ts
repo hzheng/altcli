@@ -1,5 +1,5 @@
 import type { PaneIdentity } from './api.ts';
-import type { ProcessRecord } from './workflow.ts';
+import type { ProcessRecord, WorktreeIdentity } from './workflow.ts';
 export type TerminalTarget = { agentId: string; registrationId: string } | { launchId: string };
 export interface TerminalOpen { protocol: 2; target: TerminalTarget; cols: number; rows: number; clientInstanceId: string }
 export interface TerminalConnection { connectionId: string; ticket: string; bootId: string; label: string; paneId: string; sessionId: string }
@@ -10,6 +10,8 @@ export interface ManualWriter {
   revision: number; live: boolean; bytes: number; inputMayHaveOccurred: boolean;
 }
 export interface ManualSession {
+  /** Captured at admission. Null (or absent in historical records) covers the whole server. */
+  scope?: WorktreeIdentity | null;
   /** The original grant fields are retained for archived records. Current ownership is in writers. */
   id: string; revision: number; bootId: string; clientInstanceId: string; connectionId: string;
   generation: string; target: TerminalTarget; live: boolean; reconciliationRequired: boolean;

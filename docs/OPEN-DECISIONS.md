@@ -90,7 +90,11 @@ Human-approved plan decisions recorded in [ADR-0014](adr/ADR-0014-commit-relay-a
 
 The approved September 29 direct-input plan permits concurrent connection writers under the
 existing global manual barrier (ADR-0020). Worktree-scoped automation, idle release, extra
-terminal services and pane-directed input remain outside this change.
+terminal services and pane-directed input remain outside this change. October 1, 2026: the owner
+decided worktree-scoped holds with pane-directed workspace input
+([ADR-0020 amendment](adr/ADR-0020-native-terminals.md#october-1-amendment-worktree-scoped-manual-input), D55),
+accepting the loss of tmux bindings in browser workspace terminals; implemented locally, with installed-host acceptance still open. Idle release
+and extra terminal services remain open.
 
 ## Native transport implementation evidence
 

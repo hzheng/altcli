@@ -208,7 +208,8 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
   useEffect(() => { if (tab) window.scrollTo(0, scrolls.current[tab] ?? 0); }, [tab]);
   const showTab = (next: Tab) => { if (tab) scrolls.current[tab] = window.scrollY; setTab(next); };
   const sessions = state?.sessions ?? [];
-  const project = workspace?.root ?? sessions[0]?.repository;
+  // Recovery remains reachable when the last agent disappears and no workspace was explicitly selected.
+  const project = workspace?.root ?? sessions[0]?.repository ?? state?.manualSessions?.find(m => m.scope)?.scope?.root;
   const projectSessions = sessions.filter((s) => s.repository === project);
   const card = discovery?.workspaces.find((w) => workspace ? workspaceKey(w) === workspace.key : w.worktree.root === project);
   // Older preferences have only a path, which may already have been discarded. The retained operation still identifies its project.
@@ -328,42 +329,44 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
   const unknownAgents = state?.mode === 'tmux' ? visible.filter((s) => !resetAgents.includes(s) && state.instances.find((i) => i.agentId === s.id)?.status !== 'current') : [];
   const identityBlockedReason = resetAgents.length ? `Reset workspace required for ${resetAgents.map((s) => s.label).join(', ')}. Inspect the panes and use Reset workspace above before sending.`
     : unknownAgents.length ? `The host cannot confirm the CLI process for ${unknownAgents.map((s) => s.label).join(', ')}. Recheck before sending.` : '';
+  const manualForRoot = (root: string | null | undefined) => (state?.manualSessions ?? []).filter(m => !m.scope || m.scope.root === root);
+  const manualHere = manualForRoot(project);
   // Gates shared by every card of this checkout, then each card's own agent.
-  const manualHeld = !!state?.manualSessions?.length;
+  const manualHeld = !!manualHere.length;
   // Distinguishes a live keyboard elsewhere from an unresolved record for the terminal badges.
-  const liveManual = state?.manualSessions?.find((m) => m.live);
+  const liveManual = manualHere.find((m) => m.live);
   const keyboardHolder = !liveManual && manualHeld ? 'unresolved' as const : null;
-  const writers = (state?.manualSessions ?? []).flatMap(m => m.writers.filter(w => w.live));
+  const writers = (manualHere).flatMap(m => m.writers.filter(w => w.live));
   const describeTerminal = (target: import('../contracts/terminals').TerminalTarget) => 'agentId' in target
     ? state?.sessions.find(s => s.id === target.agentId && s.registrationId === target.registrationId)?.label ?? 'terminal' : 'launched terminal';
   const writerHandle = (writer: import('../contracts/terminals').ManualWriter) => [...terminals.current.values()].find(h => h.matches(writer));
   // What an action's acknowledgement clears before the action runs, as observed now: this checkout's controller runs, an older delivery
-  // hold, the uncertain-request warning and every manual-input record on the server. Each step keeps its own request and server checks.
+  // hold, the uncertain-request warning and manual-input records covering this checkout. Each step keeps its own request and server checks.
   const holds: Holds = { request: unknownRequest, runs: owned.map((r) => ({ id: r.id, commandId: r.currentCommandId, status: r.status, label: r.participants.map((p) => p.label).join(' ⇄ ') })),
-    delivery: !owned.length && transportHold ? transportHold.activeCommandId : null, manual: state?.manualSessions ?? [] };
+    delivery: !owned.length && transportHold ? transportHold.activeCommandId : null, manual: manualHere };
   const overrideOf = (h: Holds): Override | null => { const lines = holdConsequences(h, describeTerminal, clientInstanceId);
     return lines.length ? { lines, key: holdKey(h), clear: () => clearHolds(token, h, writerHandle, () => setUnknownRequest(null)) } : null; };
   const override = overrideOf(holds);
   // Input into a running turn keeps that run: only manual input and the request warning are overridden there.
   const inputOverride = overrideOf({ ...holds, runs: [], delivery: null });
-  const checkpointOverride = overrideOf({ request: null, runs: [], delivery: null, manual: state?.manualSessions ?? [] });
+  const checkpointOverride = overrideOf({ request: null, runs: [], delivery: null, manual: manualHere });
   // A changed set of holds needs a fresh acknowledgement, even when it reads the same (the composers' consent keys include the same key).
   const holdsKey = JSON.stringify(overrideKey(override));
   useEffect(() => { setReady(false); }, [holdsKey]);
   // What a Stage relay click authorizes except the holds it clears: the view, target, drafts, branch and agent activity. The
   // revision is monotonic; any change while holds are cleared cancels the send.
-  const stageIntentKey = JSON.stringify([viewKey, stageDrafts, state?.activities ?? null, pair?.id ?? null, pair?.revision ?? null, git?.branch ?? null, git?.head ?? null]);
+  const stageIntentKey = JSON.stringify([viewKey, stageDrafts, state?.activities?.filter(a => projectSessions.some(s => s.id === a.agentId)) ?? null, pair?.id ?? null, pair?.revision ?? null, git?.branch ?? null, git?.head ?? null]);
   const stageIntent = useRef({ key: stageIntentKey, revision: 0 });
   if (stageIntent.current.key !== stageIntentKey) stageIntent.current = { key: stageIntentKey, revision: stageIntent.current.revision + 1 };
   /** Projects: a worktree operation also ends that worktree's own controller run or delivery hold; a launch only needs manual input cleared. */
-  const worktreeOverride = (root: string, scope: 'worktree' | 'launch') => {
+  const worktreeOverride = (root: string, scope: 'worktree' | 'launch', otherRoot?: string) => {
     const runs = scope === 'launch' ? [] : (state?.runs ?? []).filter((r) => r.repository === root && ['running','waiting','paused'].includes(r.status));
     const delivery = scope === 'launch' ? undefined : state?.reservations.find((r) => r.repository === root);
     return overrideOf({ request: null, runs: runs.map((r) => ({ id: r.id, commandId: r.currentCommandId, status: r.status, label: r.participants.map((p) => p.label).join(' ⇄ ') })),
-      delivery: !runs.length && delivery ? delivery.activeCommandId : null, manual: state?.manualSessions ?? [] });
+      delivery: !runs.length && delivery ? delivery.activeCommandId : null, manual: (state?.manualSessions ?? []).filter(m => !m.scope || m.scope.root === root || m.scope.root === otherRoot) });
   };
-  // The shared manual-input hold as the server reports it, independent of the selected checkout.
-  const keyboardOwner = keyboardOwnerOf(state?.manualSessions, clientInstanceId, target => 'agentId' in target && visible.some(s => s.id === target.agentId)
+  // Manual-input periods covering the selected checkout, including global fallbacks.
+  const keyboardOwner = keyboardOwnerOf(manualHere, clientInstanceId, target => 'agentId' in target && visible.some(s => s.id === target.agentId)
     ? { key: target.agentId, label: describeTerminal(target) } : undefined, describeTerminal);
   const dispatchReason = identityBlockedReason
     || (groupInputBlock ? `${groupInputBlock.label}: ${inputBlocks.get(groupInputBlock.id)}` : '') || (stale ? 'The console is not current. Wait for it to reconnect.' : '')
@@ -393,10 +396,10 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
   /** Moves focus to the already visible action; a still-current confirmation is kept. */
   const returnToAction = () => { controlPane.current?.focus(); (controlPane.current?.querySelector('.control-agent.active') ?? controlPane.current)?.scrollIntoView({ block: 'nearest' }); };
   const unknownActivity = projectSessions.filter((s) => state?.activities?.find((a) => a.agentId === s.id)?.state === 'unknown');
-  const otherWorktrees = [...new Set((state?.manualSessions ?? []).flatMap((m) => m.runs)
+  const otherWorktrees = [...new Set((manualHere).flatMap((m) => m.runs)
     .map((r) => state?.runs.find((run) => run.id === r.id)?.repository).filter((repo): repo is string => !!repo && repo !== project))];
   const access = controlItems({ keyboard: keyboardOwner && { kind: keyboardOwner.kind, label: keyboardOwner.label },
-    manual: (state?.manualSessions ?? []).map((m) => ({ live: m.live, runs: m.runs.length })), run: owned[0] ? { status: owned[0].status } : null, otherWorktrees,
+    manual: (manualHere).map((m) => ({ live: m.live, runs: m.runs.length, scope: m.scope?.root })), run: owned[0] ? { status: owned[0].status } : null, otherWorktrees,
     unknownRequest: !!unknownRequest, transportHold: !!transportHold && !owned.length, resetAgents: resetAgents.map((s) => s.label), unknownAgents: unknownAgents.map((s) => s.label),
     unknownActivity: unknownActivity.map((s) => s.label), inputBlocks: visible.filter((s) => inputBlocks.has(s.id)).map((s) => ({ label: s.label, reason: inputBlocks.get(s.id)! })),
     agentReason: current && state ? cardReason(current) : '', setupHeld, stale: !!state && stale, checking, inputEnabled: state?.inputEnabled !== false });
@@ -573,23 +576,24 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
   // Several terminals can type at once: this names every active input connection, never one keyboard owner.
   const inputLabel = !keyboardOwner || keyboardOwner.kind === 'unresolved' ? 'none active' : keyboardOwner.kind === 'this-browser' ? `${keyboardOwner.label} (this browser)` : keyboardOwner.label;
   // The global Control access entry, then the active input count, then connection status: on every tab.
+  const scopeLabels = [...new Set((state?.manualSessions ?? []).map(m => m.scope ? tilde(m.scope.root) : 'Every worktree (server-wide)'))];
   const headingStatus = <div className="heading-status">
     {state && <button type="button" ref={accessEntry} className={`quiet access-entry${access.attention ? ' attention' : ''}`} aria-expanded={accessOpen} aria-controls="control-access"
       onClick={() => accessOpen ? closeAccess() : openAccess()}>{access.attention && <span aria-hidden="true">⚠ </span>}Control access · {access.summary}{access.attention && <span className="sr-only"> (action needed)</span>}</button>}
-    {state && (config?.terminalEnabled || manualHeld) && <StatusIcon icon="⌨️" label={`Input: ${writers.length} active${manualHeld ? ' · automation held' : ''}`} align="end"
-      help={`Typing: ${inputLabel}. ${stale ? 'This is the last reported state; the console is not current. ' : ''}Use a terminal's Terminal toggle to type. An action's acknowledgement stops typing and records manual input before it runs.`} />}
+    {state && (config?.terminalEnabled || scopeLabels.length) && <StatusIcon icon="⌨️" label={`Input: ${writers.length} active${manualHeld ? ' · automation held' : ''}`} align="end"
+      help={`Holds: ${scopeLabels.join('; ') || 'none'}. Typing here: ${inputLabel}. ${stale ? 'This is the last reported state; the console is not current. ' : ''}Use a terminal's Terminal toggle to type. An action's acknowledgement stops typing and records manual input before it runs.`} />}
     {connection}
   </div>;
   const actionable = !!pair && members.length <= 2;
   // What one Take control confirmation would clear, as observed now; each step carries the identity its request is checked against.
-  const unresolvedManual = (state?.manualSessions ?? []).filter((m) => !m.live);
+  const unresolvedManual = (manualHere).filter((m) => !m.live);
   const takePlan: TakePlan = { request: unknownRequest, runs: owned.map((r) => ({ id: r.id, commandId: r.currentCommandId, status: r.status, label: r.participants.map((p) => p.label).join(' ⇄ ') })),
     delivery: !owned.length && transportHold ? transportHold.activeCommandId : null, manual: unresolvedManual.map((m) => ({ id: m.id, revision: m.revision })) };
   const takeSteps = [
     ...(takePlan.request ? [`Clear the warning for request ${takePlan.request}; nothing is resent.`] : []),
     ...takePlan.runs.map((r) => `End the controller’s ${r.status} run for ${r.label}; it stops sending and judging turns.`),
     ...(takePlan.delivery ? ['Release the older delivery hold; nothing is replayed.'] : []),
-    ...(takePlan.manual.length ? [`Record that you accept possible effects of earlier manual input (${takePlan.manual.length === 1 ? 'one record' : `${takePlan.manual.length} records`}), lifting the server-wide hold. Runs in other worktrees keep their own holds.`] : []),
+    ...(takePlan.manual.length ? [`Record that you accept possible effects of earlier manual input (${takePlan.manual.length === 1 ? 'one record' : `${takePlan.manual.length} records`}), lifting the listed manual-input holds. Runs in other worktrees keep their own holds.`] : []),
   ];
   // The composer on screen in Control, mirroring its render conditions below. Its readiness check sits beside its action and only the
   // shown composer can be confirmed, so a confirmation always attests to the action on screen.
@@ -639,7 +643,7 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
           {item.id === 'setup' && <button type="button" className="quiet inline-link" onClick={() => showTab('workspaces')}>Open Projects</button>}
           {(item.id === 'process' || item.id === 'agent') && <button type="button" className="quiet inline-link" disabled={busy || checking} onClick={recheckNow}>Recheck agents</button>}</li>)}
           {unresolvedManual.map((m) => <li key={m.id} className="muted">Earlier manual input: {m.reason} {m.bytes} input bytes · {m.runs.length} affected runs.</li>)}
-          {(state?.manualSessions ?? []).filter((m) => m.live && m.recoveryRequired).map((m) => <li key={m.id} className="muted">Input needs inspection: {m.reason}</li>)}</ul></>}
+          {(manualHere).filter((m) => m.live && m.recoveryRequired).map((m) => <li key={m.id} className="muted">Input needs inspection: {m.reason}</li>)}</ul></>}
         {/* Optional, one click each, once nothing holds this checkout: the notes above say what to look at first. */}
         {!owned.length && unknownActivity.map((s) => { const block = resetStatusReason(s);
           return <div key={s.id} className="pane-buttons access-agent" role="group" aria-label={`Status of ${s.label}`}>
@@ -669,7 +673,7 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
             <p>{run.reason}</p>
             <HandoffProgress run={run} />
             {run.status === 'paused' && run.blockedHandoff && <BlockedHandoff key={`${run.blockedHandoff.revision}:${viewEpoch}`} handoff={run.blockedHandoff}
-              disabled={busy || stale || !state.inputEnabled || !!state.manualSessions?.some(s => s.live || s.reconciliationRequired)} onRecheck={() => void action(run, 'recheck')} />}
+              disabled={busy || stale || !state.inputEnabled || manualHere.some(s => s.live || s.reconciliationRequired)} onRecheck={() => void action(run, 'recheck')} />}
             <p className="fine run-meaning">The controller is this server: while it drives this checkout it decides what these agents are sent next and judges their completions. Agents: {run.participants.map((p) => `${p.label} ${statuses.get(p.id)?.badge ?? 'unknown'}`).join(' · ')}.{run.status === 'paused' ? ' The controller is paused, not the agents.' : ''}</p>
             {run.implementation && <p className="mono">{run.implementation.policy} · {run.implementation.branch} · turn {run.implementation.turn} · accepted {run.implementation.acceptedSha.slice(0, 12)}{run.implementation.candidateSha ? ` · candidate ${run.implementation.candidateSha.slice(0, 12)}` : ''}</p>}
             {run.planning && <PlanningProgress token={token} run={run} git={card?.git} disabled={busy || stale || !state.inputEnabled} refresh={refresh} onMessage={setMessage} onStop={() => void action(run, 'pause')} viewEpoch={viewEpoch} />}
@@ -921,7 +925,7 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
             ['Native terminals', config.terminalEnabled ? 'enabled' : 'disabled', 'ALTCLI_ENABLE_TERMINAL', 'false'],
             ['Agent launch', config.launchEnabled ? 'enabled' : 'disabled', 'ALTCLI_ENABLE_AGENT_LAUNCH', 'false'],
             ...(config.terminalEnabled ? [
-              ['Keyboard scope', 'Independent terminal writers; AltCLI dispatch, setup and launch stay held across the tmux server until stop and reconciliation', '', 'server-wide'],
+              ['Keyboard scope', 'Input stays on the original pane. Its verified worktree stays held until stop and reconciliation; unverified and older periods hold every worktree', '', 'worktree; global fallback'],
               ['Terminal limits', `${TERMINAL_LIMITS.hostConnections} connections per host, ${TERMINAL_LIMITS.sessionConnections} per session; ${TERMINAL_LIMITS.inputFrame / 1024} KiB input frames, 256 KiB paste; ${TERMINAL_LIMITS.outputHigh / 1024 / 1024} MiB output credit; ${TERMINAL_LIMITS.ticketMs / 1000} s ticket, ${TERMINAL_LIMITS.leaseMs / 1000} s heartbeat lease`, '', 'fixed'],
             ] : []),
             ['Console input', config.inputEnabled ? 'enabled' : 'read-only', 'ALTCLI_ENABLE_INPUT', 'true'],

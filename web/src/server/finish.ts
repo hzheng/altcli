@@ -10,6 +10,7 @@ import { AppError, messageOf } from '../core/errors.ts';
 import { parseFinishConfirm, parseFinishContinue, parseFinishInput, parseFinishReconcile } from '../core/project-validation.ts';
 import type { Config } from './config.ts';
 import type { InputAuthority } from './input-authority.ts';
+import { scopesFor } from '../core/input-scope.ts';
 import type { LaunchService } from './launches.ts';
 import { paneProcessTree, processStarts } from './processes.ts';
 import type { ProjectCatalog } from './projects.ts';
@@ -98,7 +99,7 @@ export class FinishCoordinator {
       ...(run && run.status !== 'paused' ? [`The controller is ${run.status === 'waiting' ? 'waiting for you' : run.status} on this worktree. Pause it in Console first; pausing does not interrupt the workers.`] : []),
       ...(run?.execution && ['planned', 'dispatching', 'uncertain'].includes(run.execution) ? ['A delivery to this worktree is being sent or is uncertain. Inspect it in Console first.'] : []),
       ...(this.deps.delivery(worktree.root) ? ['An unresolved delivery owns this worktree. Inspect it in Console first.'] : []),
-      ...(this.deps.authority.pending().length ? ['Manual terminal input holds automation on this server. Release the keyboard and reconcile manual input first.'] : []),
+      ...(this.deps.authority.pending(scopesFor(worktree)).length ? ['Manual terminal input holds automation in this worktree. Release the keyboard and reconcile manual input first.'] : []),
       ...(this.deps.projects.projectHeld(projectId) ? ['Another setup, launch or Finish branch operation owns this project. Inspect its result first.'] : []),
     ];
   }
@@ -187,7 +188,7 @@ export class FinishCoordinator {
         const attempted = latest.sessions.some((s) => s.status !== 'pending');
         return this.save({ ...latest, status: attempted ? 'uncertain' : 'failed', message: `${messageOf(error)} ${attempted ? 'Inspect the result; nothing is retried.' : 'Nothing was closed.'}` }, latest.revision);
       }
-    });
+    }, scopesFor(preview.worktree));
   }
   private async closeSessions(claimed: TaskFinish): Promise<TaskFinish> {
     let op = claimed; const { preview } = op;
@@ -199,7 +200,7 @@ export class FinishCoordinator {
     } catch (error) { return fail(`The sessions could not be inspected again: ${messageOf(error)} Nothing was closed.`); }
     const targets = preview.sessions.filter((s) => s.closable);
     await this.deps.closeTerminals(new Set(targets.flatMap((s) => s.panes.map((p) => p.paneId))), 'Finish branch closed this session.');
-    if (this.deps.authority.pending().length) return fail('Manual terminal input began. Nothing was closed.');
+    if (this.deps.authority.pending(scopesFor(preview.worktree)).length) return fail('Manual terminal input began. Nothing was closed.');
     let killed = 0;
     for (const target of targets) {
       const item = this.deps.launches.batches().flatMap((b) => b.items).find((i) => i.id === target.launchId);
@@ -282,7 +283,7 @@ export class FinishCoordinator {
         return this.afterChild(claimed, 'failed', `${messageOf(error)} No Git operation was recorded.`);
       }
       return this.afterChild(claimed, result.status, result.message);
-    });
+    }, scopesFor(op.preview.worktree));
   }
   private recordedChild(op: TaskFinish): WorktreeRemoval | WorktreeDiscard | undefined {
     const children = op.child?.kind === 'removal' ? this.store.worktreeRemovals() : this.store.worktreeDiscards();

@@ -19,7 +19,7 @@ interface Props {
   launchEnabled?: boolean;
   /** What an acknowledgement clears before a worktree action or launch (controller runs and deliveries on that worktree, manual input),
    * or null when nothing holds it. */
-  overrideFor?: (root: string, scope: 'worktree' | 'launch') => Override | null;
+  overrideFor?: (root: string, scope: 'worktree' | 'launch', otherRoot?: string) => Override | null;
   discovery: WorkspaceDiscovery | null; discoveryError: string; onRecheck: () => Promise<void>;
   sessions: SessionRegistration[]; pairs: Group[]; lockedRepositories: string[];
   onSelectWorkspace: (workspace: Workspace) => void;
@@ -108,7 +108,7 @@ export function Workspaces(props: Props) {
             <LaunchAgents requested={launchRequest?.treeId === tree.id ? launchRequest.nonce : 0} token={props.token} projectId={project.id} tree={tree} sessions={props.sessions} enabled={props.launchEnabled === true && props.inputEnabled} inputEnabled={props.inputEnabled} override={props.overrideFor?.(tree.path, 'launch') ?? null} onChanged={props.onChanged} viewEpoch={viewEpoch} busy={props.disabled}/>
           </WorkspaceDetail>}
           branch={tree.main ? <p className="muted">This is the main checkout. Manage and integrate task branches from their worktrees.</p> : <WorktreeActions project={project} tree={tree} token={props.token}
-          disabled={!!squashReason} disabledReason={squashReason} deletionReason={hardReason} deletionHint={detachedReason || occupied} override={props.overrideFor?.(tree.path, 'worktree') ?? null}
+          disabled={!!squashReason} disabledReason={squashReason} deletionReason={hardReason} deletionHint={detachedReason || occupied} override={props.overrideFor?.(tree.path, 'worktree') ?? null} integrationOverride={(target) => props.overrideFor?.(tree.path, 'worktree', target) ?? null}
           onChanged={props.onChanged} viewEpoch={viewEpoch} />} />;
       })}</ul>
       <LifecycleResults project={project} token={props.token} onChanged={props.onChanged} viewEpoch={props.viewEpoch} />

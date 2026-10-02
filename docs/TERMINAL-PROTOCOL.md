@@ -64,23 +64,26 @@ text: tmux 3.5a otherwise counts ignored clients when no ordinary client supplie
 size. Never alter discovered/global window sizing or lifetime options to make
 observation work. A changed sizing policy, server or pane identity closes the
 attachment, as does an observer client that tmux moved to another session. The
-target pane leaving its original session, or that session ending, closes even a
-navigated writer; nothing falls back to another session. Incompatible
+target pane leaving its original session, or that session ending, closes the
+writer too; nothing falls back to another session. Incompatible
 `destroy-unattached` settings refuse attach.
 
-A workspace keyboard writer is a full tmux client, so it may deliberately navigate to another
-session. The attachment then follows: the status line shows the actual session,
-pane and command and notes the navigation. The card's agent and the Control
-target do not change, and the server-wide manual hold still covers every session.
-A session reached by navigation keeps its own lifetime settings. If it uses
-`destroy-unattached`, detaching the browser there (release, close or Lock) can
-destroy it, just as a desktop client leaving it would.
+A workspace writer uses a read-only display client that still supplies window size. Ordered
+input goes to the original pane through a uniquely named temporary tmux buffer; tmux prefixes and command bindings reach
+the CLI instead of navigating. A moved display client closes the writer. Use a desktop tmux
+client for tmux navigation and prefix-driven copy mode. Bracketed text paste is assembled only
+in the attachment's bounded memory, then sent through a uniquely named, immediately deleted
+tmux buffer with `paste-buffer -p -r -d` to that same pane. This preserves program-specific paste
+markers and newlines. An incomplete paste is discarded when the attachment closes, never replayed.
+Image Insert uses the same pane-directed paste operation and refuses copy mode. Mouse reports are sent only when
+the original pane’s program requests them, translated to its coordinates; clicks outside it
+do not navigate. Escape, Ctrl+C or q can leave copy mode entered from a desktop client.
 
-The ⌨️ status reports the active input connection count and shared automation hold. There is
+The ⌨️ status reports this worktree's active connections and lists all held scopes. There is
 no exclusive keyboard owner. Global AI's own terminal is the exception to everything about the
 hold below: it requests input automatically once connected, shows no toggle, and its `acquire`
 returns `manualSession: null` without joining any manual-input period. Its display client
-is read-only; ordered input frames use `send-keys -H` with its exact original pane,
+is read-only; ordered input frames write only its exact original pane, bypassing synchronized-pane broadcasts too,
 so tmux prefixes go to Helper's CLI and cannot navigate the client into another session.
 An externally moved display client closes instead of following. Pending writes drain
 before close, and uncertain writes are never replayed. Other terminals' holds and
@@ -102,13 +105,20 @@ replayed into a replacement generation. A pending grant does not pull focus back
 
 Writers may coexist in this or another browser, even on one pane. Native tmux interleaving and
 size negotiation still apply. Each connection has one attachment, replaced on promotion or stop;
-no extra persistent service is created. The first writer durably records the all-pane snapshot
-and whole-run holds before input. Later writers join the same period without overwriting
-original checkpoints, snapshots or aggregate byte evidence, including when joining an unsettled
-period that needs recovery. Acquisition remains serialized with
-setup, delivery and other keyboard decisions; existing writers have independent input queues.
+no extra persistent service is created. The first writer durably records its verified Git index identity, snapshots every pane whose agent
+or directory belongs to that worktree, and holds only owned runs in that scope before input. Other
+worktrees continue, including automatic handoffs. An unverified target uses a global period. A writer
+joins an existing global period first, otherwise its own worktree's period without overwriting
+original checkpoints or aggregate byte evidence; each newly written pane is added to the original snapshot, including when joining an unsettled
+period that needs recovery. Admission excludes setup, delivery, launch and Finish operations on overlapping scopes; existing writers have independent input queues.
 Legacy owners still need settlement/takeover. Current modern turns can finish while held but
 cannot dispatch a successor; branch-scoped Stage relay keeps its fault/takeover rule.
+
+Operations wait on every worktree they write or check for settlement: squash covers both task
+and integration checkouts; creation covers its source; launch and Finish cover their selected
+worktree. Reconciliation of one period leaves the others and their run holds intact. Schema 21
+marks every older period global because its writers could navigate. A settled backend restart is
+required to activate this transport; restarting never certifies old input as settled.
 
 The terminal's **Terminal / Display** toggle posts `acquire` or `release` for its own connection;
 a toggle on a failed or closed connection first opens a fresh observer connection. The toggle is the
@@ -131,8 +141,7 @@ exact aggregate and writer revisions, so bytes admitted after confirmation refus
 Strict inventory/activity/background-work/checkpoint checks must succeed before ordinary dispatch.
 A failed check still stops those writers and retains the barrier and reason. The `handoffRequestId`
 binds successful settlement to the exact frozen command; `keyboardSettlement` carries the returned
-period ID/revision through admission, branch setup and delivery checks. New activity, keyboard
-changes or restart invalidate it. A changed draft, target, activity or view cancels dispatch and
+period ID/revision through admission, branch setup and delivery checks. New activity or keyboard changes in an overlapping scope, or restart, invalidate it. A changed draft, target, activity or view cancels dispatch and
 preserves the draft; an uncertain response is never retried. This is distinct from the current
 browser's human-inspection sequence below. Settlement alone never continues a run.
 
@@ -172,21 +181,19 @@ was granted (such as a remain-on-exit launch pane) has no process tree to read; 
 neither blocks the grant nor fails settlement while it stays exited.
 
 In the browser, an action's readiness acknowledgement, or **Take control…** in Control access,
-records this human decision for every unresolved record after one confirmation, including when no agents remain or feature flags are
+records this human decision for each unresolved period covering the action’s worktree after one confirmation, including when no agents remain or feature flags are
 off. Its notes say that earlier input may have run commands or left background work; the fixed
 acknowledgement wording is recorded as the decision note, with no checkbox or typed note.
 `POST /api/v1/terminals/reconcile` accepts either `confirmReady: true` for the
 settled check, or `confirmInspected: true` with a nonblank single-line `note`
 (at most 1,000 characters). Both require the current `manualSessionId`,
 `expectedRevision` and an idempotent `requestId`. The human decision records
-possible prior/background effects and releases only that server-wide barrier;
+possible prior/background effects and releases only the addressed period; all other periods remain held, including overlapping global periods.
 affected runs retain their keyboard holds, checkpoints and faults. It does not
-certify settlement or send anything. Any live keyboard, in-flight operation, or
-unresolved delivery/setup/launch refuses reconciliation. Never clear SQLite rows
+certify settlement or send anything. Any live keyboard, in-flight operation, or unresolved delivery/setup/launch in an overlapping scope refuses reconciliation. Never clear SQLite rows
 by hand.
 The browser selects the viewed agent and Control recipient together; DOM focus and
-keyboard grants remain separate. Native tmux navigation can change a writer's actual
-destination without changing that selected agent. Control-pane drafts, including the Plan brief, stay editable while
+keyboard grants remain separate. Browser input remains bound to its original pane. Control-pane drafts, including the Plan brief, stay editable while
 a keyboard or manual barrier holds dispatch; only their actions are blocked, with
 the reason shown. Ctrl+Shift+Escape leaves terminal focus for the visible Terminal/Control switch
 (or the Control access entry); the terminal shows this hint while it has
@@ -209,7 +216,7 @@ same way (🟢 Connected, 🔴 Not current, ⏳ Connecting); it is not agent act
 line shows the actual pane, foreground command and effective window size. If focus
 moved elsewhere while a keyboard grant was pending, the terminal does not take
 focus back. The toggle queues no first input. With native terminals
-enabled, Settings also shows the server-wide keyboard scope and the terminal limits.
+enabled, Settings also explains the worktree scope and global fallback and the terminal limits.
 
 The worktree group row keeps **Agents** immediately left of local **Settings**, including
 in Stage relay. Agents expands the checkout status table; Settings edits the phase’s
@@ -307,7 +314,7 @@ directory, and the image's bytes, then takes fresh evidence that the writer stil
 pane in the original session as its last step before the write (a writer that navigated tmux, even while
 the image was being prepared, is refused). Without awaiting anything further it rechecks authority,
 records the image's use and the manual-input evidence and writes `ESC[200~'<absolute path>'ESC[201~`,
-never Enter. tmux forwards the
+never Enter. The pane-directed paste operation forwards the
 paste markers only to a program that enabled bracketed paste. A refusal before the write returns the
 image to Ready; a failed write or lost response is uncertain and never resent. These checks narrow, but
 do not remove, tmux's inspection/write race and interleaving with other writers. Removing an inserted

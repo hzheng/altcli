@@ -111,8 +111,8 @@ remain responsible for checking and executing any recommended action.
 ## Native input and recovery
 
 The Global AI terminal is always writable: input starts as soon as it connects, and
-there is no Display/Terminal switch. It is the one terminal outside the server-wide
-manual-input barrier ([ADR-0020](adr/ADR-0020-native-terminals.md)). Typing there
+there is no Display/Terminal switch. It is the one terminal outside all worktree and global
+manual-input barriers ([ADR-0020](adr/ADR-0020-native-terminals.md)). Typing there
 creates no manual-input record, holds no dispatch, setup or launch, touches no run
 checkpoint and needs no reconciliation. That is safe because no project, run or
 automated delivery uses its private tmux session; the broker exempts only an

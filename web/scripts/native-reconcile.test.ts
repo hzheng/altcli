@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { beforeEach, afterEach, test } from 'node:test';
-import { mkdtemp, realpath, rm } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdir, mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -10,6 +11,8 @@ import { Controller } from '../src/server/controller.ts';
 import { ControlPlane } from '../src/server/control-plane.ts';
 import { createRunner, TmuxAdapter, type Runner } from '../src/server/adapters/tmux.ts';
 import { paneProcesses } from '../src/server/processes.ts';
+import { resolveWorktree } from '../src/server/worktree.ts';
+import type { WorktreeIdentity } from '../src/contracts/workflow.ts';
 import type { ManualSession } from '../src/contracts/terminals.ts';
 
 let directory: string, store: Store, plane: ControlPlane, run: Runner;
@@ -98,4 +101,23 @@ test('private tmux: replacing the shell with exec preserves its PID but cannot p
   assert.deepEqual(await paneProcesses(current.identity.panePid), []);
   await assert.rejects(plane.reconcileManual(strict(m)), /non-agent command changed/); held();
   await plane.reconcileManual(human(m)); assert.equal(plane.authority.blocked, false);
+});
+
+// Real Git resolution, including a linked checkout inside the source path: prefixes are not scope.
+test('private tmux: scoped inventory uses Git index identity for subdirectories, aliases and nested linked worktrees', async () => {
+  execFileSync('git',['-C',directory,'init','-b','main']);
+  execFileSync('git',['-C',directory,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','-c','commit.gpgsign=false','-c','core.hooksPath=/dev/null','commit','--allow-empty','-m','fixture']);
+  await mkdir(join(directory,'sub'));
+  execFileSync('git',['-C',directory,'worktree','add','-b','nested',join(directory,'linked')]);
+  const alias=join(directory,'alias');await symlink(join(directory,'sub'),alias);
+  for(const [name,cwd] of [['sub',join(directory,'sub')],['alias',alias],['linked',join(directory,'linked')]])
+    await run(['new-session','-d','-s',name!,'-c',cwd!,'/bin/sh']);
+  const scope=await resolveWorktree(directory);assert.ok(scope);
+  const snapshot=(plane as unknown as {manualSnapshot(scope:WorktreeIdentity):Promise<ManualSession['panes']>}).manualSnapshot.bind(plane);
+  const panes=await snapshot(scope);
+  assert.equal(panes.length,3);assert.ok(!panes.some(p=>p.cwd===join(directory,'linked')));
+  const m=plane.authority.save({...await barrier(),scope,panes});
+  // An unrelated pane disappearing must not poison this period's settlement.
+  await run(['kill-session','-t','linked']);
+  assert.equal((await plane.reconcileManual(strict(m))).reconciliationRequired,false);
 });

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { loadConfig } from '../src/server/config.ts';
-import { Store } from '../src/server/store.ts';
+import { Store, STORE_SCHEMA } from '../src/server/store.ts';
 import { Controller } from '../src/server/controller.ts';
 import { MockAdapter, mockSessions } from '../src/server/adapters/mock.ts';
 import { GlobalControlPlane } from '../src/server/global-ai/plane.ts';
@@ -21,7 +21,7 @@ test('Global AI shares the existing SQLite/controller/terminal authority without
   try {
     assert.equal(plane.store, store);
     assert.equal(plane.terminals.services.authority, plane.authority);
-    assert.equal(store.db.prepare('PRAGMA user_version').get() && (store.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 20);
+    assert.equal(store.db.prepare('PRAGMA user_version').get() && (store.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, STORE_SCHEMA);
     const result = await plane.globalAI.ownerRead({ name: 'get_capabilities', arguments: {} });
     assert.equal((result.data as { effects: boolean }).effects, false);
     // The host serves the documents packed at build time, not files from a checkout.

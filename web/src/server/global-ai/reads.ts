@@ -1,3 +1,4 @@
+import { manualCovers } from '../../core/input-scope.ts';
 import { createHash } from 'node:crypto';
 import type { AppTool, ToolReply } from '../../contracts/global-ai.ts';
 import type { RelayRun, WorkflowState, WorkspaceDiscovery } from '../../contracts/workflow.ts';
@@ -122,7 +123,8 @@ export class AppReads {
             blockedHandoff: run.blockedHandoff ?? null,
             participants: run.participants.map(p => ({ id: p.id, label: p.label, instance: state.instances.find(i => i.agentId === p.id)?.status ?? 'unknown',
               activity: state.activities?.find(a => a.agentId === p.id) ?? { state: 'unknown' } })),
-            manualInput: { heldAcrossServer: !!state.manualSessions?.some(m => m.live || m.reconciliationRequired),
+            manualInput: { heldAcrossServer: !!state.manualSessions?.some(m => !m.scope && (m.live || m.reconciliationRequired)),
+              heldForWorktree: !!state.manualSessions?.some(m => (m.live || m.reconciliationRequired) && manualCovers(m, [run.lockKey])),
               affectedRun: !!state.manualSessions?.some(m => m.runs.some(r => r.id === run.id)) },
             checkpoint: checkpoint ? { kind: checkpoint.kind, revision: checkpoint.revision, commandId: checkpoint.commandId, fault: checkpoint.fault ?? null } : null,
             plan: plan ? { step: plan.step, revision: plan.current?.revision ?? null, hash: plan.current?.hash ?? null,
