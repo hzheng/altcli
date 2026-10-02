@@ -106,6 +106,9 @@ a validated `feature/ui` Implementation turn and its automatic review handoff.
   the task worktree and the integration checkout). Keyboard admission into a scope waits only for
   in-flight delivery, setup, launch or Finish operations acting on that scope. A pre-upgrade staging
   owner refuses native input only into its own worktree.
+  Keyboard grants and stops serialize only overlapping worktrees or the same connection; a slow
+  input drain in another worktree does not queue them. Closing an observer that never admitted
+  input creates no manual-input barrier.
 - **Evidence and recovery.** The original snapshot and strict settlement cover the panes in the
   scope: every pane whose agent or directory belongs to that worktree, including each written pane.
   Reconciliation, readiness acknowledgements, checkpoint review and Take control act on the periods

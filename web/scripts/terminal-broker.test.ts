@@ -581,6 +581,24 @@ test('a stalled writer queue neither blocks another writer nor lets checked stop
   const stopping=plane.terminals.stop(input);await settle();pause=false;unblock();await rejected;await stopping;
   assert.equal(plane.authority.pending()[0]!.bytes,1);assert.equal(plane.authority.pending()[0]!.writers.filter(w=>w.live).length,1);
 });
+test('a stalled keyboard release queues later grants only in its own worktree',async()=>{
+  let stall=false,unblock:(()=>void)|undefined;
+  plane.terminals.services.attach=async(_config,target,writer)=>{if(!writer&&stall){stall=false;await new Promise<void>(r=>{unblock=r;});}
+    return {pid:1,write:()=>{},resize:()=>{},pause:()=>{},resume:()=>{},close:async()=>{},active:async()=>({paneId:target.identity.paneId,sessionId:target.sessionId,label:target.label,command:'fixture'})};};
+  const a=await connect(),same=await connect(),other=await connect('/demo/other'),owner=await grant(a);stall=true;
+  const release=plane.terminals.keyboard(a.opened.connectionId,{requestId:randomUUID(),expectedBootId:plane.authority.bootId,expectedGeneration:owner.generation,action:'release'});
+  for(let n=0;n<400&&!unblock;n++)await settle();assert.ok(unblock,'the release must be replacing its attachment');
+  let joined=false;const overlapping=grant(same).then(r=>{joined=true;return r;});
+  const independent=await Promise.race([grant(other),new Promise<null>(r=>setTimeout(()=>r(null),2000))]);
+  const waited=!joined;unblock();await release;
+  assert.equal(independent?.manualSession?.scope?.indexPath,'/demo/other/.git/index','a grant in another worktree does not wait for the drain');
+  assert.equal(waited,true,'a grant in the draining worktree waits for the release');
+  const later=await overlapping;assert.equal(later.writer,true);assert.equal(later.manualSession!.id,owner.manualSession!.id);
+});
+test('closing an observer that never admitted input holds no scope and leaves no barrier',async()=>{
+  const c=await connect(),closing=plane.terminals.close(c.opened.connectionId);
+  assert.equal(plane.authority.busy,false);await closing;assert.equal(plane.authority.pending().length,0);
+});
 
 test('a partial batch stop failure retains recovery; a new writer joins it while automation stays held',async()=>{
   const a=await connect(),b=await connect();await grant(a);await grant(b);

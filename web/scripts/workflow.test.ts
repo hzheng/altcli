@@ -16,6 +16,7 @@ import type { ListedPane } from '../src/server/adapters/terminal.ts';
 import { parseHook, parseStart, parseRunAction, parseWorkspaceReset } from '../src/core/workflow-validation.ts';
 import { parseRenameSession } from '../src/core/validation.ts';
 import { parseGroupSelection } from '../src/core/implementation-validation.ts';
+import type { ClearContextInput } from '../src/contracts/api.ts';
 import type { HookEvent, ManagedSession, StartInput } from '../src/contracts/workflow.ts';
 
 let directory: string; let store: Store; let adapter: MockAdapter; let plane: ControlPlane;
@@ -51,6 +52,81 @@ async function complete(commandId: string, more: Partial<HookEvent> = {}) {
   return plane.recordEvent(value);
 }
 function stopped(runId: string) { plane.action(parseRunAction({ runId, action: 'takeover', confirmReady: true })); }
+
+async function clearInput(agentId = 'codex'): Promise<ClearContextInput> {
+  const state = await plane.state(), session = state.sessions.find(s => s.id === agentId)!;
+  return { requestId: randomUUID(), agentId, registrationId: session.registrationId, expectedActivityUpdatedAt: state.activities?.find(a => a.agentId === agentId)?.updatedAt ?? null, confirmReady: true };
+}
+test('clear context sends only the native command on main and a task checkout, without a workflow or peer handoff', async () => {
+  const solo = (await plane.state()).sessions.find(s => s.repository === '/demo/other')!;
+  for (const agentId of ['codex', 'claude', solo.id]) {
+    const input = await clearInput(agentId), record = await plane.clearContext(input);
+    assert.equal(record.status, 'delivered');
+    assert.deepEqual(await plane.clearContext(input), record);
+    assert.equal(plane.workflow.execution(input.requestId), undefined);
+  }
+  assert.deepEqual(sent, [{ agent: 'codex', text: '/clear' }, { agent: 'claude', text: '/clear' }, { agent: solo.id, text: '/clear' }]);
+  assert.deepEqual(store.reservations(), []); assert.deepEqual((await plane.state()).runs, []);
+});
+test('clear context pins request identity, refuses changed instances and disabled input', async () => {
+  const input = await clearInput();
+  await assert.rejects(plane.clearContext({ ...input, registrationId: randomUUID() }), /instance changed/);
+  plane.config.inputEnabled = false; await assert.rejects(plane.clearContext(input), /disabled/); plane.config.inputEnabled = true;
+  await plane.clearContext(input);
+  await assert.rejects(plane.clearContext({ ...await clearInput('claude'), requestId: input.requestId }), /another terminal decision/);
+  assert.equal(sent.length, 1);
+});
+test('clear context preserves active-run, manual-input and uncertain-delivery ownership', async () => {
+  const input = await clearInput(); const command = start(); await plane.submit(command);
+  await assert.rejects(plane.clearContext(input), /run owns/); stopped(command.requestId);
+  const session = (await plane.state()).sessions.find(s => s.id === 'codex')!;
+  const manual = await plane.terminals.services.begin({ protocol: 2, target: { agentId: session.id, registrationId: session.registrationId }, clientInstanceId: randomUUID(), cols: 80, rows: 24 }, randomUUID(), randomUUID());
+  await assert.rejects(plane.clearContext(input), /Manual terminal input/);
+  assert.equal(plane.authority.get(manual.id).live, true);
+  assert.equal(sent.length, 1);
+});
+test('clear context uncertainty survives restart and duplicate requests never resend', async () => {
+  const input = await clearInput();
+  adapter.send = async () => { sent.push({ agent: 'codex', text: '/clear' }); throw Error('lost after typing'); };
+  const record = await plane.clearContext(input); assert.equal(record.status, 'uncertain');
+  await assert.rejects(plane.clearContext(await clearInput('claude')), /pending delivery/);
+  await assert.rejects(plane.submit(start()), /uncertain delivery/);
+  await plane.terminals.shutdown();
+  plane = new ControlPlane(new Controller(plane.config, store, adapter));
+  assert.equal((await plane.clearContext(input)).status, 'uncertain');
+  assert.equal(store.activeFor('/demo/project'), input.requestId);
+  assert.equal(sent.length, 1);
+});
+test('overlapping clear requests cannot deliver twice or open another run during delivery', async () => {
+  const input = await clearInput(); let release!: () => void, began!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; }), sending = new Promise<void>(resolve => { began = resolve; });
+  adapter.send = async (s, text) => { sent.push({ agent: s.id, text }); began(); await gate; };
+  const first = plane.clearContext(input);
+  try {
+    await sending;
+    assert.equal((await plane.clearContext(input)).status, 'sending');
+    await assert.rejects(plane.clearContext(await clearInput('claude')), /pending delivery/);
+    await assert.rejects(plane.submit(start()), /uncertain delivery/);
+  } finally { release(); await first; }
+  assert.equal(sent.length, 1);
+});
+test('native working activity and activity changes refuse context reset without marking anything ready', async () => {
+  adapter.foregrounds.set('codex', '42'); await plane.register({ paneId: '%0', label: 'Codex' });
+  const input = await clearInput(), session = (await plane.state()).sessions.find(s => s.id === 'codex')!;
+  const native: HookEvent = { event: 'turn_started', source: 'codex', paneId: '%0', socketPath: session.identity.socketPath, identity: session.identity, cliPid: '42', sessionId: 'native-chat', sourceTurnId: 'native-turn', startedAt: new Date().toISOString() };
+  await plane.recordEvent(native);
+  await assert.rejects(plane.clearContext(input), /agent is working/);
+  await plane.recordEvent({ ...native, event: 'turn_complete', settled: true, backgroundState: 'clear' });
+  await assert.rejects(plane.clearContext(input), /activity changed/);
+  await plane.clearContext(await clearInput()); assert.equal(sent.length, 1);
+});
+test('clear context rechecks the CLI immediately before delivery', async () => {
+  adapter.foregrounds.set('codex', '42'); await plane.register({ paneId: '%0', label: 'Codex' });
+  const input = await clearInput(); let checks = 0;
+  adapter.preflight = async () => { if (++checks === 2) adapter.foregrounds.set('codex', '43'); };
+  const result = await plane.clearContext(input);
+  assert.equal(result.status, 'rejected'); assert.deepEqual(sent, []); assert.deepEqual(store.reservations(), []);
+});
 
 test('manual input in another worktree leaves a Stage relay completion and automatic handoff running',async()=>{
   const command=start({pairId:pair().id,autoContinue:true});await plane.submit(command);

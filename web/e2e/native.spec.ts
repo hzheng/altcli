@@ -280,6 +280,8 @@ test('copy mode keeps the native terminal mounted and its keyboard generation in
   });
   const pane=page.getByRole('article',{name:'Codex pane',exact:true});
   await expect(pane.getByText(/Tmux copy mode/)).toBeVisible();
+  await expect(pane.getByRole('button',{name:'Clear context…',exact:true})).toBeDisabled();
+  await expect(pane.getByRole('button',{name:'Clear context…',exact:true})).toHaveAttribute('title',/Tmux copy mode/);
   await expect(badge(card,'Typing enabled')).toBeVisible();
   expect(((await state(request)).manualSessions??[])[0]!.writers.find(w=>w.live)!.generation).toBe(owner);
   expect(closes).toEqual([]);
@@ -287,6 +289,20 @@ test('copy mode keeps the native terminal mounted and its keyboard generation in
   await expect(pane.getByText(/Tmux copy mode/)).toHaveCount(0);
   await expect(badge(card,'Typing enabled')).toBeVisible();
   expect(closes).toEqual([]);
+});
+test('Clear context lists this checkout’s typing, stops and reconciles it, then keeps its receipt',async({page,request})=>{
+  const card=await openKeyboard(page),pane=page.getByRole('article',{name:'Codex pane',exact:true});
+  const sent=async()=>(await state(request)).commands.filter(c=>c.agentId==='codex'&&c.text==='/clear').length,before=await sent();
+  await pane.getByRole('button',{name:'Clear context…',exact:true}).click();
+  const confirmation=pane.getByRole('region',{name:'Clear context for Codex',exact:true});
+  await expect(confirmation.getByRole('list',{name:'Consequences of clearing context',exact:true})).toContainText('Typing stops in Codex (this browser)');
+  await confirmation.getByRole('button',{name:'Clear Codex context',exact:true}).click();
+  const receipt=pane.getByRole('status').filter({hasText:'/clear sent to Codex'});
+  await expect(receipt).toBeVisible();await expect(badge(card,'Typing enabled')).toHaveCount(0);
+  await expect.poll(async()=>((await state(request)).manualSessions??[]).length).toBe(0);
+  // The refreshed view no longer lists any hold; the receipt of this click stays.
+  await expect(page.locator('.page-heading').getByRole('img',{name:'Input: 0 active',exact:true})).toBeVisible();
+  await expect(receipt).toBeVisible();expect(await sent()).toBe(before+1);
 });
 test('a copy-mode peer stays visible and blocks automated input without discarding the draft',async({page})=>{
   await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();

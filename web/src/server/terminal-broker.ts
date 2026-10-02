@@ -8,7 +8,7 @@ import { parseKeyboard, parseKeyboardBatch, parseNativeInput, parseTerminalOpen,
 import { AppError, messageOf } from '../core/errors.ts';
 import type { Config } from './config.ts';
 import { InputAuthority } from './input-authority.ts';
-import { scopesFor } from '../core/input-scope.ts';
+import { scopesFor, scopesOverlap, type InputScopes } from '../core/input-scope.ts';
 import type { WorktreeIdentity } from '../contracts/workflow.ts';
 import { assertObserverSize, attachTmux, type Attachment, type AttachTarget } from './tmux-attach.ts';
 import type { TerminalGateway } from './terminal-gateway.ts';
@@ -47,12 +47,34 @@ export class TerminalBroker implements TerminalGateway {
   private readonly connections = new Map<string, Connection>();
   private readonly timer: ReturnType<typeof setInterval>;
   private closing = false;
-  private decisionTail: Promise<unknown> = Promise.resolve();
+  private readonly decisions = new Set<{ scopes: Promise<InputScopes>; connections: readonly string[]; requestId: string; work: Promise<unknown> }>();
   constructor(services: TerminalServices) {
     this.services = services;
     this.timer = setInterval(() => this.tick(), 1000); this.timer.unref();
   }
   private get authority() { return this.services.authority; }
+  /** Preserve decision order only where scopes or connections overlap; draining one checkout cannot queue another's first key. */
+  private queueDecision<T>(scopes: Promise<InputScopes>, connections: readonly string[], requestId: string, action: () => Promise<T>): Promise<T> {
+    const earlier = [...this.decisions];
+    const work = (async () => {
+      const scope = await scopes;
+      await Promise.all(earlier.map(async decision => {
+        if (requestId === decision.requestId || connections.some(id => decision.connections.includes(id)) || scopesOverlap(scope, await decision.scopes.catch(() => []))) await decision.work.catch(() => {});
+      }));
+      return action();
+    })();
+    const decision = { scopes, connections, requestId, work }; this.decisions.add(decision);
+    void work.then(() => this.decisions.delete(decision), () => this.decisions.delete(decision));
+    return work;
+  }
+  private async keyboardScopes(id: string): Promise<InputScopes> {
+    const c = this.connections.get(id);
+    if (!c) return null; // The decision itself can still return a previously recorded receipt.
+    if (this.services.exempt?.(c.input.target)) return [];
+    if (this.authority.pending().some(s => !s.scope)) return null;
+    if (c.manualId) return scopesFor(this.authority.get(c.manualId).scope);
+    return scopesFor(await this.services.scope?.(c.input.target));
+  }
   private enabled(input = false) {
     if (this.closing || !this.services.config.terminalEnabled) throw new AppError('TERMINAL_DISABLED', 'Native terminals are disabled on this host.', 403);
     if (input && !this.services.config.inputEnabled) throw new AppError('READ_ONLY', 'Input is disabled on this host.', 403);
@@ -266,12 +288,12 @@ export class TerminalBroker implements TerminalGateway {
         throw error;
       }
     };
-    // Finishing Helper input is local to its pane and must not delay another terminal's keyboard grant or reconciliation.
-    if (c.free) await end(); else await this.authority.draining(end, scopesFor(c.manualId ? this.authority.get(c.manualId).scope : null));
+    // Helper and connections that never admitted input have no manual period to drain or hold.
+    if (c.free || !c.manualId) await end(); else await this.authority.draining(end, scopesFor(this.authority.get(c.manualId).scope));
   }
   async keyboard(id: string, value: unknown): Promise<KeyboardResult> {
-    const work = this.decisionTail.catch(() => {}).then(() => this.keyboardDecision(id, value));
-    this.decisionTail = work; return work;
+    const { requestId } = parseKeyboard(value);
+    return this.queueDecision(this.keyboardScopes(id).catch(() => null), [id], requestId, () => this.keyboardDecision(id, value));
   }
   private async keyboardDecision(id: string, value: unknown): Promise<KeyboardResult> {
     const input = parseKeyboard(value), request = { connectionId: id, ...input };
@@ -331,8 +353,9 @@ export class TerminalBroker implements TerminalGateway {
     this.authority.decide(input.requestId, request, result); return result;
   }
   async stop(value: unknown): Promise<ManualSession> {
-    const work = this.decisionTail.catch(() => {}).then(async () => {
-      const input = parseKeyboardBatch(value);
+    const input = parseKeyboardBatch(value);
+    const scopes = Promise.resolve().then(() => scopesFor(this.authority.get(input.manualSessionId).scope));
+    return this.queueDecision(scopes, input.writers.map(w => w.connectionId), input.requestId, async () => {
       if (input.expectedBootId !== this.authority.bootId) throw new AppError('TERMINAL_CHANGED', 'The host restarted. Inspect manual input.', 409);
       const prior = this.authority.duplicate<ManualSession>(input.requestId, input); if (prior) return prior;
       let manual = this.authority.get(input.manualSessionId);
@@ -361,7 +384,6 @@ export class TerminalBroker implements TerminalGateway {
       for (const c of selected) this.emit(c, { type: 'keyboard', generation: c.generation, manualSessionId: manual.id, writer: false, reason: manual.reason });
       this.authority.decide(input.requestId, input, manual); return manual;
     });
-    this.decisionTail = work; return work;
   }
   async close(id: string, reason = 'Terminal closed; reconcile manual input.'): Promise<void> {
     const c = this.connections.get(id); if (!c || c.closed) return;
@@ -391,6 +413,6 @@ export class TerminalBroker implements TerminalGateway {
   async shutdown(): Promise<void> {
     this.closing = true; clearInterval(this.timer);
     await Promise.all([...this.connections.keys()].map(id => this.close(id, 'Host shutdown; inspect and reconcile manual input.')));
-    await this.decisionTail.catch(() => {});
+    await Promise.allSettled([...this.decisions].map(decision => decision.work));
   }
 }

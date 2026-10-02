@@ -94,5 +94,12 @@ for (const layout of ['claude', 'codex'] as const) test(`private tmux (${layout}
     await adapter.send(session, command);
     await wait(async () => (await submitted()).length === 2);
     assert.deepEqual(await submitted(), ['first\n\nsecond', command]);
+    // Context resets use the same input-area guard, but arrive as a bare native slash command.
+    const reset = '/clear';
+    await setDraft('unfinished instruction'); await assert.rejects(adapter.send(session, reset), refused);
+    assert.equal(await draft(), 'unfinished instruction');
+    await setDraft(''); await adapter.send(session, reset);
+    await wait(async () => (await submitted()).length === 3);
+    assert.deepEqual(await submitted(), ['first\n\nsecond', command, reset]);
   } finally { await run(['kill-server']).catch(() => {}); await rm(directory, { recursive: true, force: true }); }
 });

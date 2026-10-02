@@ -14,6 +14,7 @@ import { nameOf, workspaceKey, Workspaces } from './Workspaces';
 import { HandoffProgress, RunPolicy } from './Implementation';
 import { PlanningProgress } from './PlanningProgress';
 import { PaneActions } from './PaneActions';
+import { ClearContext } from './ClearContext';
 import { LaunchProfiles } from './LaunchProfiles';
 import { GlobalAISettings } from './GlobalAISettings';
 import { GlobalAI, type HelperSection } from './GlobalAI';
@@ -813,6 +814,10 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
               {/* Resetting an unknown status is confirmed in Control access. */}
               {activity?.state === 'unknown' && <span className="muted">Reset status in Control access.</span>}</div>
             {inputBlocks.has(s.id) && <p className="notice" role="status">{inputBlocks.get(s.id)}</p>}
+            <ClearContext token={token} agent={s} activity={activity} reasonShown={inputBlocks.has(s.id)} busy={busy} viewKey={viewKey} override={checkpointOverride} submit={guarded} refresh={refresh} onUncertain={setUnknownRequest}
+              blocked={!state.inputEnabled ? 'Read-only console: input is disabled.' : stale || checking ? 'Wait for the console to refresh.'
+                : setupHold?.reason || inputBlocks.get(s.id) || cardReason(s) || (owned.length ? 'Let the run finish or take control in Control access before clearing context.'
+                : transportHold || unknownRequest ? 'Inspect and reconcile the uncertain delivery in Control access first.' : '')} />
             {visibleOutcome?.outcome && <div className={`outcome ${visibleOutcome.outcome}`}>{visibleOutcome.outcome}: {visibleOutcome.reason}</div>}
             {config?.terminalEnabled && s.registrationId ? <NativeTerminal ref={handle => {if(handle)terminals.current.set(s.id,handle);else terminals.current.delete(s.id);}} token={token} target={{agentId:s.id,registrationId:s.registrationId}} clientInstanceId={clientInstanceId} viewEpoch={viewKey} label={s.label} capturedAt={snapshot?.capturedAt} inputEnabled={state.inputEnabled}
               workspace={s.worktree?.root ?? s.repository} imagesSupported={s.agentType === 'claude' || s.agentType === 'codex'}

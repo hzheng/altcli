@@ -10,6 +10,20 @@ servers:
 security:
 - ownerToken: []
 paths:
+  /api/v1/sessions/clear-context:
+    post:
+      operationId: clearContext
+      description: Explicitly send /clear alone to one exact current Claude Code or Codex CLI on any branch. Creates a delivery receipt, not a workflow turn. Refuses working agents, changed activity or identity, owned runs, setup, unresolved delivery and manual-input holds. Delivery is not proof that the CLI reset; duplicate or uncertain requests are never replayed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ClearContextInput'}
+      responses:
+        '200': {description: Durable delivery receipt, content: {application/json: {schema: {$ref: '#/components/schemas/CommandRecord'}}}}
+        '400': {description: Invalid or unsupported request, content: {application/json: {schema: {$ref: '#/components/schemas/ApiError'}}}}
+        '403': {description: Input disabled or access denied, content: {application/json: {schema: {$ref: '#/components/schemas/ApiError'}}}}
+        '409': {description: Changed, owned or uncertain state; inspect before proceeding, content: {application/json: {schema: {$ref: '#/components/schemas/ApiError'}}}}
   /api/v1/launches/{id}/capture:
     get:
       operationId: captureLaunch
@@ -1287,6 +1301,16 @@ components:
       scheme: bearer
       description: Separate random eight-hour Global AI read capability held in this boot's memory and a private 0600 descriptor. It never accepts or reveals the owner token, and host restart invalidates it.
   schemas:
+    ClearContextInput:
+      type: object
+      additionalProperties: false
+      required: [requestId, agentId, registrationId, expectedActivityUpdatedAt, confirmReady]
+      properties:
+        requestId: {type: string, format: uuid}
+        agentId: {$ref: '#/components/schemas/AgentId'}
+        registrationId: {type: string, format: uuid}
+        expectedActivityUpdatedAt: {type: [string, 'null'], format: date-time}
+        confirmReady: {const: true, description: Human inspected an empty prompt and settled agent/background work and accepts loss of current conversation context. Does not reset activity or release any ownership.}
     ProjectRecord: {type: object, properties: {id: {type: string}, name: {type: string}, commonDir: {type: string}, directoryName: {type: string}, settings: {$ref: '#/components/schemas/RepositorySettings'}}, required: [id, name, commonDir, directoryName], additionalProperties: false}
     LaunchDefault: {type: object, properties: {profileId: {type: string}, count: {type: integer, minimum: 1, maximum: 6}}, required: [profileId, count], additionalProperties: false}
     RepositorySettings:

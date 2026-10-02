@@ -103,6 +103,16 @@ preview or form opens below its group's buttons. Each worktree remembers
 its selected tab; switching tabs keeps drafts and pending results but revokes previews.
 Moving the directory is accepted design, not yet implemented.
 
+To reuse an agent after a squash, open its checkout in Console and choose
+**Clear context…** beside that agent's terminal. Confirm the named agent's empty
+prompt and settled work: AltCLI sends `/clear` to Claude Code or Codex to start
+a fresh conversation in the same tmux session. Files and commits stay in place.
+This works on main and task branches, also with captured terminals. Its confirmation
+also releases the listed terminal-input holds for that checkout, stopping its typing
+connections first. Active runs and unresolved deliveries must be reconciled in
+**Control access** first. A sent command is a delivery receipt; inspect the terminal for the fresh
+conversation. Nothing is cleared automatically after integration.
+
 Use [ROADMAP](ROADMAP.md#migration-and-implementation-sequence) for rollout, [OPEN-DECISIONS](docs/OPEN-DECISIONS.md) for unresolved choices, and [DESIGN-MIGRATION](docs/DESIGN-MIGRATION.md) to locate the content formerly held in the standalone collaboration draft. The draft is no longer a required document.
 
 ## Status and boundaries

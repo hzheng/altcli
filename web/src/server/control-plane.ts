@@ -2,7 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { access, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import type { CommandRecord, HostConfig, PairInput, RegistrationInput, RegistrationResult, RenameSession, SessionRegistration } from '../contracts/api.ts';
+import type { ClearContextInput, CommandRecord, HostConfig, PairInput, RegistrationInput, RegistrationResult, RenameSession, SessionRegistration } from '../contracts/api.ts';
+import { clearContextCommand } from '../core/clear-context.ts';
 import { describeConfig } from './config.ts';
 import type { ActivityReset, BackgroundEvidence, Execution, HookEvent, HookReceipt, InstanceState, ManagedSession, ProcessRecord, RunAction, StartInput, WorkflowState, WorkspaceDiscovery, WorkspaceReset, WorkspaceResetResult } from '../contracts/workflow.ts';
 import { AppError } from '../core/errors.ts';
@@ -821,6 +822,44 @@ export class ControlPlane {
     }
     this.transport.removePair(id);
     this.store.removeGroup(id);
+  }
+  /** A native conversation reset has a durable delivery receipt but no task, completion event or automatic continuation. */
+  async clearContext(input: ClearContextInput): Promise<CommandRecord> {
+    const decision = { action: 'clear_context', ...input };
+    const previous = () => {
+      if (!this.authority.duplicate<{ commandId: string }>(input.requestId, decision)) return;
+      const record = this.store.get(input.requestId);
+      if (!record) throw new AppError('CLEAR_PENDING', 'This clear-context request was already admitted. Inspect the terminal; it will not be replayed.', 409);
+      return record;
+    };
+    const recorded = previous(); if (recorded) return recorded;
+    return this.authority.automated(async () => {
+      if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'Input is disabled by the host.', 403);
+      const session = this.workspaceSessions(await this.workspaces()).find(s => s.id === input.agentId);
+      if (!session || session.registrationId !== input.registrationId) throw new AppError('TARGET_CHANGED', 'The CLI instance changed. Inspect it before clearing context.', 409);
+      const text = clearContextCommand(session.agentType);
+      if (!text) throw new AppError('CLEAR_UNSUPPORTED', 'Clear context supports Claude Code and Codex only.');
+      const available = () => {
+        this.projects.assertWorktreeReady(session.repository);
+        this.authority.assertAutomated(scopesFor(session.worktree));
+        if (this.workflow.owner(session.worktree?.indexPath ?? session.repository)) throw new AppError('RUN_ACTIVE', 'A run owns this worktree. Let it finish or take control before clearing context.', 409);
+        const activity = this.activity.read(session);
+        if (activity.state === 'working') throw new AppError('AGENT_WORKING', 'This agent is working. Wait for it to finish before clearing context.', 409);
+        if (activity.updatedAt !== input.expectedActivityUpdatedAt) throw new AppError('ACTIVITY_CHANGED', 'Agent activity changed. Inspect the terminal and confirm again.', 409);
+      };
+      available();
+      await this.validateMembers([session], session.cwd, true);
+      // Another caller can finish validation while this one awaits discovery. Only the first may admit this request ID.
+      const concurrent = previous(); if (concurrent) return concurrent;
+      if (this.store.get(input.requestId)) throw new AppError('ID_CONFLICT', 'This request ID belongs to another command.', 409);
+      available();
+      if (this.store.activeFor(session.repository)) throw new AppError('TURN_ACTIVE', 'Inspect and reconcile the pending delivery before clearing context.', 409);
+      this.bindMembers([session]);
+      this.authority.decide(input.requestId, decision, { commandId: input.requestId });
+      return this.transport.submit({ requestId: input.requestId, agentId: session.id, kind: 'instruction', text, confirmReady: true }, {
+        beforeSend: async () => { await this.validateMembers([session], session.cwd); available(); },
+      });
+    }, this.agentScopes(input.agentId));
   }
   async submit(input: StartInput): Promise<CommandRecord> { return this.authority.automated(() => this.submitAdmitted(input), this.agentScopes(input.agentId)); }
   private async submitAdmitted(input: StartInput): Promise<CommandRecord> {

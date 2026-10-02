@@ -59,6 +59,47 @@ test.beforeEach(async ({ request }) => {
   expect((await request.patch('/api/v1/sessions/claude', { headers, data: { label: 'Claude Code', expectedLabel: 'Claude', expectedRegistrationId: session.registrationId } })).ok()).toBe(true);
 });
 test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'wait' }); });
+test('Clear context confirms the exact agent, sends a bare native command, and creates no run', async ({ page, request }, info) => {
+  await unlock(page, TOKEN, false); await showSurface(page, 'Terminal');
+  const card = pane(page, 'Codex'), clear = card.getByRole('button', { name: 'Clear context…', exact: true });
+  const before = await state(request), commands = before.commands.length;
+  await clear.click();
+  const confirmation = card.getByRole('region', { name: 'Clear context for Codex', exact: true });
+  await expect(confirmation).toContainText('/clear'); await expect(confirmation).toContainText('/demo/project');
+  await page.screenshot({ path: info.outputPath('clear-context.png'), fullPage: true });
+  expect((await state(request)).commands.length).toBe(commands);
+  await confirmation.getByRole('button', { name: 'Cancel', exact: true }).click(); await expect(confirmation).toHaveCount(0);
+  await clear.click(); await showSurface(page, 'Control'); await showSurface(page, 'Terminal'); await expect(confirmation).toHaveCount(0);
+  await clear.click(); await confirmation.getByRole('button', { name: 'Clear Codex context', exact: true }).click();
+  await expect(card.getByRole('status').filter({ hasText: '/clear sent to Codex' })).toBeVisible();
+  const after = await state(request), fresh = after.commands.filter(c => !before.commands.some(old => old.id === c.id));
+  expect(fresh).toHaveLength(1); expect(fresh[0]).toMatchObject({ agentId: 'codex', text: '/clear', status: 'delivered', handoff: false });
+  expect(after.runs).toEqual(before.runs); expect(after.reservations).toEqual([]);
+  await page.getByRole('navigation', { name: 'Agent' }).getByRole('button', { name: 'Claude Code', exact: true }).click();
+  const claude = pane(page, 'Claude Code'); await claude.getByRole('button', { name: 'Clear context…', exact: true }).click();
+  await expect(claude.getByRole('region', { name: 'Clear context for Claude Code', exact: true })).toContainText('/clear');
+  await claude.getByRole('button', { name: 'Clear Claude Code context', exact: true }).click();
+  await expect.poll(async () => (await state(request)).commands[0]?.text).toBe('/clear');
+});
+test('Clear context is blocked by ownership and working activity; an uncertain response is never resent', async ({ page, request }) => {
+  await unlock(page, TOKEN, false); await showSurface(page, 'Terminal');
+  const card = pane(page, 'Codex'), clear = card.getByRole('button', { name: 'Clear context…', exact: true });
+  const record = await post(request, 'commands', { requestId: crypto.randomUUID(), agentId: 'codex', kind: 'relay', confirmReady: true });
+  await expect(clear).toBeDisabled(); await expect(card.locator('.clear-context')).toContainText('take control');
+  await post(request, 'runs', { runId: record.id, action: 'takeover', confirmReady: true }); await expect(clear).toBeEnabled();
+  await page.route('**/api/v1/state', async route => {
+    const response = await route.fetch(), body = await response.json();
+    body.activities = body.activities.map((a: { agentId: string }) => a.agentId === 'codex' ? { ...a, state: 'working' } : a);
+    await route.fulfill({ response, json: body });
+  });
+  await expect(clear).toBeDisabled(); await expect(card.locator('.clear-context')).toContainText('Wait for this agent');
+  await page.unroute('**/api/v1/state'); await expect(clear).toBeEnabled();
+  let sends = 0;
+  await page.route('**/api/v1/sessions/clear-context', async route => { sends++; await route.abort('failed'); });
+  await clear.click(); await card.getByRole('button', { name: 'Clear Codex context', exact: true }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'uncertain HTTP result' })).toBeVisible(); await expect(clear).toBeDisabled();
+  await showSurface(page, 'Control'); await showSurface(page, 'Terminal'); expect(sends).toBe(1);
+});
 test('Console switches projects and worktrees without writes, keeps drafts and revokes readiness', async ({ page, request }, info) => {
   const inventory = await (await request.get('/api/v1/workspaces', { headers })).json() as WorkspaceDiscovery;
   const project = inventory.projects!.find(p => p.name === 'project')!, other = inventory.projects!.find(p => p.name === 'other')!;

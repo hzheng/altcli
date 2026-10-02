@@ -56,6 +56,11 @@ export interface RegistrationResult {
 }
 /** A label-only edit; instance identity and historical attribution do not change. */
 export interface RenameSession { label: string; expectedRegistrationId: string; expectedLabel: string }
+/** Explicitly start an empty conversation in one existing CLI, without creating a workflow turn. */
+export interface ClearContextInput {
+  requestId: string; agentId: AgentId; registrationId: string;
+  expectedActivityUpdatedAt: string | null; confirmReady: true;
+}
 /** Bounded read-only capture of any live pane, so the human can identify it before registering. */
 export interface PanePreview {
   paneId: string;

@@ -344,6 +344,22 @@ release and reconciliation before starting Stage relay.
 
 Within one page, drafts, choices, open sections and scroll positions survive tab, view and workspace switches in page memory only (never browser storage; Lock clears them). Readiness and destructive confirmations do not survive a view switch. Browser preferences initialize choices only. Explicit roster, role, scope, gate, and budget changes are controller operations applied at safe boundaries. Tab switches, locks, reconnects, and extra devices do not change them.
 
+**Clear context…** beside each supported agent's terminal reuses that CLI after a
+task, including after squash integration on main or a task worktree. It previews
+the exact recipient, directory and native command (`/clear` for both Claude Code
+and Codex). Confirming acknowledges loss of conversation context and an empty prompt
+with settled agent/background work. The same confirmation lists and accepts the
+checkout's manual-input consequences, stops its typing connections and reconciles
+the listed records before sending; other worktrees retain their own input and holds.
+Legacy server-wide holds retain their existing scope. A view, instance, activity or
+input-hold change revokes the confirmation. Working agents, workflow ownership,
+setup and unresolved delivery block it; Control access retains the existing
+reconciliation path. It sends the native command alone through guarded transport, records delivery
+and uncertainty without replay, and creates no workflow turn or completion claim.
+Files, commits, tmux sessions, names and group membership remain. Unknown activity
+is not reset by this action; the human inspection does not establish lifecycle
+completion. Installed-provider acceptance remains separate from mock/browser checks.
+
 ## Final design principle
 
 **Choose the project and worktree, confirm the group, and coordinate the work. Users own environments and agent placement; AltCLI owns confirmed setup, explicit assignments, review, agreement, and progression.**
