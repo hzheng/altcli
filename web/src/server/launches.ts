@@ -112,22 +112,55 @@ export class LaunchService {
     return this.store.managedWorkspaces().find(w=>w.status==='active'&&w.projectId===projectId&&w.worktreeId===worktreeId&&!!w.identity&&isDeepStrictEqual(w.identity,tree))?.id??null;
   }
   private assertAvailable(tree:WorktreeIdentity) {if(this.store.worktreeCreations().some(op=>op.input.source.root===tree.root && ['applying','uncertain'].includes(op.status)))throw new AppError('LAUNCH_BUSY','Source worktree setup is unresolved.',409);this.projects.assertWorktreeReady(tree.root);this.guard(tree);if(this.store.db.prepare('SELECT 1 FROM launch_reservations WHERE index_path=?').get(tree.indexPath))throw new AppError('LAUNCH_BUSY','An earlier launch owns this checkout. Inspect it first.',409);}
+  private async missing(item:LaunchInstance):Promise<boolean> {
+    if(item.closed||item.cleanup||!item.identity||!item.sessionId||item.phase!=='observed')return false;
+    return await this.cleanupHost.absent({sessionId:item.sessionId,serverPid:item.identity.serverPid,serverStarted:item.identity.serverStarted}).catch(()=>null)===true;
+  }
+  /** Read-only observation. A failed listing is never an empty server; records alone never prove absence. */
+  async missingSessions():Promise<string[]> {
+    if(this.config.mode==='mock')return [];
+    await this.sessionNames();
+    const missing:string[]=[];
+    for(const item of this.batches().flatMap(b=>b.items))if(await this.missing(item))missing.push(item.id);
+    return missing;
+  }
+  private recreation(item:LaunchItem):LaunchInstance|null {
+    if(!item.recreates)return null;
+    const original=this.lookup(item.recreates.launchId).item;
+    if(digest(original)!==item.recreates.digest||original.projectId!==item.projectId||original.worktreeId!==item.worktreeId||!isDeepStrictEqual(original.worktree,item.worktree))
+      throw new AppError('LAUNCH_PREVIEW_CHANGED','The original launch or checkout changed. Preview recreation again.',409);
+    return original;
+  }
   async preview(value:unknown):Promise<LaunchPreview> {
-    this.enabled();const b=terminalFields(value,['projectId','items']);const projectId=terminalText(b.projectId);
-    if(!Array.isArray(b.items)||!b.items.length||b.items.length>6)throw new AppError('LAUNCH_ITEMS','Choose one to six instances.');
+    this.enabled();const b=terminalFields(value,['projectId','items','recreateLaunchIds']);const projectId=terminalText(b.projectId);
+    const originals:LaunchInstance[]=[];
+    let rows=b.items;
+    if(b.recreateLaunchIds!==undefined){
+      if(rows!==undefined||!Array.isArray(b.recreateLaunchIds)||!b.recreateLaunchIds.length||b.recreateLaunchIds.length>6||new Set(b.recreateLaunchIds).size!==b.recreateLaunchIds.length)
+        throw new AppError('LAUNCH_ITEMS','Choose one to six distinct missing launches, without new launch items.');
+      for(const id of b.recreateLaunchIds){const original=this.lookup(requestId(id)).item;
+        if(original.projectId!==projectId||!await this.missing(original))throw new AppError('LAUNCH_NOT_MISSING','The original session is not verified missing. Recheck before recreating it.',409);
+        originals.push(original);
+      }
+      if(new Set(originals.map(i=>i.worktreeId)).size!==1)throw new AppError('LAUNCH_ITEMS','Recreate sessions for one worktree at a time.');
+      rows=originals.map(i=>({worktreeId:i.worktreeId,profileId:i.profile.id,count:1}));
+    }
+    if(!Array.isArray(rows)||!rows.length||rows.length>6)throw new AppError('LAUNCH_ITEMS','Choose one to six instances.');
     const items:LaunchItem[]=[], blockers:string[]=[];
     // Short names: profile and branch only, numbered when taken. Confirmation rechecks them before anything is reserved.
     const taken=this.heldNames();
     try{for(const name of await this.sessionNames())taken.add(name);}catch{blockers.push('Cannot list tmux sessions to choose unique names. Recheck, then preview again.');}
-    for(const row of b.items){const i=terminalFields(row,['worktreeId','profileId','count']), count=terminalNumber(i.count,1,6);
+    for(const [rowIndex,row] of rows.entries()){const i=terminalFields(row,['worktreeId','profileId','count']), count=terminalNumber(i.count,1,6);
       const tree=await this.projects.launchWorktree(projectId,terminalText(i.worktreeId));const profile=this.profiles().find(p=>p.id===i.profileId);
+      const original=originals[rowIndex];
+      if(original&&!isDeepStrictEqual(original.worktree,tree.identity))throw new AppError('WORKTREE_CHANGED','The recorded checkout changed. Nothing will be recreated.',409);
       if(profile&&profile.purpose!=='agent')throw new AppError('PROFILE_PURPOSE',`A ${profile.purpose==='helper'?'Helper':'Background assistant'} profile cannot launch a worktree agent. Choose an agent profile.`,409);
       if(!profile?.enabled)throw new AppError('PROFILE_CHANGED','Choose an enabled profile.',409);
       try{this.authority.assertAutomated(scopesFor(tree.identity));this.assertAvailable(tree.identity!);}catch(e){blockers.push(messageOf(e));}
       const executable=await this.resolved(profile);const project=this.projects.record(projectId);
       for(let n=0;n<count;n++){const id=randomUUID(),sessionName=uniqueSessionName(`${slug(profile.label)}-${slug(tree.branch??'detached')}`,taken);taken.add(sessionName);
         items.push({id,projectId,worktreeId:tree.id,worktree:tree.identity!,commonDir:project.commonDir,branch:tree.branch,head:tree.head!,profile,executable,sessionName,environmentDigest:digest(launchEnvironment()),
-          role:'workspace-agent',workspaceId:this.workspaceFor(projectId,tree.id,tree.identity!)});}
+          role:'workspace-agent',workspaceId:this.workspaceFor(projectId,tree.id,tree.identity!),...(original?{recreates:{launchId:original.id,digest:digest(original)}}:{})});}
     }
     if(items.length>6)throw new AppError('LAUNCH_ITEMS','At most six instances may be launched together.');
     if(this.batches().flatMap(b=>b.items).filter(i=>!i.closed&&!SETTLED.has(i.status)).length+items.length>8)blockers.push('At most eight launched sessions may await attention.');
@@ -148,16 +181,19 @@ export class LaunchService {
       // A previewed name taken since is refused, never silently renamed after the user saw it.
       const listedAt=new Date().toISOString();let live:Set<string>;try{live=await this.sessionNames();}catch{throw new AppError('LAUNCH_PREVIEW_CHANGED','Cannot list tmux sessions to confirm the previewed names. Recheck, then preview again.',409);}
       if(preview.items.some(i=>live.has(i.sessionName)))throw new AppError('LAUNCH_PREVIEW_CHANGED','A previewed session name is now in use. Preview again.',409);
+      for(const item of preview.items){const original=this.recreation(item);if(original&&!await this.missing(original))throw new AppError('LAUNCH_NOT_MISSING','The original session is no longer verified missing. Preview again.',409);}
       let claimed=false;
       const batch=this.store.db.transaction(()=>{
         const duplicate=this.batches().find(x=>x.requestId===id);if(duplicate)return duplicate;
         this.enabled();this.authority.assertAutomated(scopes);
         // Launches for other worktrees can reserve the same short name between preview and this transaction.
         const held=this.heldNames(id,listedAt);if(preview.items.some(i=>held.has(i.sessionName)))throw new AppError('LAUNCH_PREVIEW_CHANGED','Another launch reserved a previewed session name. Preview again.',409);
-        for(const i of preview.items){this.assertAvailable(i.worktree);if(!isDeepStrictEqual(this.profiles().find(p=>p.id===i.profile.id),i.profile)||digest(launchEnvironment())!==i.environmentDigest)throw new AppError('LAUNCH_PREVIEW_CHANGED','Profile or environment changed before reservation.',409);
+        for(const i of preview.items){this.recreation(i);this.assertAvailable(i.worktree);if(!isDeepStrictEqual(this.profiles().find(p=>p.id===i.profile.id),i.profile)||digest(launchEnvironment())!==i.environmentDigest)throw new AppError('LAUNCH_PREVIEW_CHANGED','Profile or environment changed before reservation.',409);
           if(this.workspaceFor(i.projectId,i.worktreeId,i.worktree)!==i.workspaceId)throw new AppError('LAUNCH_PREVIEW_CHANGED','The checkout\'s recorded task workspace changed. Preview again.',409);}
         const now=new Date().toISOString();const result:LaunchBatch={requestId:id,previewDigest,createdAt:now,items:preview.items.map(i=>({...i,status:'applying',phase:'reserved',message:'Launch reserved; no program started.',identity:null,placeholder:null,sessionId:null,windowId:null,updatedAt:now}))};
         this.projects.persist(preview.items[0]!.projectId);
+        // Retire only the verified missing records, atomically with the fresh launch reservation. No session is killed and no owner is cleared.
+        for(const i of preview.items)if(i.recreates){const original=this.lookup(i.recreates.launchId);this.update(original.batch,original.item,{closed:{recoveryId:id,at:now}});}
         this.save(result);for(const index of new Set(preview.items.map(i=>i.worktree.indexPath)))this.store.db.prepare('INSERT INTO launch_reservations(index_path,launch_id) VALUES(?,?)').run(index,id);claimed=true;return result;
       }).immediate();
       if(!claimed)return batch;
@@ -316,13 +352,18 @@ export class LaunchService {
     return item;
   }
   async inspect(id:string):Promise<LaunchInstance> {
-    const {batch,item}=this.lookup(id);
+    const {item}=this.lookup(id);
     if(item.cleanup&&!item.closed)return this.inspectCleanup(id);
     if(item.status==='reconciled'||item.status==='failed'||item.closed||this.config.mode==='mock')return item;
+    let changes:Partial<LaunchInstance>;
     try{const pane=await this.verify(item);
       const eligible=classifyAgent({...pane,location:`${item.sessionName}:0.0`},[]).eligible;
-      this.update(batch,item,{status:pane.dead?'exited':eligible?'running':'starting',message:pane.dead?'Exited; inspect possible background effects before releasing the reservation.':eligible?`Running ${pane.command}; readiness still requires normal discovery and confirmation.`:`Needs attention: ${pane.command} is not yet an eligible coding CLI.`});
-    }catch(e){this.update(batch,item,{status:'uncertain',message:messageOf(e)});}return item;
+      changes={status:pane.dead?'exited':eligible?'running':'starting',message:pane.dead?'Exited; inspect possible background effects before releasing the reservation.':eligible?`Running ${pane.command}; readiness still requires normal discovery and confirmation.`:`Needs attention: ${pane.command} is not yet an eligible coding CLI.`};
+    }catch(e){changes={status:'uncertain',message:messageOf(e)};}
+    // A recreation, cleanup or another inspection may have settled this record while tmux was being read.
+    // Read the batch again too: a sibling's retirement must not be overwritten by this observation.
+    const current=this.lookup(id);if(!isDeepStrictEqual(current.item,item))return current.item;
+    this.update(current.batch,current.item,changes);return current.item;
   }
   async reconcile(id:string,value:unknown):Promise<LaunchInstance> {
     const b=terminalFields(value,['requestId','confirmInspected','note']);requestId(b.requestId);if(b.confirmInspected!==true)throw new AppError('CONFIRM_REQUIRED','Inspect the host, including possible prior and background effects.');
@@ -337,13 +378,13 @@ export class LaunchService {
   }
   async capture(id: string): Promise<{text: string}> {
     const {item} = this.lookup(id);
-    if (item.closed) return {text: 'finishId' in item.closed?'This session was closed by Finish branch.':'This session was closed by cleanup. Its launch history is retained.'};
+    if (item.closed) return {text: 'finishId' in item.closed?'This session was closed by Finish branch.':'recoveryId' in item.closed?'This missing session was replaced by a confirmed fresh launch. Its history is retained.':'This session was closed by cleanup. Its launch history is retained.'};
     if (this.config.mode === 'mock') return {text: `Simulated launch ${item.sessionName}; no host process.`};
     const pane = await this.verify(item);
     return {text: await terminalRunner(this.config)(['capture-pane', '-p', '-J', '-S', '-250', '-t', pane.identity.paneId])};
   }
   async target(id:string):Promise<AttachTarget> {
-    const {item}=this.lookup(id);if(item.closed)throw new AppError('LAUNCH_CHANGED','finishId' in item.closed?'This session was closed by Finish branch.':'This session was closed by cleanup.',409);
+    const {item}=this.lookup(id);if(item.closed)throw new AppError('LAUNCH_CHANGED','finishId' in item.closed?'This session was closed by Finish branch.':'recoveryId' in item.closed?'This missing session was replaced by a fresh launch.':'This session was closed by cleanup.',409);
     if(item.cleanup)throw new AppError('LAUNCH_CHANGED','This session has a pending cleanup.',409);if(this.config.mode==='mock' && item.identity && item.sessionId)return {identity:item.identity,sessionId:item.sessionId,label:item.sessionName};
     const pane=await this.verify(item);return inspectAttach(this.config,pane.identity);
   }

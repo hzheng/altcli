@@ -61,7 +61,13 @@ earlier manual input its fixed acknowledgement is recorded as the decision note.
 typed or found with **Browse…**, even with no tmux panes. **Agents → Workspace agents →
 Profiles** edits executable/argument profiles; **Launch agents…**
 previews exact checkout, commit and program before creating sessions named
-`<profile>-<branch>`. Launch cards show status and recovery actions; open the
+`<profile>-<branch>`. After a reboot, each worktree's Agents tab, including main,
+offers **Recreate missing sessions…** when its recorded app sessions are verified
+gone. Preview and confirm fresh launches with the current saved profiles; this
+keeps launch history and does not resume conversations or tasks. Unreadable tmux
+state and unresolved ownership block recreation. **Check for missing sessions**
+refreshes that observation without launching anything.
+Launch cards show status and recovery actions; open the
 checkout in Console to view its agent terminals. **Finish branch…** on a task worktree closes the sessions AltCLI
 launched there after a preview and confirmation, then can remove or discard the worktree
 through the usual confirmations. Each launch card also offers **Clean up…** for a dead or

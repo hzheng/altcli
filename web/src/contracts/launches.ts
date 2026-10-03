@@ -9,6 +9,8 @@ export interface LaunchItem {
   /** ADR-0024: a launched coding agent's role, and the recorded task workspace it was launched into (null when its checkout is not
    * one, such as a base checkout or a launch made before workspaces were recorded). Absent on schema-19 records until migration. */
   role?: 'workspace-agent'; workspaceId?: string | null;
+  /** Explicit fresh launch replacing a verified missing session; digest pins its historical record. */
+  recreates?: { launchId: string; digest: string };
 }
 export interface LaunchPreview { requestId: string; digest: string; expiresAt: string; items: LaunchItem[]; blockers: string[] }
 export interface LaunchInstance extends LaunchItem {
@@ -17,8 +19,8 @@ export interface LaunchInstance extends LaunchItem {
   message: string; identity: PaneIdentity|null; sessionId: string|null; windowId: string|null;
   placeholder: PaneIdentity|null; updatedAt: string; humanDecision?: { requestId: string; note: string; at: string };
   backgroundDecision?: { requestId: string; note: string; at: string; authorization: import('./background-actions.ts').BackgroundAuthorization };
-  /** Explicitly closed or cleaned up: no longer a terminal or discovery target; history is kept. */
-  closed?: ({ finishId: string } | { cleanupId: string }) & { at: string };
+  /** Explicitly closed, cleaned up or replaced after verified absence: no longer a terminal or discovery target; history is kept. */
+  closed?: ({ finishId: string } | { cleanupId: string } | { recoveryId: string }) & { at: string };
   cleanup?: { requestId: string; digest: string; status: 'applying'|'uncertain'|'done'; acknowledgedAt: string; confirmStop?: true };
 }
 export interface LaunchBatch { requestId: string; previewDigest: string; items: LaunchInstance[]; createdAt: string }

@@ -1151,3 +1151,44 @@ test('with mouse reporting, a click in Display grants nothing and a click in Ter
   await surface.click({position:{x:20,y:20}});
   await expect.poll(()=>frames.join('')).toMatch(/^\x1b\[<0;\d+;\d+M\x1b\[<0;\d+;\d+m$/);
 });
+
+test('main offers recreation only after verified absence and requires a fresh preview and confirmation',async({page,request},info)=>{
+  const name=`recreate-${info.project.name}`;
+  const project=await post(request,'projects',{path:`/demo/${name}`});
+  const discovery=await (await request.get('/api/v1/workspaces',{headers})).json();
+  const tree=discovery.projects.find((p:{id:string})=>p.id===project.id).worktrees[0];
+  const profile=await post(request,'launch-profiles',{label:'Recovery fixture',executable:'codex',args:['--no-daemon'],adapterHint:'codex',enabled:true});
+  const initial=await post(request,'launches/preview',{projectId:project.id,items:[{worktreeId:tree.id,profileId:profile.id,count:2}]});
+  const original=await post(request,'launches',{requestId:initial.requestId,previewDigest:initial.digest,confirm:true});
+  const [missing,surviving]=original.items;let batches=[original],gone:string[]=[],unreadable=false,previews=0,launches=0;
+  const fresh={...initial.items[0],id:crypto.randomUUID(),recreates:{launchId:missing.id,digest:'historical-record'}};
+  const preview={requestId:crypto.randomUUID(),digest:'recreation-preview',expiresAt:new Date(Date.now()+120000).toISOString(),items:[fresh],blockers:[]};
+  // UI evidence is simulated; real absence/recreation is exercised separately on a private tmux socket.
+  await page.route('**/api/v1/launches/missing',route=>unreadable?route.fulfill({status:409,json:{error:{code:'TMUX_FAILED',message:'tmux inspection unavailable'}}}):route.fulfill({json:gone}));
+  await page.route('**/api/v1/launches/preview',route=>{
+    previews++;expect(route.request().postDataJSON()).toEqual({projectId:project.id,recreateLaunchIds:[missing.id]});return route.fulfill({json:preview});
+  });
+  await page.route('**/api/v1/launches',route=>{
+    if(route.request().method()==='GET')return route.fulfill({json:batches});
+    launches++;expect(route.request().postDataJSON()).toEqual({requestId:preview.requestId,previewDigest:preview.digest,confirm:true});
+    missing.closed={recoveryId:preview.requestId,at:new Date().toISOString()};gone=[];
+    const batch={requestId:preview.requestId,previewDigest:preview.digest,createdAt:new Date().toISOString(),items:[{...missing,...fresh,closed:undefined,status:'running',message:'Fresh fixture session'}]};batches=[original,batch];return route.fulfill({json:batch});
+  });
+  try{
+    await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
+    await page.getByRole('navigation',{name:'Sections'}).getByRole('button',{name:'Projects',exact:true}).click();
+    await page.getByRole('button',{name:`Project ${name}`,exact:true}).click();await expandAgents(page,name);
+    const recreate=page.getByRole('button',{name:'Recreate missing sessions…',exact:true}),check=page.getByRole('button',{name:'Check for missing sessions',exact:true});
+    await expect(check).toBeVisible();await expect(recreate).toHaveCount(0);expect(previews).toBe(0);expect(launches).toBe(0);
+    unreadable=true;await check.click();await expect(page.getByRole('alert').filter({hasText:'tmux inspection unavailable'})).toBeVisible();await expect(recreate).toHaveCount(0);
+    unreadable=false;gone=[missing.id];await check.click();await expect(recreate).toBeEnabled();await recreate.click();
+    const form=page.getByRole('region',{name:`Launch agents in ${tree.path}`,exact:true});
+    await expect(form).toContainText('Previous conversations and tasks are not resumed');expect(launches).toBe(0);
+    await form.getByRole('button',{name:'Preview recreation',exact:true}).click();await expect(form.getByRole('button',{name:'Recreate 1 session',exact:true})).toBeEnabled();
+    expect(previews).toBe(1);expect(launches).toBe(0);
+    await page.screenshot({path:info.outputPath('recreate-main-preview.png'),fullPage:true});
+    await form.getByRole('button',{name:'Recreate 1 session',exact:true}).click();
+    await expect(recreate).toHaveCount(0);await expect(page.getByText('Fresh fixture session',{exact:true})).toBeVisible();expect(launches).toBe(1);
+    await expect(page.getByRole('group',{name:`Launch ${surviving.sessionName}`,exact:true})).toBeVisible();
+  }finally{await page.unrouteAll({behavior:'wait'});}
+});

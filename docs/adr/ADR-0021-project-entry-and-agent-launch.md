@@ -63,6 +63,24 @@ with explicit acknowledgement of interrupted work. The final tmux check binds th
 original pane PID. Group membership does not gate closing; existing identity,
 ownership, background-work and no-retry safeguards still apply.
 
+## October 3 amendment: recreate verified missing sessions
+
+The owner requested recovery after a host reboot. Each existing worktree, including
+main, can explicitly recreate its previously observed app-launched sessions once
+their original server/session identities are verified absent. A read-only check
+offers the action; unreadable inspection is not absence. The preview uses current
+enabled profiles and the current verified checkout, with exact executable, arguments
+and new session names. Confirmation rechecks absence, the historical launch records,
+checkout, profiles and normal launch gates. It reserves a fresh batch and retires
+only its missing predecessors atomically, retaining their history. It never kills
+or adopts a replacement session, clears an unresolved owner, resumes a conversation
+or replays a task. The confirmation acknowledges inspection of possible surviving
+work. Duplicate or uncertain requests follow the existing no-retry launch contract.
+Sessions that AltCLI never launched still use the ordinary profile launch flow.
+This is a recovery extension to the current runtime, not ADR-0024's later admission
+or dedicated-socket increments. Installed-agent and physical-device acceptance
+remain separate from fixture validation.
+
 ## Proposed launch completion work
 
 Proposed future direction, not implemented: offer browser access to an exact

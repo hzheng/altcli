@@ -238,3 +238,41 @@ test('private tmux: a confirmed branch rename also renames the worktree\'s app-l
     }
   } finally { await run(['kill-server']).catch(() => {}); store.close(); await rm(directory, { recursive: true, force: true }); }
 });
+
+test('private tmux: main and linked worktree sessions can be recreated after their server disappears',async()=>{
+  const directory=await realpath(await mkdtemp(join(tmpdir(),'altcli-recreate-'))),root=join(directory,'repo'),linked=join(directory,'task');await mkdir(root);
+  const git=(...args:string[])=>execFileSync('git',['-C',root,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','-c','commit.gpgsign=false','-c','core.hooksPath=/dev/null',...args],{stdio:'ignore'});
+  git('init','-b','main');await writeFile(join(root,'base'),'fixture');git('add','base');git('commit','-m','fixture');git('worktree','add','-b','task',linked);
+  const config=loadConfig({ALTCLI_TOKEN:'a'.repeat(64),ALTCLI_DATA_DIR:join(directory,'data'),ALTCLI_TMUX_SOCKET:join(directory,'t.sock'),ALTCLI_ENABLE_AGENT_LAUNCH:'true'});
+  const store=new Store(config.dataDir),catalog=new ProjectCatalog(store,config),run=createRunner('tmux',config.tmuxSocket);
+  const make=()=>new LaunchService(config,store,catalog,new InputAuthority(store),()=>{},async()=>sessionNamesOf(await listPanes(run)));
+  let launches=make();
+  try{
+    const project=await catalog.add({path:root}),trees=(await catalog.discover([],[]))[0]!.worktrees;
+    const profile=(await launches.profile({label:'Recovery',executable:'/bin/sleep',args:['300'],adapterHint:'manual',enabled:true}))!;
+    const originals=[];
+    for(const tree of trees){
+      const p=await launches.preview({projectId:project.id,items:[{worktreeId:tree.id,profileId:profile.id,count:1}]});
+      const item=(await launches.confirm({requestId:p.requestId,previewDigest:p.digest,confirm:true})).items[0]!;
+      assert.ok(item.identity,item.message);
+      // This fixture runs sleep, not a recognized coding CLI. Settle its startup reservation explicitly.
+      await launches.reconcile(item.id,{requestId:randomUUID(),confirmInspected:true,note:'Known private sleep fixture; no task or background work.'});originals.push(item);
+    }
+    assert.deepEqual(await launches.missingSessions(),[]);
+    await run(['kill-server']);
+    for(let n=0;n<100&&(await launches.missingSessions()).length!==2;n++)await wait(20);
+    assert.equal((await launches.missingSessions()).length,2);
+    launches=make(); // New service after reboot; durable predecessor records remain available.
+    for(const old of originals){
+      const p=await launches.preview({projectId:project.id,recreateLaunchIds:[old.id]});assert.deepEqual(p.blockers,[]);
+      const consent={requestId:p.requestId,previewDigest:p.digest,confirm:true};
+      const result=(await launches.confirm(consent)).items[0]!;assert.ok(result.identity,result.message);
+      assert.equal(result.worktree.root,old.worktree.root);assert.equal(result.recreates?.launchId,old.id);
+      assert.notEqual(result.identity!.serverPid,old.identity!.serverPid);
+      assert.equal((await launches.confirm(consent)).items[0]!.id,result.id);
+      assert.ok(launches.batches().flatMap(b=>b.items).find(i=>i.id===old.id)!.closed);
+    }
+    assert.deepEqual(await launches.missingSessions(),[]);
+    assert.equal((await run(['list-sessions','-F','#{session_name}'])).trim().split('\n').length,2);
+  }finally{await run(['kill-server']).catch(()=>{});store.close();await rm(directory,{recursive:true,force:true});}
+});

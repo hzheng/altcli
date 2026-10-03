@@ -1,5 +1,11 @@
 # AltCLI roadmap
 
+**Missing session recovery (October 3, 2026).** Worktrees, including main, offer
+explicit recreation of verified missing app-launched sessions using the normal
+profile preview and launch gates ([ADR-0021](docs/adr/ADR-0021-project-entry-and-agent-launch.md#october-3-amendment-recreate-verified-missing-sessions)).
+Fresh launches retain predecessor history and never resume old tasks. Uncertainty
+and existing owners still block. Installed-agent and device acceptance remain open.
+
 **Registered repositories and task workspaces (October 1, 2026).** [ADR-0024](docs/adr/ADR-0024-registered-repositories-and-managed-workspaces.md)
 replaces discovery-based enrollment: records decide membership and inspection decides condition. Its registry,
 settled-store upgrade gate and schema-20 migration are implemented locally; the remaining increments are listed
