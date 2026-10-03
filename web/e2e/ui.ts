@@ -19,7 +19,8 @@ export async function expandAgents(page: Page, name: string) {
  * and next-run settings the helpers below address. Elsewhere, and in Plan, there is no Relay mode and nothing changes. */
 async function commitRelay(page: Page) {
   const commit = page.getByRole('group', { name: 'Relay mode', includeHidden: true }).getByRole('button', { name: 'Send options', exact: true, includeHidden: true });
-  if (!await commit.count() || await commit.getAttribute('aria-pressed') === 'true') return;
+  // Membership updates can remove this optional control; read presence and state in the same DOM snapshot.
+  if (!await commit.evaluateAll(buttons => buttons.some(button => button.getAttribute('aria-pressed') === 'false'))) return;
   await showSurface(page, 'Control'); await commit.click();
 }
 /** Opens the next run's settings editor for the phase on screen unless it is already open. */
@@ -38,7 +39,7 @@ export async function openCard(page: Page, name: string) {
 /** Outside Plan, shows the terminals or Control in the shared frame; in Plan there is no switch and both stay shown. */
 export async function showSurface(page: Page, surface: 'Terminal' | 'Control') {
   const button = page.getByRole('group', { name: 'Terminal or Control' }).getByRole('button', { name: surface, exact: true });
-  if (await button.count() && await button.getAttribute('aria-pressed') !== 'true') await button.click();
+  if (await button.evaluateAll(buttons => buttons.some(button => button.getAttribute('aria-pressed') === 'false'))) await button.click();
 }
 /** Opens Agents on one kind and, optionally, one of that kind's sections. Navigation only: it starts, sends and approves nothing. */
 export async function openAgents(page: Page, kind: 'Workspace agents' | 'Helper' | 'Background assistant', section?: string) {

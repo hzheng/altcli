@@ -829,11 +829,14 @@ test('two live agents can be changed to solo or an empty selection through real 
   const detail = workspace(page, 'project');
   await detail.getByLabel('Include Claude Code', { exact: true }).uncheck();
   await expect(detail).toContainText('Solo · 1 agent');
-  await openTab(page, 'Console'); await editSettings(page);
-  await expect(page.getByLabel('Collaboration', { exact: true })).toHaveValue('solo');
+  // The summary is optimistic; wait for the save/refresh and the console's membership before using its controls.
+  await expect(detail.getByLabel('Include Claude Code', { exact: true })).toBeEnabled();
+  await openTab(page, 'Console');
   await expect(page.getByLabel('Claude Code native output')).toHaveCount(0);
+  await editSettings(page); await expect(page.getByLabel('Collaboration', { exact: true })).toHaveValue('solo');
   await openTab(page, 'Projects'); await detail.getByLabel('Include Codex', { exact: true }).uncheck();
   await expect(detail).toContainText('Select at least one agent before starting.');
+  await expect(detail.getByLabel('Include Codex', { exact: true })).toBeEnabled();
   await openTab(page, 'Console');
   await expect(page.getByRole('region', { name: 'Implementation settings' })).toContainText('Select at least one agent');
   await expect(page.getByRole('button', { name: /^Send / })).toHaveCount(0);
