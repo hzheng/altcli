@@ -194,7 +194,7 @@ test('Control access stays in the worktree console; viewing it sends nothing, an
   await expect(codex.getByRole('button', { name: 'Send Codex', exact: true })).toBeEnabled();
   // Worktree recovery leaves the page on global tabs; switching tabs revokes readiness.
   const sections = page.getByRole('navigation', { name: 'Sections' });
-  for (const name of ['Projects', 'Settings', 'Helper']) {
+  for (const name of ['Projects', 'Settings', 'Agents']) {
     await sections.getByRole('button', { name, exact: true }).click();
     await expect(access).toBeHidden(); await expect(entry).toBeHidden(); await expect(ready).toBeHidden();
   }
@@ -390,11 +390,18 @@ test('Settings shows the effective host configuration and the console preference
   await subtabs.getByRole('button', { name: 'Console preferences', exact: true }).click();
   const preferences = page.getByRole('region', { name: 'Console preferences' });
   await expect(preferences.getByLabel('Staging fallback', { exact: true })).toHaveCount(0); // Stage relay is offered in Control on main, not as a preference
-  await sections.getByRole('button', { name: 'Helper', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Helper', exact: true })).toBeVisible();
+  // Settings keeps no profile editor: each kind's profiles live under Agents, which the preferences link to.
+  await expect(preferences.getByRole('region', { name: 'Launch profiles' })).toHaveCount(0);
+  await expect(preferences.getByRole('button', { name: /^Agents → / })).toHaveText(['Agents → Workspace agents → Profiles', 'Agents → Helper → Profiles', 'Agents → Background assistant → Profiles']);
+  await sections.getByRole('button', { name: 'Agents', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Agents', exact: true })).toBeVisible();
+  const kinds = page.getByRole('navigation', { name: 'Agent kinds' });
+  // The Background kind also shows how many attention items are not yet seen.
+  await expect(kinds.getByRole('button')).toHaveText(['Workspace agents', 'Helper', /^Background assistant/]);
+  await kinds.getByRole('button', { name: 'Helper', exact: true }).click();
   // Helper opens on Chat; Guide explains worktree controls without showing them globally.
   const helper = page.getByRole('navigation', { name: 'Helper sections' });
-  await expect(helper.getByRole('button')).toHaveText(['Chat', 'Session', 'Settings', 'Evidence', 'Guide']);
+  await expect(helper.getByRole('button')).toHaveText(['Chat', 'Session', 'Profiles', 'Evidence', 'Guide']);
   await expect(helper.getByRole('button', { name: 'Chat', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await helper.getByRole('button', { name: 'Guide', exact: true }).click();
   await expect(page.getByRole('region', { name: 'How this works' })).toContainText('No effect in this page sends commands');
@@ -640,7 +647,7 @@ test('Agents sits left of local Settings, including Stage relay, and lists this 
   await page.route('**/api/v1/config', async (route) => { const response = await route.fetch(); await route.fulfill({ json: { ...(await response.json()), homeDir: '/demo' } }); });
   await openGroup(page, group);
   const sections = page.getByRole('navigation', { name: 'Sections' });
-  await expect(sections.getByRole('button')).toHaveText(['Console', 'Projects', 'Helper', 'Settings']);
+  await expect(sections.getByRole('button')).toHaveText(['Console', 'Projects', 'Agents', 'Settings']);
   const path = page.locator('.context-project > .mono');
   await expect(path).toHaveText('~/project'); await expect(path).toHaveAttribute('title', '/demo/project');
   const sent = mutations(page), local = page.getByRole('region', { name: 'Implementation settings', exact: true });

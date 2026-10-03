@@ -14,6 +14,7 @@ import { consumePlan, planAgreed } from './planning-state.ts';
 import type { InteractionHold, InteractionInput } from '../contracts/interactions.ts';
 import type { AttachmentDescriptor } from '../contracts/attachments.ts';
 import { pinAttachments } from './attachments.ts';
+import { noteRun, noting } from './attention/sources.ts';
 
 const json = JSON.stringify;
 export const DEFAULT_TURN_LIMIT = 20;
@@ -42,6 +43,9 @@ export function manifestWire(requestId: string, path: string): string {
 export class WorkflowStore {
   readonly store: Store;
   readonly assignmentDirectory: string;
+  /** Wakes deterministic attention after a run's semantic state changed. The marker itself is written in the run's own
+   * transaction; this signal is only an after-commit optimization and never runs workflow code. */
+  attentionSignal: (() => void) | null = null;
   constructor(store: Store, assignmentDirectory = '/tmp/altcli-test-assignments') {
     this.store = store;
     this.assignmentDirectory = assignmentDirectory;
@@ -134,18 +138,22 @@ export class WorkflowStore {
   }
   private saveRun(run: RelayRun): void {
     run.updatedAt = now();
+    if (run.status !== 'paused') delete run.pauseCause;
     this.store.db.prepare('INSERT INTO workflow_runs(id,lock_key,value) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(run.id, run.lockKey, json(run));
+    noting(() => noteRun(this.store.db, run), this.attentionSignal);
   }
   private saveExecution(turn: Execution): void {
     this.store.db.prepare('INSERT INTO workflow_turns(id,run_id,value) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(turn.commandId, turn.runId, json(turn));
   }
-  private stop(run: RelayRun, reason: string, complete = false): void {
+  /** `cause` types a pause that no other field shows. Pausing again while paused keeps the earlier cause; a new pause clears it. */
+  private stop(run: RelayRun, reason: string, complete = false, cause?: RelayRun['pauseCause']): void {
     delete run.blockedHandoff;
     if (run.interaction?.active) {
       if (complete && !run.interaction.fault) { this.holdDisposition(run, 'complete'); return; }
       run.interaction.fault = true;
       complete = false;
     }
+    if (cause) run.pauseCause = cause; else if (run.status !== 'paused') delete run.pauseCause;
     run.status = complete ? 'completed' : 'paused'; run.reason = reason; this.saveRun(run);
     if (complete) this.store.db.prepare('DELETE FROM workflow_owners WHERE run_id=?').run(run.id);
   }
@@ -624,10 +632,12 @@ export class WorkflowStore {
       prompt: input.prompt ?? null, outcome: input.outcome ?? null, reason: input.reason ?? null,
       outcomeState: input.outcome ? 'reported' : 'none', receivedAt: now() };
   }
-  pause(id: string, reason = 'Paused by the user. This does not interrupt an agent or release ownership.'): void {
+  /** Without a reason this is the owner's own Pause, recorded with that typed cause; every controller pause names its reason. */
+  pause(id: string, reason?: string): void {
     this.store.db.transaction(() => { const run = this.run(id); if (!run) throw new AppError('NOT_FOUND', 'Run not found.', 404);
       if (!['running','waiting','paused'].includes(run.status)) return;
-      run.pauseRequested = true; this.stop(run, reason);
+      run.pauseRequested = true;
+      this.stop(run, reason ?? 'Paused by the user. This does not interrupt an agent or release ownership.', false, reason === undefined ? 'user' : undefined);
     }).immediate();
   }
   takeover(id: string): void {
@@ -648,7 +658,7 @@ export class WorkflowStore {
       const turn = this.execution(run.currentCommandId)!;
       if (run.implementation?.setup === 'applying') run.implementation.setup = 'uncertain';
       if (turn.status === 'dispatching') { turn.status = 'uncertain'; this.saveExecution(turn); }
-      this.stop(run, 'Backend restarted. Reconcile this run before starting another; nothing was replayed.');
+      this.stop(run, 'Backend restarted. Reconcile this run before starting another; nothing was replayed.', false, 'restart');
     }
   }
 }

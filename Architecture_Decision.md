@@ -1,5 +1,7 @@
 # AltCLI architecture decisions
 
+**Updated October 2, 2026:** the [ADR-0022 amendment](docs/adr/ADR-0022-app-wide-ai-instances.md#october-2-amendment-attention-first-background-assistant) (D56) accepts an attention-first Background assistant. Deterministic attention, the Agents tab, role profiles, shared read contracts and the assessment validator are implemented locally (schema 22); the Background runtime is not.
+
 **Updated October 1, 2026:** [ADR-0024](docs/adr/ADR-0024-registered-repositories-and-managed-workspaces.md) (D54) accepts registered repositories, app-created task workspaces, recorded agent membership and a dedicated tmux endpoint in place of discovery-based enrollment. Its registry, settled-store upgrade gate and migration (schema 20) are implemented locally; listing, admission, the socket and the UI still behave as before until its later increments land. Also October 1: an [ADR-0020 amendment](docs/adr/ADR-0020-native-terminals.md#october-1-amendment-worktree-scoped-manual-input) (D55) scopes manual-input holds to the target's worktree with pane-directed workspace input; implemented locally (schema 21), with installed-host acceptance open.
 
 **Updated September 27, 2026:** the uncommitted relay is now branch-scoped **Stage relay** on main/default (ADR-0014, D51), and linked task worktrees can be updated from main and renamed in place, while directory move remains unimplemented design (ADR-0013, D52). **Updated September 19, 2026.** The new local Implementation path implements the
@@ -82,25 +84,27 @@ status in the ADR and the [roadmap](ROADMAP.md#registered-repositories-and-task-
 
 <a id="proposed-app-wide-assistance-not-implemented"></a>
 
-## App-wide assistance: A1 implementation and proposed direction
+## App-wide assistance: A1, attention and proposed direction
 
 The September 30 [selective integration](docs/DESIGN-MIGRATION.md#september-30-selective-next-step-integration)
-records the broader proposed architecture from the next-step source. Only the
-Global AI A1 read increment is implemented; [GLOBAL-AI](docs/GLOBAL-AI.md) describes
-its current behavior and outstanding provider/device acceptance. Background jobs,
-notifications and delegated effects remain proposed. Source-attributed acceptance
+records the broader proposed architecture from the next-step source. The Global AI A1
+read increment is implemented; [GLOBAL-AI](docs/GLOBAL-AI.md) describes its current
+behavior and outstanding provider/device acceptance. Since October 2 (D56), deterministic
+attention, the Agents tab, role profiles and shared read contracts are also implemented
+([guide](docs/BACKGROUND-ASSISTANT.md)). Background jobs, AI explanations, external
+notifications and delegated effects remain unimplemented. Source-attributed acceptance
 is preserved in [provenance](docs/SOURCES.md#september-30-next-step-design-source);
 neither these records nor A1 grant delegated authority.
 
 | Record | Responsibility and implementation status |
 | --- | --- |
-| [ADR-0022](docs/adr/ADR-0022-app-wide-ai-instances.md) | Separate Global AI and Background assistant instances, lifecycle, bounded jobs and notifications; only the Global AI A1 read increment is implemented ([guide](docs/GLOBAL-AI.md)) |
-| [ADR-0023](docs/adr/ADR-0023-app-tools-and-delegated-authority.md) | Shared app tools, authenticated principals and explicit delegated authority; only A1's read-only tools are implemented, with no delegated authority |
+| [ADR-0022](docs/adr/ADR-0022-app-wide-ai-instances.md) | Separate Global AI and Background assistant instances, lifecycle, bounded jobs and notifications. Implemented: the Global AI A1 read increment ([guide](docs/GLOBAL-AI.md)) and, per its October 2 amendment, deterministic attention and the Agents tab ([guide](docs/BACKGROUND-ASSISTANT.md)). Not implemented: the Background runtime |
+| [ADR-0023](docs/adr/ADR-0023-app-tools-and-delegated-authority.md) | Shared app tools, authenticated principals and explicit delegated authority. Implemented: read-only tools with output schemas, read principals and the assessment validator. No effect tool, job endpoint or delegated authority exists |
 
 Optional app-wide assistance is distinct from a mandatory third reviewer,
 controller replacement or enabling larger Plan/Implementation groups. Existing
 human approval, lifecycle evidence, branch consent and ownership rules remain.
-That integration left the D01–D53 ledger unchanged; source N decisions are mapped separately
+That integration left the D01–D53 ledger unchanged (D56 later recorded the endorsed attention-first plan); source N decisions are mapped separately
 rather than promoted into accepted decisions. See the
 [roadmap](ROADMAP.md#proposed-app-wide-assistance-and-completion-work),
 [open choices](docs/OPEN-DECISIONS.md#proposed-app-wide-assistance-and-completion-choices)
@@ -181,3 +185,4 @@ Use these labels when implementing:
 | D53 | Image attachments (M4A/M4B): PNG/JPEG uploads to private bounded storage outside every workspace (10 MiB each, four and 20 MiB per draft, 40 million pixels, two concurrent, 512 MiB and 1,000 files per host); structural checks, never pixel decoding. A native insertion is an explicit intent in the writer's ordered lane that rechecks pane, session, CLI, directory and bytes, pins the image, and writes one single-quoted path as a bracketed paste without Enter. Plain Send, new committed work and a Plan brief freeze and pin descriptors at admission; plain Send's prompt names an input manifest; the commit-handoff and plan-handoff skills inspect listed images and stop with a phase-correct blocker when one is missing, changed or unreadable. Other surfaces stay text-only. Possibly used images never expire; unused drafts expire after 24 hours; a full quota refuses uploads. | September 29, 2026 endorsed Plan (brief revision 1, plan revision 3). Implemented locally; a disposable probe verified Claude Code 2.1.285 and Codex 0.159.0. Physical-device, deployed-host and end-to-end workflow acceptance pending |
 | D54 | Records determine membership; live inspection determines condition. Owners register repositories (base checkout on any branch, never app-owned; one selected local integration branch; default agents); AltCLI creates and records task workspaces and launches the only workspace agents; Plan, Implementation, Send, committed review and launches run only in active task workspaces, and new Stage relay starts and in-place branch creation leave the normal flow. Create & launch is one consent with separate effects. Boundary operations inspect app, default and previous tmux endpoints for outside writers. App sessions and Helper use a dedicated `<data directory>/tmux.sock` endpoint, never isolation. The store upgrades only from a settled state, with a private backup and no invented choices; hand-started agents and unrecorded worktrees are not adopted. | October 1, 2026 endorsed two-planner Plan (automatic transition); [ADR-0024](docs/adr/ADR-0024-registered-repositories-and-managed-workspaces.md). I0 and I1 (schema 20 registry, gate, settings metadata, workspace lifecycle records, launch links) implemented locally; I2–I7 not implemented |
 | D55 | Manual input is scoped to the target agent's worktree (its Git index identity). Workspace writers attach read-only and write each frame to the exact pane, so tmux bindings reach the CLI and a moved client closes. Periods, checkpoints, holds, gates, settlement evidence and reconciliation apply per scope; runs elsewhere keep relaying. Targets without a verified worktree and pre-change periods keep server-wide scope. Cross-worktree effects through paths, shared Git state or ports are an accepted risk. | October 1, 2026 owner decision after a `main` keyboard period held a `feature/ui` handoff; [ADR-0020 amendment](docs/adr/ADR-0020-native-terminals.md#october-1-amendment-worktree-scoped-manual-input). Implemented locally; installed-host acceptance open |
+| D56 | The Background assistant starts with diagnosis and notification, as two layers that fail independently. **Attention:** always on and model-free; one durable item per issue key from recorded state (blocked runs, Plan checkpoints that need the human, uncertain launches or Helper starts); transaction-bound source versions; revise in place, resolve, and open a new item on recurrence; typed pause causes, never reason-text classification; delivered in-app. **Diagnosis:** explicit enablement; bounded read-only jobs in one recorded tmux instance on Helper's endpoint resolver; host-validated answers bound by compare-and-set to item revision and source version. A central Agents tab holds workspace agents, Helper and the Background assistant, each with its own profile purpose. Delegated effects stay A4. | October 2, 2026 endorsed two-planner Plan (run `aec693b1`, plan revision 3; automatic transition); [ADR-0022 amendment](docs/adr/ADR-0022-app-wide-ai-instances.md#october-2-amendment-attention-first-background-assistant). Attention, the Agents tab, profiles, read contracts and the assessment validator implemented locally (schema 22); Background runtime and provider probe not implemented |

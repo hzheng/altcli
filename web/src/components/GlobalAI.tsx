@@ -7,8 +7,8 @@ import { findGlobalAIProfile } from '../core/policy';
 import { NativeTerminal } from './NativeTerminal';
 import styles from './GlobalAI.module.css';
 
-/** Console's Helper tab sections; Settings (GlobalAISettings) and Guide, the general explanation, are Console's; the others are rendered here. */
-export type HelperSection = 'chat' | 'session' | 'settings' | 'evidence' | 'guide';
+/** Helper's sections under Agents; Profiles (GlobalAISettings) and Guide, the general explanation, are Console's; the others are rendered here. */
+export type HelperSection = 'chat' | 'session' | 'profiles' | 'evidence' | 'guide';
 type View = GlobalAIView & { profiles: LaunchProfile[]; fallback: string; capturedAt: string; manualHeld: boolean };
 type RunSummary = { id: string; workspace: string; status: string; reason: string };
 const examples = ['Why is this run blocked, and what should I do next?', 'Which runs need my attention?', 'Explain Commit versus Relay in this installed version.'];
@@ -73,7 +73,7 @@ export function GlobalAI({ token, clientInstanceId, section, onSection, profiles
   const outdated = !!(launched && saved && commandOf(saved) !== commandOf(launched));
   // Usually only the model or effort changed: show the arguments, and the executable only when it differs.
   const shownOf = (p: LaunchProfile) => launched && saved && launched.executable !== saved.executable ? commandOf(p) : p.args.join(' ') || '(no arguments)';
-  const setup = <button type="button" className="inline-link" onClick={() => onSection('settings')}>Settings</button>;
+  const setup = <button type="button" className="inline-link" onClick={() => onSection('profiles')}>Profiles</button>;
   const terminalReady = !!(view?.instance?.identity && view.instance.sessionId && view.nativeState !== 'unavailable');
   const allowance = <p>Uses the selected CLI&apos;s existing sign-in and allowance. No paid fallback is selected. Actual model and remaining quota are unknown.</p>;
   const disabled = view && !view.enabled && <p className={styles.warning}>Starting Helper requires a tmux host with input, native terminal and agent-launch flags enabled. App evidence remains readable.</p>;

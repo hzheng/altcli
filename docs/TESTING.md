@@ -53,6 +53,27 @@ reviewers, planners and the frozen plan, and a changed file pausing dispatch. `w
 exercises paste, picker, Display refusal, mixed clipboards, Insert, Remove, Send and a Plan brief with
 browser-encoded images; synthetic clipboard events prove the handlers only.
 
+Attention tests (`web/scripts/attention.test.ts`, part of `npm run test:workflow`) use real SQLite and the workflow
+store. They cover:
+
+- typed pause causes;
+- one open item per issue under the unique index;
+- revisions that ignore updatedAt-only saves;
+- A → B → A source versions;
+- rolled-back transitions leaving no marker;
+- repair by the full sweep;
+- unreadable records staying open as stale;
+- paging and counts past one page;
+- per-revision Mark seen;
+- launch and Helper sources;
+- ownership-based discovery past history limits;
+- the schema-21 upgrade followed by restart recovery;
+- the assessment validator.
+
+`npm run test:global-ai` covers output-schema conformance of every read tool, the job scope and minimized job view, MCP
+structured replies and Background profile validation. `web/e2e/agents.spec.ts` exercises a real paused run reaching the Attention
+list, navigation-only Open, Mark seen, launch and Helper destinations, paging, and the three agent kinds with their profiles.
+
 Browser tests cover explicit readiness, registration, pair selection, server
 progression with a locked page, multiple views, pause/takeover, uncertainty and
 unauthorized reads. Assertions use explicit correlated hook fixtures; they do not
@@ -411,8 +432,9 @@ environment and actual outcomes, rather than weakening checks to obtain a pass.
 
 ## Proposed app-wide assistance and completion checks
 
-**Planned requirements; no results are claimed by this catalog.** Only Global AI's
-A1 read increment is implemented; its fixture checks and their limits are listed in
+**Planned requirements; no results are claimed by this catalog.** Global AI's A1
+read increment is implemented, and so is deterministic attention, whose local checks are listed
+above and in [BACKGROUND-ASSISTANT](BACKGROUND-ASSISTANT.md#tests); the Background runtime is not. A1's fixture checks and their limits are listed in
 [GLOBAL-AI](GLOBAL-AI.md#storage-rollout-and-tests), and installed-provider acceptance
 remains open. [ADR-0022](adr/ADR-0022-app-wide-ai-instances.md) and
 [ADR-0023](adr/ADR-0023-app-tools-and-delegated-authority.md) own the proposed

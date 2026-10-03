@@ -18,6 +18,8 @@ import { ClearContext } from './ClearContext';
 import { LaunchProfiles } from './LaunchProfiles';
 import { GlobalAISettings } from './GlobalAISettings';
 import { GlobalAI, type HelperSection } from './GlobalAI';
+import { AttentionList } from './AttentionList';
+import type { AttentionDestination } from '../contracts/attention';
 import { NativeTerminal, type NativeTerminalHandle } from './NativeTerminal';
 import { keyboardOwnerOf } from './KeyboardSelector';
 import { Acknowledgement, clearHolds, holdConsequences, holdKey, overrideKey, TakeControlHere, type Holds, type Override } from './Holds';
@@ -38,8 +40,15 @@ const STAY_UNLOCKED = 'altcli.stayUnlocked';
 const SAVED_TOKEN = 'altcli.token';
 const DEFAULT_TURN_LIMIT = 20;
 const timeOf = (iso: string) => new Date(iso).toLocaleTimeString();
-type Tab = 'console' | 'workspaces' | 'helper' | 'settings';
-const HELPER_SECTIONS: [HelperSection, string][] = [['chat', 'Chat'], ['session', 'Session'], ['settings', 'Settings'], ['evidence', 'Evidence'], ['guide', 'Guide']];
+type Tab = 'console' | 'workspaces' | 'agents' | 'settings';
+/** Agents holds three kinds, each with its own profiles: workspace agents, the one global Helper and the one global Background assistant. */
+export type AgentKind = 'workspace' | 'helper' | 'background';
+const AGENT_KINDS: [AgentKind, string][] = [['workspace', 'Workspace agents'], ['helper', 'Helper'], ['background', 'Background assistant']];
+type WorkspaceSection = 'inventory' | 'profiles';
+const WORKSPACE_SECTIONS: [WorkspaceSection, string][] = [['inventory', 'Inventory'], ['profiles', 'Profiles']];
+const HELPER_SECTIONS: [HelperSection, string][] = [['chat', 'Chat'], ['session', 'Session'], ['profiles', 'Profiles'], ['evidence', 'Evidence'], ['guide', 'Guide']];
+type BackgroundSection = 'attention' | 'activity' | 'profiles' | 'settings';
+const BACKGROUND_SECTIONS: [BackgroundSection, string][] = [['attention', 'Attention'], ['activity', 'Activity'], ['profiles', 'Profiles'], ['settings', 'Settings']];
 /** The selected workspace card and the checkout it belongs to; the console shows the agents registered on that checkout. */
 interface WorkspaceChoice { key: string; root: string; projectId?: string }
 /** What one Take control confirmation clears, with the identities its requests are checked against. */
@@ -120,8 +129,9 @@ function Output({ text, label, memoryKey }: { text: string; label: string; memor
     place.current = { top: el.scrollTop, stick: el.scrollHeight - el.scrollTop - el.clientHeight < 8 }; memory.set(memoryKey, place.current); }}>{text}</pre>;
 }
 /** A view and command client. There is intentionally no effect that sends another turn. */
-/** `initialTab` opens a section directly, e.g. /global-ai; otherwise Console or Projects is chosen from the registered agents. */
-export function Console({ initialTab }: { initialTab?: Tab } = {}) {
+/** `initialTab` opens a section directly; /global-ai opens Agents on Helper (`initialKind`). Otherwise Console or Projects is chosen
+ * from the registered agents. */
+export function Console({ initialTab, initialKind }: { initialTab?: Tab; initialKind?: AgentKind } = {}) {
   // Page memory for drafts and choices. Lock replaces it: hooks that stay mounted above the unlock form must not keep old values.
   const [memory, setMemory] = useState<PageMemory>(() => new Map());
   const [clientInstanceId] = useState(() => crypto.randomUUID());
@@ -199,12 +209,17 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
   }, [token]);
   // First view: the console when agents are already named, otherwise setup. Later switches are the user's.
   useEffect(() => { if (state && tab === null) setTab(initialTab ?? (state.sessions.length ? 'console' : 'workspaces')); }, [state, tab, initialTab]);
-  // Helper opens on Chat; a section chosen earlier on this page is kept.
+  // Agents opens on the kind chosen earlier on this page; each kind keeps its own section. Helper opens on Chat.
+  const [agentKind, setAgentKind] = useRemembered<AgentKind>('agentKind', initialKind ?? 'workspace', memory);
+  const [workspaceSection, setWorkspaceSection] = useRemembered<WorkspaceSection>('workspaceAgentsSection', 'inventory', memory);
   const [helperSection, setHelperSection] = useRemembered<HelperSection>('helperSection', 'chat', memory);
+  const [backgroundSection, setBackgroundSection] = useRemembered<BackgroundSection>('backgroundSection', 'attention', memory);
   // Helper's conversation mounts on the first visit to one of its sections and then stays mounted, so its terminal and typing survive
-  // switching tabs.
+  // switching tabs and kinds.
   const [globalOpened, setGlobalOpened] = useState(false);
-  useEffect(() => { if (tab === 'helper' && helperSection !== 'guide') setGlobalOpened(true); }, [tab, helperSection]);
+  useEffect(() => { if (tab === 'agents' && agentKind === 'helper' && helperSection !== 'guide') setGlobalOpened(true); }, [tab, agentKind, helperSection]);
+  // A launch item opens its worktree's card in Projects; the nonce lets the same card be revealed again.
+  const [reveal, setReveal] = useState<{ projectId: string; worktreeId: string; nonce: number } | null>(null);
   // Both sections stay mounted; each keeps its own page scroll across switches.
   useEffect(() => { if (tab) window.scrollTo(0, scrolls.current[tab] ?? 0); }, [tab]);
   const showTab = (next: Tab) => { if (tab) scrolls.current[tab] = window.scrollY; setTab(next); };
@@ -313,7 +328,7 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
   const readinessKey = JSON.stringify([pair, card?.agents, current?.id, current?.registrationId, groupInstances, [...inputBlocks], git?.branch, git?.head]);
   useEffect(() => { setConsent(''); setReady(false); setResetFor(null); }, [readinessKey, project]);
   // Readiness and confirmations attest to what was on screen, so any view switch revokes them. Drafts and choices stay.
-  const viewKey = JSON.stringify([tab, phase, layout, displayed, merged && surface, relayMode]);
+  const viewKey = JSON.stringify([tab, tab === 'agents' && agentKind, phase, layout, displayed, merged && surface, relayMode]);
   useEffect(() => { setConsent(''); setReady(false); setResetFor(null); setViewEpoch((epoch) => epoch + 1); }, [viewKey]);
   const chooseLayout = (next: 'parallel' | 'focus') => { setLayout(next); try { localStorage.setItem(LAYOUT, next); } catch { /* preference only */ } };
   const chooseControlPlacement = (next: 'below' | 'side') => { setControlPlacement(next); try { localStorage.setItem(CONTROL_PLACEMENT, next); } catch { /* preference only */ } };
@@ -386,7 +401,12 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
   const resetBlocked = busy || stale || setupHeld || owned.length > 0 || !!transportHold || !!unknownRequest || !project || !!discoveryError || !!discovery?.error;
   const workspaceError = discoveryError || discovery?.error || '';
   const select = (id: string) => { setPaneChoice(id); setConsent(''); setReady(false); };
-  const openAccess = (target: HTMLElement | null = null) => { if (tab !== 'console') showTab('console'); setControlDrawer(false); setAccessOpen(true); requestAnimationFrame(() => { const destination = target ?? accessPanel.current; destination?.focus(); destination?.scrollIntoView({ block: target ? 'nearest' : 'start' }); }); };
+  const openAccess = (target: HTMLElement | null = null, workspaceScope = ws) => {
+    if (tab !== 'console') showTab('console'); setControlDrawer(false);
+    // Attention may switch workspaces in this event; write the destination's view state before that render.
+    if (workspaceScope === ws) setAccessOpen(true); else memory.set(`controlAccess:${workspaceScope}`, true);
+    requestAnimationFrame(() => { const destination = target ?? accessPanel.current; destination?.focus(); destination?.scrollIntoView({ block: target ? 'nearest' : 'start' }); });
+  };
   const closeAccess = () => { setAccessOpen(false); requestAnimationFrame(() => accessEntry.current?.focus()); };
   /** Inspection only: shows an agent's terminal and leaves Control access open. Changing the view clears earlier confirmations; nothing is sent. */
   const showAgentTerminal = (id: string) => { if (tab !== 'console') showTab('console'); select(id); if (merged) setSurface('terminal');
@@ -418,8 +438,8 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
   }
   function switchWorktree(chosen: ProjectWorktree) {
     const directories = discovery?.workspaces.filter(w => w.worktree.root === chosen.path) ?? [];
-    if (directories.length === 1) chooseWorkspace(directories[0]!);
-    else chooseWorktree(chosen);
+    if (directories.length === 1) { chooseWorkspace(directories[0]!); return workspaceKey(directories[0]!); }
+    chooseWorktree(chosen); return chosen.path;
   }
   /** Keeps or drops the token in this browser according to the preference. Lock always drops it. */
   function rememberToken(next: boolean, current = token) {
@@ -433,7 +453,7 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
   function lock() {
     void api(token, 'terminals/revoke', {body:{clientInstanceId}}).catch(() => {});
     try { localStorage.removeItem(SAVED_TOKEN); } catch { /* preference only */ }
-    generation.current++; readNumber.current++; discoveryRead.current++; setToken(''); setDraftToken(''); setState(null); setDiscovery(null); setTab(null); setGlobalOpened(false); setReady(false);
+    generation.current++; readNumber.current++; discoveryRead.current++; setToken(''); setDraftToken(''); setState(null); setDiscovery(null); setTab(null); setGlobalOpened(false); setReveal(null); setReady(false);
     setMessage(''); setError(''); setDiscoveryError(''); setUnknownRequest(null); setResetFor(null); setConsent(''); setConfig(null); setConfigError('');
     // Lock forgets drafts and form state, including image previews; server-owned runs and any image already in use continue.
     setMemory(new Map()); scrolls.current = {}; revokePreviews(); abortUploads();
@@ -577,9 +597,26 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
     : <StatusIcon icon="🟢" label="Connected" align="end" help={`Connected to the host. Last update ${lastUpdate}; the console refreshes every 2 seconds.`} />}</div>;
   // Several terminals can type at once: this names every active input connection, never one keyboard owner.
   const inputLabel = !keyboardOwner || keyboardOwner.kind === 'unresolved' ? 'none active' : keyboardOwner.kind === 'this-browser' ? `${keyboardOwner.label} (this browser)` : keyboardOwner.label;
-  // Host-wide input and connection status; worktree recovery lives beside the worktree selector.
+  // Host-wide attention, input and connection status; worktree recovery lives beside the worktree selector.
   const scopeLabels = [...new Set((state?.manualSessions ?? []).map(m => m.scope ? tilde(m.scope.root) : 'Every worktree (server-wide)'))];
+  const unseenAttention = state?.attention?.unseen ?? 0;
+  /** Navigation only: shows the Attention list. Nothing is marked seen or acted on. */
+  const openAttention = () => { setAgentKind('background'); setBackgroundSection('attention'); showTab('agents'); };
+  const attentionEntry = state?.attention && <button type="button" className={`quiet access-entry${unseenAttention ? ' attention' : ''}`} onClick={openAttention}
+    title={`${state.attention.open} open attention item${state.attention.open === 1 ? '' : 's'} for every project on this host; ${unseenAttention} not marked seen.`}>
+    {!!unseenAttention && <span aria-hidden="true">⚑ </span>}Attention · {unseenAttention}{!!unseenAttention && <span className="sr-only"> not seen</span>}</button>;
+  /** Opens the existing surface an attention item names. View state only: it sends, approves, resumes and reconciles nothing. */
+  const openDestination = (destination: AttentionDestination) => {
+    if (destination.surface === 'helper-session') { setAgentKind('helper'); setHelperSection('session'); showTab('agents'); return; }
+    if (destination.surface === 'launch') { setReveal({ projectId: destination.projectId, worktreeId: destination.worktreeId, nonce: Date.now() }); showTab('workspaces'); return; }
+    const tree = discovery?.projects?.flatMap(p => p.worktrees).find(w => w.path === destination.repository);
+    let destinationScope = destination.repository;
+    if (tree) destinationScope = switchWorktree(tree);
+    else { setWorkspace({ key: destination.repository, root: destination.repository }); setReady(false); showTab('console'); }
+    openAccess(null, destinationScope);
+  };
   const headingStatus = <div className="heading-status">
+    {attentionEntry}
     {state && (config?.terminalEnabled || scopeLabels.length) && <StatusIcon icon="⌨️" label={`Input: ${writers.length} active${manualHeld ? ' · automation held' : ''}`} align="end"
       help={`Holds: ${scopeLabels.join('; ') || 'none'}. Typing here: ${inputLabel}. ${stale ? 'This is the last reported state; the console is not current. ' : ''}Use a terminal's Terminal toggle to type. An action's acknowledgement stops typing and records manual input before it runs.`} />}
     {connection}
@@ -613,7 +650,7 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
       <nav className="section-tabs" aria-label="Sections">
         <button type="button" className={tab === 'console' ? 'selected' : ''} aria-pressed={tab === 'console'} onClick={() => showTab('console')}>Console</button>
         <button type="button" className={tab === 'workspaces' ? 'selected' : ''} aria-pressed={tab === 'workspaces'} onClick={() => showTab('workspaces')}>Projects</button>
-        <button type="button" className={tab === 'helper' ? 'selected' : ''} aria-pressed={tab === 'helper'} onClick={() => showTab('helper')}>Helper</button>
+        <button type="button" className={tab === 'agents' ? 'selected' : ''} aria-pressed={tab === 'agents'} onClick={() => showTab('agents')}>Agents</button>
         <button type="button" className={tab === 'settings' ? 'selected' : ''} aria-pressed={tab === 'settings'} onClick={() => showTab('settings')}>Settings</button></nav>
       <div className="toolbar">{state?.mode === 'mock' && <span className="muted toolbar-note">Simulated panes. No commands reach real terminals.</span>}
         <span className="badge">{state?.mode === 'mock' ? 'MOCK MODE' : 'LOCAL HOST'}</span>
@@ -621,8 +658,9 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
     {tab === 'workspaces' ? <div className="page-heading"><div><p className="eyebrow">PROJECT · WORKTREE · TASK</p><h1>Projects and agents</h1>
         <p className="muted">Choose an existing worktree or explicitly create one for a new task. Opening a console never starts work.</p></div>{headingStatus}</div>
       : tab === 'settings' ? <div className="page-heading compact"><h1>Settings</h1>{headingStatus}</div>
-      // Helper's terminal holds nothing, so outside Guide its heading only shows connection status.
-      : tab === 'helper' ? <div className="page-heading compact"><h1>Helper</h1>{helperSection === 'guide' ? headingStatus : <div className="heading-status">{connection}</div>}</div>
+      // Helper's terminal holds nothing, so outside Guide its heading shows attention and connection status.
+      : tab === 'agents' ? <div className="page-heading compact"><h1>Agents</h1>{agentKind === 'helper' && helperSection !== 'guide'
+        ? <div className="heading-status">{attentionEntry}{connection}</div> : headingStatus}</div>
       : <div className="page-heading compact"><h1>Agent console</h1>{headingStatus}</div>}
     {error && <div className="notice error" role="alert">{tilde(error)} <button onClick={() => void refresh()}>Refresh</button></div>}
     {state && <>
@@ -631,7 +669,7 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
       <Workspaces token={token} disabled={busy} discovery={discovery} discoveryError={discoveryError} onRecheck={() => recheck()}
         inputEnabled={state.inputEnabled} runs={state.runs} selectedRoot={project ?? null} onSelectWorktree={chooseWorktree}
         launchEnabled={config?.launchEnabled === true} overrideFor={worktreeOverride} sessions={sessions} pairs={groups} lockedRepositories={[...setupHolds.map((hold) => hold.root), ...state.runs.filter((run) => ['running','waiting','paused'].includes(run.status)).map((run) => run.repository)]}
-        onSelectWorkspace={chooseWorkspace} viewEpoch={viewEpoch}
+        onSelectWorkspace={chooseWorkspace} viewEpoch={viewEpoch} reveal={reveal}
         onChanged={async (notice) => { setMessage(notice); await Promise.all([refresh(), recheck()]); }} />
     </div>
     <div className="section-panel" hidden={tab !== 'console'}>
@@ -912,9 +950,11 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
       {state && <section className="panel" aria-label="Console preferences" hidden={settingsTab !== 'preferences'}>
         <div className="section-heading"><h2>Console preferences</h2><span className="badge">THIS PAGE</span></div>
         <p className="muted">Preferences for this browser page. They never start work on their own.</p>
-        <LaunchProfiles key={profilesVersion} token={token} enabled={config?.launchEnabled === true && state?.inputEnabled === true} />
-        <p className="fine">These profiles launch worktree agents. Helper&apos;s profiles are kept apart, in{' '}
-          <button type="button" className="inline-link" onClick={() => { showTab('helper'); setHelperSection('settings'); }}>Helper → Settings</button>.</p>
+        <p className="fine">Launch profiles live with their agents: worktree agents&apos; in{' '}
+          <button type="button" className="inline-link" onClick={() => { setAgentKind('workspace'); setWorkspaceSection('profiles'); showTab('agents'); }}>Agents → Workspace agents → Profiles</button>,
+          Helper&apos;s in{' '}<button type="button" className="inline-link" onClick={() => { setAgentKind('helper'); setHelperSection('profiles'); showTab('agents'); }}>Agents → Helper → Profiles</button>{' '}
+          and the Background assistant&apos;s in{' '}
+          <button type="button" className="inline-link" onClick={() => { setAgentKind('background'); setBackgroundSection('profiles'); showTab('agents'); }}>Agents → Background assistant → Profiles</button>.</p>
         <label className="readiness"><input type="checkbox" aria-label="Stay unlocked on this device" checked={stayUnlocked} onChange={(e) => rememberToken(e.target.checked)} />
           Stay unlocked on this device: keep the host access token in this browser so reopening the page does not ask for it. Anyone who can use this browser profile can then open the console; the host still checks the token on every request. <strong>Lock</strong> always forgets the token.</label>
       </section>}
@@ -947,14 +987,40 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
         {!config && !configError && <p className="muted">Reading the host configuration…</p>}
       </section>
     </div>
-    <div className="section-panel" hidden={tab !== 'helper'}>
+    <div className="section-panel" hidden={tab !== 'agents'}>
+      <nav className="section-tabs settings-tabs agent-kinds" aria-label="Agent kinds">
+        {AGENT_KINDS.map(([id, name]) => <button type="button" key={id} className={agentKind === id ? 'selected' : ''} aria-pressed={agentKind === id} onClick={() => setAgentKind(id)}>
+          {name}{id === 'background' && !!unseenAttention && <> <span className="badge warning">{unseenAttention}</span><span className="sr-only"> not seen</span></>}</button>)}</nav>
+      <div hidden={agentKind !== 'workspace'}>
+        <nav className="section-tabs settings-tabs" aria-label="Workspace agent sections">
+          {WORKSPACE_SECTIONS.map(([id, name]) => <button type="button" key={id} className={workspaceSection === id ? 'selected' : ''} aria-pressed={workspaceSection === id} onClick={() => setWorkspaceSection(id)}>{name}</button>)}</nav>
+        {/* Rendered only while shown: it repeats Console's agent status text, which must not exist twice in the page. */}
+        {tab === 'agents' && agentKind === 'workspace' && workspaceSection === 'inventory' && <section className="panel" aria-label="Workspace agent inventory">
+          <div className="section-heading"><h2>Agents in the selected checkout</h2></div>
+          {project && <p className="mono" title={project}>{tilde(project)}</p>}
+          {!project ? <p>No checkout is selected. Choose a worktree in Projects.</p>
+            : !projectSessions.length ? <p>No agents are in this checkout. Launch agents or start coding CLIs there from Projects, then Recheck.</p>
+            : <ul className="agent-inventory" aria-label="Agents in the selected checkout">{projectSessions.map((s) => { const status = statuses.get(s.id); return <li key={s.id}>
+              <div><Icon badge={status?.badge ?? 'unknown'} /> <strong>{s.label}</strong> <span className="muted">{s.agentType} · {status?.badge ?? 'unknown'}</span></div>
+              {status?.detail && <p className="fine">{status.detail}</p>}
+              <button type="button" className="quiet" onClick={() => showAgentTerminal(s.id)}>Show {s.label} in Console</button></li>; })}</ul>}
+          <div className="pane-buttons"><button type="button" className="quiet" onClick={() => showTab('workspaces')}>Choose another worktree in Projects</button></div>
+          <p className="fine">Viewing this list changes nothing. Names, membership and launches stay in Projects; instructions stay in Console.</p>
+        </section>}
+        {/* Stays mounted, so switching keeps unsaved profile edits. */}
+        <div hidden={workspaceSection !== 'profiles'}>
+          {state && <LaunchProfiles key={profilesVersion} token={token} enabled={config?.launchEnabled === true && state.inputEnabled === true} />}
+          <p className="fine">These profiles launch worktree agents from Projects. Helper and the Background assistant keep their own profiles.</p>
+        </div>
+      </div>
+      <div hidden={agentKind !== 'helper'}>
       <nav className="section-tabs settings-tabs" aria-label="Helper sections">
         {HELPER_SECTIONS.map(([id, name]) => <button type="button" key={id} className={helperSection === id ? 'selected' : ''} aria-pressed={helperSection === id} onClick={() => setHelperSection(id)}>{name}</button>)}</nav>
       <div hidden={helperSection === 'guide'}>
         {globalOpened && <GlobalAI token={token} clientInstanceId={clientInstanceId} section={helperSection} onSection={setHelperSection}
           profilesVersion={profilesVersion} />}
-        {/* Keep this editor's draft across top-level tabs; reentering the Helper Settings section reads saved profiles again. */}
-        {state && helperSection === 'settings' && <GlobalAISettings token={token} config={config} enabled={config?.launchEnabled === true && state.inputEnabled === true}
+        {/* Keep this editor's draft across tabs and kinds; reentering Helper's Profiles section reads saved profiles again. */}
+        {state && helperSection === 'profiles' && <GlobalAISettings token={token} config={config} enabled={config?.launchEnabled === true && state.inputEnabled === true}
           onSaved={() => setProfilesVersion(v => v + 1)} />}
       </div>
       <section className="panel about" aria-label="How this works" hidden={helperSection !== 'guide'}>
@@ -965,6 +1031,28 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
         <p>Viewing another worktree never changes a running relay. Pause a run before manual terminal takeover. Locking this view or disconnecting your phone does not interrupt workers.</p>
         <p className="fine">Plan produces documents and an approval checkpoint; Implementation runs committed handoffs on a task branch. Integration branches are starting points only. The detailed design lives in the repository’s README, docs/WORKFLOWS.md and the ADRs.</p>
       </section>
+      </div>
+      <div hidden={agentKind !== 'background'}>
+        <nav className="section-tabs settings-tabs" aria-label="Background assistant sections">
+          {BACKGROUND_SECTIONS.map(([id, name]) => <button type="button" key={id} className={backgroundSection === id ? 'selected' : ''} aria-pressed={backgroundSection === id} onClick={() => setBackgroundSection(id)}>{name}</button>)}</nav>
+        {/* Rendered only while shown: items repeat run reasons that Control access also shows. */}
+        {tab === 'agents' && agentKind === 'background' && backgroundSection === 'attention'
+          && <AttentionList token={token} feed={state.attention} stale={stale} onOpen={openDestination} onChanged={refresh} />}
+        <section className="panel" aria-label="Background activity" hidden={backgroundSection !== 'activity'}>
+          <div className="section-heading"><h2>Activity</h2></div>
+          <p>No Background jobs have run. This version has no Background runtime, so nothing was assessed, launched or sent to a model provider.</p>
+          <p className="fine">Attention items come from the controller&apos;s own records and need no model.</p>
+        </section>
+        {backgroundSection === 'profiles' && <GlobalAISettings purpose="background" token={token} config={config} enabled={config?.launchEnabled === true && state.inputEnabled === true}
+          onSaved={() => {}} />}
+        <section className="panel" aria-label="Background assistant settings" hidden={backgroundSection !== 'settings'}>
+          <div className="section-heading"><h2>Settings</h2><span className="badge warning">Runtime not available</span></div>
+          <p><strong>AI explanations are not available in this version.</strong> Attention is always on: the host records which runs, plans and launches need you
+            from its own state, and keeps one current item per issue until that issue changes or resolves.</p>
+          <p>The Background runtime is designed as one recorded app instance you enable explicitly, with one preview, to run bounded read-only jobs that explain an
+            attention item. It would never approve, resume, retry or answer a prompt. Until it lands, nothing here starts a process or sends data to a model provider.</p>
+        </section>
+      </div>
     </div>
     </>}
   </main></HomeContext.Provider></MemoryContext.Provider>;

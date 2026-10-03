@@ -91,6 +91,18 @@ captures before setting `ALTCLI_ENABLE_INPUT=true` and restarting the backend.
 After configuration or server-code changes, settle active deliveries before
 restarting; hot reload retains the running controller.
 
+### Upgrade to store schema 22
+
+Schema 22 adds attention records and Background assistant profiles
+([BACKGROUND-ASSISTANT](BACKGROUND-ASSISTANT.md#storage-upgrade-and-recovery)). It changes no run, owner, hold or launch, so a
+schema 20 or 21 store upgrades without settling work first. Before migrating, the backend keeps a private
+`altcli-schema-<n>-<time>.sqlite3` copy of the old store; older versions refuse the new schema, so rolling back means restoring that
+copy with its matching version while nothing is in flight.
+
+Stop the old backend while no delivery is active. On restart, the usual recovery pauses owned runs and marks interrupted deliveries
+and starting launches uncertain. It keeps their owners and replays nothing, and each such run appears in Attention. Upgrading from
+before schema 20 still requires the settled-store gate below.
+
 ### Upgrade to store schema 21
 
 At a settled backend restart, schema 21 enables worktree-scoped manual input and pane-directed

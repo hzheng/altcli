@@ -9,7 +9,12 @@ const path = join(directory, 'altcli.sqlite3');
 if (!existsSync(path)) { console.log(`No store at ${path}. A new store starts at schema ${STORE_SCHEMA}.`); process.exit(0); }
 const report = inspectUpgrade(path);
 if (report.version >= STORE_SCHEMA) { console.log(`${path} is already at schema ${report.version}.`); process.exit(0); }
-if (report.version >= REGISTRY_SCHEMA) { console.log(`${path}: schema ${report.version} upgrades to ${STORE_SCHEMA}; existing manual-input periods remain server-wide and require reconciliation.`); process.exit(0); }
+if (report.version >= REGISTRY_SCHEMA) {
+  console.log(`${path}: schema ${report.version} upgrades to ${STORE_SCHEMA} without requiring settled work, keeping a private backup of the old schema. `
+    + `Stop the old backend while no delivery is active; restart recovery then pauses owned runs without replaying anything.`
+    + (report.version < 21 ? ' Existing manual-input periods remain server-wide and require reconciliation.' : ''));
+  process.exit(0);
+}
 console.log(`${path}: schema ${report.version}; this version upgrades it to ${report.target} only when nothing below is unresolved.`);
 for (const b of report.blockers) console.log(`  unresolved ${b.kind} ${b.id}: ${b.detail}`);
 console.log(report.blockers.length ? 'Settle these with the previous AltCLI version, stop it, then start this version.' : 'Nothing is unresolved; the upgrade can proceed.');

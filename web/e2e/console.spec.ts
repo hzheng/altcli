@@ -33,7 +33,7 @@ async function unlock(page: Page, token = TOKEN, useFallback = true) {
     }
   }
 }
-async function openTab(page: Page, name: 'Console' | 'Projects' | 'Helper' | 'Settings') { await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name, exact: true }).click(); }
+async function openTab(page: Page, name: 'Console' | 'Projects' | 'Agents' | 'Settings') { await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name, exact: true }).click(); }
 async function editWorkspace(page: Page, name: string) {
   await page.getByRole('button', { name: `Project ${name}`, exact: true }).click();
   await expandWorktree(page, name); await page.getByRole('button', { name: `Open ${name}`, exact: true }).click();
@@ -172,7 +172,7 @@ test('takeover belongs to the selected worktree and switching revokes its confir
   await expect(confirm).toHaveCount(0); await expect(access.locator('.access-scope')).toContainText('/demo/other');
   await trees.selectOption(project.worktrees[0]!.id);
   await expect(access).toBeVisible(); await expect(confirm).toHaveCount(0);
-  for (const tab of ['Projects', 'Settings', 'Helper'] as const) {
+  for (const tab of ['Projects', 'Settings', 'Agents'] as const) {
     await openTab(page, tab); await expect(access).toBeHidden();
     await expect(page.getByRole('button', { name: 'Take control…', exact: true })).toHaveCount(0);
   }

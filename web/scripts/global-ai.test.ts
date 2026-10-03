@@ -9,8 +9,10 @@ import { Readable, Writable } from 'node:stream';
 import type { WorkflowState, RelayRun, WorkspaceDiscovery } from '../src/contracts/workflow.ts';
 import type { LaunchProfile } from '../src/contracts/launches.ts';
 import type { GlobalAIInstance } from '../src/contracts/global-ai.ts';
-import { AppReads, APP_TOOLS, GlobalAIError } from '../src/server/global-ai/reads.ts';
-import { GlobalAIService, helperProfileArgs, toolEndpoint, type GlobalHost } from '../src/server/global-ai/service.ts';
+import { AppReads, APP_TOOLS, GlobalAIError, toolsFor, type ReadPrincipal } from '../src/server/global-ai/reads.ts';
+import { violation, type Schema } from '../src/server/global-ai/schema.ts';
+import { backgroundProfileArgs, GlobalAIService, helperProfileArgs, toolEndpoint, type GlobalHost } from '../src/server/global-ai/service.ts';
+import type { AttentionItem } from '../src/contracts/attention.ts';
 import { codexProfileArgs } from '../src/server/global-ai/codex.ts';
 import { claudeProfileArgs } from '../src/server/global-ai/claude.ts';
 import { NativeGlobalHost } from '../src/server/global-ai/host.ts';
@@ -33,7 +35,7 @@ function readFixture() {
   const discovery = { workspaces: [{ cwd: '/work/a', worktree: { root: '/work/a' }, branch: 'feature/a', agents: [] },
     { cwd: '/secret', worktree: { root: '/secret' }, branch: 'private', agents: [] }], discoveredAt: run.updatedAt, error: null } as unknown as WorkspaceDiscovery;
   const services = { state: async () => state, workspaces: async () => discovery, run: (id: string) => state.runs.find(r => r.id === id),
-    featureFlags: () => ({ input: true }), kb };
+    featureFlags: () => ({ input: true }), kb, attention: { item: () => undefined, open: () => ({ items: [], total: 0 }) }, launch: () => undefined };
   return { reads: new AppReads(services), services, state, run };
 }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
@@ -295,4 +297,76 @@ test('a stale failed view inspection cannot revoke a newly renewed capability', 
   await f.service.refreshTools({ instanceId: view.instance!.id, confirm: true }, 'http://127.0.0.1:8787');
   const token = f.descriptor().token; gate.resolve(); await oldView;
   assert.equal(f.service.authenticate(token).instance.id, view.instance!.id);
+});
+
+const attentionItem: AttentionItem = { id: '11111111-1111-4111-8111-111111111111', key: 'run:run-a', kind: 'run', facets: ['completion_gate'],
+  subject: { type: 'run', runId: 'run-a', repository: '/work/a', phase: 'implementation', participants: ['Coder A'], commandId: 'command-a' },
+  title: 'Completion evidence holds the handoff · Implementation', detail: 'Manual input requires checkpoint review.',
+  destination: { surface: 'control-access', repository: '/work/a', runId: 'run-a' }, revision: 2, sourceVersion: 3, status: 'open',
+  openedAt: '2026-10-02T00:00:00Z', updatedAt: '2026-10-02T00:01:00Z', resolvedAt: null, resolution: null, seenRevision: null, stale: false };
+function scopedFixture() {
+  const fixture = readFixture();
+  fixture.state.runs[0]!.planning = { step: 'checkpoint', current: { text: 'PRIVATE_PLAN_TEXT', revision: 1, hash: 'h' }, request: { requireApproval: true },
+    endorsements: {}, objections: { 'coder-a': 'PRIVATE_OBJECTION' } } as never;
+  fixture.state.runs[0]!.implementation = { latestPublication: { sha: 'c'.repeat(40), projectChanged: true,
+    entry: { decision: null, needsHuman: false, summary: 'PRIVATE_SUMMARY', checks: ['PRIVATE_CHECK'] } } } as never;
+  const services = { ...fixture.services, attention: { item: (id: string) => id === attentionItem.id ? attentionItem : undefined, open: () => ({ items: [attentionItem], total: 1 }) },
+    launch: (id: string) => id === 'launch-a' ? { id, kind: 'workspace' as const, status: 'uncertain', phase: 'executing', message: 'Host restarted during startup.',
+      sessionName: 'codex-main', profileLabel: 'Codex', repository: '/work/a', branch: 'main', updatedAt: '2026-10-02T00:00:00Z', cleanup: null, closed: false, identityRecorded: false } : undefined };
+  return new AppReads(services);
+}
+const job: ReadPrincipal = { kind: 'job', scope: { itemId: attentionItem.id, runId: 'run-a', launchId: 'launch-a' } };
+test('every tool declares an output schema, and each reply is the exact JSON that conforms to it', async () => {
+  const reads = scopedFixture();
+  const calls: [string, Record<string, unknown>][] = [['get_capabilities', {}], ['list_workspaces', {}], ['list_runs', {}], ['get_run', { runId: 'run-a' }],
+    ['get_recent_events', { runId: 'run-a' }], ['search_docs', { query: 'blocked' }], ['read_doc', { document: 'README.md' }], ['list_attention', {}],
+    ['get_attention_item', { itemId: attentionItem.id }], ['get_launch', { launchId: 'launch-a' }]];
+  assert.deepEqual(calls.map(([name]) => name), APP_TOOLS.map(t => t.name));
+  for (const [name, args] of calls) {
+    const definition = APP_TOOLS.find(t => t.name === name)!, reply = await reads.call(name, args);
+    assert.equal(violation(definition.outputSchema as Schema, reply), null, name);
+    assert.deepEqual(JSON.parse(JSON.stringify(reply)), reply);
+  }
+  const capabilities = (await reads.call('get_capabilities', {})).data as { contract: string; backgroundAssistant: unknown; effects: boolean };
+  assert.equal(capabilities.contract, 'global-ai-read-v2'); assert.equal(capabilities.effects, false);
+  assert.deepEqual(capabilities.backgroundAssistant, { attention: true, runtime: 'unavailable', enabled: false });
+  // A reply that would break its declared contract is refused instead of being returned.
+  const broken = readFixture(); (broken.state.runs[0] as { status: unknown }).status = 7;
+  await assert.rejects(broken.reads.call('list_runs', {}), { code: 'TOOL_CONTRACT' });
+});
+test('a Background job reads only its admitted issue, without host-wide listings, plan text or publication bodies', async () => {
+  const reads = scopedFixture();
+  assert.deepEqual(toolsFor(job).map(t => t.name), ['get_capabilities', 'get_run', 'get_recent_events', 'search_docs', 'read_doc', 'get_attention_item', 'get_launch']);
+  assert.deepEqual(toolsFor({ kind: 'helper' }), APP_TOOLS);
+  for (const name of ['list_runs', 'list_workspaces', 'list_attention']) await assert.rejects(reads.call(name, {}, job), { code: 'OUT_OF_SCOPE' });
+  await assert.rejects(reads.call('get_run', { runId: 'secret-run' }, job), { code: 'OUT_OF_SCOPE' });
+  await assert.rejects(reads.call('get_attention_item', { itemId: '22222222-2222-4222-8222-222222222222' }, job), { code: 'OUT_OF_SCOPE' });
+  await assert.rejects(reads.call('get_launch', { launchId: 'launch-b' }, job), { code: 'OUT_OF_SCOPE' });
+  // Model-supplied scope widening is an unexpected argument, not a new principal.
+  await assert.rejects(reads.call('get_run', { runId: 'run-a', scope: { runId: 'secret-run' } }, job), { code: 'INVALID_INPUT' });
+  const scoped = await reads.call('get_run', { runId: 'run-a' }, job), text = JSON.stringify(scoped);
+  for (const secret of ['PRIVATE_PLAN_TEXT', 'PRIVATE_OBJECTION', 'PRIVATE_SUMMARY', 'PRIVATE_CHECK', 'PRIVATE_RAW_PROMPT']) assert.equal(text.includes(secret), false, secret);
+  assert.deepEqual((scoped.data as { omitted: string[] }).omitted, ['plan text', 'objection text', 'publication summary and checks']);
+  assert.equal(violation(APP_TOOLS.find(t => t.name === 'get_run')!.outputSchema as Schema, scoped), null);
+  const helper = JSON.stringify(await reads.call('get_run', { runId: 'run-a' }));
+  assert.ok(helper.includes('PRIVATE_PLAN_TEXT') && helper.includes('PRIVATE_SUMMARY')); // Helper keeps its approved host-wide view
+  assert.equal(((await reads.call('get_attention_item', { itemId: attentionItem.id }, job)).data as { item: AttentionItem }).item.revision, 2);
+  await assert.rejects(scopedFixture().call('get_launch', { launchId: 'missing' }), { code: 'LAUNCH_UNKNOWN' });
+});
+test('MCP tools/list carries every output schema with the structured reply it describes', async () => {
+  const f = serviceFixture(); await f.start(); const token = f.descriptor().token;
+  const listed = await f.service.tools(token, { method: 'list' }) as { tools: { name: string; outputSchema: unknown }[] };
+  assert.deepEqual(listed.tools.map(t => t.name), APP_TOOLS.map(t => t.name)); assert.ok(listed.tools.every(t => t.outputSchema));
+  const protocol = createProtocol((body: unknown) => f.service.tools(token, body));
+  await protocol({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } });
+  const called = await protocol({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'get_capabilities', arguments: {} } }) as { result: { structuredContent: unknown; content: { text: string }[] } };
+  assert.deepEqual(JSON.parse(called.result.content[0]!.text), called.result.structuredContent);
+  assert.equal(violation(APP_TOOLS[0]!.outputSchema as Schema, called.result.structuredContent), null);
+});
+test('a Background assistant profile records only a direct Claude Code model and effort', () => {
+  const background = { ...claude, purpose: 'background' as const };
+  assert.deepEqual(backgroundProfileArgs(background), ['--model', 'sonnet', '--effort', 'max']);
+  assert.throws(() => backgroundProfileArgs({ ...profile, purpose: 'background' }), { code: 'PROFILE_UNSUPPORTED' });
+  assert.throws(() => backgroundProfileArgs({ ...background, args: ['--model', 'sonnet', '--dangerously-skip-permissions'] }), { code: 'PROFILE_ARGUMENT' });
+  assert.throws(() => backgroundProfileArgs({ ...background, executable: '/bin/zsh' }), { code: 'PROFILE_ARGUMENT' });
 });

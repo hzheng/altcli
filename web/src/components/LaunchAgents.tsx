@@ -8,8 +8,8 @@ import { useTildify } from '../client/home';
 import { isDirectCodexProfile, lacksCodexNoDaemon } from '../core/policy';
 import { LaunchCleanup } from './LaunchCleanup';
 import { prepared, useLatest, useMounted, useOverride, type Override } from './Holds';
-/** Helper's profiles cannot launch a worktree agent. */
-const agentProfiles = (all: LaunchProfile[]) => all.filter(p => p.purpose !== 'helper');
+/** Only agent profiles launch worktree agents; Helper and Background assistant profiles never do. */
+const agentProfiles = (all: LaunchProfile[]) => all.filter(p => p.purpose === 'agent');
 export function LaunchAgents({token,projectId,tree,sessions,enabled,inputEnabled,override,onChanged,viewEpoch=0,requested=0,busy:outerBusy=false}:{token:string;projectId:string;tree:ProjectWorktree;sessions:SessionRegistration[];enabled:boolean;inputEnabled:boolean;override:Override|null;onChanged:(notice:string)=>Promise<void>;viewEpoch?:number;requested?:number;busy?:boolean}) {
   const [open,setOpen]=useState(false),[profiles,setProfiles]=useState<LaunchProfile[]>([]),[agents,setAgents]=useState<{profileId:string}[]>([]),[preview,setPreview]=useState<LaunchPreview|null>(null),[batches,setBatches]=useState<LaunchBatch[]>([]);
   // Manual input holds launches; one acknowledgement stops and records it before the preview and again before launching.

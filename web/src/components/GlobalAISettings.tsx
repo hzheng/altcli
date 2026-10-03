@@ -27,10 +27,21 @@ function parse(args: string[], cli: Cli) {
   return { model, effort, flags };
 }
 
-/** Helper's launch profiles, each a name, CLI, model and reasoning effort. Chat starts a conversation with one and Session can restart
- * with another. They are kept apart from agent profiles, and the host accepts only arguments Helper can launch. Saving or deleting
- * launches and stops nothing. */
-export function GlobalAISettings({ token, config, enabled, onSaved }: { token: string; config: HostConfig | null; enabled: boolean; onSaved: () => void }) {
+type Purpose = 'helper' | 'background';
+const COPY: Record<Purpose, { name: string; region: string; first: string; intro: string; clis: Cli[]; deleted: string; saved: (label: string) => string }> = {
+  helper: { name: 'Helper', region: 'Helper profiles', first: GLOBAL_AI_PROFILE_LABEL, clis: ['codex', 'claude'],
+    intro: 'Each Helper profile names a CLI, Codex or Claude Code, with a model and reasoning effort. Chat starts a conversation with the one you choose, and Session can restart with another. Saving never launches anything: Chat previews the exact command and asks you to confirm.',
+    deleted: 'A running Helper conversation keeps going.', saved: label => `Saved “${label}”. Choose it in Chat to start a conversation; nothing was launched.` },
+  background: { name: 'Background', region: 'Background assistant profiles', first: 'Background', clis: ['claude'],
+    intro: 'A Background assistant profile names Claude Code with a model and reasoning effort, for read-only diagnosis jobs. Codex is not yet a verified Background adapter. This version has no Background runtime: saving a profile launches nothing, enables nothing and sends nothing to a model provider.',
+    deleted: 'Nothing runs from it.', saved: label => `Saved “${label}”. Nothing was launched or enabled; this version has no Background runtime.` },
+};
+
+/** Launch profiles for an app-wide agent, each a name, CLI, model and reasoning effort: Helper's (Chat starts a conversation with one and
+ * Session can restart with another) or the Background assistant's. Each purpose lists only its own profiles, and the host accepts only
+ * arguments that purpose allows. Saving or deleting launches and stops nothing. */
+export function GlobalAISettings({ token, config, enabled, onSaved, purpose = 'helper' }: { token: string; config: HostConfig | null; enabled: boolean; onSaved: () => void; purpose?: Purpose }) {
+  const copy = COPY[purpose];
   const [profiles, setProfiles] = useState<LaunchProfile[] | null>(null), [selected, setSelected] = useState<LaunchProfile | null>(null);
   const [label, setLabel] = useState(''), [cli, setCli] = useState<Cli>('codex');
   const [model, setModel] = useState(''), [effort, setEffort] = useState(''), [flags, setFlags] = useState<string[]>([]);
@@ -41,20 +52,20 @@ export function GlobalAISettings({ token, config, enabled, onSaved }: { token: s
     setSelected(profile); setLabel(name); setCli(next); setModel(parsed.model); setEffort(parsed.effort); setFlags(parsed.flags);
   }
   // The first profile is named Helper, which Chat preselects; later ones need a name of their own.
-  const startNew = (listed: LaunchProfile[]) => show(null, 'codex', listed.some(p => p.label === GLOBAL_AI_PROFILE_LABEL) ? '' : GLOBAL_AI_PROFILE_LABEL);
+  const startNew = (listed: LaunchProfile[]) => show(null, copy.clis[0], listed.some(p => p.label === copy.first) ? '' : copy.first);
   async function reload(choose: string | null) {
-    const listed = (await api<LaunchProfile[]>(token, 'launch-profiles')).filter(p => p.purpose === 'helper');
+    const listed = (await api<LaunchProfile[]>(token, 'launch-profiles')).filter(p => p.purpose === purpose);
     setProfiles(listed);
-    const next = listed.find(p => p.id === choose) ?? findGlobalAIProfile(listed) ?? listed[0];
+    const next = listed.find(p => p.id === choose) ?? (purpose === 'helper' ? findGlobalAIProfile(listed) : undefined) ?? listed[0];
     if (next) show(next); else startNew(listed);
   }
-  useEffect(() => { reload(null).catch(e => setError(e instanceof Error ? e.message : 'Could not read Helper profiles.')); }, [token]);
+  useEffect(() => { reload(null).catch(e => setError(e instanceof Error ? e.message : `Could not read ${copy.name} profiles.`)); }, [token]);
   const { name: cliName, efforts, direct, enforcement } = CLIS[cli];
   const executable = selected && selected.adapterHint === cli && direct(selected) ? selected.executable : cli;
   const args = cli === 'claude' ? [...(model ? ['--model', model] : []), ...(effort ? ['--effort', effort] : [])]
     : [...new Set(['--no-daemon', ...flags]), ...(model ? ['-m', model] : []), ...(effort ? ['-c', `model_reasoning_effort=${effort}`] : [])];
   const invalid = !!model && !GLOBAL_AI_MODEL.test(model);
-  const missing = !config ? [] : [config.mode !== 'tmux' && 'ALTCLI_ADAPTER=tmux', !config.inputEnabled && 'ALTCLI_ENABLE_INPUT',
+  const missing = !config || purpose !== 'helper' ? [] : [config.mode !== 'tmux' && 'ALTCLI_ADAPTER=tmux', !config.inputEnabled && 'ALTCLI_ENABLE_INPUT',
     !config.terminalEnabled && 'ALTCLI_ENABLE_TERMINAL', !config.launchEnabled && 'ALTCLI_ENABLE_AGENT_LAUNCH'].filter(Boolean);
   async function operate(work: () => Promise<void>) {
     setBusy(true); setError(''); setNotice('');
@@ -62,48 +73,49 @@ export function GlobalAISettings({ token, config, enabled, onSaved }: { token: s
     finally { setBusy(false); }
   }
   const save = () => void operate(async () => {
-    const body = { label: label.trim(), executable, args, adapterHint: cli, enabled: true, purpose: 'helper' };
+    const body = { label: label.trim(), executable, args, adapterHint: cli, enabled: true, purpose };
     const result = await api<LaunchProfile>(token, `launch-profiles${selected ? `/${selected.id}` : ''}`,
       { method: selected ? 'PATCH' : 'POST', body: selected ? { ...body, expectedRevision: selected.revision } : body });
     await reload(result.id); onSaved();
-    setNotice(`Saved “${result.label}”. Choose it in Chat to start a conversation; nothing was launched.`);
+    setNotice(copy.saved(result.label));
   });
   const remove = (profile: LaunchProfile) => {
-    if (!window.confirm(`Delete the Helper profile “${profile.label}”? A running Helper conversation keeps going.`)) return;
+    if (!window.confirm(`Delete the ${copy.name} profile “${profile.label}”? ${copy.deleted}`)) return;
     void operate(async () => {
       await api(token, `launch-profiles/${profile.id}`, { method: 'DELETE', body: { expectedRevision: profile.revision } });
       await reload(null); onSaved();
       setNotice(`Deleted “${profile.label}”. Nothing was stopped.`);
     });
   };
-  return <section className="panel" aria-label="Helper settings">
-    <div className="section-heading"><h2>Settings</h2></div>
-    <p className="muted">Each Helper profile names a CLI, Codex or Claude Code, with a model and reasoning effort. Chat starts a conversation with the one you choose,
-      and Session can restart with another. Saving never launches anything: Chat previews the exact command and asks you to confirm.</p>
+  return <section className="panel" aria-label={copy.region}>
+    <div className="section-heading"><h2>Profiles</h2></div>
+    <p className="muted">{copy.intro}</p>
     {missing.length > 0 && <p className="warning-text" role="status">Starting Helper also needs {missing.join(', ')}. Set {missing.length > 1 ? 'these' : 'it'} for the host and restart it; Settings → Host configuration shows what is in effect.</p>}
     {!enabled && <p>Profile changes require agent launch and input to be enabled on the host.</p>}
     {profiles && <>
       <div className="profile-bar">
-        <div className="profile-row" role="group" aria-label="Helper profiles">{profiles.map(p => <button type="button" key={p.id} className={p.id === selected?.id ? 'selected' : ''}
+        <div className="profile-row" role="group" aria-label={`Saved ${copy.region}`}>{profiles.map(p => <button type="button" key={p.id} className={p.id === selected?.id ? 'selected' : ''}
           aria-pressed={p.id === selected?.id} disabled={busy} onClick={() => show(p)}>{p.label}{!p.enabled && <span className="muted"> · disabled</span>}</button>)}
-          {!profiles.length && <span className="muted">No Helper profiles yet. Create one below.</span>}</div>
+          {!profiles.length && <span className="muted">No {copy.name} profiles yet. Create one below.</span>}</div>
         <button type="button" disabled={busy || !selected} onClick={() => startNew(profiles)}>New profile</button>
       </div>
       <form onSubmit={e => { e.preventDefault(); if (!busy && !invalid && label.trim()) save(); }}>
         <h3>{selected ? `Edit ${selected.label}` : 'New profile'}</h3>
         <label>Name<input value={label} maxLength={100} placeholder="For example, Claude Opus max" onChange={e => setLabel(e.target.value)} /></label>
         <label>CLI<select value={cli} onChange={e => show(selected, e.target.value as Cli, label)}>
-          {(Object.keys(CLIS) as Cli[]).map(c => <option key={c} value={c}>{CLIS[c].name}</option>)}</select></label>
-        <p className="fine">{enforcement}</p>
+          {copy.clis.map(c => <option key={c} value={c}>{CLIS[c].name}</option>)}</select></label>
+        {purpose === 'helper' ? <p className="fine">{enforcement}</p>
+          : <p className="fine">A Background job would add its own restrictions: no built-in tools, only AltCLI&apos;s read tools, no prompts and structured output. They are verified before any job can run.</p>}
         <label>Model<input value={model} maxLength={128} placeholder={`${cliName}'s configured default`} onChange={e => setModel(e.target.value)} /></label>
         {invalid && <p className="warning-text" role="alert">A model name uses only letters, digits and . _ : / - and starts with a letter or digit.</p>}
         <label>Reasoning effort<select value={effort} onChange={e => setEffort(e.target.value)}>
           <option value="">{cliName}&apos;s configured default</option>{efforts.map(v => <option key={v} value={v}>{v}</option>)}</select></label>
-        <pre aria-label="Helper command preview">{JSON.stringify([executable, ...args], null, 2)}</pre>
+        <pre aria-label={`${copy.name} command preview`}>{JSON.stringify([executable, ...args], null, 2)}</pre>
         <p className="fine">AltCLI does not list or verify the models your {cliName} sign-in offers; {cliName} reports an unavailable model in its terminal.</p>
-        <button disabled={!enabled || busy || invalid || !label.trim()}>{selected ? 'Save Helper profile' : 'Create Helper profile'}</button>
-        {selected && <button type="button" disabled={!enabled || busy} onClick={() => remove(selected)}>Delete Helper profile</button>}
-        {!selected && !!profiles.length && <button type="button" className="quiet" disabled={busy} onClick={() => show(findGlobalAIProfile(profiles) ?? profiles[0]!)}>Cancel</button>}
+        <button disabled={!enabled || busy || invalid || !label.trim()}>{selected ? `Save ${copy.name} profile` : `Create ${copy.name} profile`}</button>
+        {selected && <button type="button" disabled={!enabled || busy} onClick={() => remove(selected)}>Delete {copy.name} profile</button>}
+        {!selected && !!profiles.length && <button type="button" className="quiet" disabled={busy}
+          onClick={() => show((purpose === 'helper' ? findGlobalAIProfile(profiles) : undefined) ?? profiles[0]!)}>Cancel</button>}
       </form>
     </>}
     {notice && <p role="status">{notice}</p>}{error && <p role="alert">{error}</p>}

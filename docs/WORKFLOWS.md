@@ -442,10 +442,22 @@ worktree held until **Inspect again** clears them or you record an inspection de
 run must be taken over before the removal or discard step, which shows a fresh preview. See
 [ADR-0013](adr/ADR-0013-confirmed-branch-setup.md#confirmed-closing-of-launched-sessions).
 
-## Proposed app-wide assistance
+## App-wide assistance
 
-**Proposed future direction.** Only Global AI's A1 read increment is implemented;
-see [GLOBAL-AI](GLOBAL-AI.md) for its current journey. The existing project/worktree
+**Partly implemented.** Global AI's A1 read increment ([GLOBAL-AI](GLOBAL-AI.md)) and
+model-free attention in the **Agents** tab ([BACKGROUND-ASSISTANT](BACKGROUND-ASSISTANT.md))
+are implemented locally; the Background assistant's AI runtime is not.
+
+**Today's journey.** The page heading's **Attention · N** opens Agents → Background
+assistant → Attention. It lists the owned runs that cannot progress, the Plan checkpoints
+that need your decision, and uncertain launches or Helper starts, across every project.
+Each issue keeps one item that updates as it changes and resolves when it ends. **Open**
+shows the existing Control access, plan checkpoint, launch card or Helper Session;
+**Mark seen** acknowledges that revision for every browser. Neither starts, continues,
+approves nor reconciles anything; you still act in the surface it opens. Your own Pause
+and routine waits stay quiet.
+
+The rest of this section remains proposed. The existing project/worktree
 workflow above keeps its Plan approval, branch consent, Stage relay and execution
 limits. [ADR-0022](adr/ADR-0022-app-wide-ai-instances.md) proposes two separate
 app roles; they do not become extra mandatory participants in a task group.
@@ -453,7 +465,7 @@ app roles; they do not become extra mandatory participants in a task group.
 | Role | Proposed user journey |
 | --- | --- |
 | Global AI | Open a dedicated native terminal without choosing a project; select a supported profile; A1 reads every project's AltCLI records; ask for app help or cross-workspace discussion with current evidence |
-| Background assistant | Separately enable a profile and permitted scope; useful application events produce bounded jobs; inspect compact status/activity, pause new jobs or deliberately stop the instance |
+| Background assistant | Separately enable a profile and permitted scope; attention items, not raw events, admit bounded read-only jobs that explain them; inspect compact status/activity, pause new jobs or deliberately stop the instance. Profiles and attention exist today; enablement and jobs do not |
 
 The conversations, credentials and scopes remain separate. A background job must
 not type into the user's Global AI prompt. Switching projects neither retargets

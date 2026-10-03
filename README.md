@@ -7,19 +7,21 @@ and explicitly start in Plan or Implementation. Planning produces captured docum
 implementation uses committed handoffs. The same responsive
 web console is intended for desktop and private iPhone access through Tailscale.
 Native iOS and a third AI supervisor remain deferred.
-Separate app-wide **Global AI** and **Background assistant** roles are
-[proposed future direction](docs/adr/ADR-0022-app-wide-ai-instances.md); only the
-Global AI read increment, A1, is implemented ([guide](docs/GLOBAL-AI.md)).
-They would provide help and bounded assistance through the existing host, without
-replacing its deterministic controller or becoming mandatory reviewers. See the
-[proposed roadmap](ROADMAP.md#proposed-app-wide-assistance-and-completion-work).
+Separate app-wide **Global AI** (Helper) and **Background assistant** roles follow
+[ADR-0022](docs/adr/ADR-0022-app-wide-ai-instances.md). Implemented so far: Helper's read
+increment, A1 ([guide](docs/GLOBAL-AI.md)), and model-free **attention**, which lists the runs,
+plans and launches that need you, inside a central **Agents** tab ([guide](docs/BACKGROUND-ASSISTANT.md)).
+The Background assistant's AI runtime is not implemented. Neither role replaces the deterministic
+controller or becomes a mandatory reviewer. See the
+[roadmap](ROADMAP.md#proposed-app-wide-assistance-and-completion-work).
 
 An accepted redesign, [ADR-0024](docs/adr/ADR-0024-registered-repositories-and-managed-workspaces.md),
 replaces discovery-based enrollment: you register repositories, AltCLI creates task workspaces and
 launches the agents it coordinates, and a dedicated tmux server hosts them. So far only its records and
-upgrade gate exist; listing, agent selection and the tmux server work as described below. Upgrading an
-existing store to this version requires all work to be settled first
-([setup](docs/SETUP.md#upgrade-to-store-schema-20)).
+upgrade gate exist; listing, agent selection and the tmux server work as described below. Upgrading a
+store older than schema 20 requires all work to be settled first
+([setup](docs/SETUP.md#upgrade-to-store-schema-20)); later schemas, including schema 22's attention
+records, upgrade without that gate ([setup](docs/SETUP.md#upgrade-to-store-schema-22)).
 
 ## Native terminals and explicit launch
 
@@ -56,8 +58,8 @@ that worktree's holds and offers pause, takeover, and other recovery; nothing th
 required first. The ⌨️ status in the page heading reports the
 active input connection count and whether automation is held, beside connection status. Taking control is one confirmation after a list of what to notice; for
 earlier manual input its fixed acknowledgement is recorded as the decision note. Projects adds a project by its main/default starting checkout,
-typed or found with **Browse…**, even with no tmux panes. Settings (Console preferences
-first, then Host configuration) edits executable/argument profiles; **Launch agents…**
+typed or found with **Browse…**, even with no tmux panes. **Agents → Workspace agents →
+Profiles** edits executable/argument profiles; **Launch agents…**
 previews exact checkout, commit and program before creating sessions named
 `<profile>-<branch>`. Launch cards show status and recovery actions; open the
 checkout in Console to view its agent terminals. **Finish branch…** on a task worktree closes the sessions AltCLI
@@ -136,7 +138,7 @@ not stop a run. A backend restart pauses owned runs without replaying commands.
 | Native terminal and explicit launch | Implemented; setup enables both host flags (a missing flag means off); installed-host/mobile acceptance remains open |
 | Image attachments | Paste or pick PNG/JPEG in a Terminal-mode card, then Insert its host path (never Enter); plain Send, committed work and a Plan brief carry images to Claude Code and Codex. Private host storage; installed-host and device acceptance open |
 | Native iOS / supervisor | Deferred |
-| Global AI / Background assistant | Global AI A1 implemented: a user-operated Codex or Claude Code terminal with read-only app tools ([guide](docs/GLOBAL-AI.md)); installed-provider and device acceptance open. Background assistant and delegated tools proposed, not implemented ([ADR-0022](docs/adr/ADR-0022-app-wide-ai-instances.md), [ADR-0023](docs/adr/ADR-0023-app-tools-and-delegated-authority.md)) |
+| Global AI / Background assistant | Global AI A1 implemented: a user-operated Codex or Claude Code terminal with read-only app tools ([guide](docs/GLOBAL-AI.md)); installed-provider and device acceptance open. Deterministic attention, the Agents tab and Background profiles implemented locally ([guide](docs/BACKGROUND-ASSISTANT.md)). The Background AI runtime and delegated tools are not implemented ([ADR-0022](docs/adr/ADR-0022-app-wide-ai-instances.md), [ADR-0023](docs/adr/ADR-0023-app-tools-and-delegated-authority.md)) |
 
 **Background-work evidence:** Claude uses `UserPromptSubmit` and the current
 Stop payload, including background-task and cron information when available.
@@ -341,17 +343,23 @@ straight back to the author as the next automatic turn. A result marked `needsHu
 pauses for scope or permission decisions. Restart and uncertain publication pause
 without replay. A completed chain still needs final task-level verification.
 
-The page has five tabs. **Console** holds the agent cards for the selected
+The page has four tabs. **Console** holds the agent cards for the selected
 checkout, and its **Command history** lists only that checkout's commands.
-**Projects** chooses the project, worktree and group. **Agents** lists the selected
-checkout's agents with their state and detail. **Settings** shows the host's
-effective global configuration (tmux binary and where it resolves, data store, task
+**Projects** chooses the project, worktree and group. **Agents** holds three kinds,
+each with its own profiles:
+- **Workspace agents**: an **Inventory** of the selected checkout's agents, and the agent launch **Profiles**.
+- **Helper**: **Chat**, a Codex or Claude Code conversation with read-only app tools for this host's projects
+  ([guide](docs/GLOBAL-AI.md)), with its **Session**, **Profiles** (named profiles, each a CLI, model and effort), **Evidence**
+  and **Guide**, which explains the console.
+- **Background assistant**: **Attention**, **Activity**, **Profiles** and **Settings** ([guide](docs/BACKGROUND-ASSISTANT.md)).
+
+**Settings** shows the host's effective global configuration (tmux binary and where it resolves, data store, task
 worktree root, integration branches, adapter, input, allowed origins) with the
 environment variable behind each value; values are read when the host starts, so a
 change means editing `web/.env.local` or the shell and restarting. Settings also
-holds this page's console preferences, such as launch profiles and staying unlocked.
-**Helper** holds **Chat**, a Codex or Claude Code conversation with read-only app tools for this
-host's projects ([guide](docs/GLOBAL-AI.md)), with its **Session**, **Settings** (named profiles, each a CLI, model and effort) and **Evidence**, and **Guide**, which explains the console. Paths under the host user's home directory
+holds this page's console preferences, such as staying unlocked, and links to each kind's profiles.
+Every page heading shows **Attention · N**, the open attention items not yet marked seen; it opens the
+Attention list, whose **Open** buttons only navigate. Paths under the host user's home directory
 are shown with a leading `~`; hover a path for its full form.
 
 Switching between tabs, agents, Parallel and Focus, Plan and

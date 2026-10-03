@@ -1,8 +1,8 @@
 import type { PaneIdentity } from './api.ts';
 import type { WorktreeIdentity } from './workflow.ts';
-/** purpose: worktree agent launches or Helper, which list and launch only their own profiles. Copies recorded before purposes existed lack
- * it; the host reports every saved profile with one. */
-export interface LaunchProfile { id: string; revision: number; label: string; executable: string; args: string[]; adapterHint: 'codex'|'claude'|'manual'; enabled: boolean; purpose?: 'agent'|'helper' }
+/** purpose: worktree agent launches, Helper or the Background assistant; each lists and uses only its own profiles. Copies recorded before
+ * purposes existed lack it; the host reports every saved profile with one. */
+export interface LaunchProfile { id: string; revision: number; label: string; executable: string; args: string[]; adapterHint: 'codex'|'claude'|'manual'; enabled: boolean; purpose?: 'agent'|'helper'|'background' }
 export interface LaunchItem {
   id: string; projectId: string; worktreeId: string; worktree: WorktreeIdentity; commonDir: string; branch: string|null; head: string;
   profile: LaunchProfile; executable: string; sessionName: string; environmentDigest: string;

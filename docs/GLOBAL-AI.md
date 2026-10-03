@@ -1,7 +1,7 @@
 # Helper: app-aware reads (A1)
 
-The UI calls this feature **Helper**, a Console tab whose **Chat** section holds the
-conversation. Internal routes and identifiers keep the Global AI name used by
+The UI calls this feature **Helper**, one of the three kinds under the **Agents** tab, whose
+**Chat** section holds the conversation. Internal routes and identifiers keep the Global AI name used by
 ADR-0022/0023.
 
 ## Scope and status
@@ -20,8 +20,8 @@ start` command. Server changes must not replace a live dispatcher through hot
 reload. The custom host supplies its actual loopback port to the MCP bridge;
 plain `next start` does not provide the native terminal gateway.
 
-Set it up first in Console → **Helper → Settings**; Chat's start flow links there, as
-does Settings → Console preferences under its launch profiles. Each Helper profile has
+Set it up first in **Agents → Helper → Profiles**; Chat's start flow links there, as
+does Settings → Console preferences. Each Helper profile has
 a name, a CLI (Codex or Claude Code), a model and a reasoning effort (blank keeps the
 CLI's configured default), so different CLIs, models and efforts can sit side by side.
 Saving creates or updates an ordinary launch profile, shown literally as
@@ -30,9 +30,8 @@ Saving creates or updates an ordinary launch profile, shown literally as
 another; the first is named `Helper` by default. Choosing the other CLI starts from its
 defaults; until saved, the profile keeps its CLI and values. Helper profiles are kept
 apart from agent profiles: each launch profile records its purpose, set when it is
-created. Settings → Console preferences → Launch profiles and worktree **Launch
-agents** list only agent profiles, and the host refuses a Helper profile for an agent
-launch; Helper lists and starts only Helper profiles, and the host accepts a Helper
+created. **Agents → Workspace agents → Profiles** and worktree **Launch agents** list only
+agent profiles, and the host refuses any other purpose for an agent launch; Helper lists and starts only Helper profiles, and the host accepts a Helper
 profile only with arguments Helper can launch. A profile saved before purposes existed
 is an agent profile, except the one the earlier single-profile Settings → Helper saved:
 named `Helper` or `Global AI`, with arguments Helper can launch. Deleting asks first and
@@ -46,10 +45,10 @@ settings it was launched with: after a change, the Chat section names the differ
 and offers **Restart with saved settings**, or type `/model` in its terminal to switch
 that conversation's model in place.
 
-Open the **Helper** tab in Console, before **Settings**, or go to `/global-ai`, which
-opens Console there. Helper has five sections: **Chat** (where it opens: the
-conversation's terminal once one exists, otherwise the start flow), **Session** (status,
-restart, app access and retirement), **Settings** (the launch profiles above), **Evidence**
+Open **Agents → Helper**, or go to `/global-ai`, which opens it on Chat. Helper has five
+sections: **Chat** (where it opens: the conversation's terminal once one exists, otherwise
+the start flow), **Session** (status, restart, app access and retirement), **Profiles** (the
+launch profiles above), **Evidence**
 (the read model) and **Guide** (the
 general explanation of the console); a section chosen earlier on the page is kept.
 Helper uses Console's unlocked token and **Lock**, and the
@@ -171,10 +170,20 @@ claim that every provider has been validated with both.
 | `get_recent_events` | Bounded command/execution metadata, not prompts or terminal transcripts |
 | `search_docs` | Bounded literal matches with document hashes and line references |
 | `read_doc` | Up to 120 lines from a built-in operating document; no arbitrary paths or URLs |
+| `list_attention` | Open attention items for every project: deterministic records of runs, plans and launches that need the owner ([guide](BACKGROUND-ASSISTANT.md)) |
+| `get_attention_item` | One attention item with its revision, facets and the existing surface that handles it |
+| `get_launch` | One recorded workspace launch or Helper start: status, phase and message |
+
+Every tool declares an `outputSchema`, the exact reply it returns, and the host checks
+each reply against it before answering; `structuredContent` and the serialized text carry
+the same reply. `get_capabilities` reports read contract `global-ai-read-v2` and that the
+Background runtime is unavailable. Helper reads with its own host-wide principal; the
+narrower job scope reserved for Background jobs is described in
+[BACKGROUND-ASSISTANT](BACKGROUND-ASSISTANT.md#read-contracts-shared-with-helper).
 
 The documents are packed when the app is built: `scripts/build-kb.mjs` copies the
 allowlisted `README.md`, `docs/WORKFLOWS.md`, `docs/TERMINAL-PROTOCOL.md`,
-`docs/SETUP.md` and `docs/GLOBAL-AI.md` into the generated server module
+`docs/SETUP.md`, `docs/GLOBAL-AI.md` and `docs/BACKGROUND-ASSISTANT.md` into the generated server module
 `web/src/server/global-ai/kb.generated.ts` before `npm run dev`, `build`,
 `typecheck`, `test:global-ai` and `e2e`. Any build or bundle therefore carries the
 documents that match its code, and the host never reads a checkout at runtime. A
@@ -195,7 +204,8 @@ sections; runtime capabilities and current state take precedence. Incomplete or
 unavailable evidence remains visible instead of being interpreted as approval.
 
 No mutation tools, arbitrary shell tool, terminal-transcript tool, image attachment
-scope, background queue, notification service or approval policy is added in A1.
+scope, background queue or approval policy is added in A1. Attention items are
+deterministic host records that Helper can read, not a model notification service.
 The owner can still operate the CLI natively under its normal permissions. A tool
 allowlist does not prevent a same-user process from accessing files outside it.
 

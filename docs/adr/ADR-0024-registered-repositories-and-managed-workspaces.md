@@ -124,7 +124,7 @@ Dependency order, not a commit count. Each records what actually ran in its comm
 | I1 | Schema 20: the settled-store gate and private backup, read-only `npm --prefix web run upgrade:check`, repository settings (pending until confirmed; `POST /api/v1/projects/settings`), task-workspace records written by verified creation and maintained by verified rename, update, removal and discard (a recreated path is a new record), launch role and workspace links, backfill | Implemented locally October 1, 2026; no user interface yet, and listing, admission and discovery are unchanged |
 | I2 | Registry-backed inventory and record-derived agents; shared server admission for every start, launch, edit, terminal and lifecycle path; compatibility endpoints; Helper reads; mock fixtures | Not implemented |
 | I3 | Boundary occupant inspection across the finite endpoint set | Not implemented |
-| I4 | Dedicated endpoint, its persisted transition, Helper and transport paths, attach command | Not implemented; must not land before I3 |
+| I4 | Dedicated endpoint, its persisted transition, Helper and transport paths, attach command; the transition also covers a recorded Background instance ([ADR-0022 amendment](ADR-0022-app-wide-ai-instances.md#october-2-amendment-attention-first-background-assistant)) | Not implemented; must not land before I3 |
 | I5 | Create & launch with frozen launch intent and separate durable outcomes | Not implemented |
 | I6 | Registration, New task, workspace and history surfaces; every integration path using the selected branch | Not implemented |
 | I7 | Full checks, disposable installed-provider acceptance and documented settled deployment | Not implemented |

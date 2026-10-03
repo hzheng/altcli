@@ -143,7 +143,7 @@ maintained design.
 | 2 | Preserve the existing host/terminal/launch/controller foundations in [ADR-0022](adr/ADR-0022-app-wide-ai-instances.md); omit duplicate review praise |
 | 3 | Source-qualified fixture investigations in [TESTING](TESTING.md#fixture-reliability-follow-ups), completion backlog in [ROADMAP](../ROADMAP.md#proposed-app-wide-assistance-and-completion-work); do not import historical CI counts as current health |
 | 4 | Current multiwriter, toggle, recovery and UI guidance in [ADR-0020](adr/ADR-0020-native-terminals.md) and [TERMINAL-PROTOCOL](TERMINAL-PROTOCOL.md); correct obsolete first-key/exclusive-writer assumptions, retain new redesign questions as open |
-| 5–8 | Separate roles, profiles, lifecycle and user journeys in [ADR-0022](adr/ADR-0022-app-wide-ai-instances.md) and [WORKFLOWS](WORKFLOWS.md#proposed-app-wide-assistance) |
+| 5–8 | Separate roles, profiles, lifecycle and user journeys in [ADR-0022](adr/ADR-0022-app-wide-ai-instances.md) and [WORKFLOWS](WORKFLOWS.md#app-wide-assistance) |
 | 9–10 | Current scoped evidence, one service owner and explicit delegated authority in [ADR-0023](adr/ADR-0023-app-tools-and-delegated-authority.md) |
 | 11–12 | Identified jobs, causal bounds, deterministic notification delivery, budgets and authentication limits in [ADR-0022](adr/ADR-0022-app-wide-ai-instances.md) |
 | 13–14 | Exact infrastructure identity, manual-hold self-interference and security in both new ADRs and [SECURITY](SECURITY.md#proposed-app-wide-assistant-authority); unresolved mechanisms in [OPEN-DECISIONS](OPEN-DECISIONS.md#proposed-app-wide-assistance-and-completion-choices) |

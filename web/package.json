@@ -24,7 +24,7 @@
     "e2e": "playwright test",
     "check": "npm run test:global-ai && npm run typecheck && npm run test:smoke && npm run test:workflow && npm test && npm run build",
     "check:e2e": "npm run check && npm run e2e",
-    "test:workflow": "node --experimental-strip-types --test scripts/workflow.test.ts scripts/implementation.test.ts scripts/planning.test.ts scripts/projects.test.ts scripts/finish.test.ts scripts/terminal-broker.test.ts scripts/launch-cleanup.test.ts scripts/attachments.test.ts scripts/registry.test.ts",
+    "test:workflow": "node --experimental-strip-types --test scripts/workflow.test.ts scripts/implementation.test.ts scripts/planning.test.ts scripts/projects.test.ts scripts/finish.test.ts scripts/terminal-broker.test.ts scripts/launch-cleanup.test.ts scripts/attachments.test.ts scripts/registry.test.ts scripts/attention.test.ts",
     "postinstall": "node scripts/prepare-pty.mjs",
     "probe:terminal": "node --experimental-strip-types --test scripts/native-terminal.test.ts",
     "probe:terminal:http": "node scripts/terminal-http-probe.mjs",

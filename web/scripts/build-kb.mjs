@@ -10,6 +10,7 @@ export const DOCUMENTS = {
   'docs/TERMINAL-PROTOCOL.md': 'terminal operations and current recovery contract',
   'docs/SETUP.md': 'installed-host setup',
   'docs/GLOBAL-AI.md': 'Global AI A1 capabilities and limitations',
+  'docs/BACKGROUND-ASSISTANT.md': 'Agents tab, deterministic attention, and what the Background assistant does and does not do yet',
 };
 const LIMIT = 256 * 1024;
 const web = resolve(dirname(fileURLToPath(import.meta.url)), '..');

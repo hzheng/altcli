@@ -9,7 +9,7 @@ import { requestId } from '../core/validation.ts';
 import { terminalFields, terminalNumber, terminalText } from '../core/terminal-validation.ts';
 import { classifyAgent } from '../core/workspaces.ts';
 import { isGlobalAIProfileLabel } from '../core/policy.ts';
-import { helperProfileArgs } from './global-ai/service.ts';
+import { backgroundProfileArgs, helperProfileArgs } from './global-ai/service.ts';
 import { SESSION_NAME_LIMIT, uniqueSessionName } from '../core/session-names.ts';
 import { resolveExecutable, type Config } from './config.ts';
 import type { Store } from './store.ts';
@@ -20,6 +20,7 @@ import { terminalEnvironment, terminalRunner, tmuxLiteral } from './terminal-env
 import { inspectPane } from './adapters/tmux.ts';
 import { inspectAttach, type AttachTarget } from './tmux-attach.ts';
 import { launchCleanupHost, type LaunchCleanupHost } from './launch-cleanup-host.ts';
+import { noteLaunch, noting } from './attention/sources.ts';
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 /** A profile saved before purposes existed is an agent profile, except the one the earlier Settings → Helper saved: named Helper or
  * Global AI, with arguments Helper can launch. */
@@ -53,6 +54,8 @@ export class LaunchService {
   readonly cleanupHost: LaunchCleanupHost;
   readonly config: Config; readonly store: Store; readonly projects: ProjectCatalog; readonly authority: InputAuthority;
   readonly guard: (tree: WorktreeIdentity) => void;
+  /** Wakes attention after a launch's uncertainty changed; the marker is written with the launch record. */
+  attentionSignal: (() => void) | null = null;
   /** Session names live on the configured tmux server (none when no server runs). */
   readonly sessionNames: () => Promise<Set<string>>;
   constructor(config: Config, store: Store, projects: ProjectCatalog, authority: InputAuthority, guard: (tree: WorktreeIdentity) => void, sessionNames: () => Promise<Set<string>>, cleanupHost = launchCleanupHost(config)) {
@@ -78,16 +81,18 @@ export class LaunchService {
     if(!Array.isArray(b.args) || b.args.length>32 || b.args.some(a=>typeof a!=='string'||Buffer.byteLength(a)>1024||/[\x00-\x1f\x7f]/.test(a)) || Buffer.byteLength(b.args.join(''))>4096) throw new AppError('PROFILE_ARGS','Use at most 32 literal arguments, 1 KiB each and 4 KiB total.');
     if(!['codex','claude','manual'].includes(String(b.adapterHint)) || typeof b.enabled!=='boolean') throw new AppError('PROFILE_INPUT','Choose a display hint and enabled state.');
     const purpose=b.purpose??before?.purpose??'agent';
-    if(purpose!=='agent'&&purpose!=='helper') throw new AppError('PROFILE_INPUT','A profile is for agent launches or for Helper.');
+    if(purpose!=='agent'&&purpose!=='helper'&&purpose!=='background') throw new AppError('PROFILE_INPUT','A profile is for agent launches, Helper or the Background assistant.');
     if(before&&purpose!==before.purpose) throw new AppError('PROFILE_PURPOSE','A profile keeps the purpose it was created with.',409);
     if(this.config.mode!=='mock' && !resolveExecutable(executable, launchEnvironment())) throw new AppError('PROFILE_EXECUTABLE','Executable is unavailable on the host.',409);
     const result:LaunchProfile={id:id??randomUUID(),revision:(before?.revision??0)+1,label,executable,args:b.args as string[],adapterHint:b.adapterHint as LaunchProfile['adapterHint'],enabled:b.enabled,purpose};
     // A Helper profile is always one Helper can launch, so its settings never silently drop an argument.
     if(purpose==='helper') try{helperProfileArgs(result);}catch(e){throw new AppError('PROFILE_ARGS',messageOf(e));}
+    if(purpose==='background') try{backgroundProfileArgs(result);}catch(e){throw new AppError('PROFILE_ARGS',messageOf(e));}
     this.store.db.prepare('INSERT INTO launch_profiles(id,value) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(result.id,JSON.stringify(result));return result;
   }
   batches(): LaunchBatch[] {return (this.store.db.prepare('SELECT value FROM launches ORDER BY rowid').all() as {value:string}[]).map(r=>JSON.parse(r.value));}
-  private save(batch:LaunchBatch) {this.store.db.prepare('INSERT INTO launches(id,value) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(batch.requestId,JSON.stringify(batch));}
+  private save(batch:LaunchBatch) {this.store.db.prepare('INSERT INTO launches(id,value) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(batch.requestId,JSON.stringify(batch));
+    for(const item of batch.items) noting(()=>noteLaunch(this.store.db,item),this.attentionSignal);}
   private lookup(id:string): {batch:LaunchBatch;item:LaunchInstance} {for(const batch of this.batches()){const item=batch.items.find(i=>i.id===id);if(item)return {batch,item};}throw new AppError('LAUNCH_CHANGED','Launch instance is unavailable.',409);}
   private update(batch:LaunchBatch,item:LaunchInstance,changes:Partial<LaunchInstance>) {
     Object.assign(item,changes,{updatedAt:new Date().toISOString()});this.save(batch);
@@ -115,7 +120,7 @@ export class LaunchService {
     try{for(const name of await this.sessionNames())taken.add(name);}catch{blockers.push('Cannot list tmux sessions to choose unique names. Recheck, then preview again.');}
     for(const row of b.items){const i=terminalFields(row,['worktreeId','profileId','count']), count=terminalNumber(i.count,1,6);
       const tree=await this.projects.launchWorktree(projectId,terminalText(i.worktreeId));const profile=this.profiles().find(p=>p.id===i.profileId);
-      if(profile?.purpose==='helper')throw new AppError('PROFILE_PURPOSE','A Helper profile cannot launch a worktree agent. Choose an agent profile.',409);
+      if(profile&&profile.purpose!=='agent')throw new AppError('PROFILE_PURPOSE',`A ${profile.purpose==='helper'?'Helper':'Background assistant'} profile cannot launch a worktree agent. Choose an agent profile.`,409);
       if(!profile?.enabled)throw new AppError('PROFILE_CHANGED','Choose an enabled profile.',409);
       try{this.authority.assertAutomated(scopesFor(tree.identity));this.assertAvailable(tree.identity!);}catch(e){blockers.push(messageOf(e));}
       const executable=await this.resolved(profile);const project=this.projects.record(projectId);

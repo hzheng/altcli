@@ -511,3 +511,16 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
 .attachment-actions { display:flex; gap:6px; flex-shrink:0; }
 .attachment-actions button { padding:6px 10px; }
 .native-terminal .attachment-tray { margin:0 .5rem .5rem; }
+/* Attention: one card per open issue, the deterministic facts first; long paths wrap at phone width. */
+.attention-items { list-style:none; margin:12px 0 0; padding:0; display:grid; gap:10px; }
+.attention-items > li { border:1px solid var(--line); border-radius:9px; padding:10px 12px; min-width:0; overflow-wrap:anywhere; }
+.attention-items > li.unseen { border-color:#61543e; }
+.attention-title { display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; }
+.attention-subject { margin:6px 0 0; font-size:12px; color:var(--muted); overflow-wrap:anywhere; }
+.attention-detail { margin:6px 0 0; }
+.attention-items .fine { margin-top:6px; }
+.attention-recent ul { list-style:none; margin:8px 0 0; padding:0; display:grid; gap:8px; overflow-wrap:anywhere; }
+.agent-kinds .badge { margin-left:4px; }
+.agent-inventory { list-style:none; margin:10px 0 0; padding:0; display:grid; gap:10px; }
+.agent-inventory > li { border:1px solid var(--line); border-radius:9px; padding:10px 12px; min-width:0; overflow-wrap:anywhere; }
+.agent-inventory .fine { margin-top:4px; }

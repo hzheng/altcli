@@ -2,9 +2,12 @@ import { isDeepStrictEqual } from 'node:util';
 import type { Checkpoint, CheckpointInput, InteractionInput, InteractionRecord } from '../contracts/interactions.ts';
 import { AppError } from '../core/errors.ts';
 import type { Store } from './store.ts';
+import { noteRunById, noting } from './attention/sources.ts';
 
 export class InteractionStore {
   readonly store: Store;
+  /** Wakes attention after a checkpoint changed its run's condition; the marker is written in the same transaction. */
+  attentionSignal: (() => void) | null = null;
   constructor(store: Store) { this.store = store; }
   get(id: string): InteractionRecord | undefined {
     const row = this.store.db.prepare('SELECT value FROM interactions WHERE id=?').get(id) as { value: string } | undefined;
@@ -51,6 +54,7 @@ export class InteractionStore {
   }
   saveCheckpoint(value: Checkpoint): void {
     this.store.db.prepare('INSERT INTO checkpoints(run_id,value) VALUES (?,?) ON CONFLICT(run_id) DO UPDATE SET value=excluded.value').run(value.runId, JSON.stringify(value));
+    noting(() => noteRunById(this.store.db, value.runId), this.attentionSignal);
   }
   invalidate(runId: string, reason: string): void {
     const value = this.checkpoint(runId);

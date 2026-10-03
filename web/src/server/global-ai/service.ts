@@ -3,13 +3,21 @@ import { join } from 'node:path';
 import type { GlobalAIInstance, GlobalAIPreview, GlobalAIView, ToolReply } from '../../contracts/global-ai.ts';
 import type { LaunchProfile } from '../../contracts/launches.ts';
 import type { PaneIdentity } from '../../contracts/api.ts';
-import { AppReads, APP_TOOLS, fields, GlobalAIError, hash, text } from './reads.ts';
+import { AppReads, fields, GlobalAIError, hash, HELPER, text, toolsFor } from './reads.ts';
 import { codexProfileArgs } from './codex.ts';
 import { claudeProfileArgs } from './claude.ts';
 
 /** The profile arguments Helper accepts for its CLI, Codex or Claude Code; any other profile or argument is refused. */
 export function helperProfileArgs(profile: LaunchProfile): string[] {
   return profile.adapterHint === 'claude' ? claudeProfileArgs(profile) : codexProfileArgs(profile);
+}
+/** A Background assistant profile records only a direct Claude Code program, model and effort: the first adapter to be probed for
+ * unattended structured jobs. The host would compose every restriction itself, so other arguments are refused, never dropped.
+ * Codex is not a Background adapter until it passes the same probe. Saving a profile launches nothing. */
+export function backgroundProfileArgs(profile: LaunchProfile): string[] {
+  if (profile.adapterHint !== 'claude') throw new GlobalAIError('PROFILE_UNSUPPORTED', 'Background assistant profiles use Claude Code for now. Codex is not yet a verified Background adapter.');
+  try { return claudeProfileArgs(profile); }
+  catch { throw new GlobalAIError('PROFILE_ARGUMENT', 'A Background assistant profile is a direct claude executable with only --model and --effort; AltCLI adds the read-only job arguments itself.'); }
 }
 
 export interface InstanceRepository {
@@ -215,7 +223,7 @@ export class GlobalAIService {
     this.requests++;
     try {
       let result: unknown;
-      if (b.method === 'list' && b.name === undefined && b.arguments === undefined) result = { tools: APP_TOOLS };
+      if (b.method === 'list' && b.name === undefined && b.arguments === undefined) result = { tools: toolsFor(HELPER) };
       else if (b.method === 'call') result = await this.services.reads.call(text(b.name), b.arguments ?? {});
       else throw new GlobalAIError('TOOL_METHOD', 'Only tool listing and read calls are supported.', 400);
       // Revocation, restart or retirement during an await must win over the pending read.

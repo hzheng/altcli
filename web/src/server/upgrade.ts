@@ -9,8 +9,9 @@ import { idOf } from './ids.ts';
 
 /** The schema that records registered repositories and app-created task workspaces (ADR-0024). */
 export const REGISTRY_SCHEMA = 20;
-/** Worktree-scoped manual input; all older periods remain global. */
-export const STORE_SCHEMA = 21;
+/** 21: worktree-scoped manual input, all older periods remaining global. 22: attention records and Background assistant profiles,
+ * an additive change that needs no settlement. */
+export const STORE_SCHEMA = 22;
 /** Unresolved work that only the backend version which started it can settle. */
 export interface UpgradeBlocker { kind: string; id: string; detail: string }
 

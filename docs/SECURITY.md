@@ -240,10 +240,19 @@ URL is fetched on an image's behalf.
 
 ## Proposed app-wide assistant authority
 
-**Proposed future direction.** Only Global AI's A1 read increment is implemented:
-its separate loopback read capability, private descriptor and host-wide read
-scope (every project on the host) are described in [GLOBAL-AI](GLOBAL-AI.md#tools-and-authority). Unattended and delegated
-authority below remain proposed.
+**Proposed future direction.** Global AI's A1 read increment is implemented: its separate loopback read capability,
+private descriptor and host-wide read scope (every project on the host) are described in [GLOBAL-AI](GLOBAL-AI.md#tools-and-authority).
+
+Also implemented ([BACKGROUND-ASSISTANT](BACKGROUND-ASSISTANT.md)):
+
+- deterministic attention, which reads recorded state and changes no run, approval, hold or launch;
+- an owner-authenticated mark-seen acknowledgement;
+- read principals that the transport sets and model input cannot widen;
+- output schemas the host enforces on every read reply;
+- a strict assessment validator.
+
+Attention item text is recorded evidence rendered as text, never an instruction. Unattended and delegated authority below remain
+proposed: no Background process, job capability or effect tool exists.
 [ADR-0022](adr/ADR-0022-app-wide-ai-instances.md) separates user and background
 instances; [ADR-0023](adr/ADR-0023-app-tools-and-delegated-authority.md) owns their
 proposed authority. Current owner credentials, manual/launch barriers, workflow

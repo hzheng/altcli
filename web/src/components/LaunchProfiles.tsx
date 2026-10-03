@@ -15,8 +15,8 @@ export function LaunchProfiles({token,enabled}:{token:string;enabled:boolean}) {
   const editing=draft?null:profiles.find(p=>p.id===selected)??null;
   function show(p:LaunchProfile|undefined){setDraft(null);setSelected(p?.id??null);setForm(p?formOf(p):blank);}
   function startNew(preset:Preset){setDraft(preset);setForm({...PRESETS[preset],args:[...PRESETS[preset].args]});setMenu(false);}
-  // Helper's profiles are managed in Helper → Settings.
-  const reload=async(choose:string|null)=>{const next=(await api<LaunchProfile[]>(token,'launch-profiles')).filter(p=>p.purpose!=='helper');setProfiles(next);show(next.find(p=>p.id===choose)??next[0]);};
+  // Helper's and the Background assistant's profiles are managed under their own kinds in Agents.
+  const reload=async(choose:string|null)=>{const next=(await api<LaunchProfile[]>(token,'launch-profiles')).filter(p=>p.purpose==='agent');setProfiles(next);show(next.find(p=>p.id===choose)??next[0]);};
   useEffect(()=>{void reload(null).catch(e=>setError(e.message));},[token]);
   async function save(remove=false) {if(busy)return;setBusy(true);setError('');try{const result=await api<LaunchProfile|{removed:boolean}>(token,`launch-profiles${editing?`/${editing.id}`:''}`,{method:remove?'DELETE':editing?'PATCH':'POST',body:remove?{expectedRevision:editing!.revision}:{...form,...(editing?{expectedRevision:editing.revision}:{})}});await reload(remove?null:(result as LaunchProfile).id);}catch(e){setError(e instanceof Error?e.message:'Profile changed.');}finally{setBusy(false);}}
   return <section className="panel" aria-label="Launch profiles"><h2>Launch profiles</h2><p>Profiles run a host executable with literal arguments. Saving never executes it. Keep credentials in the host’s CLI setup.</p>

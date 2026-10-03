@@ -21,10 +21,13 @@ export class Store {
     this.db.pragma("busy_timeout = 5000");
     const version = this.db.pragma("user_version", { simple: true }) as number;
     if (version > STORE_SCHEMA) { this.db.close(); throw new Error("Unsupported database version. Do not downgrade this store."); }
-    // ADR-0024: upgrade only a settled store, checked before anything here writes, and keep a private copy of the old schema.
-    if (version >= 1 && version < REGISTRY_SCHEMA) {
-      const blockers = settlementBlockers(this.db);
-      if (blockers.length) { this.db.close(); throw upgradeBlocked(version, blockers); }
+    // ADR-0024: upgrade a pre-registry store only from a settled state, checked before anything here writes. Every upgrade keeps a
+    // private copy of the old schema, since a newer schema refuses older binaries and rollback is a backup restoration.
+    if (version >= 1 && version < STORE_SCHEMA) {
+      if (version < REGISTRY_SCHEMA) {
+        const blockers = settlementBlockers(this.db);
+        if (blockers.length) { this.db.close(); throw upgradeBlocked(version, blockers); }
+      }
       const backup = join(directory, `altcli-schema-${version}-${new Date().toISOString().replace(/[:.]/g, "-")}.sqlite3`);
       this.db.prepare("VACUUM INTO ?").run(backup);
       chmodSync(backup, 0o600);
@@ -57,6 +60,10 @@ export class Store {
         CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, request_id TEXT NOT NULL UNIQUE, status TEXT NOT NULL, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS attachment_refs (attachment_id TEXT NOT NULL, kind TEXT NOT NULL, ref_id TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (attachment_id, kind, ref_id));
         CREATE TABLE IF NOT EXISTS managed_workspaces (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, path TEXT NOT NULL, status TEXT NOT NULL, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS attention_sources (source TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, version INTEGER NOT NULL, pending INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS attention_items (id TEXT PRIMARY KEY, key TEXT NOT NULL, status TEXT NOT NULL, fingerprint TEXT NOT NULL, updated_at TEXT NOT NULL, value TEXT NOT NULL);
+        CREATE UNIQUE INDEX IF NOT EXISTS attention_open_key ON attention_items(key) WHERE status = 'open';
+        CREATE INDEX IF NOT EXISTS attention_items_order ON attention_items(status, updated_at);
         CREATE UNIQUE INDEX IF NOT EXISTS managed_workspace_path ON managed_workspaces(path) WHERE status <> 'retired';
         CREATE UNIQUE INDEX IF NOT EXISTS worktree_creation_owner ON worktree_creations(project_id) WHERE status IN ('applying', 'uncertain');
         CREATE INDEX IF NOT EXISTS interactions_repository ON interactions(repository);
@@ -83,6 +90,7 @@ export class Store {
       }
       // 18: older servers must not interpret a concurrent manual-input period. 19: nor dispatch runs without their pinned images.
       // 20: nor ignore recorded repositories and task workspaces. 21: nor ignore scoped keyboard authority.
+      // 22: nor treat Background assistant profiles as workspace agents, or ignore attention records.
       if (version < 21) for (const row of this.db.prepare('SELECT id,value FROM keyboard_sessions').all() as { id: string; value: string }[]) {
         this.db.prepare('UPDATE keyboard_sessions SET value=? WHERE id=?').run(JSON.stringify({ ...JSON.parse(row.value), scope: null }), row.id);
       }

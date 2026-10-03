@@ -45,6 +45,8 @@ export interface AppTool {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  /** The exact reply (ToolReply with this tool's data) the host checks before returning it as MCP structuredContent. */
+  outputSchema: Record<string, unknown>;
   annotations: { readOnlyHint: true; destructiveHint: false; openWorldHint: false };
 }
 export interface ToolReply {

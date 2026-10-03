@@ -40,6 +40,14 @@ export async function showSurface(page: Page, surface: 'Terminal' | 'Control') {
   const button = page.getByRole('group', { name: 'Terminal or Control' }).getByRole('button', { name: surface, exact: true });
   if (await button.count() && await button.getAttribute('aria-pressed') !== 'true') await button.click();
 }
+/** Opens Agents on one kind and, optionally, one of that kind's sections. Navigation only: it starts, sends and approves nothing. */
+export async function openAgents(page: Page, kind: 'Workspace agents' | 'Helper' | 'Background assistant', section?: string) {
+  await page.getByRole('navigation', { name: 'Sections', exact: true }).getByRole('button', { name: 'Agents', exact: true }).click();
+  // The Background kind's name also carries its count of items not yet seen.
+  await page.getByRole('navigation', { name: 'Agent kinds' }).getByRole('button', { name: kind }).click();
+  if (section) await page.getByRole('navigation', { name: kind === 'Workspace agents' ? 'Workspace agent sections' : kind === 'Helper' ? 'Helper sections' : 'Background assistant sections' })
+    .getByRole('button', { name: section, exact: true }).click();
+}
 /** An accepted command from Control shows the terminals again. Waits for that switch, then shows Control to inspect what the command left
  * there. The switch is view state only and revokes readiness. */
 export async function backToControl(page: Page) {

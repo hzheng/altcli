@@ -1,5 +1,5 @@
 'use client';
-import { useId, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import type { SessionRegistration } from '../contracts/api';
 import type { Group } from '../contracts/implementation';
 import type { ManagedSession, RelayRun, Workspace, WorkspaceDiscovery, WorkspaceResetResult } from '../contracts/workflow';
@@ -29,6 +29,8 @@ interface Props {
   onChanged: (notice: string) => Promise<void>;
   /** Increases whenever the view changes; confirmations in this section are revoked when it is hidden. */
   viewEpoch?: number;
+  /** Opens one worktree's card on its Agents tab, as an attention item asks; a new nonce reveals it again. Navigation only. */
+  reveal?: { projectId: string; worktreeId: string; nonce: number } | null;
 }
 /** Read-only workspace navigation; only explicit name/membership edits persist configuration. */
 export function Workspaces(props: Props) {
@@ -42,6 +44,14 @@ export function Workspaces(props: Props) {
   const selectTab = (id: string, tab: WorktreeTab) => setWorktreeTabs(previous => (previous[id]?.tab ?? 'agents') === tab ? previous
     : { ...previous, [id]: { tab, revision: (previous[id]?.revision ?? 0) + 1 } });
   const tilde = useTildify();
+  const revealed = props.reveal;
+  useEffect(() => {
+    if (!revealed) return;
+    setProjectId(revealed.projectId); setDirectoryRoot(null);
+    setExpandedWorktrees(previous => ({ ...previous, [revealed.worktreeId]: true })); selectTab(revealed.worktreeId, 'agents');
+    requestAnimationFrame(() => document.getElementById(`worktree-${revealed.worktreeId}`)?.scrollIntoView({ block: 'start' }));
+  // Each request is its nonce: rerenders of the same request never reveal again.
+  }, [revealed?.nonce]);
   const workspaces = discovery?.workspaces ?? [];
   const projects = discovery?.projects ?? [];
   const project = projects.find((p) => p.id === projectId) ?? projects.find((p) => p.worktrees.some((w) => w.path === selectedRoot)) ?? projects[0];
@@ -91,7 +101,7 @@ export function Workspaces(props: Props) {
         const tab = worktreeTabs[tree.id]?.tab ?? 'agents';
         const viewEpoch = (props.viewEpoch ?? 0) + (worktreeTabs[tree.id]?.revision ?? 0);
         const setExpanded = (next: boolean) => setExpandedWorktrees(previous => previous[tree.id] === next ? previous : { ...previous, [tree.id]: next });
-        return <WorktreeCard key={tree.id} name={name} selected={selected} expanded={expanded} onToggle={setExpanded}
+        return <WorktreeCard key={tree.id} domId={`worktree-${tree.id}`} name={name} selected={selected} expanded={expanded} onToggle={setExpanded}
           tab={tab} onTab={next => selectTab(tree.id, next)}
           title={<span className="workspace-title"><strong><span aria-hidden="true">{expanded ? '▾' : '▸'} </span>{tree.main ? `Main checkout · ${title}` : title}</strong><span className="badge">{agents.filter((a) => a.eligible).length} AGENTS</span></span>}
           metadata={<>
@@ -116,7 +126,8 @@ export function Workspaces(props: Props) {
   </>;
 }
 /** Panels stay mounted so drafts and uncertain requests survive tab changes. */
-function WorktreeCard({ name, selected, expanded, onToggle, title, metadata, results, tab, onTab, openConsole, agents, branch }: {
+function WorktreeCard({ domId, name, selected, expanded, onToggle, title, metadata, results, tab, onTab, openConsole, agents, branch }: {
+  domId: string;
   name: string; selected: boolean; expanded: boolean; onToggle: (open: boolean) => void;
   title: ReactNode; metadata: ReactNode; tab: WorktreeTab; onTab: (tab: WorktreeTab) => void;
   /** Unresolved operations of this worktree, shown above both tabs. */
@@ -124,7 +135,7 @@ function WorktreeCard({ name, selected, expanded, onToggle, title, metadata, res
   openConsole: ReactNode; agents: ReactNode; branch: ReactNode;
 }) {
   const id = useId();
-  return <li className={selected ? 'selected' : ''}><details open={expanded} onToggle={event => onToggle(event.currentTarget.open)}>
+  return <li id={domId} className={selected ? 'selected' : ''}><details open={expanded} onToggle={event => onToggle(event.currentTarget.open)}>
     <summary className="workspace-card" aria-label={`Worktree ${name}`}>
       {title}{metadata}
     </summary>

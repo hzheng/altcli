@@ -5,6 +5,7 @@ import type { Group, ImplementationRun, ImplementationTurn, JournalRecord, Stand
 import type { PlanningRun, PlanTurn } from './planning.ts';
 import type { Project } from './projects.ts';
 import type { Checkpoint, InteractionHold, InteractionRecord } from './interactions.ts';
+import type { AttentionFeed } from './attention.ts';
 
 export interface WorktreeIdentity { root: string; gitDir: string; indexPath: string }
 export interface ManagedSession extends SessionRegistration {
@@ -72,6 +73,9 @@ export interface RelayRun {
   restoredCheckpoint?: boolean;
   /** Only an unresolved completion gate may be explicitly rechecked; other pauses revoke it. */
   blockedHandoff?: BlockedHandoff;
+  /** A pause's typed cause where no other field shows it: the owner's own Pause or a backend restart. Absent for every other
+   * pause and cleared whenever the run is not paused. Attention keeps an owner's pause quiet. */
+  pauseCause?: 'user' | 'restart';
 }
 /** A live process under a registered pane, as the host reported it. */
 export interface ProcessRecord { pid: string; command: string }
@@ -129,6 +133,8 @@ export interface WorkflowState extends ConsoleState {
   activities?: AgentActivity[];
   interactions?: InteractionRecord[];
   checkpoints?: Checkpoint[];
+  /** Current attention items for the whole host, independent of the selected checkout. */
+  attention?: AttentionFeed;
 }
 export interface HookReceipt { accepted: boolean; reason: string; event: TurnEvent | null; completion?: 'pending' | 'finished' }
 /** `expectedCommandId` is required with continue and recheck. With takeover it is optional; when given, a run whose current command differs is refused. */

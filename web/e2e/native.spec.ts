@@ -1,6 +1,6 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import type { WorkflowState } from '../src/contracts/workflow';
-import { backToControl, expand, expandAgents, expandWorktree, takeControl, openAccess, openCard, pane, readiness, showSurface } from './ui';
+import { backToControl, expand, expandAgents, expandWorktree, takeControl, openAccess, openAgents, openCard, pane, readiness, showSurface } from './ui';
 const headers={Authorization:`Bearer ${'a'.repeat(64)}`};
 async function state(request:APIRequestContext):Promise<WorkflowState>{return (await request.get('/api/v1/state',{headers})).json();}
 async function post(request:APIRequestContext,path:string,data:unknown){const r=await request.post(`/api/v1/${path}`,{headers,data});expect(r.ok(),await r.text()).toBe(true);return r.json();}
@@ -386,7 +386,7 @@ test('observation is automatic; direct input, stop and Lock preserve manual auth
 
 test('repository entry, literal profile editor, preview and explicit duplicate-profile launch use the real mock API',async({page,request},info)=>{
   await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
-  const sections=page.getByRole('navigation',{name:'Sections'});await sections.getByRole('button',{name:'Settings',exact:true}).click();
+  const sections=page.getByRole('navigation',{name:'Sections'});await openAgents(page,'Workspace agents','Profiles');
   const profiles=page.getByRole('region',{name:'Launch profiles'});await profiles.getByRole('button',{name:'New',exact:true}).click();await profiles.getByRole('menuitem',{name:'Codex preset'}).click();
   await expect(profiles.getByLabel('Argument 1',{exact:true})).toHaveValue('--no-daemon');
   const label=`Fixture ${info.project.name}`;await profiles.getByLabel('Profile label',{exact:true}).fill(label);await profiles.getByRole('button',{name:'Add argument',exact:true}).click();await profiles.getByLabel('Argument 2',{exact:true}).fill('literal ;');await profiles.getByRole('button',{name:'Save profile'}).click();
@@ -424,7 +424,7 @@ test('repository entry, literal profile editor, preview and explicit duplicate-p
   await trees.getByRole('button',{name:`Open native-${info.project.name}`,exact:true}).click();
   await expect(page.getByRole('heading',{name:'Agent console',exact:true})).toBeVisible();
   for(const name of names)await expect(page.locator(`article[aria-label="${name} pane"]`)).toHaveCount(1);
-  await sections.getByRole('button',{name:'Settings',exact:true}).click();await profiles.getByRole('button',{name:label,exact:true}).click();await profiles.getByRole('button',{name:'Delete profile'}).click();
+  await openAgents(page,'Workspace agents','Profiles');await profiles.getByRole('button',{name:label,exact:true}).click();await profiles.getByRole('button',{name:'Delete profile'}).click();
   await expect(profiles.getByRole('button',{name:label,exact:true})).toHaveCount(0);
   const batches=await (await request.get('/api/v1/launches',{headers})).json();expect(batches.flatMap((b:{items:{profile:{id:string}}[]})=>b.items).filter((i:{profile:{id:string}})=>i.profile.id===profile.id)).toHaveLength(2);
 });
@@ -760,7 +760,7 @@ test('a Codex profile without --no-daemon is flagged in the row, the editor and 
     const trees=page.getByRole('region',{name:`Project worktrees nodaemon-${info.project.name}`});await expandAgents(page,`nodaemon-${info.project.name}`);await trees.getByRole('button',{name:'Launch agents…'}).click();
     await trees.getByRole('button',{name:'Add agent',exact:true}).click();await trees.getByLabel('Agent 1 profile').selectOption(created.id);await trees.getByRole('button',{name:'Preview launch'}).click();
     await expect(trees.getByRole('status').filter({hasText:`Profile ${label} runs Codex without --no-daemon`})).toBeVisible();
-    await sections.getByRole('button',{name:'Settings',exact:true}).click();
+    await openAgents(page,'Workspace agents','Profiles');
     const profiles=page.getByRole('region',{name:'Launch profiles'});
     await profiles.getByRole('button',{name:`${label} · needs --no-daemon`,exact:true}).click();
     const warning=profiles.getByRole('status').filter({hasText:'lacks --no-daemon'});
@@ -786,7 +786,7 @@ test('a Codex-hinted shell profile keeps its arguments and offers manual verific
     await trees.getByRole('button',{name:'Add agent',exact:true}).click();await trees.getByLabel('Agent 1 profile').selectOption(created.id);await trees.getByRole('button',{name:'Preview launch'}).click();
     await expect(trees.getByRole('status').filter({hasText:`Profile ${label} uses a shell or wrapper`})).toBeVisible();
     await expect(trees.getByText('runs Codex without --no-daemon',{exact:false})).toHaveCount(0);
-    await sections.getByRole('button',{name:'Settings',exact:true}).click();
+    await openAgents(page,'Workspace agents','Profiles');
     const profiles=page.getByRole('region',{name:'Launch profiles'});
     await profiles.getByRole('button',{name:label,exact:true}).click();
     await expect(profiles.getByText('For a shell or wrapper, check that its Codex command includes',{exact:false})).toBeVisible();
@@ -799,25 +799,26 @@ test('a Codex-hinted shell profile keeps its arguments and offers manual verific
     if(current)await request.delete(`/api/v1/launch-profiles/${created.id}`,{headers,data:{expectedRevision:current.revision}});
   }
 });
-test('Helper → Settings saves the model as the only launchable profile Chat preselects; Chat and Launch profiles link to it; nothing launches',async({page,request})=>{
+test('Helper → Profiles saves the model as the only launchable profile Chat preselects; Chat and Settings link to it; nothing launches',async({page,request})=>{
   const list=async()=>((await (await request.get('/api/v1/launch-profiles',{headers})).json()) as {id:string;label:string;revision:number;args:string[]}[]);
   const wrapper=await post(request,'launch-profiles',{label:'Wrapped Codex',executable:'/bin/zsh',args:['-lc','codex'],adapterHint:'codex',enabled:true});
   try {
     const posts:string[]=[];page.on('request',r=>{if(r.method()==='POST'&&r.url().includes('/global-ai'))posts.push(r.url());});
     await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
-    const sections=page.getByRole('navigation',{name:'Sections',exact:true});await sections.getByRole('button',{name:'Helper',exact:true}).click();
+    const sections=page.getByRole('navigation',{name:'Sections',exact:true});await openAgents(page,'Helper');
     // Helper uses Console's token. Worktree recovery stays in Console; with no conversation yet Chat is the start flow.
-    await expect(page.getByRole('heading',{name:'Helper',level:1})).toBeVisible();await expect(page.getByLabel('AltCLI access token')).toHaveCount(0);
+    await expect(page.getByRole('heading',{name:'Agents',level:1})).toBeVisible();await expect(page.getByLabel('AltCLI access token')).toHaveCount(0);
+    await expect(page.getByRole('navigation',{name:'Agent kinds'}).getByRole('button')).toHaveText(['Workspace agents','Helper','Background assistant']);
     const parts=page.getByRole('navigation',{name:'Helper sections'});
-    await expect(parts.getByRole('button')).toHaveText(['Chat','Session','Settings','Evidence','Guide']);
+    await expect(parts.getByRole('button')).toHaveText(['Chat','Session','Profiles','Evidence','Guide']);
     await expect(parts.getByRole('button',{name:'Chat',exact:true})).toHaveAttribute('aria-pressed','true');
     await expect(page.locator('.page-heading').getByRole('button',{name:/^Control access/})).toHaveCount(0);
-    // Without a profile, Chat leads to Settings.
+    // Without a profile, Chat leads to Profiles.
     const start=page.getByRole('region',{name:'Start Helper'});
     await expect(start.getByText('No profile can launch Helper yet',{exact:false})).toBeVisible();
-    await start.getByRole('button',{name:'Settings',exact:true}).first().click();
-    await expect(parts.getByRole('button',{name:'Settings',exact:true})).toHaveAttribute('aria-pressed','true');
-    const settings=page.getByRole('region',{name:'Helper settings'});
+    await start.getByRole('button',{name:'Profiles',exact:true}).first().click();
+    await expect(parts.getByRole('button',{name:'Profiles',exact:true})).toHaveAttribute('aria-pressed','true');
+    const settings=page.getByRole('region',{name:'Helper profiles'});
     // The mock host is not tmux: the missing requirement is named before anything could start.
     await expect(settings.getByRole('status').filter({hasText:'ALTCLI_ADAPTER=tmux'})).toBeVisible();
     // The wrapper cannot launch Helper, so it is not listed; the first new profile is named Helper.
@@ -835,49 +836,51 @@ test('Helper → Settings saves the model as the only launchable profile Chat pr
     const select=page.getByLabel('Helper launch profile');
     await expect(select).toHaveValue(saved.id);await expect(select.locator('option',{hasText:'Wrapped Codex'})).toHaveCount(0);
     await expect(page.getByText('for every project on this host',{exact:false})).toBeVisible();
-    // Settings no longer has a Helper section, and its Launch profiles hold only agent profiles. It links back, where the saved values read back.
+    // Settings links to each kind's profiles. Worktree agent profiles hold only agent profiles; Helper's link leads back to the saved values.
     await sections.getByRole('button',{name:'Settings',exact:true}).click();
     await expect(page.getByRole('navigation',{name:'Settings sections'}).getByRole('button')).toHaveText(['Console preferences','Host configuration']);
+    await page.getByRole('region',{name:'Console preferences'}).getByRole('button',{name:'Agents → Workspace agents → Profiles'}).click();
     const agentProfiles=page.getByRole('region',{name:'Launch profiles'}).getByRole('group',{name:'Saved profiles'});
     await expect(agentProfiles.getByRole('button',{name:'Wrapped Codex',exact:true})).toBeVisible();await expect(agentProfiles.getByRole('button',{name:'Helper',exact:true})).toHaveCount(0);
-    await page.getByRole('region',{name:'Console preferences'}).getByRole('button',{name:'Helper → Settings'}).click();
-    await expect(sections.getByRole('button',{name:'Helper',exact:true})).toHaveAttribute('aria-pressed','true');
+    await sections.getByRole('button',{name:'Settings',exact:true}).click();
+    await page.getByRole('region',{name:'Console preferences'}).getByRole('button',{name:'Agents → Helper → Profiles'}).click();
+    await expect(sections.getByRole('button',{name:'Agents',exact:true})).toHaveAttribute('aria-pressed','true');
     await expect(settings.getByLabel('Model',{exact:true})).toHaveValue('gpt-test');await expect(settings.getByLabel('Reasoning effort')).toHaveValue('high');
     await expect(settings.getByRole('button',{name:'Save Helper profile'})).toBeVisible();
-    await expect(settings.getByRole('group',{name:'Helper profiles'}).getByRole('button')).toHaveText(['Helper']);
+    await expect(settings.getByRole('group',{name:'Saved Helper profiles'}).getByRole('button')).toHaveText(['Helper']);
     // Session has nothing to manage without a conversation and leads back to Chat; Evidence reads work without one.
     await parts.getByRole('button',{name:'Session',exact:true}).click();await expect(select).toBeHidden();await expect(settings).toBeHidden();
     await page.getByRole('region',{name:'Helper session'}).getByRole('button',{name:'Start one in Chat'}).click();await expect(select).toHaveValue(saved.id);
     await parts.getByRole('button',{name:'Evidence',exact:true}).click();await expect(page.getByRole('heading',{name:'Evidence, not another prompt'})).toBeVisible();
     await expect(page.getByRole('button',{name:'Inspect runs',exact:true})).toBeVisible();
     await expect(page.locator('.page-heading').getByRole('button',{name:/^Control access/})).toHaveCount(0);
-    // With a profile, Chat still links to Settings.
+    // With a profile, Chat still links to Profiles.
     await parts.getByRole('button',{name:'Chat',exact:true}).click();
-    await start.getByRole('button',{name:'Settings',exact:true}).first().click();
+    await start.getByRole('button',{name:'Profiles',exact:true}).first().click();
     await expect(settings).toBeVisible();await parts.getByRole('button',{name:'Chat',exact:true}).click();await expect(select).toHaveValue(saved.id);
     // Guide has no worktree recovery controls; Helper reopens on the section chosen earlier on this page.
     await parts.getByRole('button',{name:'Guide',exact:true}).click();await expect(select).toBeHidden();
     await expect(page.getByRole('button',{name:/^Control access/})).toHaveCount(0);
     await sections.getByRole('button',{name:'Console',exact:true}).click();await expect(page.getByRole('region',{name:'How this works'})).toBeHidden();
-    await sections.getByRole('button',{name:'Helper',exact:true}).click();await expect(page.getByRole('region',{name:'How this works'})).toBeVisible();
+    await sections.getByRole('button',{name:'Agents',exact:true}).click();await expect(page.getByRole('region',{name:'How this works'})).toBeVisible();
     expect(posts).toEqual([]);
-    // /global-ai opens Console on Helper → Chat.
+    // /global-ai opens Agents on Helper → Chat.
     await page.goto('/global-ai');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
-    await expect(sections.getByRole('button',{name:'Helper',exact:true})).toHaveAttribute('aria-pressed','true');
+    await expect(sections.getByRole('button',{name:'Agents',exact:true})).toHaveAttribute('aria-pressed','true');
+    await expect(page.getByRole('navigation',{name:'Agent kinds'}).getByRole('button',{name:'Helper',exact:true})).toHaveAttribute('aria-pressed','true');
     await expect(parts.getByRole('button',{name:'Chat',exact:true})).toHaveAttribute('aria-pressed','true');await expect(select).toHaveValue(saved.id);
   } finally {
     for(const p of (await list()).filter(p=>p.label==='Helper'||p.id===wrapper.id))await request.delete(`/api/v1/launch-profiles/${p.id}`,{headers,data:{expectedRevision:p.revision}});
   }
 });
-test('a profile saved under the earlier Global AI label is still preselected, and saving it in Helper → Settings keeps its name',async({page,request})=>{
+test('a profile saved under the earlier Global AI label is still preselected, and saving it in Helper → Profiles keeps its name',async({page,request})=>{
   const list=async()=>((await (await request.get('/api/v1/launch-profiles',{headers})).json()) as {id:string;label:string;revision:number}[]);
   const legacy=await post(request,'launch-profiles',{label:'Global AI',executable:'codex',args:['--no-daemon','-m','gpt-old'],adapterHint:'codex',enabled:true,purpose:'helper'});
   try {
     await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
-    const sections=page.getByRole('navigation',{name:'Sections',exact:true});
-    await sections.getByRole('button',{name:'Helper',exact:true}).click();await expect(page.getByLabel('Helper launch profile')).toHaveValue(legacy.id);
-    await page.getByRole('navigation',{name:'Helper sections'}).getByRole('button',{name:'Settings',exact:true}).click();
-    const settings=page.getByRole('region',{name:'Helper settings'});
+    await openAgents(page,'Helper');await expect(page.getByLabel('Helper launch profile')).toHaveValue(legacy.id);
+    await page.getByRole('navigation',{name:'Helper sections'}).getByRole('button',{name:'Profiles',exact:true}).click();
+    const settings=page.getByRole('region',{name:'Helper profiles'});
     await expect(settings.getByLabel('Model',{exact:true})).toHaveValue('gpt-old');await expect(settings.getByLabel('Name',{exact:true})).toHaveValue('Global AI');
     // Profiles are named by the owner now: saving never renames one.
     await settings.getByLabel('Model',{exact:true}).fill('gpt-new');
@@ -888,14 +891,13 @@ test('a profile saved under the earlier Global AI label is still preselected, an
     if(current)await request.delete(`/api/v1/launch-profiles/${legacy.id}`,{headers,data:{expectedRevision:current.revision}});
   }
 });
-test('Helper → Settings switches its profile to Claude Code, which Chat then lists; until saved, Codex keeps its values',async({page,request})=>{
+test('Helper → Profiles switches its profile to Claude Code, which Chat then lists; until saved, Codex keeps its values',async({page,request})=>{
   const list=async()=>((await (await request.get('/api/v1/launch-profiles',{headers})).json()) as {id:string;label:string;revision:number;executable:string;args:string[];adapterHint:string}[]);
   const codex=await post(request,'launch-profiles',{label:'Helper',executable:'codex',args:['--no-daemon','-m','gpt-old','-c','model_reasoning_effort=high'],adapterHint:'codex',enabled:true,purpose:'helper'});
   try {
     await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
-    const sections=page.getByRole('navigation',{name:'Sections',exact:true});await sections.getByRole('button',{name:'Helper',exact:true}).click();
-    const parts=page.getByRole('navigation',{name:'Helper sections'});await parts.getByRole('button',{name:'Settings',exact:true}).click();
-    const settings=page.getByRole('region',{name:'Helper settings'}),cli=settings.getByRole('combobox',{name:'CLI',exact:true}),model=settings.getByLabel('Model',{exact:true});
+    await openAgents(page,'Helper','Profiles');const parts=page.getByRole('navigation',{name:'Helper sections'});
+    const settings=page.getByRole('region',{name:'Helper profiles'}),cli=settings.getByRole('combobox',{name:'CLI',exact:true}),model=settings.getByLabel('Model',{exact:true});
     await expect(cli).toHaveValue('codex');await expect(model).toHaveValue('gpt-old');
     await expect(settings.getByText('--sandbox read-only',{exact:false})).toBeVisible();
     // Another CLI starts from its own defaults and states how it is held to read-only; switching back restores the saved values.
@@ -914,16 +916,15 @@ test('Helper → Settings switches its profile to Claude Code, which Chat then l
     if(current)await request.delete(`/api/v1/launch-profiles/${codex.id}`,{headers,data:{expectedRevision:current.revision}});
   }
 });
-test('Helper → Settings keeps several named profiles that Chat offers; deleting one asks first and stops nothing',async({page,request})=>{
+test('Helper → Profiles keeps several named profiles that Chat offers; deleting one asks first and stops nothing',async({page,request})=>{
   const list=async()=>((await (await request.get('/api/v1/launch-profiles',{headers})).json()) as {id:string;label:string;revision:number;adapterHint:string;args:string[]}[]);
   const first=await post(request,'launch-profiles',{label:'Helper',executable:'codex',args:['--no-daemon','-m','gpt-old'],adapterHint:'codex',enabled:true,purpose:'helper'});
   // An agent profile Helper could otherwise launch stays out of Helper.
   const agent=await post(request,'launch-profiles',{label:'Agent Codex',executable:'codex',args:['--no-daemon'],adapterHint:'codex',enabled:true});
   try {
     await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
-    await page.getByRole('navigation',{name:'Sections',exact:true}).getByRole('button',{name:'Helper',exact:true}).click();
-    const parts=page.getByRole('navigation',{name:'Helper sections'});await parts.getByRole('button',{name:'Settings',exact:true}).click();
-    const settings=page.getByRole('region',{name:'Helper settings'}),names=settings.getByRole('group',{name:'Helper profiles'}).getByRole('button');
+    await openAgents(page,'Helper','Profiles');const parts=page.getByRole('navigation',{name:'Helper sections'});
+    const settings=page.getByRole('region',{name:'Helper profiles'}),names=settings.getByRole('group',{name:'Saved Helper profiles'}).getByRole('button');
     const name=settings.getByLabel('Name',{exact:true}),create=settings.getByRole('button',{name:'Create Helper profile'});
     await expect(names).toHaveText(['Helper']);await expect(names.first()).toHaveAttribute('aria-pressed','true');
     // A new profile needs its own name; Cancel returns to the saved one without writing.
@@ -936,7 +937,7 @@ test('Helper → Settings keeps several named profiles that Chat offers; deletin
     // Visiting another top-level tab keeps the unsaved profile draft, just as the other settings editors do.
     const sections=page.getByRole('navigation',{name:'Sections',exact:true});
     await sections.getByRole('button',{name:'Settings',exact:true}).click();await expect(settings).toBeHidden();
-    await sections.getByRole('button',{name:'Helper',exact:true}).click();
+    await sections.getByRole('button',{name:'Agents',exact:true}).click();
     await expect(name).toHaveValue('Claude Opus max');await expect(settings.getByRole('combobox',{name:'CLI',exact:true})).toHaveValue('claude');
     await expect(settings.getByLabel('Model',{exact:true})).toHaveValue('opus');await expect(settings.getByLabel('Reasoning effort')).toHaveValue('max');
     await create.click();await expect(settings.getByRole('status').filter({hasText:'Saved “Claude Opus max”'})).toBeVisible();
@@ -948,7 +949,7 @@ test('Helper → Settings keeps several named profiles that Chat offers; deletin
     const select=page.getByLabel('Helper launch profile');await expect(select).toHaveValue(first.id);
     await expect(select.locator('option')).toHaveText(['Choose a launch profile','Helper','Claude Opus max']);
     // Deleting asks first and removes only it.
-    await parts.getByRole('button',{name:'Settings',exact:true}).click();await names.nth(1).click();
+    await parts.getByRole('button',{name:'Profiles',exact:true}).click();await names.nth(1).click();
     let asked='';page.once('dialog',d=>{asked=d.message();void d.accept();});
     await settings.getByRole('button',{name:'Delete Helper profile'}).click();
     await expect(settings.getByRole('status').filter({hasText:'Deleted “Claude Opus max”'})).toBeVisible();

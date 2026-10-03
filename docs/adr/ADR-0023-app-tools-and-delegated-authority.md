@@ -5,6 +5,12 @@ Status: **proposed future direction; only A1's read-only app tools are implement
 This accompanies [ADR-0022](ADR-0022-app-wide-ai-instances.md); it grants no present
 tool access, standing delegation or exemption from human approval.
 
+> October 2, 2026 ([ADR-0022 amendment](ADR-0022-app-wide-ai-instances.md#october-2-amendment-attention-first-background-assistant)):
+> reads now take an explicit principal set by the transport. Helper keeps its host-wide scope; a Background job is scoped to one
+> attention item and its run or launch. Every read tool declares an output schema that the host checks before replying. The validation
+> of a model's assessment is separate and stricter: exact fields, host-minted evidence IDs and per-kind destinations. Both are implemented
+> locally; no effect tool, job endpoint or delegated authority exists. See [BACKGROUND-ASSISTANT](../BACKGROUND-ASSISTANT.md).
+
 ## One authoritative service boundary
 
 Expose scoped documentation, capabilities, application state and captured

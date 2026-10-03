@@ -24,7 +24,7 @@ test('private tmux: Git-free Global AI startup is inspectable before agent recog
   await writeFile(binary, '#!/bin/sh\nprintf "Fixture startup: resolve login in the native terminal\\n"\nexec /bin/cat\n', { mode: 0o700 });
   const profile: LaunchProfile = { id: 'fixture', revision: 1, label: 'Fixture Codex', executable: binary, args: [], adapterHint: 'codex', enabled: true, purpose: 'helper' };
   const host = new NativeGlobalHost(config, resolve(process.cwd(), '..')), records = new Map<string, GlobalAIInstance>();
-  const reads = new AppReads({ kb: { documents: [] }, featureFlags: () => ({}),
+  const reads = new AppReads({ kb: { documents: [] }, featureFlags: () => ({}), attention: { item: () => undefined, open: () => ({ items: [], total: 0 }) }, launch: () => undefined,
     state: async () => { throw new Error('No fixture state read expected.'); }, workspaces: async () => { throw new Error('No fixture discovery expected.'); }, run: () => undefined });
   const service = new GlobalAIService({ repository: { all: () => [...records.values()], save: i => { records.set(i.id, structuredClone(i)); } },
     host, reads, directory: join(config.dataDir, 'global-ai'), profiles: () => [profile], enabled: () => true, launchGuard: work => work() });
@@ -66,7 +66,7 @@ test('private tmux: a Claude Code Helper receives its exact arguments and CLAUDE
   await writeFile(binary, '#!/bin/sh\nprintf "%s\\n" "$@" > argv.txt\nprintf "Fixture startup\\n"\nexec /bin/cat\n', { mode: 0o700 });
   const profile: LaunchProfile = { id: 'fixture', revision: 1, label: 'Fixture Claude', executable: binary, args: ['--model', 'sonnet'], adapterHint: 'claude', enabled: true, purpose: 'helper' };
   const host = new NativeGlobalHost(config, resolve(process.cwd(), '..')), records = new Map<string, GlobalAIInstance>();
-  const reads = new AppReads({ kb: { documents: [] }, featureFlags: () => ({}),
+  const reads = new AppReads({ kb: { documents: [] }, featureFlags: () => ({}), attention: { item: () => undefined, open: () => ({ items: [], total: 0 }) }, launch: () => undefined,
     state: async () => { throw new Error('No fixture state read expected.'); }, workspaces: async () => { throw new Error('No fixture discovery expected.'); }, run: () => undefined });
   const service = new GlobalAIService({ repository: { all: () => [...records.values()], save: i => { records.set(i.id, structuredClone(i)); } },
     host, reads, directory: join(config.dataDir, 'global-ai'), profiles: () => [profile], enabled: () => true, launchGuard: work => work() });

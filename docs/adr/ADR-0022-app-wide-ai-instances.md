@@ -1,5 +1,9 @@
 # ADR-0022: App-wide AI instances and background jobs
 
+> October 2, 2026: the [attention-first amendment](#october-2-amendment-attention-first-background-assistant) records the endorsed
+> design for the first Background increment. Deterministic attention, the Agents tab, profiles and read contracts are implemented locally;
+> the Background runtime is not.
+
 > October 1, 2026: [ADR-0024](ADR-0024-registered-repositories-and-managed-workspaces.md) resolves the app-owned socket choice: Helper and the future Background assistant run as recorded app-wide instances on AltCLI's dedicated tmux endpoint (not yet implemented), which is not isolation.
 
 Status: **proposed future direction; only the Global AI A1 read increment is
@@ -114,3 +118,35 @@ choice remain open. Conceptual instance, job, notification, documentation and
 scoped-preference records describe responsibilities, not new tables or APIs.
 Future migrations must preserve existing history and refuse older runtimes that
 would ignore new effectful authority.
+
+## October 2 amendment: attention-first Background assistant
+
+Status: accepted through an endorsed two-planner Plan (run `aec693b1`, brief revision 1, plan revision 3); the transition into
+Implementation was authorized by that run's automatic policy. **Implemented locally:** deterministic attention, the Agents tab,
+role profiles, shared read contracts and the assessment validator. **Not implemented:** the Background runtime and its provider
+probe. [BACKGROUND-ASSISTANT](../BACKGROUND-ASSISTANT.md) describes the current behavior.
+
+The first increment diagnoses and notifies; it does not confirm, approve, resume, retry or answer prompts. It has two layers that fail
+independently:
+
+| Layer | Decision |
+| --- | --- |
+| Attention | Always on and model-free. Owned runs that cannot progress, Plan checkpoints that need the human, and uncertain launches or Helper starts become one durable item per issue key. A real change revises the item in place, the issue's end resolves it, and a recurrence opens a new item. Source fingerprints and monotonic versions are written in the same transaction as the source change. A boot pass and a 15-second sweep repair any missed path, and unchanged sources write nothing. Typed pause causes (`user`, `restart`) replace any reading of reason text. Delivery is the in-app list and a heading count; toasts, OS push and external channels are deferred |
+| Background diagnosis | After explicit enablement, a settled item version admits one bounded, read-only job. The host validates its answer independently of any CLI schema and attaches it only by compare-and-set to the exact item revision, source version, attempt and enablement. A late answer is recorded as stale. Model failure never affects attention |
+
+Runtime decisions for the pending increment:
+
+- **Instance and endpoint.** One recorded Background instance in tmux, on the same endpoint resolver as Helper: the configured endpoint
+  until [ADR-0024](ADR-0024-registered-repositories-and-managed-workspaces.md)'s I4 lands, then the dedicated endpoint. Existing
+  instances stay bound to their recorded endpoint, and I4's transition and gate include them.
+- **Runner and principals.** The host owns scheduling and storage; a runner in the instance only carries jobs. Job reads use a separate
+  capability scoped to one item and its run or launch.
+- **Restart.** After a restart, new attempts need an explicit Inspect and Resume.
+- **First adapter.** Claude Code is the first candidate, enabled only after a disposable probe verifies structured output and the
+  removal of built-in tools. Codex follows only after passing the same probe.
+- **v1 limits.** One active job, a 20 s settle, 10 starts an hour at least 30 s apart, a 120 s deadline, 12 tool calls, one automatic
+  attempt per item version, and a stop after three consecutive failures.
+
+Store schema 22 adds the attention tables and Background profiles. The change only adds data, so it needs no settlement; it keeps a
+private backup, and older versions refuse the store. Standalone setup-operation attention and delegated handling under an owner policy
+remain later increments, with no authority granted here.
