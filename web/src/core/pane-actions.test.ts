@@ -8,15 +8,16 @@ const request = (action: PaneAction, more: Partial<PaneRequestInput> = {}) => pa
 test("After send maps to plain Send, work without relay, and work with relay", () => {
   expect([sendAction("nothing"), sendAction("commit"), sendAction("commit_relay")]).toEqual(["send", "send_commit", "send_commit_relay"]);
   const send = request("send");
-  expect(send).toEqual({ path: "instructions", body: { requestId: base.requestId, groupId: "g", groupRevision: 3, registrations: base.registrations, agentId: "codex", text: "Do the task.", policy: "peer", confirmReady: true } });
+  expect(send).toEqual({ path: "instructions", body: { requestId: base.requestId, groupId: "g", groupRevision: 3, registrations: base.registrations, agentId: "codex", text: "Do the task.", policy: "peer", replaceDraft: true, confirmReady: true } });
   expect(request("send_commit")).toMatchObject({ path: "implementation", body: { kind: "work", text: "Do the task.", handoff: false, autoContinue: false, agentId: "codex", branch: base.branch } });
   expect(request("send_commit_relay")).toMatchObject({ path: "implementation", body: { kind: "work", handoff: true, autoContinue: true, pauseOnObjection: true } });
 });
 test("Stage relay uses the existing branch-bound staging contract without committed-work fields", () => {
   expect(sendAction("stage_relay")).toBe("send_stage_relay");
-  const stage = request("send_stage_relay", { branch: { branch: "main", head: base.branch.head, newBranch: "task/unused" }, logPath: "log.jsonl", reviewNote: "unused" });
+  const registrations = { codex: "22222222-2222-4222-8222-222222222222", claude: "33333333-3333-4333-8333-333333333333" };
+  const stage = request("send_stage_relay", { branch: { branch: "main", head: base.branch.head, newBranch: "task/unused" }, logPath: "log.jsonl", reviewNote: "unused", registrations });
   expect(stage).toEqual({ path: "commands", body: { requestId: base.requestId, agentId: "codex", pairId: "g", kind: "instruction", text: "Do the task.", handoff: true,
-    stage: { branch: "main", head: base.branch.head }, autoContinue: true, turnLimit: 20, confirmReady: true } });
+    stage: { branch: "main", head: base.branch.head }, autoContinue: true, turnLimit: 20, registrations, replaceDraft: true, confirmReady: true } });
   expect(parseStart(stage.body)).toEqual(stage.body);
   expect(request("send_stage_relay", { automatic: false }).body).toMatchObject({ handoff: true, autoContinue: false });
 });

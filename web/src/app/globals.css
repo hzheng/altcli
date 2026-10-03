@@ -243,7 +243,7 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
 .context-switches label { display:flex; align-items:center; gap:6px; min-width:0; max-width:100%; margin:0; }
 .context-switches select { min-width:0; max-width:260px; width:100%; font:inherit; padding:5px 8px; color:var(--text); background:var(--bg); border:1px solid var(--line); border-radius:6px; }
 .context-project .mono { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.context-actions { margin-left:auto; display:flex; gap:6px; }
+.context-actions { margin-left:auto; display:flex; flex-wrap:wrap; gap:6px; min-width:0; max-width:100%; }
 .context-actions button { font-size:11px; }
 .run-settings { border:1px solid var(--line); border-radius:10px; background:var(--panel); padding:8px 14px; margin-bottom:12px; font-size:12px; }
 .run-summary { display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; }
@@ -252,7 +252,7 @@ footer { display:flex; justify-content:space-between; color:#82979d; font-size:1
 .phase-caption { display:inline-flex; align-items:center; gap:4px; }
 .run-summary .badge.warning { flex:0 1 auto; min-width:0; max-width:100%; overflow:hidden; text-overflow:ellipsis; }
 .row-toggles { margin-left:auto; display:flex; gap:6px; flex-shrink:0; }
-/* Server-wide status and Control access share the right side of each page heading. */
+/* Host-wide status belongs in the page heading; recovery belongs to the worktree context. */
 .page-heading { flex-wrap:wrap; gap:10px; }
 .heading-status { position:relative; display:flex; align-items:center; justify-content:flex-end; gap:8px; margin-left:auto; min-width:0; max-width:100%; }
 .heading-status .connection { margin:0; min-width:0; flex-shrink:0; }

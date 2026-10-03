@@ -72,6 +72,17 @@ them all and holds selection; Focus shows one and follows the next working agent
 The Agent selector chooses the viewed agent and recipient together; selection
 revokes readiness and sends nothing. Plan setup addresses the whole group.
 
+## October 2 amendment: confirmed replacement of unsent prompt text
+
+The owner requested recovery from leftover prompt text without another manual
+takeover cycle. For a new Send, Commit or review, the existing Ready confirmation
+explicitly includes replacing any unsent text in the selected recipient's prompt.
+The initial command records that consent; later turns never inherit it. A recognized
+mixed draft may be cleared once with editing keys before Enter, then the exact new
+command must be verified. This authorizes neither interrupts nor retries after a
+possibly submitted command. Unreadable prompts and failed replacement retain
+uncertainty ownership. Plan starts and context resets keep their existing contracts.
+
 ## October 1 amendment: worktree-scoped manual input
 
 Status: accepted by the owner on October 1, 2026; implemented locally with store schema 21.
@@ -287,6 +298,13 @@ descriptors, every later assignment of the run carries them, and plain Send's pr
 manifest instead of an image path, so exact prompt correlation is unchanged. Images that may have been
 used never expire in this increment; a full quota refuses new uploads. The protocol records which CLI
 versions a probe verified; other CLIs are refused.
+
+October 2 worktree scope: Control access moves from the global page heading into the selected
+worktree's Console, beside its selector. The panel, queued-handoff notices and takeover are
+hidden on Projects, Settings and Helper. Opening is remembered per worktree; takeover names its
+checkout and a changed worktree revokes the confirmation. Recovery remains reachable when that
+worktree has no agents. This changes presentation, not ownership: runs and delivery holds remain
+scoped to their exact checkout, while unresolved server-wide manual input is still identified.
 
 ## Proposed image completion work
 

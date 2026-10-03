@@ -867,22 +867,36 @@ export class ControlPlane {
     const fresh = !this.workflow.execution(input.requestId);
     if (fresh && !this.config.legacyEnabled) throw new AppError('STAGE_RELAY_DISABLED', 'Stage relay is disabled on this host (ALTCLI_ENABLE_LEGACY_RELAY=false). Remove that line or set it to true and restart the host to use Stage relay on main or the default branch.', 409);
     if (!this.config.inputEnabled) throw new AppError('READ_ONLY', 'Input is disabled by the host.', 403);
-    const session = this.store.sessions().find((s) => s.id === input.agentId) as ManagedSession | undefined;
+    const discovery = await this.workspaces();
+    const stored = this.store.sessions() as ManagedSession[];
+    const sessions = fresh ? this.workspaceSessions(discovery) : stored;
+    const session = sessions.find((s) => s.id === input.agentId);
     if (!session?.registrationId) throw new AppError('REGISTRATION_REQUIRED', 'Register or re-register this worker before issuing commands.', 409);
     this.projects.assertWorktreeReady(session.repository);
-    const workspaceGroup = input.pairId ? this.workspaceGroups(await this.workspaces()).find((group) => group.id === input.pairId) : undefined;
+    const workspaceGroup = input.pairId ? this.workspaceGroups(discovery).find((group) => group.id === input.pairId) : undefined;
     if (workspaceGroup && workspaceGroup.members.length !== 2) throw new AppError('INVALID_PAIR', 'Stage relay requires exactly two selected agents.', 409);
     const pair = input.pairId ? (workspaceGroup ? { ...workspaceGroup, sessions: workspaceGroup.members } : this.store.pairs().find((p) => p.id === input.pairId)) : undefined;
     if (input.pairId && (!pair || !pair.sessions.includes(input.agentId))) throw new AppError('INVALID_PAIR', 'The chosen pair does not contain this target.', 409);
     if (fresh && !pair) throw new AppError('PAIR_REQUIRED', 'Stage relay needs the two-member workspace group. Use Send for a single instruction.', 409);
     if ((input.autoContinue || input.handoff) && !pair) throw new AppError('PAIR_REQUIRED', 'Select an explicit pair to arm automatic handoffs.', 409);
-    const participants = pair ? pair.sessions.map((id) => this.store.sessions().find((s) => s.id === id) as ManagedSession) : [session];
+    const participants = pair ? pair.sessions.map((id) => sessions.find((s) => s.id === id) as ManagedSession) : [session];
     if (participants.some((s) => !s?.registrationId)) throw new AppError('REGISTRATION_REQUIRED', 'Re-register the pair participants.', 409);
     if (this.config.mode === 'tmux' && participants.some((s) => !s.cliPid)) throw new AppError('REGISTRATION_REQUIRED', 'Re-register every participant so its current CLI process can be pinned.', 409);
     if (pair && !sameWorktree(participants[0]!.worktree, participants[1]!.worktree)) throw new AppError('DIFFERENT_WORKTREE', 'Pair participants must share a verified worktree and index.', 409);
     if (this.store.get(input.requestId) && !this.workflow.execution(input.requestId)) throw new AppError('ID_CONFLICT', 'This request ID belongs to an older transport command.', 409);
     if (fresh) await this.assertStageStart(input, participants[0]!.worktree?.root ?? session.repository);
     if (input.autoContinue || input.handoff) for (const participant of participants) wireText({ ...input, kind: 'relay', text: undefined }, participant);
+    // Discovery is read-only; an explicit Start validates and binds any newly discovered or renewed members, but only the exact
+    // instances the human confirmed. Repeated requests keep the original run's identities and never rebind or redeliver them.
+    const unbound = participants.some((member) => !stored.some((saved) => saved.id === member.id && saved.registrationId === member.registrationId));
+    const confirmed = input.registrations;
+    if (fresh && (unbound || confirmed) && (!confirmed || Object.keys(confirmed).length !== participants.length || participants.some((member) => confirmed[member.id] !== member.registrationId))) {
+      throw new AppError('TARGET_CHANGED', 'An agent instance changed or was not confirmed. Recheck and confirm readiness again; nothing was sent.', 409);
+    }
+    if (fresh && unbound) {
+      await this.validateMembers(participants, workspaceGroup?.cwd ?? undefined, true);
+      this.bindMembers(participants);
+    }
     const turn = this.workflow.start(input, participants, pair?.id ?? null);
     await this.pump(turn.runId);
     const record = this.store.get(turn.commandId);
@@ -934,7 +948,7 @@ export class ControlPlane {
     const { group, participants } = await this.implementationGroup({ ...input, kind: 'work', handoff: false, autoContinue: false });
     // Validate length before persisting registrations. Plain Send carries only the user's instruction and correlation marker,
     // or, with images, only the path of its immutable input manifest.
-    const command = { requestId: input.requestId, agentId: input.agentId, kind: 'instruction' as const, text: input.text, confirmReady: true as const };
+    const command = { requestId: input.requestId, agentId: input.agentId, kind: 'instruction' as const, text: input.text, ...(input.replaceDraft !== undefined ? { replaceDraft: input.replaceDraft } : {}), confirmReady: true as const };
     wireText(command, participants.find((p) => p.id === input.agentId)!);
     const attachments = await this.admitAttachments(input.attachments, group.repository, participants.filter((p) => p.id === input.agentId));
     this.assertKeyboardSettlement(input);
@@ -969,7 +983,7 @@ export class ControlPlane {
     this.assertKeyboardSettlement(input);
     this.bindMembers(participants);
     const turn = this.workflow.start({ requestId: input.requestId, agentId: input.agentId, kind: 'instruction', text: input.kind === 'commit' ? `Commit all current staged, unstaged and nonignored untracked project changes as they stand. Do not implement pending requests, relay to another agent, or claim task completion. Record unfinished work and checks in the handoff.${input.handoff ? ' The controller will relay the new snapshot after validating publication and completion.' : ''}` : input.text ?? 'Review the assigned candidate.',
-      handoff: input.handoff, autoContinue: input.autoContinue, turnLimit: input.turnLimit, pauseOnObjection: input.pauseOnObjection === true, confirmReady: true }, participants, null, implementation, undefined, undefined, attachments);
+      handoff: input.handoff, autoContinue: input.autoContinue, turnLimit: input.turnLimit, pauseOnObjection: input.pauseOnObjection === true, ...(input.replaceDraft !== undefined ? { replaceDraft: input.replaceDraft } : {}), confirmReady: true }, participants, null, implementation, undefined, undefined, attachments);
     await this.setupImplementation(turn.runId);
     await this.pump(turn.runId);
     const receipt = this.store.get(turn.commandId);

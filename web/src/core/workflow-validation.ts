@@ -4,12 +4,14 @@ import type { ActivityReset, HookEvent, RunAction, StageBinding, StartInput, Wor
 import { sha } from './implementation-validation.ts';
 
 export function parseStart(value: unknown): StartInput {
-  const { pairId, autoContinue, turnLimit, stage, ...command } = object(value);
+  const { pairId, autoContinue, turnLimit, stage, registrations, ...command } = object(value);
   if (autoContinue !== undefined && typeof autoContinue !== 'boolean') throw new AppError('INVALID_BODY', 'autoContinue must be a boolean.');
   if (turnLimit !== undefined && (!Number.isInteger(turnLimit) || (turnLimit as number) < 1 || (turnLimit as number) > 200)) throw new AppError('INVALID_BODY', 'turnLimit must be an integer from 1 to 200.');
+  const confirmed = registrations === undefined ? undefined : Object.fromEntries(Object.entries(object(registrations)).map(([id, generation]) => [agentId(id), requestId(generation)]));
+  if (confirmed && (Object.keys(confirmed).length < 1 || Object.keys(confirmed).length > 2)) throw new AppError('INVALID_BODY', 'Confirm the exact selected registrations.');
   return { ...parseCommand(command), ...(pairId !== undefined ? { pairId: agentId(pairId) } : {}),
     ...(autoContinue !== undefined ? { autoContinue } : {}), ...(turnLimit !== undefined ? { turnLimit: turnLimit as number } : {}),
-    ...(stage !== undefined ? { stage: parseStage(stage) } : {}) };
+    ...(stage !== undefined ? { stage: parseStage(stage) } : {}), ...(confirmed ? { registrations: confirmed } : {}) };
 }
 /** The branch and full commit a Stage relay start was confirmed on. */
 function parseStage(value: unknown): StageBinding {

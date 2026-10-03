@@ -137,6 +137,8 @@ export interface CommandInput {
   text?: string;
   /** For an instruction: hand off to the relay partner when the agent finishes (its result is the next thing to review). */
   handoff?: boolean;
+  /** Human consent to replace unsent text in this recipient's prompt for this delivery only. */
+  replaceDraft?: boolean;
   confirmReady: true;
 }
 export interface CommandRecord {

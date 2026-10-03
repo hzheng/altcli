@@ -250,9 +250,17 @@ The shared Control frame keeps a separate composer for each agent:
   identities (commands, deliveries, record revisions, writer generations); a draft, target, view
   or activity change while they are cleared, or the composer unmounting (Lock, another workspace),
   cancels the action, and only the sent draft is cleared.
-- **Control access:** one nonmodal panel under the page heading, opened from its entry in the
-  page heading's status row (entry, then the ⌨️ input status, then connection status) on every tab
-  and reachable with no agents. It explains every hold and holds typing stops, manual-input
+  Ready for a new Send, Commit or review also explicitly authorizes replacing unsent
+  text in that recipient's terminal prompt. `replaceDraft` is recorded on the initial
+  command only. Before Enter, a recognized mixed prompt can be cleared once with
+  Backspace/Delete and replaced with the intended command; the complete input must
+  then pass the usual exact-command check. Unreadable layouts, unverified replacement
+  and transport failures retain the existing uncertainty behavior. Successors, Plan
+  starts, context resets and API clients without this consent keep the draft guard.
+- **Control access:** one nonmodal panel in the selected worktree's Console, opened beside the
+  worktree selector and reachable even when that worktree has no agents. Projects, Settings
+  and Helper do not show it. Its open state is remembered per worktree, and takeover names the
+  exact checkout. It explains that worktree's holds and holds typing stops, manual-input
   reconciliation, the controller's run card with pause and one-click checkpoint or handoff
   continuation, a list of what to notice, one **Take control…** confirmation (ending this
   checkout's controller run, clearing an uncertain-request warning, releasing an older delivery

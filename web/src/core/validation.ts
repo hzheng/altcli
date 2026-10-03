@@ -56,14 +56,15 @@ function onlyFields(body: Record<string, unknown>, allowed: string[]): void {
 }
 export function parseCommand(value: unknown): CommandInput {
   const body = object(value);
-  onlyFields(body, ["requestId", "agentId", "kind", "text", "handoff", "confirmReady"]);
+  onlyFields(body, ["requestId", "agentId", "kind", "text", "handoff", "confirmReady", "replaceDraft"]);
   if (body.confirmReady !== true) throw new AppError("READINESS_REQUIRED", "Confirm that the selected agent is at an empty input prompt and the other agent is not writing.");
   if (body.kind !== "relay" && body.kind !== "instruction") throw new AppError("INVALID_KIND", "Unknown command kind.");
   // An instruction needs text; a relay may carry context that the controller appends to the registered prompt.
   const text = body.kind === "instruction" || (body.text !== undefined && body.text !== "") ? promptText(body.text) : undefined;
   if (body.handoff !== undefined && typeof body.handoff !== "boolean") throw new AppError("INVALID_BODY", "handoff must be a boolean.");
+  if (body.replaceDraft !== undefined && typeof body.replaceDraft !== "boolean") throw new AppError("INVALID_BODY", "replaceDraft must be a boolean.");
   return { requestId: requestId(body.requestId), agentId: agentId(body.agentId), kind: body.kind, ...(text !== undefined ? { text } : {}),
-    ...(body.handoff !== undefined ? { handoff: body.handoff } : {}), confirmReady: true };
+    ...(body.handoff !== undefined ? { handoff: body.handoff } : {}), ...(body.replaceDraft !== undefined ? { replaceDraft: body.replaceDraft } : {}), confirmReady: true };
 }
 export function parseRegistration(value: unknown): RegistrationInput {
   const body = object(value);

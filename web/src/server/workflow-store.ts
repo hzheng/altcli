@@ -229,7 +229,7 @@ export class WorkflowStore {
           return existing;
         }
         if (existing.runId !== input.requestId || existing.input.kind !== input.kind || existing.agentId !== input.agentId || existing.wireText !== wire || existingRun.pairId !== pairId || hash(existingRun.stage ?? null) !== hash(input.stage ?? null) ||
-          existingRun.autoContinue !== (input.autoContinue === true) || existingRun.turnLimit !== (input.turnLimit ?? DEFAULT_TURN_LIMIT) || (existingRun.pauseOnObjection === true) !== (input.pauseOnObjection === true) || (existing.input.handoff === true) !== (input.handoff === true)) {
+          existingRun.autoContinue !== (input.autoContinue === true) || existingRun.turnLimit !== (input.turnLimit ?? DEFAULT_TURN_LIMIT) || (existingRun.pauseOnObjection === true) !== (input.pauseOnObjection === true) || (existing.input.handoff === true) !== (input.handoff === true) || (existing.input.replaceDraft === true) !== (input.replaceDraft === true)) {
           throw new AppError('ID_CONFLICT', 'This request ID is already bound to different work or policy.', 409);
         }
         return existing;
@@ -247,6 +247,7 @@ export class WorkflowStore {
         ...(attachments.length ? { attachments } : {}) };
       const turn: Execution = planning ? this.planTurn(run) : implementation ? this.commitTurn(run, first.id, implementation.request.kind !== 'review' ? 'work' : implementation.policy === 'peer' ? 'review_and_improve' : 'review', input.text ?? '', input.handoff === true, input.requestId) : { commandId: input.requestId, runId: run.id, agentId: first.id, input, wireText: wire,
         status: 'planned', sessionId: null, sourceTurnId: null, continuation: false, baselineProcesses: null, baselineWorktree: null };
+      if (input.replaceDraft !== undefined) turn.input.replaceDraft = input.replaceDraft;
       this.saveRun(run); this.saveExecution(turn);
       if(this.store.db.prepare('SELECT 1 FROM launch_reservations WHERE index_path=?').get(lockKey)) throw new AppError('LAUNCH_BUSY', 'An unresolved launch owns this checkout.', 409);
       this.store.db.prepare('INSERT INTO workflow_owners(lock_key,run_id) VALUES (?,?)').run(lockKey, run.id);

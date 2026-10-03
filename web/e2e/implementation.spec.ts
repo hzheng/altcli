@@ -353,15 +353,17 @@ test('committed implementation on a task branch takes explicit branch consent an
   await page.getByLabel('Implementation branch').selectOption('new');
   await page.getByLabel('New branch name').fill('task/browser-fixture');
   const claude = await openCard(page, 'Claude'); await handOff(claude, 'commit');
+  await expect(claude.getByRole('group', { name: 'Ready for implementation acknowledgement' })).toContainText('Replace any unsent text in Claude’s terminal prompt with this command.');
+  expect(starts).toHaveLength(0);
   await (await readiness(page)).check();
   await page.screenshot({ path: testInfo.outputPath('implementation.png'), fullPage: true });
   await claude.getByRole('button', { name: 'Commit current changes Claude', exact: true }).click();
   await expect.poll(() => starts.length).toBe(1);
   expect(starts[0]).toMatchObject({ groupId: group.id, agentId: 'claude', policy: 'worker_reviewer', workerId: 'claude', kind: 'commit', handoff: false, autoContinue: false,
-    branch: { branch: 'task/current', head: 'a'.repeat(40), newBranch: 'task/browser-fixture' }, confirmReady: true });
+    branch: { branch: 'task/current', head: 'a'.repeat(40), newBranch: 'task/browser-fixture' }, replaceDraft: true, confirmReady: true });
   expect(starts[0]).not.toHaveProperty('text'); // a hand-off as it stands carries no instruction
   expect(starts[0]).not.toHaveProperty('logPath'); // the journal stays in AltCLI unless the project opts into a tracked mirror
-  await expect((await readiness(page))).not.toBeChecked();
+  await backToControl(page); await expect((await readiness(page))).not.toBeChecked();
   await page.getByRole('button', { name: 'Lock', exact: true }).click(); expect(starts).toHaveLength(1);
 });
 test('a tracked relay log is an explicit opt-in whose path is sent only when enabled', async ({ page, request }) => {

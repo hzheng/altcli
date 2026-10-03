@@ -53,6 +53,60 @@ async function complete(commandId: string, more: Partial<HookEvent> = {}) {
 }
 function stopped(runId: string) { plane.action(parseRunAction({ runId, action: 'takeover', confirmReady: true })); }
 
+test('Stage relay draft consent is exact to the initial request and never inherited by the peer', async () => {
+  const options: boolean[] = [];
+  adapter.send = async (session, text, consent) => { sent.push({ agent: session.id, text }); options.push(consent?.replaceDraft === true); };
+  const input = start({ replaceDraft: true, autoContinue: true });
+  assert.deepEqual(parseStart(input), input);
+  assert.throws(() => parseStart({ ...input, replaceDraft: 'yes' }), /replaceDraft must be a boolean/);
+  await plane.submit(input); await plane.submit(input);
+  await assert.rejects(plane.submit({ ...input, replaceDraft: false }), /different work or policy/);
+  assert.deepEqual(options, [true]);
+  await complete(input.requestId);
+  assert.deepEqual(options, [true, false]);
+});
+
+for (const missing of [['codex'], ['claude'], ['codex', 'claude']]) test(`Stage relay binds discovered participants at explicit Start: ${missing.join(', ')}`, async () => {
+  for (const id of missing) store.removeSession(id);
+  const before = store.db.prepare('SELECT total_changes() AS count').get();
+  const view = await plane.state(), group = view.groups.find(g => g.repository === '/demo/project')!;
+  const target = view.sessions.find(s => s.identity.paneId === '%1')!, peer = view.sessions.find(s => s.identity.paneId === '%0')!;
+  assert.deepEqual(store.db.prepare('SELECT total_changes() AS count').get(), before);
+  assert.equal(store.sessions().length, 2 - missing.length);
+  const input = start({ agentId: target.id, pairId: group.id, autoContinue: true, registrations: { [target.id]: target.registrationId!, [peer.id]: peer.registrationId! } });
+  assert.deepEqual(parseStart(input), input);
+  // Start binds only the exact instances the human confirmed: an omitted or stale confirmation binds and sends nothing.
+  for (const registrations of [undefined, { ...input.registrations, [peer.id]: randomUUID() }, { [target.id]: target.registrationId! }]) {
+    await assert.rejects(plane.submit({ ...input, requestId: randomUUID(), registrations }), /instance changed or was not confirmed/);
+  }
+  assert.equal(store.sessions().length, 2 - missing.length); assert.equal(sent.length, 0); assert.deepEqual(plane.workflow.runs(), []);
+  const record = await plane.submit(input);
+  assert.equal(record.status, 'delivered');
+  const run = plane.workflow.run(input.requestId)!;
+  for (const member of [target, peer]) {
+    assert.equal((store.sessions().find(s => s.id === member.id) as ManagedSession).registrationId, member.registrationId);
+    assert.equal(run.participants.find(s => s.id === member.id)!.registrationId, member.registrationId);
+  }
+  await plane.submit(input); assert.equal(sent.length, 1);
+  await complete(input.requestId);
+  assert.deepEqual(sent.map(s => s.agent), [target.id, peer.id]);
+});
+
+for (const change of ['identity', 'input mode', 'directory', 'branch'] as const) test(`Stage relay refuses a discovered pair before binding when its ${change} changes`, async () => {
+  store.removeSession('codex');
+  const view = await plane.state(), group = view.groups.find(g => g.repository === '/demo/project')!;
+  const registrations = Object.fromEntries(group.members.map(id => [id, view.sessions.find(s => s.id === id)!.registrationId!]));
+  const input = start({ agentId: 'claude', pairId: group.id, registrations, ...(change === 'branch' ? { stage: { ...MAIN, head: 'b'.repeat(40) } } : {}) });
+  const inspect = adapter.inspect.bind(adapter);
+  adapter.inspect = async id => {
+    const pane = await inspect(id);
+    return id !== '%0' ? pane : { ...pane, ...(change === 'identity' ? { identity: { ...pane.identity, panePid: '999' } }
+      : change === 'input mode' ? { inMode: true } : change === 'directory' ? { cwd: '/demo/other' } : {}) };
+  };
+  await assert.rejects(plane.submit(input), /identity changed|copy mode|same canonical current directory|branch or commit changed/);
+  assert.equal(store.sessions().length, 1); assert.deepEqual(sent, []); assert.deepEqual(plane.workflow.runs(), []);
+});
+
 async function clearInput(agentId = 'codex'): Promise<ClearContextInput> {
   const state = await plane.state(), session = state.sessions.find(s => s.id === agentId)!;
   return { requestId: randomUUID(), agentId, registrationId: session.registrationId, expectedActivityUpdatedAt: state.activities?.find(a => a.agentId === agentId)?.updatedAt ?? null, confirmReady: true };

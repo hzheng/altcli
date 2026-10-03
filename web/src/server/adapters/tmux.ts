@@ -6,7 +6,7 @@ import type { PaneState, SessionRegistration } from "../../contracts/api.ts";
 import { AppError } from "../../core/errors.ts";
 import { assertIdentity } from "../../core/policy.ts";
 import { paneId as validPaneId, promptText, singleLine } from "../../core/validation.ts";
-import { inputAfterTyping } from "../../core/prompt-leftover.ts";
+import { inputAfterTyping, inputEraseCount } from "../../core/prompt-leftover.ts";
 import type { ProcessRecord } from "../../contracts/workflow.ts";
 import type { ListedPane, TerminalAdapter } from "./terminal.ts";
 import { foregroundPid, hostPaneProcesses, paneProcesses } from "../processes.ts";
@@ -77,7 +77,7 @@ export class TmuxAdapter implements TerminalAdapter {
     await this.preflight(session);
     return this.run(["capture-pane", "-p", "-J", "-S", "-250", "-t", session.identity.paneId]);
   }
-  async send(session: SessionRegistration, text: string): Promise<void> {
+  private async typePrompt(session: SessionRegistration, text: string): Promise<string> {
     await this.preflight(session);
     if (text.includes("\n")) {
       // A multi-line prompt arrives the way a terminal delivers a paste: one bracketed paste, which both CLIs insert
@@ -90,11 +90,28 @@ export class TmuxAdapter implements TerminalAdapter {
     // Do not submit text if the CLI exited while characters were being delivered.
     // This narrows but cannot eliminate the terminal check/use race.
     await this.preflight(session);
+    return this.run(["capture-pane", "-p", "-t", validPaneId(session.identity.paneId)]);
+  }
+  async send(session: SessionRegistration, text: string, options: { replaceDraft?: boolean } = {}): Promise<void> {
+    const screen = await this.typePrompt(session, text);
     // Text someone left in the input area would be submitted with the command and change what the agent is asked. Submit only when the
     // input area visibly holds just this command. Otherwise nothing is submitted: a typed line that shows up next to other text is
     // erased character by character (the cursor sits right after it); a paste or an unreadable layout is left as it is, since
     // backspacing there could delete someone else's text.
-    const found = inputAfterTyping(await this.run(["capture-pane", "-p", "-t", validPaneId(session.identity.paneId)]), text);
+    let found = inputAfterTyping(screen, text);
+    if (found === "mixed" && options.replaceDraft === true && ['codex', 'claude'].includes(session.agentType)) {
+      const count = inputEraseCount(screen);
+      if (count !== null && count <= 16384) {
+        // One human-confirmed replacement, before Enter has ever been sent. The cursor may be inside a multiline draft:
+        // remove both sides with editing keys, then independently verify the complete new prompt. Never retry a submission.
+        await this.preflight(session);
+        await this.run(["send-keys", "-N", String(count), "-t", session.identity.paneId, "BSpace"]);
+        await this.preflight(session);
+        await this.run(["send-keys", "-N", String(count), "-t", session.identity.paneId, "DC"]);
+        found = inputAfterTyping(await this.typePrompt(session, text), text);
+        if (found !== 'only') throw new AppError('INPUT_UNVERIFIED', 'The confirmed draft replacement could not be verified. Nothing was submitted. Inspect the terminal before starting again.', 409);
+      }
+    }
     if (found !== "only") {
       const erase = found === "mixed" && !text.includes("\n");
       if (erase) await this.run(["send-keys", "-N", String(Array.from(text).length), "-t", validPaneId(session.identity.paneId), "BSpace"]);

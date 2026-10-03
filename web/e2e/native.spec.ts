@@ -438,6 +438,7 @@ test('manual recovery stays visible without agents and needs only explicit ackno
   // Only the empty-agent display is simulated. The durable barrier and decision use the mock server API.
   await page.route('**/api/v1/state',async route=>{const response=await route.fetch(),body=await response.json();await route.fulfill({response,json:{...body,sessions:[]}});});
   await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
+  await page.getByRole('navigation',{name:'Sections'}).getByRole('button',{name:'Console',exact:true}).click();
   await expect(page.getByRole('button',{name:/^Control access · you · manual input unresolved/})).toBeVisible();
   // The note says what earlier manual input may have done; taking control is one confirmation, with no checkbox or typed note.
   const access=await openAccess(page);await expect(access.getByRole('list',{name:'What to notice'})).toContainText('may have run commands');
@@ -452,7 +453,7 @@ test('manual recovery stays visible without agents and needs only explicit ackno
   const response=await decision;expect(response.ok()).toBe(true);
   expect((await response.json()).humanDecision.note).toBe('I inspected the host and acknowledge possible prior and background effects.');
   await expect.poll(async()=>(await state(request)).manualSessions?.length).toBe(0);
-  await expect(page.getByRole('button',{name:'Control access · you',exact:true})).toBeVisible();
+  await expect(page.getByRole('button',{name:'Take control…',exact:true})).toHaveCount(0);
 });
 
 for(const fault of [null,'takeover refused','takeover unknown','reconcile refused','reconcile unknown'] as const)
@@ -805,7 +806,7 @@ test('Helper → Settings saves the model as the only launchable profile Chat pr
     const posts:string[]=[];page.on('request',r=>{if(r.method()==='POST'&&r.url().includes('/global-ai'))posts.push(r.url());});
     await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
     const sections=page.getByRole('navigation',{name:'Sections',exact:true});await sections.getByRole('button',{name:'Helper',exact:true}).click();
-    // Helper uses Console's token. It opens on Chat, whose heading leaves Control access to the other tabs; with no conversation yet Chat is the start flow.
+    // Helper uses Console's token. Worktree recovery stays in Console; with no conversation yet Chat is the start flow.
     await expect(page.getByRole('heading',{name:'Helper',level:1})).toBeVisible();await expect(page.getByLabel('AltCLI access token')).toHaveCount(0);
     const parts=page.getByRole('navigation',{name:'Helper sections'});
     await expect(parts.getByRole('button')).toHaveText(['Chat','Session','Settings','Evidence','Guide']);
@@ -854,9 +855,9 @@ test('Helper → Settings saves the model as the only launchable profile Chat pr
     await parts.getByRole('button',{name:'Chat',exact:true}).click();
     await start.getByRole('button',{name:'Settings',exact:true}).first().click();
     await expect(settings).toBeVisible();await parts.getByRole('button',{name:'Chat',exact:true}).click();await expect(select).toHaveValue(saved.id);
-    // Guide keeps Control access in the heading, and Helper reopens on the section chosen earlier on this page.
+    // Guide has no worktree recovery controls; Helper reopens on the section chosen earlier on this page.
     await parts.getByRole('button',{name:'Guide',exact:true}).click();await expect(select).toBeHidden();
-    await expect(page.locator('.page-heading').getByRole('button',{name:/^Control access/})).toBeVisible();
+    await expect(page.getByRole('button',{name:/^Control access/})).toHaveCount(0);
     await sections.getByRole('button',{name:'Console',exact:true}).click();await expect(page.getByRole('region',{name:'How this works'})).toBeHidden();
     await sections.getByRole('button',{name:'Helper',exact:true}).click();await expect(page.getByRole('region',{name:'How this works'})).toBeVisible();
     expect(posts).toEqual([]);

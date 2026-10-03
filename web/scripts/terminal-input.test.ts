@@ -13,7 +13,7 @@ import type { SessionRegistration } from '../src/contracts/api.ts';
  * with a cursor (Ctrl-A start, Ctrl-E end, Ctrl-U clear, Backspace), keeps newlines received inside a bracketed paste, writes the
  * exact draft to a file after every change, and records each draft submitted with Enter. */
 const FIXTURE = String.raw`import{appendFileSync,writeFileSync}from'node:fs';const[layout,bytes,submitted,draftFile]=process.argv.slice(2);
-let text=[],cursor=0,paste=false;const rule='─'.repeat(60);
+let text=[],cursor=0,paste=false,pending='';const rule='─'.repeat(60);
 const draw=()=>{const lines=text.join('').split('\n'),rows=['⏺ fixture transcript',''];let top;
   if(layout==='claude'){rows.push(rule);top=rows.length;lines.forEach((l,i)=>rows.push((i?'  ':'❯ ')+l));rows.push(rule,'  ⏵⏵ fixture footer');}
   else{top=rows.length;lines.forEach((l,i)=>rows.push((i?'  ':'› ')+l+(text.length?'':'\x1b[2mAsk the fixture anything\x1b[0m')));rows.push('','  fixture model · ~/fixture','  ? for shortcuts');}
@@ -21,8 +21,10 @@ const draw=()=>{const lines=text.join('').split('\n'),rows=['⏺ fixture transcr
   process.stdout.write('\x1b[2J\x1b[H'+rows.join('\r\n')+'\x1b['+(top+before.length)+';'+(3+before.at(-1).length)+'H');
   writeFileSync(draftFile,JSON.stringify(text.join('')));};
 process.stdin.setRawMode(true);process.stdin.resume();process.stdout.write('\x1b[?2004h');draw();
-process.stdin.on('data',b=>{appendFileSync(bytes,b);let s=b.toString('utf8');
-  while(s){if(s.startsWith('\x1b[200~')){paste=true;s=s.slice(6);continue;}if(s.startsWith('\x1b[201~')){paste=false;s=s.slice(6);continue;}
+process.stdin.on('data',b=>{appendFileSync(bytes,b);let s=pending+b.toString('utf8');pending='';
+  while(s){if(['\x1b[200~','\x1b[201~','\x1b[3~'].some(k=>k.startsWith(s)&&k!==s)){pending=s;break;}
+    if(s.startsWith('\x1b[3~')){text.splice(cursor,1);s=s.slice(4);continue;}
+    if(s.startsWith('\x1b[200~')){paste=true;s=s.slice(6);continue;}if(s.startsWith('\x1b[201~')){paste=false;s=s.slice(6);continue;}
     const c=Array.from(s)[0];s=s.slice(c.length);
     if(c==='\r'&&!paste){appendFileSync(submitted,JSON.stringify(text.join(''))+'\n');text=[];cursor=0;}
     else if(c==='\r'){text.splice(cursor,0,'\n');cursor++;}
@@ -44,7 +46,7 @@ async function fixture(directory: string, layout: 'claude' | 'codex') {
   let pane = await adapter.inspect('%0');
   for (let i = 0; pane.command !== 'prompt-cli' && i < 50; i++) { await new Promise((r) => setTimeout(r, 20)); pane = await adapter.inspect('%0'); }
   assert.equal(pane.command, 'prompt-cli');
-  const session: SessionRegistration = { id: 'prompt', label: 'Prompt fixture', agentType: 'other', expectedCommand: 'prompt-cli', repository: directory, relayPrompt: '', registeredAt: new Date().toISOString(), identity: pane.identity };
+  const session: SessionRegistration = { id: 'prompt', label: 'Prompt fixture', agentType: layout, expectedCommand: 'prompt-cli', repository: directory, relayPrompt: '', registeredAt: new Date().toISOString(), identity: pane.identity };
   const read = (file: string) => readFile(file).catch(() => Buffer.alloc(0));
   const draft = async () => { const value = (await read(files[2]!)).toString('utf8'); return value ? JSON.parse(value) as string : null; };
   const submitted = async () => (await read(files[1]!)).toString('utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line) as string);
@@ -101,5 +103,31 @@ for (const layout of ['claude', 'codex'] as const) test(`private tmux (${layout}
     await setDraft(''); await adapter.send(session, reset);
     await wait(async () => (await submitted()).length === 3);
     assert.deepEqual(await submitted(), ['first\n\nsecond', command, reset]);
+  } finally { await run(['kill-server']).catch(() => {}); await rm(directory, { recursive: true, force: true }); }
+});
+
+for (const layout of ['claude', 'codex'] as const) test(`private tmux (${layout} layout) replaces a confirmed draft once and submits only the new command`, async () => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'altcli-replace-draft-')));
+  const { run, adapter, session, draft, setDraft, submitted, wait } = await fixture(directory, layout);
+  try {
+    const command = 'Implement the task [altcli-command:11111111-1111-4111-8111-111111111111]';
+    const cases = [['CX-main', false], ['CX-main', true], ['before\n\nafter 🙂 次', true], ['old '.repeat(60), false]] as const;
+    for (const [value, start] of cases) {
+      await setDraft(value); if (start) await run(['send-keys', '-t', '%0', 'C-a']);
+      await adapter.send(session, command, { replaceDraft: true });
+      await wait(async () => await draft() === ''); assert.equal(await draft(), '');
+    }
+    assert.deepEqual(await submitted(), cases.map(() => command));
+    await setDraft('CX-main'); await adapter.send(session, 'first\n\nsecond', { replaceDraft: true });
+    await wait(async () => (await submitted()).length === cases.length + 1);
+    assert.deepEqual(await submitted(), [...cases.map(() => command), 'first\n\nsecond']);
+    // Permission belongs to one delivery, not the adapter or session. The following ordinary send still preserves the draft.
+    await setDraft('keep this'); await assert.rejects(adapter.send(session, command), /held other text/);
+    assert.equal(await draft(), 'keep this'); assert.equal((await submitted()).length, cases.length + 1);
+    // If a CLI does not honor an editing key, the final comparison prevents Enter; no repeated cleanup attempt.
+    await setDraft('keep this'); await run(['send-keys', '-t', '%0', 'C-a']);
+    const refused = new TmuxAdapter(async (args, input) => args.at(-1) === 'DC' ? '' : run(args, input));
+    await assert.rejects(refused.send(session, command, { replaceDraft: true }), /replacement could not be verified/);
+    assert.equal((await submitted()).length, cases.length + 1);
   } finally { await run(['kill-server']).catch(() => {}); await rm(directory, { recursive: true, force: true }); }
 });

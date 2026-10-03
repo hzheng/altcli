@@ -41,10 +41,10 @@ export function paneRequest(input: PaneRequestInput): PaneRequest {
   const { action, requestId, groupId, groupRevision, registrations, agentId, policy } = input;
   const text = input.text.trim(); const worker = policy === "worker_reviewer" ? { workerId: input.workerId! } : {};
   const attachments = IMAGE_ACTIONS.includes(action) && input.attachments?.length ? { attachments: input.attachments } : {};
-  if (action === "send") return { path: "instructions", body: { requestId, groupId, groupRevision, registrations, agentId, text, policy, ...worker, ...attachments, confirmReady: true } };
+  if (action === "send") return { path: "instructions", body: { requestId, groupId, groupRevision, registrations, agentId, text, policy, ...worker, ...attachments, replaceDraft: true, confirmReady: true } };
   if (action === "send_stage_relay") return { path: "commands", body: { requestId, agentId, pairId: groupId, kind: "instruction", text, handoff: true,
     stage: { branch: input.branch.branch!, head: input.branch.head }, autoContinue: input.automatic, turnLimit: input.turnLimit,
-    confirmReady: true } };
+    registrations, replaceDraft: true, confirmReady: true } };
   const kind = action === "send_commit" || action === "send_commit_relay" ? "work" : action === "relay" ? "review" : "commit";
   const handoff = action === "send_commit_relay" || action === "commit_relay" || action === "relay";
   const solo = policy === "solo";
@@ -52,5 +52,5 @@ export function paneRequest(input: PaneRequestInput): PaneRequest {
     autoContinue: !solo && handoff && input.automatic, turnLimit: input.turnLimit, pauseOnObjection: !solo && input.pauseOnObjection,
     ...(input.logPath ? { logPath: input.logPath } : {}), branch: input.branch,
     ...(kind !== "work" && handoff && input.reviewBase ? { reviewBase: input.reviewBase } : {}),
-    ...(kind !== "review" && handoff && input.reviewNote?.trim() ? { reviewNote: input.reviewNote.trim() } : {}), ...(kind === "work" ? attachments : {}), confirmReady: true } };
+    ...(kind !== "review" && handoff && input.reviewNote?.trim() ? { reviewNote: input.reviewNote.trim() } : {}), ...(kind === "work" ? attachments : {}), replaceDraft: true, confirmReady: true } };
 }

@@ -46,8 +46,10 @@ export async function backToControl(page: Page) {
   await expect(page.getByRole('group', { name: 'Terminal or Control' }).getByRole('button', { name: 'Terminal', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await showSurface(page, 'Control');
 }
-/** Opens the one Control access panel unless it is already open. Opening it changes no run and no confirmation. */
+/** Opens the selected worktree's Control access, navigating to Console if needed. Opening the panel itself changes no run or confirmation. */
 export async function openAccess(page: Page) {
+  const consoleTab = page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Console', exact: true });
+  if (await consoleTab.getAttribute('aria-pressed') !== 'true') await consoleTab.click();
   const entry = page.getByRole('button', { name: /^Control access · / });
   if (await entry.getAttribute('aria-expanded') !== 'true') await entry.click();
   return page.getByRole('region', { name: 'Control access', exact: true });

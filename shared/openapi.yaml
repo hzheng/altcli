@@ -2561,6 +2561,9 @@ components:
             pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$
           agentId:
             $ref: '#/components/schemas/AgentId'
+          replaceDraft:
+            type: boolean
+            description: Explicit human consent to replace this recipient's unsent prompt text for this delivery only. Default false; not inherited by later turns.
           confirmReady:
             type: boolean
             const: true
@@ -2571,6 +2574,12 @@ components:
             $ref: '#/components/schemas/AgentId'
           stage:
             $ref: '#/components/schemas/StageBinding'
+          registrations:
+            type: object
+            minProperties: 1
+            maxProperties: 2
+            additionalProperties: {type: string, format: uuid}
+            description: Exact agent instances the human confirmed. Required, naming every participant, when a new Stage relay start binds a discovered or renewed agent.
           autoContinue:
             type: boolean
           turnLimit:
@@ -2597,6 +2606,9 @@ components:
             pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$
           agentId:
             $ref: '#/components/schemas/AgentId'
+          replaceDraft:
+            type: boolean
+            description: Explicit human consent to replace this recipient's unsent prompt text for this delivery only. Default false; not inherited by later turns.
           confirmReady:
             type: boolean
             const: true
@@ -2607,6 +2619,12 @@ components:
             $ref: '#/components/schemas/AgentId'
           stage:
             $ref: '#/components/schemas/StageBinding'
+          registrations:
+            type: object
+            minProperties: 1
+            maxProperties: 2
+            additionalProperties: {type: string, format: uuid}
+            description: Exact agent instances the human confirmed. Required, naming every participant, when a new Stage relay start binds a discovered or renewed agent.
           autoContinue:
             type: boolean
           turnLimit:
@@ -2740,6 +2758,7 @@ components:
         policy: {"enum":["solo","peer","worker_reviewer"]}
         workerId: {"$ref":"#/components/schemas/AgentId"}
         attachments: {"$ref":"#/components/schemas/AttachmentIds","description":"With images, the wire prompt names only an immutable input manifest holding the instruction and image descriptors."}
+        replaceDraft: {type: boolean, description: "Explicit human consent to replace the first recipient's unsent prompt text. Default false; never inherited by later turns."}
         confirmReady: {"const":true}
       required: [requestId, groupId, groupRevision, registrations, agentId, text, policy, confirmReady]
       additionalProperties: false
@@ -2808,6 +2827,7 @@ components:
         reviewBase: {"$ref":"#/components/schemas/GitSha"}
         reviewNote: {type: string, maxLength: 1900, description: A note from the human for the peer that reviews this handoff, delivered with the review assignment as its note. Requires handoff and is not accepted for kind review, whose text is the review context.}
         attachments: {"$ref":"#/components/schemas/AttachmentIds","description":"kind work only. Frozen and pinned at admission; every assignment of the run, including reviews, carries the descriptors."}
+        replaceDraft: {type: boolean, description: "Explicit human consent to replace the first recipient's unsent prompt text. Default false; never inherited by later turns."}
         confirmReady: {"const":true}
       required: ["requestId","groupId","groupRevision","registrations","agentId","kind","handoff","policy","autoContinue","turnLimit","branch","confirmReady"]
       additionalProperties: false

@@ -77,6 +77,33 @@ async function complete(id: string, more: Partial<HookEvent> = {}) {
 }
 const run = (id: string) => plane.workflow.run(id)!;
 
+test('confirmed draft replacement belongs to the initial implementation delivery only and is never replayed', async () => {
+  const options: boolean[] = [];
+  adapter.send = async (_session, text, consent) => { sent.push(text); options.push(consent?.replaceDraft === true); };
+  const input = request({ replaceDraft: true });
+  assert.deepEqual(parseImplementation(input), input);
+  assert.throws(() => parseImplementation({ ...input, replaceDraft: 'yes' }), /replaceDraft must be a boolean/);
+  const first = await plane.submitImplementation(input);
+  assert.equal(first.status, 'delivered'); assert.equal(plane.workflow.execution(first.id)!.input.replaceDraft, true);
+  await plane.submitImplementation(input); assert.deepEqual(options, [true]);
+  await assert.rejects(plane.submitImplementation({ ...input, replaceDraft: false }), /another implementation request/);
+  publish(first.id, true); await complete(first.id);
+  assert.deepEqual(options, [true, false]);
+  assert.equal(plane.workflow.execution(run(first.id).currentCommandId)!.input.replaceDraft, undefined);
+});
+
+test('plain Send carries explicit draft consent and keeps uncertainty without retrying a failed replacement', async () => {
+  const input = { ...instruction(), replaceDraft: true };
+  assert.deepEqual(parseStandalone(input), input);
+  assert.throws(() => parseStandalone({ ...input, replaceDraft: 'yes' }), /replaceDraft must be a boolean/);
+  let attempts = 0;
+  adapter.send = async (_session, _text, options) => { assert.equal(options?.replaceDraft, true); attempts++; throw Error('replacement transport failed'); };
+  const result = await plane.submitStandalone(input);
+  assert.equal(result.status, 'uncertain'); assert.equal(run(input.requestId).status, 'paused');
+  assert.equal(plane.workflow.owner(run(input.requestId).lockKey), input.requestId);
+  await plane.submitStandalone(input); assert.equal(attempts, 1);
+});
+
 async function keyboardStart() {
   const input=request();const session=store.sessions().find(s=>s.id==='codex') as ManagedSession;
   const manual=await plane.terminals.services.begin({protocol:2,target:{agentId:session.id,registrationId:session.registrationId},clientInstanceId:randomUUID(),cols:80,rows:24},randomUUID(),randomUUID());

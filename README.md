@@ -51,9 +51,9 @@ manual terminal input holds the checkout, that check lists every consequence and
 those holds (ending the run, stopping all typing, recording the input as accepted) before it
 starts. Projects' squash, update, rebase, reset, rename, finish, removal, discard and launch use one
 such **Proceed anyway** acknowledgement, and a squash refused only for possible agent activity can
-be previewed anyway. **Control access**, the one entry in the page heading's status row, explains
-every hold and offers pause, takeover, and other recovery; nothing there is
-required first. The ⌨️ status to its right reports the
+be previewed anyway. **Control access**, beside the worktree selector in Console, explains
+that worktree's holds and offers pause, takeover, and other recovery; nothing there is
+required first. The ⌨️ status in the page heading reports the
 active input connection count and whether automation is held, beside connection status. Taking control is one confirmation after a list of what to notice; for
 earlier manual input its fixed acknowledgement is recorded as the decision note. Projects adds a project by its main/default starting checkout,
 typed or found with **Browse…**, even with no tmux panes. Settings (Console preferences
@@ -395,7 +395,7 @@ borrow each other's completion. Relay commands use the `relay:` prefix. The glob
 instruction rule must recognize that prefix as documented in [SKILLS](docs/SKILLS.md).
 The marker is bookkeeping, not a new task. The skill defines its Git staging contract.
 
-The **Control access · …** entry in the page heading's status row names who holds control, **system**
+The **Control access · …** entry beside the worktree selector names who holds that worktree, **system**
 (the controller's run, whether driving, paused or waiting for you) or **you**, followed by a short
 detail when one applies: `paused`, `waiting for you`, a keyboard hold or unresolved manual input. Open it to
 see what to notice first: an agent that may still be working, a request or delivery that may have
@@ -416,6 +416,13 @@ input, then reviews the saved checkpoint while keeping the run. A failed step or
 checkpoint or view cancels continuation; **Take control** instead ends the run and its
 queued handoff. No command is
 silently retried. Final task-level tests and review remain your responsibility.
+
+For a new Send, Commit or review, the Ready confirmation also authorizes replacing
+any unsent text in the selected recipient's terminal prompt. A recognized draft is
+cleared with editing keys and the exact new command is verified before Enter. This
+avoids another takeover just because text was left in the prompt. The permission
+applies only to that first delivery; automatic relay turns preserve other drafts.
+An unreadable prompt or failed replacement still stops without submitting.
 
 Once ownership is released, a restarted CLI in the same pane is
 rediscovered automatically, including a verified move to another worktree. Names and group selections are preserved; your next

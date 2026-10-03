@@ -102,7 +102,7 @@ export class Controller {
     record = { ...record, status: "sending", updatedAt: new Date().toISOString() };
     this.store.update(record); // Durable boundary BEFORE terminal input.
     try {
-      await this.adapter.send(session, options.wireText ?? text);
+      await this.adapter.send(session, options.wireText ?? text, { replaceDraft: input.replaceDraft === true });
       record = { ...record, status: "delivered", updatedAt: new Date().toISOString() };
     } catch (error) {
       record = { ...record, status: "uncertain", error: messageOf(error), updatedAt: new Date().toISOString() };

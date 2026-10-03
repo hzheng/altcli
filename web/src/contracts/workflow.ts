@@ -24,8 +24,9 @@ export interface AgentActivity { agentId: string; state: 'ready' | 'working' | '
 export interface ActivityReset { agentId: string; registrationId: string; expectedUpdatedAt: string | null; confirmReady: true }
 /** The branch and commit a Stage relay start was confirmed on. The run is bound to them and stops, never switches, when they change. */
 export interface StageBinding { branch: string; head: string }
-/** `turnLimit` is the run's maximum number of automatic turns, frozen at start; the server default is 20. `stage` is required for a new Stage relay start. */
-export interface StartInput extends CommandInput { pairId?: string; autoContinue?: boolean; turnLimit?: number; pauseOnObjection?: boolean; stage?: StageBinding }
+/** `turnLimit` is the run's maximum number of automatic turns, frozen at start; the server default is 20. `stage` is required for a new Stage relay start.
+ * `registrations` names the exact instances the human confirmed; a start that binds a discovered or renewed agent requires it. */
+export interface StartInput extends CommandInput { pairId?: string; autoContinue?: boolean; turnLimit?: number; pauseOnObjection?: boolean; stage?: StageBinding; registrations?: Record<string, string> }
 export type RunStatus = 'running' | 'waiting' | 'paused' | 'completed' | 'stopped';
 /** Bounded registry diagnostics; arbitrary task text never enters this contract. */
 export interface BackgroundSummary {

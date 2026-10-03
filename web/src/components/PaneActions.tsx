@@ -266,7 +266,7 @@ export function PaneActions(p: PaneActionsProps) {
   // and accepts every listed consequence of the holds this action overrides.
   const readiness = p.active ? <div role="group" aria-label={`Readiness for ${name}`}>
     <Acknowledgement label="Ready for implementation" checked={ready} disabled={inputOff} onChange={(checked) => p.setConsent(() => checked ? key : '')} lines={p.override?.lines ?? []}>
-      <strong>Ready for implementation</strong>. All agents in this checkout are settled: empty prompts, no background writers. {canSend && <span className="muted">({relevant.join(' · ')})</span>}</Acknowledgement>
+      <strong>Ready for implementation</strong>. All agents in this checkout are settled, with no background writers. Replace any unsent text in {name}’s terminal prompt with this command. {canSend && <span className="muted">({relevant.join(' · ')})</span>}</Acknowledgement>
     <p className="fine">{canSend ? <><strong>{sendLabel}</strong>: {authorization}</> : relayHelp}{p.override && <> {accessLink}</>}</p>
   </div> : <p className="fine">Select {name} to confirm readiness and send.</p>;
   return <section className="pane-actions" aria-label={`Actions for ${name}`}>
@@ -310,7 +310,7 @@ export function PaneActions(p: PaneActionsProps) {
       <RangePicker range={review} recipientName={name} snapshot={false} disabled={inputOff} inputDisabled={inputOff} />
     </details>}
     <details className="pane-disclosure authorizes"><summary>What each action authorizes</summary>
-      <p className="fine">Readiness means every selected and unselected agent sharing this checkout is settled: prompts are empty and no background writers remain. Send authorizes only its instruction; Stage relay adds a peer review of uncommitted changes on main/default, with accepted changes staged and the final commit left to you. With a Commit follow-up it also authorizes one handoff commit on the displayed branch choice, and with Commit &amp; relay one review of that commit by the named peer, who also receives the relay note. With the instruction empty, Commit current changes authorizes one snapshot of all staged, unstaged and nonignored untracked changes as they stand, without completing pending requests; with a relay it also authorizes review from the selected baseline through that snapshot. Relay authorizes review of the displayed range and scoped handoff commits. A completed chain is not final task acceptance.</p>
+      <p className="fine">Readiness means every selected and unselected agent sharing this checkout is settled: no background writers remain. This action replaces any unsent text in the selected recipient’s prompt; later relay turns do not inherit that permission. Send authorizes only its instruction; Stage relay adds a peer review of uncommitted changes on main/default, with accepted changes staged and the final commit left to you. With a Commit follow-up it also authorizes one handoff commit on the displayed branch choice, and with Commit &amp; relay one review of that commit by the named peer, who also receives the relay note. With the instruction empty, Commit current changes authorizes one snapshot of all staged, unstaged and nonignored untracked changes as they stand, without completing pending requests; with a relay it also authorizes review from the selected baseline through that snapshot. Relay authorizes review of the displayed range and scoped handoff commits. A completed chain is not final task acceptance.</p>
     </details>
   </section>;
 }

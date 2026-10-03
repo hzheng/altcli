@@ -79,10 +79,12 @@ export interface ImplementationStart {
   reviewNote?: string;
   /** Ordered uploaded images for new work (kind `work` only). Frozen into every assignment of the run. */
   attachments?: string[];
+  /** Human consent to replace the first recipient's unsent prompt text; never inherited by later turns. */
+  replaceDraft?: boolean;
   confirmReady: true;
 }
 /** Plain Send: no branch setup, publication contract, or automatic successor. */
-export type StandaloneStart = Pick<ImplementationStart, 'requestId' | 'groupId' | 'groupRevision' | 'registrations' | 'agentId' | 'policy' | 'workerId' | 'confirmReady' | 'keyboardSettlement' | 'attachments'> & { text: string };
+export type StandaloneStart = Pick<ImplementationStart, 'requestId' | 'groupId' | 'groupRevision' | 'registrations' | 'agentId' | 'policy' | 'workerId' | 'confirmReady' | 'keyboardSettlement' | 'attachments' | 'replaceDraft'> & { text: string };
 export interface ImplementationPolicy {
   policy: CollaborationPolicy;
   workerId: string | null;

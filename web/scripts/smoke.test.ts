@@ -314,7 +314,7 @@ test("tmux send submits only an input line holding just the command; otherwise i
     const calls: string[][] = []; let screen = "";
     const run = async (args: string[]) => { calls.push(args);
       return args[0] === "display-message" ? `%1\t11\t22\t123\t/tmp/tmux-test\tcodex\t${directory}\t0\t0\t0\n` : args[0] === "capture-pane" ? screen : ""; };
-    const send = (text: string) => new TmuxAdapter(run).send({ ...session, repository: directory }, text);
+    const send = (text: string, replaceDraft = false) => new TmuxAdapter(run).send({ ...session, repository: directory }, text, { replaceDraft });
     // Typed next to an unsent draft: erased character by character, never submitted.
     const footer = "\n\n  model · ~/repo\n  ? for shortcuts\n";
     screen = `› i meanrelay é${footer}`; await assert.rejects(send("relay é"), /held other text besides this command\. Nothing was submitted and the typed command was erased/);
@@ -325,6 +325,9 @@ test("tmux send submits only an input line holding just the command; otherwise i
     // A paste next to a draft is not backspaced either.
     calls.length = 0; screen = `› draft[Pasted text #1 +1 lines]${footer}`; await assert.rejects(send("a\nb"), /Nothing was submitted; the command may still be in the input line/);
     assert.equal(calls.at(-1)![0], "capture-pane");
+    // Consent does not turn an unreadable prompt or a collapsed mixed paste into evidence for clearing it.
+    calls.length = 0; await assert.rejects(send("a\nb", true), /Nothing was submitted/);
+    assert.ok(!calls.some((args) => args.includes('BSpace') || args.includes('DC')));
     assert.ok(!calls.some((args) => args.includes("Enter")));
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

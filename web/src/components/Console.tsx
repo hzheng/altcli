@@ -247,8 +247,8 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
   const [historyOpen, setHistoryOpen] = useRemembered(`history:${ws}`, false, memory);
   const [paneChoice, setPaneChoice] = useRemembered<string | null>(`pane:${ws}`, null, memory);
   const [latestOpen, setLatestOpen] = useRemembered(`latest:${ws}`, false, memory);
-  // Page memory, not per workspace: the entry and its panel serve every tab. Opening or closing never changes a run or a confirmation.
-  const [accessOpen, setAccessOpen] = useRemembered('controlAccess', false, memory);
+  // Recovery belongs to this worktree console; opening or closing never changes a run or a confirmation.
+  const [accessOpen, setAccessOpen] = useRemembered(`controlAccess:${ws}`, false, memory);
   // The phase shown for the next run is remembered per workspace, like its drafts, so returning to a workspace shows its own choice.
   const [phase, setPhase] = useRemembered<Phase>(`phase:${ws}`, 'implementation', memory);
   // The run/transition whose phase this workspace last followed: each transition is applied once, so a later click is never overridden.
@@ -386,7 +386,7 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
   const resetBlocked = busy || stale || setupHeld || owned.length > 0 || !!transportHold || !!unknownRequest || !project || !!discoveryError || !!discovery?.error;
   const workspaceError = discoveryError || discovery?.error || '';
   const select = (id: string) => { setPaneChoice(id); setConsent(''); setReady(false); };
-  const openAccess = (target: HTMLElement | null = null) => { setControlDrawer(false); setAccessOpen(true); requestAnimationFrame(() => { const destination = target ?? accessPanel.current; destination?.focus(); destination?.scrollIntoView({ block: target ? 'nearest' : 'start' }); }); };
+  const openAccess = (target: HTMLElement | null = null) => { if (tab !== 'console') showTab('console'); setControlDrawer(false); setAccessOpen(true); requestAnimationFrame(() => { const destination = target ?? accessPanel.current; destination?.focus(); destination?.scrollIntoView({ block: target ? 'nearest' : 'start' }); }); };
   const closeAccess = () => { setAccessOpen(false); requestAnimationFrame(() => accessEntry.current?.focus()); };
   /** Inspection only: shows an agent's terminal and leaves Control access open. Changing the view clears earlier confirmations; nothing is sent. */
   const showAgentTerminal = (id: string) => { if (tab !== 'console') showTab('console'); select(id); if (merged) setSurface('terminal');
@@ -475,13 +475,14 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
       const standalone = kind === 'instruction' && !handoff;
       // The run is bound to the branch and commit on screen; the server refuses a start or delivery after either changes.
       // Plain Send keeps the standalone contract, including instructions that deliberately change HEAD.
+      // Both starts name the exact instances on screen; the server binds no other instance.
+      const registrations = Object.fromEntries(pair.members.map((id) => [id, state?.sessions.find((session) => session.id === id)?.registrationId ?? '']));
       const record = await api<CommandRecord>(token, standalone ? 'instructions' : 'commands', { body: standalone ? {
-        requestId, agentId: agent.id, groupId: pair.id, groupRevision: pair.revision, policy: 'peer',
-        registrations: Object.fromEntries(pair.members.map((id) => [id, state?.sessions.find((session) => session.id === id)?.registrationId ?? ''])),
-        text: text.trim(), confirmReady: true,
+        requestId, agentId: agent.id, groupId: pair.id, groupRevision: pair.revision, policy: 'peer', registrations,
+        text: text.trim(), replaceDraft: true, confirmReady: true,
       } : { requestId, agentId: agent.id, kind,
-        ...(text.trim() ? { text: text.trim() } : {}), handoff, pairId: pair.id, turnLimit: limitValue,
-        autoContinue: autoContinue && (kind === 'relay' || handoff), stage: { branch: git.branch, head: git.head }, confirmReady: true } });
+        ...(text.trim() ? { text: text.trim() } : {}), handoff, pairId: pair.id, turnLimit: limitValue, registrations,
+        autoContinue: autoContinue && (kind === 'relay' || handoff), stage: { branch: git.branch, head: git.head }, replaceDraft: true, confirmReady: true } });
       setMessage(`${record.status.toUpperCase()}: ${record.error ?? 'Terminal delivery recorded. The server owns this run until completion or human takeover.'}`);
       // Only the sent draft is cleared; a newer one survives.
       if (record.status !== 'rejected') { setStageDrafts((drafts) => drafts[agent.id] === text ? { ...drafts, [agent.id]: '' } : drafts); showActiveTerminal(); }
@@ -576,11 +577,9 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
     : <StatusIcon icon="🟢" label="Connected" align="end" help={`Connected to the host. Last update ${lastUpdate}; the console refreshes every 2 seconds.`} />}</div>;
   // Several terminals can type at once: this names every active input connection, never one keyboard owner.
   const inputLabel = !keyboardOwner || keyboardOwner.kind === 'unresolved' ? 'none active' : keyboardOwner.kind === 'this-browser' ? `${keyboardOwner.label} (this browser)` : keyboardOwner.label;
-  // The global Control access entry, then the active input count, then connection status: on every tab.
+  // Host-wide input and connection status; worktree recovery lives beside the worktree selector.
   const scopeLabels = [...new Set((state?.manualSessions ?? []).map(m => m.scope ? tilde(m.scope.root) : 'Every worktree (server-wide)'))];
   const headingStatus = <div className="heading-status">
-    {state && <button type="button" ref={accessEntry} className={`quiet access-entry${access.attention ? ' attention' : ''}`} aria-expanded={accessOpen} aria-controls="control-access"
-      onClick={() => accessOpen ? closeAccess() : openAccess()}>{access.attention && <span aria-hidden="true">⚠ </span>}Control access · {access.summary}{access.attention && <span className="sr-only"> (action needed)</span>}</button>}
     {state && (config?.terminalEnabled || scopeLabels.length) && <StatusIcon icon="⌨️" label={`Input: ${writers.length} active${manualHeld ? ' · automation held' : ''}`} align="end"
       help={`Holds: ${scopeLabels.join('; ') || 'none'}. Typing here: ${inputLabel}. ${stale ? 'This is the last reported state; the console is not current. ' : ''}Use a terminal's Terminal toggle to type. An action's acknowledgement stops typing and records manual input before it runs.`} />}
     {connection}
@@ -622,17 +621,53 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
     {tab === 'workspaces' ? <div className="page-heading"><div><p className="eyebrow">PROJECT · WORKTREE · TASK</p><h1>Projects and agents</h1>
         <p className="muted">Choose an existing worktree or explicitly create one for a new task. Opening a console never starts work.</p></div>{headingStatus}</div>
       : tab === 'settings' ? <div className="page-heading compact"><h1>Settings</h1>{headingStatus}</div>
-      // Helper's terminal holds nothing, so outside Guide its heading leaves Control access and the input status to the other tabs.
+      // Helper's terminal holds nothing, so outside Guide its heading only shows connection status.
       : tab === 'helper' ? <div className="page-heading compact"><h1>Helper</h1>{helperSection === 'guide' ? headingStatus : <div className="heading-status">{connection}</div>}</div>
       : <div className="page-heading compact"><h1>Agent console</h1>{headingStatus}</div>}
     {error && <div className="notice error" role="alert">{tilde(error)} <button onClick={() => void refresh()}>Refresh</button></div>}
     {state && <>
+    <div className="section-panel" hidden={tab !== 'workspaces'}>
+      {feedback}
+      <Workspaces token={token} disabled={busy} discovery={discovery} discoveryError={discoveryError} onRecheck={() => recheck()}
+        inputEnabled={state.inputEnabled} runs={state.runs} selectedRoot={project ?? null} onSelectWorktree={chooseWorktree}
+        launchEnabled={config?.launchEnabled === true} overrideFor={worktreeOverride} sessions={sessions} pairs={groups} lockedRepositories={[...setupHolds.map((hold) => hold.root), ...state.runs.filter((run) => ['running','waiting','paused'].includes(run.status)).map((run) => run.repository)]}
+        onSelectWorkspace={chooseWorkspace} viewEpoch={viewEpoch}
+        onChanged={async (notice) => { setMessage(notice); await Promise.all([refresh(), recheck()]); }} />
+    </div>
+    <div className="section-panel" hidden={tab !== 'console'}>
+      <div className="context-bar">
+        <div className="context-project">
+          <div className="context-switches">
+            <label>Project<select aria-label="Switch project" value={selectedProject?.id ?? ''} disabled={!projectOptions.length} onChange={event => {
+              const tree = projectOptions.find(option => option.project.id === event.target.value)?.firstAgentTree; if (tree) switchWorktree(tree);
+            }}>
+              {!selectedProject && <option value="" disabled>Choose project</option>}
+              {projectOptions.map(({ project: p, firstAgentTree }) => <option key={p.id} value={p.id} disabled={!firstAgentTree}>{p.name}{firstAgentTree ? '' : ' — no agents'}</option>)}
+            </select></label>
+            <label>Worktree<select aria-label="Switch worktree" title={project} value={selectedTree?.id ?? ''} disabled={!worktreeOptions.length} onChange={event => {
+              const tree = worktreeOptions.find(t => t.id === event.target.value); if (tree) switchWorktree(tree);
+            }}>
+              {!selectedTree && <option value="" disabled>Choose worktree</option>}
+              {/* The branch is shown to the right; the option names the checkout by its path only. */}
+              {worktreeOptions.map(tree => <option key={tree.id} value={tree.id}>{tree.main ? `Main checkout · ${tilde(tree.path)}` : tilde(tree.path)}</option>)}
+            </select></label>
+          </div>
+          {project && <span className="mono muted" title={project}>{tilde(project)}</span>}
+        </div>
+        {(card || selectedTree) && <span>Branch <span className="mono">{(card ?? selectedTree)?.branch ?? 'detached HEAD'}</span>{git && <span className="mono muted"> @ {git.head.slice(0, 7)} · {git.clean ? 'clean' : `${git.changeCount} uncommitted`}{git.integration ? ' · integration branch' : ''}</span>}</span>}
+        <span>{pair ? <>Group <strong>{pair.name}</strong> <span className="muted">{pair.sessions.map((id) => sessions.find((s) => s.id === id)?.label ?? id).join(' ⇄ ')}</span></> : <span className="muted">No group in use</span>}</span>
+        <span className="context-actions">
+          {project && <button type="button" ref={accessEntry} className={`quiet access-entry${access.attention ? ' attention' : ''}`} aria-expanded={accessOpen} aria-controls="control-access"
+            onClick={() => accessOpen ? closeAccess() : openAccess()}>{access.attention && <span aria-hidden="true">⚠ </span>}Control access · {access.summary}{access.attention && <span className="sr-only"> (action needed)</span>}</button>}
+          <button type="button" className="quiet" disabled={busy || checking} onClick={recheckNow}>{checking ? 'Checking…' : 'Recheck'}</button>
+          <button type="button" className="quiet" onClick={() => showTab('workspaces')}>Projects →</button></span>
+      </div>
+      {project && <>
       {owned.filter(run => run.status === 'paused' && run.implementation?.next && run.implementation.latestPublication?.entry.commandId === run.currentCommandId).map(run => <p key={run.id} className="notice" role="status">
         Result received; {run.participants.find(p => p.id === run.implementation!.next!.agentId)?.label ?? 'the next agent'}’s {run.implementation!.next!.action === 'work' ? 'work' : 'review'} is paused.{' '}
         <button type="button" className="quiet inline-link" onClick={() => openAccess()}>Inspect queued handoff</button>
       </p>)}
-      {/* The one Control access panel: workflow takeover, recovery and action readiness appear here once. Typing starts directly at each terminal. It sits outside the
-          tab and surface guards, so recovery stays reachable on any tab and with no agents. Opening or closing it changes nothing. */}
+      {/* Recovery for the selected worktree, including when its agents disappear. Viewing never changes ownership. */}
       <section id="control-access" ref={accessPanel} tabIndex={-1} className="panel control-access" aria-label="Control access" hidden={!accessOpen}>
         <div className="section-heading"><h2>Control access</h2><button type="button" className="quiet" onClick={closeAccess}>Close</button></div>
         <p className="fine access-scope">{project ? <>Checkout <span className="mono" title={project}>{tilde(project)}</span></> : 'No checkout selected'}{current ? <> · selected agent <strong>{current.label}</strong></> : ''}
@@ -657,7 +692,7 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
           {resetFor === resetKey && <><p>Reset saved names and group selection for every agent on <span className="mono" title={project}>{project && tilde(project)}</span>? Live agents will appear with their default names. Files, commits, running CLIs and command history are kept.</p>
             <div className="pane-buttons"><button type="button" disabled={resetBlocked} onClick={() => void resetWorkspace()}>Confirm workspace reset</button>
             <button type="button" disabled={busy} onClick={() => setResetFor(null)}>Keep configuration</button></div></>}</div>}
-        {takeSteps.length ? <TakeControl key={JSON.stringify([takePlan, viewEpoch])} steps={takeSteps} disabled={busy} onConfirm={() => void takeControl(takePlan)}
+        {takeSteps.length ? <TakeControl key={JSON.stringify([project, takePlan, viewEpoch])} worktree={tilde(project)} steps={takeSteps} disabled={busy} onConfirm={() => void takeControl(takePlan)}
           onPause={owned.some((r) => r.status !== 'paused') ? () => { for (const run of owned.filter((r) => r.status !== 'paused')) void action(run, 'pause'); } : undefined} />
           : <p className="fine">No controller run, uncertain delivery or earlier manual input needs takeover.
             {liveManual && ' Active typing still holds automation; an action’s acknowledgement stops and records it.'}</p>}
@@ -701,39 +736,7 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
           {composer && <button type="button" className="quiet" onClick={readinessHere ? returnToAction : showControlSurface}>{readinessHere ? 'Return to action' : tab !== 'console' ? 'Go to Console' : 'Show Control'}</button>}
         </section>
       </section>
-    <div className="section-panel" hidden={tab !== 'workspaces'}>
-      {feedback}
-      <Workspaces token={token} disabled={busy} discovery={discovery} discoveryError={discoveryError} onRecheck={() => recheck()}
-        inputEnabled={state.inputEnabled} runs={state.runs} selectedRoot={project ?? null} onSelectWorktree={chooseWorktree}
-        launchEnabled={config?.launchEnabled === true} overrideFor={worktreeOverride} sessions={sessions} pairs={groups} lockedRepositories={[...setupHolds.map((hold) => hold.root), ...state.runs.filter((run) => ['running','waiting','paused'].includes(run.status)).map((run) => run.repository)]}
-        onSelectWorkspace={chooseWorkspace} viewEpoch={viewEpoch}
-        onChanged={async (notice) => { setMessage(notice); await Promise.all([refresh(), recheck()]); }} />
-    </div>
-    <div className="section-panel" hidden={tab !== 'console'}>
-      <div className="context-bar">
-        <div className="context-project">
-          <div className="context-switches">
-            <label>Project<select aria-label="Switch project" value={selectedProject?.id ?? ''} disabled={!projectOptions.length} onChange={event => {
-              const tree = projectOptions.find(option => option.project.id === event.target.value)?.firstAgentTree; if (tree) switchWorktree(tree);
-            }}>
-              {!selectedProject && <option value="" disabled>Choose project</option>}
-              {projectOptions.map(({ project: p, firstAgentTree }) => <option key={p.id} value={p.id} disabled={!firstAgentTree}>{p.name}{firstAgentTree ? '' : ' — no agents'}</option>)}
-            </select></label>
-            <label>Worktree<select aria-label="Switch worktree" title={project} value={selectedTree?.id ?? ''} disabled={!worktreeOptions.length} onChange={event => {
-              const tree = worktreeOptions.find(t => t.id === event.target.value); if (tree) switchWorktree(tree);
-            }}>
-              {!selectedTree && <option value="" disabled>Choose worktree</option>}
-              {/* The branch is shown to the right; the option names the checkout by its path only. */}
-              {worktreeOptions.map(tree => <option key={tree.id} value={tree.id}>{tree.main ? `Main checkout · ${tilde(tree.path)}` : tilde(tree.path)}</option>)}
-            </select></label>
-          </div>
-          {project && <span className="mono muted" title={project}>{tilde(project)}</span>}
-        </div>
-        {(card || selectedTree) && <span>Branch <span className="mono">{(card ?? selectedTree)?.branch ?? 'detached HEAD'}</span>{git && <span className="mono muted"> @ {git.head.slice(0, 7)} · {git.clean ? 'clean' : `${git.changeCount} uncommitted`}{git.integration ? ' · integration branch' : ''}</span>}</span>}
-        <span>{pair ? <>Group <strong>{pair.name}</strong> <span className="muted">{pair.sessions.map((id) => sessions.find((s) => s.id === id)?.label ?? id).join(' ⇄ ')}</span></> : <span className="muted">No group in use</span>}</span>
-        <span className="context-actions"><button type="button" className="quiet" disabled={busy || checking} onClick={recheckNow}>{checking ? 'Checking…' : 'Recheck'}</button>
-          <button type="button" className="quiet" onClick={() => showTab('workspaces')}>Projects →</button></span>
-      </div>
+      </>}
       {(workspaceError || card?.gitError) && <p className="notice error" role="alert">{tilde(workspaceError || card?.gitError || '')} Recheck before starting.</p>}
       {setupHold && <p className="notice">{setupHold.reason}</p>}
       {unknownRequest && <div className="notice error" role="alert">Request {unknownRequest} has an uncertain HTTP result. Inspect its server run and the terminal; do not resend it.
@@ -866,7 +869,7 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
                   <button type="button" disabled={stageBlocked || !stageReady || !text.trim()} onClick={() => void send(agent, 'instruction', true)}>Send {agent.label} &amp; stage-relay to {state.sessions.find((session) => pair?.sessions.includes(session.id) && session.id !== agent.id)?.label} ↗</button>
                   <button type="button" disabled={stageBlocked || !stageReady} onClick={() => void send(agent, 'relay')}>Stage-relay review by {agent.label} ↗</button></div>
                 {active ? <Acknowledgement label="Ready to send" checked={ready} disabled={stageBlocked} onChange={setReady} lines={override?.lines ?? []}>
-                  I checked that all participants are at empty prompts, have no background writers, use their standard Git index, and will remain under controller ownership for this run.</Acknowledgement>
+                  I checked that all participants are settled, have no background writers, use their standard Git index, and will remain under controller ownership for this run. Replace any unsent text in {agent.label}’s terminal prompt with this command.</Acknowledgement>
                   : <p className="fine">Select {agent.label} to confirm readiness and send.</p>}
                 {!busy && (sharedReason || cardReason(agent)) && <p className="fine" role="status">{sharedReason || cardReason(agent)}</p>}
               </form>}
@@ -957,7 +960,7 @@ export function Console({ initialTab }: { initialTab?: Tab } = {}) {
       <section className="panel about" aria-label="How this works" hidden={helperSection !== 'guide'}>
         <div className="section-heading"><h2>How this works</h2></div>
         <p>AltCLI is a host-resident console for coding agents running in tmux panes. You can start CLIs yourself or explicitly preview and confirm profile launches when the host enables that feature. The console coordinates their turns.</p>
-        <p>The Agent selector above the terminals chooses both the terminal shown and the Control pane's recipient; it starts on a working agent. In <strong>Focus</strong> it then follows whichever agent starts working, for the terminal and Control alike; in <strong>Parallel</strong> all agent controls appear side by side on wide screens and stacked on phones, with separate drafts. Selecting a card activates its readiness check and clears the previous confirmation. Outside Plan, the <strong>Terminal / Control</strong> switch shows one or the other in the same frame, and an accepted command from Control switches back to the terminals. Plan setup addresses the whole group and keeps its own section. The worktree group's <strong>Agents</strong> toggle, beside its local <strong>Settings</strong> toggle, shows agent status. Local Settings remain available in Stage relay; they configure Plan and committed work. Every action has one readiness check beside it; while something holds the checkout (a controller run, an uncertain delivery or request, manual terminal input) the check lists each consequence and the action clears those holds before it runs. <strong>Control access</strong>, at the top of every page, explains what holds work and offers Take control, typing stops and recovery; nothing there is required first. The keyboard emoji reports active input connections and the shared automation hold. Each terminal has a <strong>Terminal / Display</strong> toggle: Terminal types in that pane and stays writable when you focus another; Display only watches, and toggling again resets a failed connection. Send delivers an instruction; After send can add one handoff commit, or a commit and one review by the named peer. Current changes snapshots work as it stands, and Committed review asks this agent to review a committed range. Every action names its recipients and needs a fresh readiness confirmation.</p>
+        <p>The Agent selector above the terminals chooses both the terminal shown and the Control pane's recipient; it starts on a working agent. In <strong>Focus</strong> it then follows whichever agent starts working, for the terminal and Control alike; in <strong>Parallel</strong> all agent controls appear side by side on wide screens and stacked on phones, with separate drafts. Selecting a card activates its readiness check and clears the previous confirmation. Outside Plan, the <strong>Terminal / Control</strong> switch shows one or the other in the same frame, and an accepted command from Control switches back to the terminals. Plan setup addresses the whole group and keeps its own section. The worktree group's <strong>Agents</strong> toggle, beside its local <strong>Settings</strong> toggle, shows agent status. Local Settings remain available in Stage relay; they configure Plan and committed work. Every action has one readiness check beside it; while something holds the checkout (a controller run, an uncertain delivery or request, manual terminal input) the check lists each consequence and the action clears those holds before it runs. <strong>Control access</strong>, beside the worktree selector in Console, explains what holds this worktree and offers Take control, typing stops and recovery; nothing there is required first. The keyboard emoji reports active input connections and the shared automation hold. Each terminal has a <strong>Terminal / Display</strong> toggle: Terminal types in that pane and stays writable when you focus another; Display only watches, and toggling again resets a failed connection. Send delivers an instruction; After send can add one handoff commit, or a commit and one review by the named peer. Current changes snapshots work as it stands, and Committed review asks this agent to review a committed range. Every action names its recipients and needs a fresh readiness confirmation.</p>
         <p>The server owns every run, validates and deduplicates correlated completions, and pauses on unknown background work. No effect in this page sends commands. A completed chain is not final task acceptance.</p>
         <p>Viewing another worktree never changes a running relay. Pause a run before manual terminal takeover. Locking this view or disconnecting your phone does not interrupt workers.</p>
         <p className="fine">Plan produces documents and an approval checkpoint; Implementation runs committed handoffs on a task branch. Integration branches are starting points only. The detailed design lives in the repository’s README, docs/WORKFLOWS.md and the ADRs.</p>

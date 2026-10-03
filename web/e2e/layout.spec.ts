@@ -74,25 +74,19 @@ test('a typed instruction explains the disabled Send and readiness enables it wi
   await expect(page.locator('.page-heading').getByRole('img', { name: 'Input: 0 active', exact: true })).toBeVisible();
   expect(sent).toEqual([]);
 });
-test('the page heading row holds the one Control access entry, then the keyboard status, then connection status', async ({ page }, info) => {
+test('worktree recovery sits beside its selector while the heading keeps host status', async ({ page }, info) => {
   await unlock(page);
-  const heading = page.locator('.page-heading'), entry = heading.getByRole('button', { name: /^Control access · / });
-  const keyboard = heading.getByRole('img', { name: /^Input: / });
+  const heading = page.locator('.page-heading'), context = page.locator('.context-bar');
+  const entry = context.getByRole('button', { name: /^Control access · / }), keyboard = heading.getByRole('img', { name: /^Input: / });
   await expect(entry).toBeVisible(); await expect(keyboard).toBeVisible();
-  // One global status entry; the implementation readiness hint can also open this same panel.
-  await expect(page.locator('.topbar .access-entry')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Open Control access' })).toHaveCount(0);
-  const middle = (box: { y: number; height: number }) => box.y + box.height / 2;
+  await expect(heading.getByRole('button', { name: /^Control access/ })).toHaveCount(0);
   for (const width of [1440, 800, 390, 320]) {
     await page.setViewportSize({ width, height: 900 });
-    const access = (await entry.boundingBox())!, owner = (await keyboard.boundingBox())!, connection = (await heading.locator('.connection').boundingBox())!;
-    for (const box of [owner, connection]) expect(Math.abs(middle(access) - middle(box)), `one row at ${width}`).toBeLessThan(3);
-    expect(owner.x, `keyboard status right of Control access at ${width}`).toBeGreaterThanOrEqual(access.x + access.width);
-    expect(connection.x, `connection status right of the keyboard status at ${width}`).toBeGreaterThanOrEqual(owner.x + owner.width);
-    expect(connection.x - access.x - access.width).toBeLessThan(60);
+    await expect(entry).toBeVisible(); await expect(context.getByRole('combobox', { name: 'Switch worktree' })).toBeVisible();
+    expect(await context.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
     expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(0);
   }
-  await heading.screenshot({ path: info.outputPath('heading-control-access.png') });
+  await context.screenshot({ path: info.outputPath('worktree-control-access.png') });
 });
 test('the Agent selector switches the shown terminal and Control together and keeps each draft', async ({ page, request }, info) => {
   const group = await post(request, 'groups', { name: 'Agent selector', members: ['codex','claude'] });
@@ -174,7 +168,7 @@ test('outside Plan one frame shows the terminals or Control; the hidden surface 
   await expect(page.getByRole('region', { name: 'Plan setup' })).toBeVisible();
   expect(sent).toEqual([]);
 });
-test('Control access is one panel on every tab; opening it sends nothing, and readiness is confirmed beside the action on screen', async ({ page, request }) => {
+test('Control access stays in the worktree console; viewing it sends nothing, and readiness stays beside the action', async ({ page, request }) => {
   const group = await post(request, 'groups', { name: 'Access', members: ['codex','claude'] });
   await taskBranch(page);
   await openGroup(page, group);
@@ -198,11 +192,14 @@ test('Control access is one panel on every tab; opening it sends nothing, and re
   await access.getByRole('button', { name: 'Return to action', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Control', exact: true })).toBeFocused(); await expect(ready).toBeChecked();
   await expect(codex.getByRole('button', { name: 'Send Codex', exact: true })).toBeEnabled();
-  // The same panel is reachable from another tab; switching tabs revokes the check.
-  await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Projects', exact: true }).click();
-  await expect(access).toBeVisible(); await expect(ready).toBeHidden();
-  await access.getByRole('button', { name: 'Go to Console', exact: true }).click();
-  await expect(codex).toBeVisible(); await expect(ready).not.toBeChecked();
+  // Worktree recovery leaves the page on global tabs; switching tabs revokes readiness.
+  const sections = page.getByRole('navigation', { name: 'Sections' });
+  for (const name of ['Projects', 'Settings', 'Helper']) {
+    await sections.getByRole('button', { name, exact: true }).click();
+    await expect(access).toBeHidden(); await expect(entry).toBeHidden(); await expect(ready).toBeHidden();
+  }
+  await sections.getByRole('button', { name: 'Console', exact: true }).click();
+  await expect(access).toBeVisible(); await expect(codex).toBeVisible(); await expect(ready).not.toBeChecked();
   expect(sent).toEqual([]);
 });
 test('one control pane keeps per-target drafts; After send maps to a plain Send, work with commit, or work with commit and relay', async ({ page, request }) => {
@@ -395,13 +392,13 @@ test('Settings shows the effective host configuration and the console preference
   await expect(preferences.getByLabel('Staging fallback', { exact: true })).toHaveCount(0); // Stage relay is offered in Control on main, not as a preference
   await sections.getByRole('button', { name: 'Helper', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Helper', exact: true })).toBeVisible();
-  // Helper opens on Chat; the general explanation is its Guide section, whose heading keeps Control access.
+  // Helper opens on Chat; Guide explains worktree controls without showing them globally.
   const helper = page.getByRole('navigation', { name: 'Helper sections' });
   await expect(helper.getByRole('button')).toHaveText(['Chat', 'Session', 'Settings', 'Evidence', 'Guide']);
   await expect(helper.getByRole('button', { name: 'Chat', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await helper.getByRole('button', { name: 'Guide', exact: true }).click();
   await expect(page.getByRole('region', { name: 'How this works' })).toContainText('No effect in this page sends commands');
-  await expect(page.locator('.page-heading').getByRole('button', { name: /^Control access/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Control access/ })).toHaveCount(0);
   await sections.getByRole('button', { name: 'Console', exact: true }).click(); await showSurface(page, 'Control');
   await expect(page.getByRole('region', { name: 'Stage relay', exact: true })).toBeVisible(); // main's default Control action
 });
@@ -747,7 +744,7 @@ test('Plan drawer can open Control access without covering the readiness check b
   await page.getByRole('button', { name: 'Open control drawer', exact: true }).click();
   const control = page.getByRole('region', { name: 'Control', exact: true });
   await control.getByLabel('Shared task brief').fill('Plan the drawer flow.');
-  await page.locator('.page-heading').getByRole('button', { name: /^Control access · / }).click();
+  await page.locator('.context-bar').getByRole('button', { name: /^Control access · / }).click();
   expect(await control.evaluate((el) => getComputedStyle(el).position)).not.toBe('fixed');
   const access = page.getByRole('region', { name: 'Control access', exact: true });
   await expect(access.getByRole('checkbox')).toHaveCount(0);

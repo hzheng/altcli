@@ -137,6 +137,52 @@ test('Console switches projects and worktrees without writes, keeps drafts and r
   await page.reload(); await page.getByLabel('Host access token').fill(TOKEN); await page.getByRole('button', { name: 'Open console' }).click();
   await expect(trees).toHaveValue(main.id);
 });
+test('Stage relay starts with a discovered peer without requiring registration first', async ({ page, request }) => {
+  await post(request, 'workspaces/reset', { repository: '/demo/project', confirmReady: true });
+  await post(request, 'sessions', { paneId: '%1', label: 'Claude Code' });
+  const before = await state(request), peer = before.sessions.find(s => s.identity.paneId === '%0')!;
+  await unlock(page);
+  await page.getByRole('navigation', { name: 'Agent' }).getByRole('button', { name: 'Claude Code', exact: true }).click();
+  await (await readiness(page, 'Ready to send')).check();
+  const response = page.waitForResponse(r => r.url().endsWith('/api/v1/commands') && r.request().method() === 'POST');
+  await page.getByRole('button', { name: 'Stage-relay review by Claude Code ↗', exact: true }).click();
+  const delivered = await response; expect(delivered.ok()).toBe(true);
+  const receipt = await delivered.json(); expect(receipt.status).toBe('delivered');
+  const run = (await state(request)).runs.find(r => r.id === receipt.id)!;
+  expect(run.participants.find(s => s.id === peer.id)?.registrationId).toBe(peer.registrationId);
+});
+test('takeover belongs to the selected worktree and switching revokes its confirmation', async ({ page, request }, info) => {
+  const { session: otherAgent } = await post(request, 'sessions', { paneId: '%3', label: 'Other Codex' });
+  const mainRun = await post(request, 'commands', { requestId: crypto.randomUUID(), agentId: 'codex', kind: 'instruction', text: 'Main task', confirmReady: true });
+  const otherId = crypto.randomUUID(); await instruct(request, otherAgent.id, 'Other task', otherId);
+  const inventory = await (await request.get('/api/v1/workspaces', { headers })).json() as WorkspaceDiscovery;
+  const project = inventory.projects!.find(p => p.name === 'project')!, other = inventory.projects!.find(p => p.name === 'other')!;
+  // The browser shows both checkout roots as worktrees of one project; execution uses the real store boundaries.
+  project.worktrees.push({ ...other.worktrees[0]!, main: false });
+  inventory.projects = inventory.projects!.filter(p => p.id !== other.id);
+  await page.route('**/api/v1/workspaces', route => route.fulfill({ json: inventory }));
+  await unlock(page, TOKEN, false);
+  const writes: string[] = []; page.on('request', r => { if (r.method() !== 'GET' && !observationTransport(r.url())) writes.push(r.url()); });
+  const access = await openAccess(page), confirm = access.getByRole('region', { name: 'Confirm take control' });
+  await access.getByRole('button', { name: 'Take control…', exact: true }).click();
+  await expect(confirm).toContainText('Take control of /demo/project?');
+  const trees = page.getByRole('combobox', { name: 'Switch worktree' });
+  await trees.selectOption(other.worktrees[0]!.id);
+  await expect(access).toBeHidden(); await openAccess(page);
+  await expect(confirm).toHaveCount(0); await expect(access.locator('.access-scope')).toContainText('/demo/other');
+  await trees.selectOption(project.worktrees[0]!.id);
+  await expect(access).toBeVisible(); await expect(confirm).toHaveCount(0);
+  for (const tab of ['Projects', 'Settings', 'Helper'] as const) {
+    await openTab(page, tab); await expect(access).toBeHidden();
+    await expect(page.getByRole('button', { name: 'Take control…', exact: true })).toHaveCount(0);
+  }
+  await openTab(page, 'Console'); await expect(access).toBeVisible(); expect(writes).toEqual([]);
+  await access.getByRole('button', { name: 'Take control…', exact: true }).click();
+  await page.screenshot({ path: info.outputPath('worktree-takeover.png'), fullPage: true });
+  await confirm.getByRole('button', { name: 'Take control now', exact: true }).click();
+  await expect.poll(async () => (await state(request)).runs.find(r => r.id === mainRun.id)?.status).toBe('stopped');
+  expect((await state(request)).runs.find(r => r.id === otherId)?.status).toBe('running');
+});
 test('Console keeps the project when the selected worktree disappears, including after reload', async ({ page, request }) => {
   const inventory = await (await request.get('/api/v1/workspaces', { headers })).json() as WorkspaceDiscovery;
   const project = inventory.projects!.find(p => p.name === 'project')!, main = project.worktrees[0]!;

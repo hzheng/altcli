@@ -35,7 +35,7 @@ export class MockAdapter implements TerminalAdapter {
   async capture(session: SessionRegistration): Promise<string> {
     return this.output.get(session.id) ?? `[MOCK ${session.label}]\n\nThis is a simulated pane, not a connected coding agent.\nNo repository has been read or modified.\n\nReady to preview a manual command.\n> `;
   }
-  async send(session: SessionRegistration, text: string): Promise<void> {
+  async send(session: SessionRegistration, text: string, _options?: { replaceDraft?: boolean }): Promise<void> {
     if (text.replace(/ \[altcli-command:[0-9a-f-]+\]$/i, "") === "mock:uncertain") throw new AppError("TMUX_FAILED", "Simulated transport failure after typing began.", 409);
     this.output.set(session.id, `${await this.capture(session)}${text}\n\n[MOCK] Input received. No review or code change was performed.\n> `);
   }

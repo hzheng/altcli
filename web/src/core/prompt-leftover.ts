@@ -25,6 +25,19 @@ function inputArea(rows: string[], start: number): string[] | null {
   return rows.slice(start, blank);
 }
 
+function inputRows(screen: string): string[] | null {
+  const rows = screen.split('\n').map((row) => row.replace(/\s+$/u, ''));
+  let start = rows.length - 1;
+  while (start >= 0 && !PROMPT_ROW.test(rows[start]!)) start--;
+  const area = start < 0 ? null : inputArea(rows, start);
+  return !area || area.slice(1).some((row) => row && !row.startsWith('  ')) ? null : area;
+}
+/** Upper bound on visible draft characters, including wrapping/indentation. Used only after the typed command is verified in a
+ * mixed draft. Backspace and Delete remove text on both sides of the cursor without submitting or sending an interrupt. */
+export function inputEraseCount(screen: string): number | null {
+  const area = inputRows(screen);
+  return area ? Array.from(area.join('\n')).length : null;
+}
 /** What the agent's input area holds after the controller typed `typed` into it, read from a capture of the visible pane before
  * submitting. `only`: exactly the command, nothing before it, after the cursor or on other rows, and no blank rows the command does
  * not have (a multi-line paste may show as one paste token). `mixed`: the command is visible together with other text. `unreadable`:
@@ -32,12 +45,9 @@ function inputArea(rows: string[], start: number): string[] | null {
  * typed. Only `only` is evidence that submitting sends just this command. The input area is the last row starting with a prompt
  * symbol, below any earlier prompts in the scrollback. */
 export function inputAfterTyping(screen: string, typed: string): 'only' | 'mixed' | 'unreadable' {
-  const rows = screen.split('\n').map((row) => row.replace(/\s+$/u, ''));
-  let start = rows.length - 1;
-  while (start >= 0 && !PROMPT_ROW.test(rows[start]!)) start--;
-  const area = start < 0 ? null : inputArea(rows, start);
+  const area = inputRows(screen);
   const mine = squeeze(typed);
-  if (!area || !mine || area.slice(1).some((row) => row && !row.startsWith('  '))) return 'unreadable';
+  if (!area || !mine) return 'unreadable';
   const first = area[0]!.replace(PROMPT_ROW, ''), shown = squeeze([first, ...area.slice(1)].join(''));
   if (typed.includes('\n') && /^\[Pasted[^\]]*\]$/u.test(shown)) return 'only';
   // Whitespace-insensitive equality would accept a draft of spaces or empty lines: the command must start right after the prompt
