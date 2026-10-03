@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { beforeEach, afterEach, test } from 'node:test';
+import { before, after, beforeEach, afterEach, test } from 'node:test';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync, existsSync, utimesSync } from 'node:fs';
@@ -24,6 +24,13 @@ import type { HookEvent, ManagedSession, Workspace } from '../src/contracts/work
 import type { WorktreeCreateInput, WorktreeIntegrationPreview, WorktreeRename, WorktreeUpdate, WorktreeUpdatePreview } from '../src/contracts/projects.ts';
 
 // Real Git / SQLite, isolated task-worktree root. No installed agents, actual home or live controller is used.
+const gitConfigEnvironment = { GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL, GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM };
+before(() => { process.env.GIT_CONFIG_GLOBAL = '/dev/null'; process.env.GIT_CONFIG_NOSYSTEM = '1'; });
+after(() => {
+  for (const [key, value] of Object.entries(gitConfigEnvironment)) {
+    if (value === undefined) delete process.env[key]; else process.env[key] = value;
+  }
+});
 let directory: string; let root: string; let store: Store; let catalog: ProjectCatalog; let config: Config;
 function git(path: string, ...args: string[]) {
   return execFileSync('git', ['-C', path, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -33,7 +40,10 @@ async function workspace(path: string): Promise<Workspace> {
 }
 beforeEach(() => {
   directory = realpathSync(mkdtempSync(join(tmpdir(), 'altcli-projects-'))); root = join(directory, 'repo'); mkdirSync(root);
-  git(root, 'init', '-b', 'main'); writeFileSync(join(root, 'app.txt'), 'baseline\n'); git(root, 'add', 'app.txt'); git(root, 'commit', '-m', 'baseline');
+  git(root, 'init', '-b', 'main');
+  // Application Git calls do not inherit the fixture helper's invocation-local identity.
+  git(root, 'config', 'user.name', 'Fixture'); git(root, 'config', 'user.email', 'fixture@example.invalid');
+  writeFileSync(join(root, 'app.txt'), 'baseline\n'); git(root, 'add', 'app.txt'); git(root, 'commit', '-m', 'baseline');
   config = { ...loadConfig({ ALTCLI_TOKEN: 'a'.repeat(64), ALTCLI_DATA_DIR: join(directory, 'metadata'), CLAUDE_CONFIG_DIR: join(directory, 'claude'), CODEX_HOME: join(directory, 'codex') }), worktreeDir: join(directory, 'tasks') };
   store = new Store(config.dataDir); catalog = new ProjectCatalog(store, config);
 });

@@ -73,6 +73,10 @@ export async function attachTmux(config: Config, target: AttachTarget, writer: b
   const fresh = await inspectAttach(config, target.identity);
   if (fresh.sessionId !== target.sessionId) throw new AppError('TARGET_CHANGED', 'The target session changed.', 409);
   if (!writer) await assertObserverSize(config, target.sessionId);
+  const run = terminalRunner(config);
+  // tmux 3.7 sanitizes paste buffers by default. Typed input needs literal bytes, but a real paste
+  // keeps that protection against an embedded end marker; older servers lack -S and preserve both.
+  const literalPaste = writer && paneInput && /^paste-buffer \([^\n]+\) \[-[^\]]*S/m.test(await run(['list-commands']));
   const { spawn } = await import('node-pty'); // Mock mode never loads a native addon.
   // A fixed release may close and reuse its kqueue before onExit. Never close saved
   // descriptor numbers under a different implementation; audit each stable upgrade.
@@ -105,7 +109,6 @@ export async function attachTmux(config: Config, target: AttachTarget, writer: b
     }
   });
   await watcher; // Identified while the child runs, before anyone can close it.
-  const run = terminalRunner(config);
   // xterm emits a complete paste event, but the browser sends it in ordered 4 KiB frames.
   // Keep those bytes in this attachment only; close/replacement discards an incomplete paste.
   let pendingPaste: Buffer | null = null;
@@ -116,7 +119,7 @@ export async function attachTmux(config: Config, target: AttachTarget, writer: b
     try {
       await run(['load-buffer', '-b', buffer, '-'], bytes);
       if (ended) throw new AppError('TARGET_CHANGED', 'The terminal attachment ended before inserting.');
-      await run(['paste-buffer', ...(bracket ? ['-p'] : []), '-r', '-d', '-b', buffer, '-t', target.identity.paneId]);
+      await run(['paste-buffer', ...(literalPaste && !bracket ? ['-S'] : []), ...(bracket ? ['-p'] : []), '-r', '-d', '-b', buffer, '-t', target.identity.paneId]);
     } catch (error) { await run(['delete-buffer', '-b', buffer]).catch(() => {}); throw error; }
   };
   const paste = async (reference: Buffer) => {

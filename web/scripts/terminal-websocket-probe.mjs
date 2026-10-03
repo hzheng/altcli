@@ -19,7 +19,14 @@ for (const stream of [child.stdout,child.stderr]) stream.on('data', d => { log =
 const wait = ms => new Promise(r => setTimeout(r,ms));
 async function request(path, body) {
   const response = await fetch(`${origin}/api/v1/${path}`, { headers: { Authorization: `Bearer ${token}`, Origin: origin, ...(body ? {'Content-Type':'application/json'} : {}) }, method: body ? 'POST' : 'GET', ...(body ? {body:JSON.stringify(body)} : {}) });
-  const data = await response.json(); return {status:response.status,data};
+  const contentType = response.headers.get('content-type') ?? '(missing)';
+  const bodyText = await response.text();
+  try {
+    assert.match(contentType, /^application\/json\b/i);
+    return {status:response.status,data:JSON.parse(bodyText)};
+  } catch (cause) {
+    throw new Error(`Expected JSON from /api/v1/${path}; HTTP ${response.status}; Content-Type: ${contentType}\nResponse: ${bodyText.slice(0, 1000)}\nServer log:\n${log}`, { cause });
+  }
 }
 try {
   for(let n=0;n<180;n++) { if(child.exitCode!==null) throw Error(log); try { if((await request('config')).status===200) break; }catch{} await wait(100); }

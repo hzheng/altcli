@@ -106,8 +106,9 @@ test('concurrent uploads are bounded and an aborted client leaves nothing behind
   const a = plane.attachments.upload(upload(first.stream)), b = plane.attachments.upload(upload(second.stream));
   for (let i = 0; i < 200 && rows().length < 2; i++) await turns();
   await assert.rejects(plane.attachments.upload(upload(png())), /At most 2 images upload at once/);
+  const rejected = Promise.all([assert.rejects(a, /interrupted/), assert.rejects(b, /interrupted/)]);
   first.fail(); second.fail();
-  await assert.rejects(a, /interrupted/); await assert.rejects(b, /interrupted/);
+  await rejected;
   assert.deepEqual(rows(), []); assert.deepEqual(files(), []);
   assert.ok(await plane.attachments.upload(upload(png())));
 });

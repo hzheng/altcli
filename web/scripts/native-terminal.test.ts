@@ -11,7 +11,12 @@ import { paneProcesses } from '../src/server/processes.ts';
 import { tmuxLiteral } from './lib/terminal-environment.ts';
 import { nativeReference } from '../src/server/attachments.ts';
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
-async function eventually(check: () => Promise<boolean>) { for (let n=0;n<100;n++) { if (await check()) return; await delay(20); } assert.fail('Native condition timed out'); }
+async function eventually(check: () => Promise<boolean>, diagnostic?: () => string) { for (let n=0;n<100;n++) { if (await check()) return; await delay(20); } assert.fail(diagnostic?.() ?? 'Native condition timed out'); }
+async function bytesArrive(path: string, expected: Buffer) {
+  let actual = Buffer.alloc(0);
+  await eventually(async () => { actual = await readFile(path); return actual.equals(expected); },
+    () => `Native bytes timed out: expected ${expected.length} bytes (${expected.toString('hex')}), received ${actual.length} bytes (${actual.toString('hex')})`);
+}
 
 for (const launch of ['direct', 'npm'] as const)
 test(`private tmux: exact ${launch} backend process is infrastructure but its child is work`, async () => {
@@ -99,8 +104,7 @@ test('private tmux: observer isolation, native bytes, resize, exact client ident
     await eventually(async () => { try { return (await writer!.active()).paneId === '%0'; } catch { return false; } });
     const bytes = Buffer.from('é次🙂\x1b[A\x1b\t\x03\x04\x12\x15\x1b[200~line1\nline2\x1b[201~');
     await writer.write(bytes);
-    await eventually(async () => (await readFile(join(dir, 'bytes'))).length === bytes.length);
-    assert.deepEqual(await readFile(join(dir, 'bytes')), bytes);
+    await bytesArrive(join(dir, 'bytes'), bytes);
     writer.resize(70, 20); await delay(100);
     assert.equal((await run(['display-message', '-p', '-t', '%0', '#{window_width}x#{window_height}'])).trim(), '70x19');
     assert.equal((await writer.active()).size, '70x19', 'the status line reports the effective window, not the browser grid');
@@ -136,8 +140,7 @@ test('private tmux: pane-directed Helper and workspace bytes stay on their origi
     // Prefixes, Unicode, binary controls and bracketed paste are CLI input, never tmux client commands.
     const bytes = Buffer.from('\x02:switch-client -t project\r\x00é次🙂\x1b[A\x03\x1b[200~line1\nline2\x1b[201~');
     await writer.write(bytes);
-    await eventually(async () => (await readFile(join(dir, 'helper.bytes'))).length === bytes.length);
-    assert.deepEqual(await readFile(join(dir, 'helper.bytes')), bytes);
+    await bytesArrive(join(dir, 'helper.bytes'), bytes);
     assert.equal((await writer.active()).sessionId, target.sessionId);
     // Even a host-side client switch between inspection and writing cannot redirect a frame.
     const client = (await run(['list-clients', '-F', '#{client_pid}\t#{client_name}'])).trimEnd().split('\n').map(l => l.split('\t')).find(p => p[0] === String(writer!.pid))![1]!;
@@ -167,8 +170,8 @@ test('private tmux: synchronized panes cannot broadcast a browser writer into an
     writer=await attachTmux(config,target,true,80,24,()=>{},()=>{},true);await writer.ready;
     await run(['set-window-option','-t','%0','synchronize-panes','on']);
     const bytes=Buffer.from('only here\x02:next-window\r\x00é');await writer.write(bytes);
-    await eventually(async()=>(await readFile(join(dir,'one'))).length===bytes.length);
-    assert.deepEqual(await readFile(join(dir,'one')),bytes);assert.equal((await readFile(join(dir,'two'))).length,0);
+    await bytesArrive(join(dir,'one'),bytes);
+    assert.equal((await readFile(join(dir,'two'))).length,0);
     assert.equal((await inspectPane(run,'%0')).synchronized,true);
   } finally {await writer?.close();await run(['kill-server']).catch(()=>{});await rm(dir,{recursive:true,force:true});}
 });
@@ -196,8 +199,7 @@ test('private tmux: mouse reports reach only a requesting original pane, with pa
     await writer.write(Buffer.from(`\x1b[<0;${point}M`));await writer.write(Buffer.from(`\x1b[<0;${point}m`));
     await writer.write(Buffer.from('\x1b[<0;3;4M')); // The other pane never receives or redirects a click.
     await writer.write(Buffer.from('\x1b[<0;500;500M'));await writer.write(Buffer.from(`\x1b[<35;${point}M`));
-    await eventually(async()=>(await readFile(join(dir,'bytes'))).length===18);
-    assert.equal(await readFile(join(dir,'bytes'),'utf8'),'\x1b[<0;3;4M\x1b[<0;3;4m');
+    await bytesArrive(join(dir,'bytes'),Buffer.from('\x1b[<0;3;4M\x1b[<0;3;4m'));
   } finally {await writer?.close();await run(['kill-server']).catch(()=>{});await rm(dir,{recursive:true,force:true});}
 });
 
@@ -235,6 +237,27 @@ test('private tmux: an image reference reaches the pane as one bracketed paste o
       await writer.close();
     }
   } finally { for (const a of attachments) await a.close().catch(() => {}); await run(['kill-server']).catch(() => {}); await rm(dir, { recursive: true, force: true }); }
+});
+
+// tmux 3.7 sanitizes pasted content unless asked not to; only typed bytes opt out (see the Helper test above).
+test('private tmux: pasted text cannot end the program\'s bracketed paste early', async t => {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), 'altcli-paste-marker-')));
+  const config = loadConfig({ ALTCLI_TOKEN: 'a'.repeat(64), ALTCLI_DATA_DIR: join(dir, 'data'), ALTCLI_TMUX_SOCKET: join(dir, 't.sock') });
+  const run = createRunner(config.tmuxBin, config.tmuxSocket);
+  let writer: Attachment | undefined;
+  try {
+    await writeFile(join(dir, 'paste.sh'), '#!/bin/sh\nstty raw -echo\nprintf "\\033[?2004hReady\\r\\n"\nexec /bin/cat > paste.bytes\n');
+    await run(['-f', '/dev/null', 'new-session', '-d', '-s', 'paste', '-x', '80', '-y', '24', '-c', dir, '/bin/sh', join(dir, 'paste.sh')]);
+    if (!/^paste-buffer \([^\n]+\) \[-[^\]]*S/m.test(await run(['list-commands']))) return t.skip('tmux before 3.7 pastes buffers literally');
+    await eventually(async () => (await inspectPane(run, '%0')).command === 'cat');
+    writer = await attachTmux(config, await inspectAttach(config, (await inspectPane(run, '%0')).identity), true, 80, 24, () => {}, () => {}, true);
+    await eventually(async () => { try { return (await writer!.active()).paneId === '%0'; } catch { return false; } });
+    await writer.write(Buffer.from('\x1b[200~a\x1b[201~b\x1b[201~'));
+    let bytes = Buffer.alloc(0);
+    await eventually(async () => (bytes = await readFile(join(dir, 'paste.bytes'))).subarray(-6).equals(Buffer.from('\x1b[201~')));
+    const inner = bytes.subarray(6, -6).toString();
+    assert.ok(bytes.subarray(0, 6).equals(Buffer.from('\x1b[200~')) && !inner.includes('\x1b') && inner.startsWith('a') && inner.endsWith('[201~b'), JSON.stringify(bytes.toString()));
+  } finally { await writer?.close(); await run(['kill-server']).catch(() => {}); await rm(dir, { recursive: true, force: true }); }
 });
 
 // node-pty 1.1.0 on macOS leaks a spare master, the slave copy and the exit watcher's kqueue per spawn.
