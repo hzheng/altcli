@@ -507,7 +507,11 @@ test('terminal captures are taller, grow with the window, and stand apart from s
 test('terminal tool help starts at its control and stays inside the pane', async ({ page }, info) => {
   test.skip(info.project.name !== 'desktop', 'Hover bubbles are measured in a desktop window.');
   await unlock(page);
-  const tools = page.getByRole('region', { name: 'Codex terminal', exact: true }).locator('.terminal-tools > .hint');
+  const terminal = page.getByRole('region', { name: 'Codex terminal', exact: true });
+  await expect(terminal).toBeVisible();
+  // Connecting removes the status and reconnect controls; wait before capturing positional locators.
+  await expect(terminal.getByRole('img', { name: 'Disconnected', exact: true })).toHaveCount(0);
+  const tools = terminal.locator('.terminal-tools > .hint');
   const card = (await pane(page, 'Codex').boundingBox())!;
   await expect(tools.last().getByRole('button', { name: 'Terminal tools help' })).toBeVisible();
   for (const hint of await tools.all()) {

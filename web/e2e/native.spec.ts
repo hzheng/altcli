@@ -4,6 +4,9 @@ import { backToControl, expand, expandAgents, expandWorktree, takeControl, openA
 const headers={Authorization:`Bearer ${'a'.repeat(64)}`};
 async function state(request:APIRequestContext):Promise<WorkflowState>{return (await request.get('/api/v1/state',{headers})).json();}
 async function post(request:APIRequestContext,path:string,data:unknown){const r=await request.post(`/api/v1/${path}`,{headers,data});expect(r.ok(),await r.text()).toBe(true);return r.json();}
+async function stopFixtureRuns(request:APIRequestContext) {
+  for(const r of (await state(request)).runs.filter(r=>['running','waiting','paused'].includes(r.status)))await post(request,'runs',{runId:r.id,action:'takeover',confirmReady:true});
+}
 async function reconcileFixtureKeyboard(request:APIRequestContext) {
   for(const m of (await state(request)).manualSessions??[]) {
     for(const w of m.writers.filter(w=>w.live))await post(request,'terminals/revoke',{clientInstanceId:w.clientInstanceId});
@@ -46,12 +49,12 @@ async function openKeyboard(page:Page) {
   await expect(badge(card,'Typing enabled')).toBeVisible();await expectKeyboard(page,'Codex');return card;
 }
 test.beforeEach(async({request})=>{
-  const s=await state(request);for(const r of s.runs.filter(r=>['running','waiting','paused'].includes(r.status)))await post(request,'runs',{runId:r.id,action:'takeover',confirmReady:true});
+  await stopFixtureRuns(request);
   await reconcileFixtureKeyboard(request);
   await post(request,'workspaces/reset',{repository:'/demo/project',confirmReady:true});await post(request,'sessions',{paneId:'%0',label:'Codex'});await post(request,'sessions',{paneId:'%1',label:'Claude'});
 });
-// Finish intercepted polling requests before Playwright closes the page, then clear keyboard records.
-test.afterEach(async({page,request})=>{await page.unrouteAll({behavior:'wait'});await reconcileFixtureKeyboard(request);});
+// Finish intercepted requests, then end fixture runs before clearing input without a completed checkpoint.
+test.afterEach(async({page,request})=>{await page.unrouteAll({behavior:'wait'});await stopFixtureRuns(request);await reconcileFixtureKeyboard(request);});
 test('a worktree hold stays visible in status but does not enter another workspace acknowledgement',async({page,request})=>{
   const other=await post(request,'sessions',{paneId:'%3',label:'Other Codex'});
   try {
@@ -692,12 +695,16 @@ for(const leave of ['Lock','another workspace'] as const)for(const purpose of ['
   if(purpose==='update')await update.getByLabel('Add detail for Codex').fill('Must never arrive.');
   else {await expand(update,'Terminal controls');await update.getByLabel('Literal answer for Codex').fill('1');}
   const check=update.getByRole('checkbox',{name:/I inspected Codex/});await expect(check).toBeEnabled({timeout:8000});
-  await expect(update.getByRole('list',{name:'Consequences of proceeding'})).toContainText('Typing stops in Codex');await check.check();
-  let release!:()=>void,arrived!:()=>void;const gate=new Promise<void>(r=>release=r),received=new Promise<void>(r=>arrived=r);
-  await page.route('**/api/v1/terminals/reconcile',async route=>{const response=await route.fetch();arrived();await gate;await route.fulfill({response});},{times:1});
+  const consequences=update.getByRole('list',{name:'Consequences of proceeding'});
+  await expect(consequences).toContainText('Typing stops in Codex');
+  // takeKeyboard waits for server bytes; the browser must also see that revision before authorizing the stop.
+  await expect(consequences).toContainText('Manual terminal input (3 bytes)');await check.check();
+  let release!:()=>void,reconcileStatus:number|undefined;const gate=new Promise<void>(r=>release=r);
+  await page.route('**/api/v1/terminals/reconcile',async route=>{const response=await route.fetch();reconcileStatus=response.status();await gate;await route.fulfill({response});},{times:1});
   const sent:string[]=[];page.on('request',r=>{if(r.method()==='POST'&&new URL(r.url()).pathname==='/api/v1/interactions')sent.push(r.url());});
   try {
-    await update.getByRole('button',{name:purpose==='update'?'Send update to Codex':'Send answer',exact:true}).click();await received;
+    await update.getByRole('button',{name:purpose==='update'?'Send update to Codex':'Send answer',exact:true}).click();
+    await expect.poll(()=>reconcileStatus,{message:'Manual input must reconcile before leaving the pending composer'}).toBe(200);
     if(leave==='Lock'){await page.getByRole('button',{name:'Lock',exact:true}).click();await expect(page.getByRole('button',{name:'Open console'})).toBeVisible();}
     else {await page.getByRole('combobox',{name:'Switch project'}).selectOption({label:'other'});await expect(update).toHaveCount(0);}
     release();
