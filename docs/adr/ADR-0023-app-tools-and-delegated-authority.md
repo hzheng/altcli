@@ -1,6 +1,6 @@
 # ADR-0023: Shared app tools and delegated authority
 
-Status: **proposed future direction; only A1's read-only app tools are implemented**
+Status: **Background actions accepted and implemented locally by the October 2 amendment below; broader extensions remain proposed**
 ([guide](../GLOBAL-AI.md)). September 30, 2026.
 This accompanies [ADR-0022](ADR-0022-app-wide-ai-instances.md); it grants no present
 tool access, standing delegation or exemption from human approval.
@@ -9,7 +9,7 @@ tool access, standing delegation or exemption from human approval.
 > reads now take an explicit principal set by the transport. Helper keeps its host-wide scope; a Background job is scoped to one
 > attention item and its run or launch. Every read tool declares an output schema that the host checks before replying. The validation
 > of a model's assessment is separate and stricter: exact fields, host-minted evidence IDs and per-kind destinations. Both are implemented
-> locally; no effect tool, job endpoint or delegated authority exists. See [BACKGROUND-ASSISTANT](../BACKGROUND-ASSISTANT.md).
+> locally. The subsequent action amendment adds a job endpoint, confirmed effects and explicit standing permissions. See [BACKGROUND-ASSISTANT](../BACKGROUND-ASSISTANT.md).
 
 ## One authoritative service boundary
 
@@ -112,3 +112,32 @@ stale evidence, manual barriers, duplicates and uncertain effects. The
 read-only assistance ahead of delegated effects. This ADR describes proposed
 authority responsibilities, not implemented policy/decision tables, request
 envelopes or amendments to current runtime permissions.
+
+## October 2 amendment: confirmed Background actions
+
+Authority: the owner explicitly requested that Background be able to perform operations after interactive confirmation, or without
+another confirmation when allowed in Settings, and required a database-backed Log. This accepts the A4 increment for Background only;
+Helper’s existing read tools remain unchanged.
+
+Implemented locally in schema 24: one `request_action` boundary for ordinary app API requests and host commands, exact interactive
+consent, independent versioned app/command/risk permissions (all ask by default), one-use app grants, and durable proposals and audit
+events. App requests reuse owner routes, validation, receipts and uncertainty handling. Host commands are a separately disclosed full
+same-user capability, not the app API or an OS sandbox. Native CLI built-in tools remain disabled. The model cannot directly change its
+own permission settings or forge lifecycle events through the app tool. Commands are powerful enough to modify same-user files; audit
+integrity against a malicious authorized host command is not an enforced security claim.
+
+Interactive decisions bind exact payload, issue/source version, instance/enablement and permission revision. A saved permission applies
+to future proposals, never retrospectively approves old ones, and is rechecked at dispatch. An additional risk permission admits
+owner-delegated Plan and inspection decisions without pretending the owner inspected each occurrence. Frozen plans identify Background
+and its action/policy record, and retain the original Plan approval setting. Inspection decisions have their own delegated record;
+native readiness requirements remain native evidence and all applicable app gates still execute.
+
+Record before effects; reject changed idempotency keys, keep duplicate receipts, and never replay unknown execution. A restart retains
+uncertain action ownership. Owner reconciliation retains its note and history and clears no underlying workflow or setup owner.
+All tool calls and writable requests, authorizations, executions, results, denials, failures and policy changes appear in **Log**.
+Command logs describe command-level operations, not a filesystem/system-call audit. No log pruning is automatic.
+
+The [runtime guide](../BACKGROUND-ASSISTANT.md#confirmed-actions-standing-permissions-and-log) owns limits and controls. Tests cover real
+owner HTTP and synthetic native writes, revoked/stale grants, duplicate consent, process survival, restart and delegated Plan identity.
+An installed Claude Code 2.1.288 probe proposed a synthetic write which executed only after the fixture owner's explicit confirmation,
+with SQLite audit records. Physical-device and production-data acceptance remain separate.

@@ -1,6 +1,6 @@
 import { constants } from 'node:fs';
 import { lstat, mkdir, open, realpath, rename, unlink } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import type { LaunchProfile } from '../../contracts/launches.ts';
@@ -16,23 +16,26 @@ import { claudeProfileArgs } from './claude.ts';
 import { hash, GlobalAIError } from './reads.ts';
 import { helperProfileArgs, type GlobalHost } from './service.ts';
 
-async function privateDirectory(path: string): Promise<void> {
+export async function privateDirectory(path: string): Promise<void> {
   await mkdir(path, { recursive: true, mode: 0o700 });
   const st = await lstat(path);
   if (!st.isDirectory() || st.isSymbolicLink() || st.uid !== process.getuid?.() || st.mode & 0o077 || await realpath(path) !== resolve(path))
-    throw new GlobalAIError('APP_DIRECTORY', 'Helper needs a private ordinary directory owned by this host user.');
+    throw new GlobalAIError('APP_DIRECTORY', 'App-wide agents need a private ordinary directory owned by this host user.');
 }
-async function privateFile(path: string, contents: string): Promise<void> {
+export async function privateFile(path: string, contents: string): Promise<void> {
   const temporary = `${path}.${randomUUID()}.part`;
   const handle = await open(temporary, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
   try { await handle.writeFile(contents, 'utf8'); await handle.sync(); } finally { await handle.close(); }
   try { await rename(temporary, path); } finally { await unlink(temporary).catch(() => {}); }
 }
+export type NativeAppInstance = Omit<GlobalAIInstance, 'role'>;
 export class NativeGlobalHost implements GlobalHost {
   readonly config: Config;
   readonly bridge: string;
   constructor(config: Config, repoRoot: string) { this.config = config; this.bridge = join(repoRoot, 'web/scripts/global-ai-mcp.mjs'); }
-  private environment(): Record<string, string> {
+  protected readonly marker: string = '@altcli_global_ai';
+  protected readonly label: string = 'Helper';
+  protected environment(): Record<string, string> {
     const env = launchEnvironment();
     // App tools use a different credential. Do not point Global AI at the owner's hook env file.
     delete env.ALTCLI_ENV; delete env.ALTCLI_URL;
@@ -40,6 +43,10 @@ export class NativeGlobalHost implements GlobalHost {
     return env;
   }
   environmentHash(): string { return hash(this.environment()); }
+  protected command(instance: NativeAppInstance): string[] { return [instance.executable, ...instance.args]; }
+  protected runner(instance: NativeAppInstance) {
+    return terminalRunner({ ...this.config, tmuxSocket: instance.identity?.socketPath ?? this.config.tmuxSocket });
+  }
   async executable(profile: LaunchProfile): Promise<string> {
     helperProfileArgs(profile);
     const path = resolveExecutable(profile.executable, this.environment());
@@ -58,8 +65,8 @@ export class NativeGlobalHost implements GlobalHost {
       '-c', `mcp_servers.altcli_read.args=${JSON.stringify(mcp.args)}`,
       '-c', 'mcp_servers.altcli_read.enabled=true'];
   }
-  async prepare(instance: GlobalAIInstance, descriptor: { endpoint: string; token: string }): Promise<void> {
-    await privateDirectory(join(this.config.dataDir, 'global-ai'));
+  async prepare(instance: NativeAppInstance, descriptor: { endpoint: string; token: string }): Promise<void> {
+    await privateDirectory(dirname(instance.directory));
     await privateDirectory(instance.directory);
     if (await resolveWorktree(instance.directory)) throw new GlobalAIError('APP_DIRECTORY', 'Helper must start outside a Git worktree; choose another AltCLI data directory.');
     const script = await lstat(this.bridge);
@@ -67,31 +74,31 @@ export class NativeGlobalHost implements GlobalHost {
     await privateFile(join(instance.directory, instance.profile.adapterHint === 'claude' ? 'CLAUDE.md' : 'AGENTS.md'), GLOBAL_ORIENTATION);
     await this.descriptor(instance, descriptor);
   }
-  async descriptor(instance: GlobalAIInstance, descriptor: { endpoint: string; token: string }): Promise<void> {
+  async descriptor(instance: NativeAppInstance, descriptor: { endpoint: string; token: string }): Promise<void> {
     await privateDirectory(instance.directory);
     await privateFile(join(instance.directory, 'connection.json'), JSON.stringify({ schema: 1, ...descriptor }) + '\n');
   }
-  async inspect(instance: GlobalAIInstance) {
-    if (!instance.identity || !instance.sessionId || !instance.windowId) throw new GlobalAIError('GLOBAL_IDENTITY', 'No exact observed Helper terminal identity.');
-    const run = terminalRunner(this.config), pane = await inspectPane(run, instance.identity.paneId);
-    const values = (await run(['display-message', '-p', '-t', pane.identity.paneId, '#{session_id}\t#{window_id}\t#{@altcli_global_ai}'])).trimEnd().split('\t');
+  async inspect(instance: NativeAppInstance) {
+    if (!instance.identity || !instance.sessionId || !instance.windowId) throw new GlobalAIError('GLOBAL_IDENTITY', `No exact observed ${this.label} terminal identity.`);
+    const run = this.runner(instance), pane = await inspectPane(run, instance.identity.paneId);
+    const values = (await run(['display-message', '-p', '-t', pane.identity.paneId, `#{session_id}\t#{window_id}\t#{${this.marker}}`])).trimEnd().split('\t');
     if (!isDeepStrictEqual(pane.identity, instance.identity) || values.join('\t') !== [instance.sessionId, instance.windowId, instance.id].join('\t') || pane.cwd !== instance.directory)
-      throw new GlobalAIError('GLOBAL_IDENTITY', 'Helper identity, marker or directory changed. Nothing was adopted.');
-    return { identity: pane.identity, sessionId: instance.sessionId, label: 'Helper', dead: pane.dead };
+      throw new GlobalAIError('GLOBAL_IDENTITY', `${this.label} identity, marker or directory changed. Nothing was adopted.`);
+    return { identity: pane.identity, sessionId: instance.sessionId, label: this.label, dead: pane.dead };
   }
-  async stop(instance: GlobalAIInstance): Promise<void> {
+  async stop(instance: NativeAppInstance): Promise<void> {
     await this.inspect(instance);
-    const run = terminalRunner(this.config);
+    const run = this.runner(instance);
     const panes = (await run(['list-panes', '-s', '-t', instance.sessionId!, '-F', '#{pane_id}'])).trimEnd().split('\n');
     if (panes.length !== 1 || panes[0] !== instance.identity!.paneId)
-      throw new GlobalAIError('GLOBAL_IDENTITY', 'Helper has additional panes or windows. Inspect them before stopping its session.');
+      throw new GlobalAIError('GLOBAL_IDENTITY', `${this.label} has additional panes or windows. Inspect them before stopping its session.`);
     await run(['kill-session', '-t', instance.sessionId!]);
   }
-  async capture(instance: GlobalAIInstance): Promise<string> {
+  async capture(instance: NativeAppInstance): Promise<string> {
     await this.inspect(instance);
-    return (await terminalRunner(this.config)(['capture-pane', '-p', '-t', instance.identity!.paneId, '-S', '-200'])).slice(-24000);
+    return (await this.runner(instance)(['capture-pane', '-p', '-t', instance.identity!.paneId, '-S', '-200'])).slice(-24000);
   }
-  async launch(instance: GlobalAIInstance, save: (change: Partial<GlobalAIInstance>) => void): Promise<void> {
+  async launch(instance: NativeAppInstance, save: (change: Partial<NativeAppInstance>) => void): Promise<void> {
     const run = terminalRunner(this.config);
     save({ phase: 'creating' });
     const ids = (await run(['new-session', '-d', '-P', '-F', '#{session_id}\t#{window_id}\t#{pane_id}', '-s', instance.sessionName,
@@ -103,12 +110,12 @@ export class NativeGlobalHost implements GlobalHost {
     await run(['set-option', '-t', ids[0]!, 'update-environment', '']);
     await run(['set-option', '-t', ids[0]!, 'mouse', 'on']);
     await run(['set-option', '-w', '-t', ids[1]!, 'remain-on-exit', 'on']);
-    await run(['set-option', '-t', ids[0]!, '@altcli_global_ai', instance.id]);
+    await run(['set-option', '-t', ids[0]!, this.marker, instance.id]);
     await this.inspect(instance);
     const environment = childEnvironmentArgs(await run(['show-environment', '-g']), await run(['show-environment', '-t', ids[0]!]), this.environment());
     save({ phase: 'executing' });
     await run(['respawn-pane', '-k', '-t', ids[2]!, '-c', tmuxLiteral(instance.directory), '/usr/bin/env', ...environment.map(tmuxLiteral),
-      tmuxLiteral(instance.executable), ...instance.args.map(tmuxLiteral)]);
+      ...this.command(instance).map(tmuxLiteral)]);
     const observed = (await inspectPane(run, ids[2]!)).identity;
     if (observed.serverPid !== original.serverPid || observed.serverStarted !== original.serverStarted || observed.socketPath !== original.socketPath)
       throw new GlobalAIError('GLOBAL_IDENTITY', 'The tmux server changed during launch.');

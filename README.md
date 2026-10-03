@@ -11,7 +11,7 @@ Separate app-wide **Global AI** (Helper) and **Background assistant** roles foll
 [ADR-0022](docs/adr/ADR-0022-app-wide-ai-instances.md). Implemented so far: Helper's read
 increment, A1 ([guide](docs/GLOBAL-AI.md)), and model-free **attention**, which lists the runs,
 plans and launches that need you, inside a central **Agents** tab ([guide](docs/BACKGROUND-ASSISTANT.md)).
-The Background assistant's AI runtime is not implemented. Neither role replaces the deterministic
+The opt-in Background runtime adds a separate private tmux session and bounded Claude investigations, confirmed or explicitly allowed app/host actions, and a database-backed Log. Neither role replaces the deterministic
 controller or becomes a mandatory reviewer. See the
 [roadmap](ROADMAP.md#proposed-app-wide-assistance-and-completion-work).
 
@@ -138,7 +138,7 @@ not stop a run. A backend restart pauses owned runs without replaying commands.
 | Native terminal and explicit launch | Implemented; setup enables both host flags (a missing flag means off); installed-host/mobile acceptance remains open |
 | Image attachments | Paste or pick PNG/JPEG in a Terminal-mode card, then Insert its host path (never Enter); plain Send, committed work and a Plan brief carry images to Claude Code and Codex. Private host storage; installed-host and device acceptance open |
 | Native iOS / supervisor | Deferred |
-| Global AI / Background assistant | Global AI A1 implemented: a user-operated Codex or Claude Code terminal with read-only app tools ([guide](docs/GLOBAL-AI.md)); installed-provider and device acceptance open. Deterministic attention, the Agents tab and Background profiles implemented locally ([guide](docs/BACKGROUND-ASSISTANT.md)). The Background AI runtime and delegated tools are not implemented ([ADR-0022](docs/adr/ADR-0022-app-wide-ai-instances.md), [ADR-0023](docs/adr/ADR-0023-app-tools-and-delegated-authority.md)) |
+| Global AI / Background assistant | Global AI A1 implemented: a user-operated Codex or Claude Code terminal with read-only app tools ([guide](docs/GLOBAL-AI.md)); installed-provider and device acceptance open. Deterministic attention, the Agents tab and Background profiles implemented locally ([guide](docs/BACKGROUND-ASSISTANT.md)). The Background runtime is implemented locally with explicit enablement, scoped Claude jobs and restart inspection, confirmed/delegated actions and a database Log ([ADR-0022](docs/adr/ADR-0022-app-wide-ai-instances.md), [ADR-0023](docs/adr/ADR-0023-app-tools-and-delegated-authority.md)) |
 
 **Background-work evidence:** Claude uses `UserPromptSubmit` and the current
 Stop payload, including background-task and cron information when available.
@@ -351,7 +351,7 @@ each with its own profiles:
 - **Helper**: **Chat**, a Codex or Claude Code conversation with read-only app tools for this host's projects
   ([guide](docs/GLOBAL-AI.md)), with its **Session**, **Profiles** (named profiles, each a CLI, model and effort), **Evidence**
   and **Guide**, which explains the console.
-- **Background assistant**: **Attention**, **Activity**, **Profiles** and **Settings** ([guide](docs/BACKGROUND-ASSISTANT.md)).
+- **Background assistant**: **Attention**, **Activity**, **Log**, **Profiles** and **Settings** ([guide](docs/BACKGROUND-ASSISTANT.md)).
 
 **Settings** shows the host's effective global configuration (tmux binary and where it resolves, data store, task
 worktree root, integration branches, adapter, input, allowed origins) with the

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Small stdio MCP bridge: newline JSON-RPC only. It has no database or owner token, and never executes app mutations.
+// Small stdio MCP bridge: newline JSON-RPC only. It has no database or owner token; the host authorizes all operations.
 import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
@@ -17,7 +17,7 @@ export async function connectionFile(path) {
     if (bytesRead > 4096) throw new Error('Connection descriptor is oversized.');
     const value = JSON.parse(bytes.subarray(0, bytesRead).toString('utf8')), url = new URL(value.endpoint);
     if (value.schema !== 1 || !/^[a-f0-9]{64}$/.test(value.token) || url.protocol !== 'http:' || url.hostname !== '127.0.0.1' ||
-      url.username || url.password || url.search || url.hash || url.pathname !== '/api/v1/global-ai/tools') throw new Error('Invalid private connection descriptor.');
+      url.username || url.password || url.search || url.hash || !['/api/v1/global-ai/tools', '/api/v1/background/tools', '/api/v1/background/runner'].includes(url.pathname)) throw new Error('Invalid private connection descriptor.');
     return { endpoint: url.href, token: value.token };
   } finally { await file.close(); }
 }
@@ -36,7 +36,7 @@ export async function hostRead(path, body) {
   if (!response.ok) throw new Error(result?.error?.message ?? 'App-tool read refused.');
   return result;
 }
-export function createProtocol(call) {
+export function createProtocol(call, background = false) {
   let initialized = false;
   return async (request) => {
     const id = request?.id;
@@ -49,7 +49,8 @@ export function createProtocol(call) {
       initialized = true;
       return { jsonrpc: '2.0', id, result: { protocolVersion: request.params?.protocolVersion === '2025-06-18' ? '2025-06-18' : '2025-11-25',
         capabilities: { tools: {} }, serverInfo: { name: 'altcli-read', version: '1.0.0' },
-        instructions: 'Read-only AltCLI tools. Cite returned source/revision and document lines. No approval or execution tools exist.' } };
+        instructions: background ? 'Scoped AltCLI investigation and action requests. Read get_action_permissions and get_actions. Only request_action may propose effects; confirmation or saved owner permissions are required. Pending requests are not approval. Cite served evidence. Never replay uncertain actions.'
+          : 'Read-only AltCLI tools. Cite returned source/revision and document lines. No approval or execution tools exist.' } };
     }
     if (!initialized) return error(-32002, 'Initialize first.');
     if (request.method === 'ping') return { jsonrpc: '2.0', id, result: {} };
@@ -69,8 +70,8 @@ export function createProtocol(call) {
 }
 /** @param {string} path @param {import('node:stream').Readable} [input] @param {import('node:stream').Writable} [output] */
 export async function main(path, input = process.stdin, output = process.stdout) {
-  await connectionFile(path);
-  const protocol = createProtocol(body => hostRead(path, body));
+  const descriptor = await connectionFile(path);
+  const protocol = createProtocol(body => hostRead(path, body), new URL(descriptor.endpoint).pathname === '/api/v1/background/tools');
   let pending = ''; const decoder = new StringDecoder('utf8');
   for await (const chunk of input) {
     pending += typeof chunk === 'string' ? chunk : decoder.write(chunk);

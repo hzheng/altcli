@@ -73,8 +73,8 @@ export interface RelayRun {
   restoredCheckpoint?: boolean;
   /** Only an unresolved completion gate may be explicitly rechecked; other pauses revoke it. */
   blockedHandoff?: BlockedHandoff;
-  /** A pause's typed cause where no other field shows it: the owner's own Pause or a backend restart. Absent for every other
-   * pause and cleared whenever the run is not paused. Attention keeps an owner's pause quiet. */
+  /** An explicit owner-authorized pause (including saved Background permission) or backend restart. Reason and action audit identify
+   * the actor. Absent for other pauses; cleared when no longer paused. Attention keeps an explicitly authorized pause quiet. */
   pauseCause?: 'user' | 'restart';
 }
 /** A live process under a registered pane, as the host reported it. */

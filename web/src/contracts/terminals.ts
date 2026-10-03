@@ -21,6 +21,7 @@ export interface ManualSession {
   /** Initial targets ever admitted in this period, including writers that have stopped. */
   targets: TerminalTarget[];
   humanDecision?: { requestId: string; note: string; at: string };
+  backgroundDecision?: { requestId: string; note: string; at: string; authorization: import('./background-actions.ts').BackgroundAuthorization };
   settlement?: { requestId: string; nativeRevision: number; keyboardRevision: number };
 }
 export interface KeyboardSettlement { manualSessionId: string; revision: number }

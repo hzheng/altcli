@@ -16,6 +16,7 @@ export interface LaunchInstance extends LaunchItem {
   phase: 'reserved'|'creating'|'created'|'configured'|'marked'|'executing'|'observed';
   message: string; identity: PaneIdentity|null; sessionId: string|null; windowId: string|null;
   placeholder: PaneIdentity|null; updatedAt: string; humanDecision?: { requestId: string; note: string; at: string };
+  backgroundDecision?: { requestId: string; note: string; at: string; authorization: import('./background-actions.ts').BackgroundAuthorization };
   /** Explicitly closed or cleaned up: no longer a terminal or discovery target; history is kept. */
   closed?: ({ finishId: string } | { cleanupId: string }) & { at: string };
   cleanup?: { requestId: string; digest: string; status: 'applying'|'uncertain'|'done'; acknowledgedAt: string; confirmStop?: true };

@@ -15,6 +15,7 @@ import type { InteractionHold, InteractionInput } from '../contracts/interaction
 import type { AttachmentDescriptor } from '../contracts/attachments.ts';
 import { pinAttachments } from './attachments.ts';
 import { noteRun, noting } from './attention/sources.ts';
+import { backgroundAuthorization, decisionActor } from './background/action-context.ts';
 
 const json = JSON.stringify;
 export const DEFAULT_TURN_LIMIT = 20;
@@ -502,19 +503,22 @@ export class WorkflowStore {
       if (!input.text?.trim() || !input.agentId || !plan.required.includes(input.agentId)) throw new AppError('INVALID_GUIDANCE', 'Choose a required planner and describe the requested changes.', 409);
       if (plan.brief.length + input.text.length > 32000) throw new AppError('BRIEF_LIMIT', 'The accumulated brief is full. Stop and begin a new scoped planning task.', 409);
       run.restoredCheckpoint = false;
-      plan.brief += `\n\nHuman changes (brief revision ${plan.briefRevision + 1}):\n${input.text}`;
+      plan.brief += `\n\n${decisionActor()} changes (brief revision ${plan.briefRevision + 1}):\n${input.text}`;
       plan.briefRevision++; plan.endorsements = {}; plan.step = 'refinement'; plan.next = { agentId: input.agentId, action: 'revise' };
       this.schedulePlan(run, false);
     }).immediate();
   }
   /** Atomic phase transition: ownership/budgets survive and a frozen plan precedes any branch write. */
   beginImplementation(input: PlanDecision, implementation: ImplementationRun, authority: FrozenPlan['authority']): Execution {
+    const delegated = backgroundAuthorization();
+    if (delegated?.decision === 'policy') authority = 'background';
     return this.store.db.transaction(() => {
       const run = this.planBoundary(input); const plan = run.planning!;
       if (authority === 'automatic' && (run.restoredCheckpoint || !run.autoContinue || plan.request.requireApproval || !planAgreed(plan))) throw new AppError('APPROVAL_REQUIRED', 'This transition is not preauthorized.', 409);
       if (!planAgreed(plan) && !input.overrideReason?.trim()) throw new AppError('PLAN_DISAGREEMENT', 'Explicitly acknowledge the missing endorsements or objections before overriding plan judgment.', 409);
-      if (authority === 'automatic' && run.automaticTurns >= run.turnLimit) throw new AppError('TURN_LIMIT', 'Automatic turn budget reached before Implementation.', 409);
+      if (authority !== 'human' && run.automaticTurns >= run.turnLimit) throw new AppError('TURN_LIMIT', 'Automatic turn budget reached before Implementation.', 409);
       plan.frozen = { transitionId: implementation.request.requestId, authorizedAt: now(), authority, overrideReason: input.overrideReason ?? null,
+        ...(delegated ? { backgroundAuthorization: delegated } : {}),
         epoch: plan.epoch, briefRevision: plan.briefRevision, policyRevision: plan.policyRevision, rosterRevision: plan.group.revision, baseline: plan.request.baseline.head,
         brief: plan.brief, planningGroup: plan.group, planners: plan.participants,
         automaticPolicy: { autoContinue: run.autoContinue, requireApproval: plan.request.requireApproval, turnLimit: run.turnLimit, pauseOnObjection: run.pauseOnObjection === true, automaticTurnsBeforeTransition: run.automaticTurns },
@@ -524,7 +528,7 @@ export class WorkflowStore {
       run.implementation = implementation; run.participants = plan.implementationParticipants; run.autoContinue = implementation.request.autoContinue;
       const turn = this.commitTurn(run, implementation.request.agentId, 'work', 'Implement the frozen plan within the recorded task scope.', implementation.request.handoff, implementation.request.requestId);
       run.currentCommandId = turn.commandId; run.status = 'running'; run.reason = 'Plan frozen and authorized; Implementation branch setup pending.';
-      if (authority === 'automatic') run.automaticTurns++;
+      if (authority !== 'human') run.automaticTurns++;
       this.saveExecution(turn); this.saveRun(run); return turn;
     }).immediate();
   }
@@ -637,7 +641,8 @@ export class WorkflowStore {
     this.store.db.transaction(() => { const run = this.run(id); if (!run) throw new AppError('NOT_FOUND', 'Run not found.', 404);
       if (!['running','waiting','paused'].includes(run.status)) return;
       run.pauseRequested = true;
-      this.stop(run, reason ?? 'Paused by the user. This does not interrupt an agent or release ownership.', false, reason === undefined ? 'user' : undefined);
+      const actor = backgroundAuthorization()?.decision === 'policy' ? decisionActor() : 'the user';
+      this.stop(run, reason ?? `Paused by ${actor}. This does not interrupt an agent or release ownership.`, false, reason === undefined ? 'user' : undefined);
     }).immediate();
   }
   takeover(id: string): void {
@@ -649,7 +654,7 @@ export class WorkflowStore {
       if (turn.status === 'dispatching') throw new AppError('DELIVERY_PENDING', 'Wait for the in-flight terminal delivery before taking over.', 409);
       const delivery = this.store.activeFor(run.repository);
       if (delivery) this.store.release(delivery);
-      run.status = 'stopped'; run.reason = 'Human takeover acknowledged. No command was replayed or process interrupted.'; this.saveRun(run);
+      run.status = 'stopped'; run.reason = `${decisionActor()} takeover acknowledged. No command was replayed or process interrupted.`; this.saveRun(run);
       this.store.db.prepare('DELETE FROM workflow_owners WHERE run_id=?').run(id);
     }).immediate();
   }

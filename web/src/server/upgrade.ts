@@ -10,8 +10,8 @@ import { idOf } from './ids.ts';
 /** The schema that records registered repositories and app-created task workspaces (ADR-0024). */
 export const REGISTRY_SCHEMA = 20;
 /** 21: worktree-scoped manual input, all older periods remaining global. 22: attention records and Background assistant profiles,
- * an additive change that needs no settlement. */
-export const STORE_SCHEMA = 22;
+ * an additive change that needs no settlement. 23: durable Background instance and attempt accounting. 24: action permissions, audit and delegated decisions. */
+export const STORE_SCHEMA = 24;
 /** Unresolved work that only the backend version which started it can settle. */
 export interface UpgradeBlocker { kind: string; id: string; detail: string }
 
@@ -62,6 +62,12 @@ export function settlementBlockers(db: Database.Database): UpgradeBlocker[] {
   for (const finish of values<TaskFinish>(db, 'task_finishes')) if (FINISH_HOLDING.includes(finish.status)) blockers.push({ kind: 'finish-branch', id: finish.requestId, detail: finish.status });
   for (const instance of values<{ id: string; status: string }>(db, 'global_ai_instances'))
     if (['launching', 'uncertain'].includes(instance.status)) blockers.push({ kind: 'helper', id: instance.id, detail: `Helper start is ${instance.status}` });
+  for (const attempt of values<{ id: string; status: string }>(db, 'background_attempts'))
+    if (['claimed', 'running', 'uncertain'].includes(attempt.status)) blockers.push({ kind: 'background', id: attempt.id, detail: `Background attempt is ${attempt.status}` });
+  for (const settings of values<{ instance: { id: string; status: string } | null }>(db, 'background_state'))
+    if (settings.instance && settings.instance.status !== 'retired') blockers.push({ kind: 'background-instance', id: settings.instance.id, detail: 'A recorded Background reservation or session has not been retired.' });
+  for (const action of values<{ id: string; status: string }>(db, 'background_actions'))
+    if (['running', 'uncertain'].includes(action.status)) blockers.push({ kind: 'background-action', id: action.id, detail: `Background action is ${action.status}` });
   return blockers;
 }
 

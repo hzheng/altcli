@@ -33,8 +33,8 @@ const COPY: Record<Purpose, { name: string; region: string; first: string; intro
     intro: 'Each Helper profile names a CLI, Codex or Claude Code, with a model and reasoning effort. Chat starts a conversation with the one you choose, and Session can restart with another. Saving never launches anything: Chat previews the exact command and asks you to confirm.',
     deleted: 'A running Helper conversation keeps going.', saved: label => `Saved “${label}”. Choose it in Chat to start a conversation; nothing was launched.` },
   background: { name: 'Background', region: 'Background assistant profiles', first: 'Background', clis: ['claude'],
-    intro: 'A Background assistant profile names Claude Code with a model and reasoning effort, for read-only diagnosis jobs. Codex is not yet a verified Background adapter. This version has no Background runtime: saving a profile launches nothing, enables nothing and sends nothing to a model provider.',
-    deleted: 'Nothing runs from it.', saved: label => `Saved “${label}”. Nothing was launched or enabled; this version has no Background runtime.` },
+    intro: 'A Background assistant profile names Claude Code with a model and reasoning effort, for investigation and authorized actions. Codex is not yet a verified Background adapter. Choose this profile in Background Settings, preview its data sharing and limits, then explicitly enable it. Saving a profile launches and enables nothing.',
+    deleted: 'The recorded Background instance keeps its bound profile; stop it before choosing another.', saved: label => `Saved “${label}”. Preview and enable it in Background Settings; nothing was launched or enabled.` },
 };
 
 /** Launch profiles for an app-wide agent, each a name, CLI, model and reasoning effort: Helper's (Chat starts a conversation with one and
@@ -105,13 +105,13 @@ export function GlobalAISettings({ token, config, enabled, onSaved, purpose = 'h
         <label>CLI<select value={cli} onChange={e => show(selected, e.target.value as Cli, label)}>
           {copy.clis.map(c => <option key={c} value={c}>{CLIS[c].name}</option>)}</select></label>
         {purpose === 'helper' ? <p className="fine">{enforcement}</p>
-          : <p className="fine">A Background job would add its own restrictions: no built-in tools, only AltCLI&apos;s read tools, no prompts and structured output. They are verified before any job can run.</p>}
-        <label>Model<input value={model} maxLength={128} placeholder={`${cliName}'s configured default`} onChange={e => setModel(e.target.value)} /></label>
+          : <p className="fine">Background jobs use scoped AltCLI tools and structured output. The adapter disables built-in tools and inherited customizations, and checks each invocation.</p>}
+        <label>Model<input value={model} maxLength={128} placeholder={purpose === 'background' ? `${cliName} default` : `${cliName}'s configured default`} onChange={e => setModel(e.target.value)} /></label>
         {invalid && <p className="warning-text" role="alert">A model name uses only letters, digits and . _ : / - and starts with a letter or digit.</p>}
         <label>Reasoning effort<select value={effort} onChange={e => setEffort(e.target.value)}>
-          <option value="">{cliName}&apos;s configured default</option>{efforts.map(v => <option key={v} value={v}>{v}</option>)}</select></label>
+          <option value="">{purpose === 'background' ? `${cliName} default` : `${cliName}'s configured default`}</option>{efforts.map(v => <option key={v} value={v}>{v}</option>)}</select></label>
         <pre aria-label={`${copy.name} command preview`}>{JSON.stringify([executable, ...args], null, 2)}</pre>
-        <p className="fine">AltCLI does not list or verify the models your {cliName} sign-in offers; {cliName} reports an unavailable model in its terminal.</p>
+        <p className="fine">AltCLI does not list or verify the models your {cliName} sign-in offers. {purpose === 'background' ? 'Background reports failed jobs in Activity.' : `${cliName} reports an unavailable model in its terminal.`}</p>
         <button disabled={!enabled || busy || invalid || !label.trim()}>{selected ? `Save ${copy.name} profile` : `Create ${copy.name} profile`}</button>
         {selected && <button type="button" disabled={!enabled || busy} onClick={() => remove(selected)}>Delete {copy.name} profile</button>}
         {!selected && !!profiles.length && <button type="button" className="quiet" disabled={busy}

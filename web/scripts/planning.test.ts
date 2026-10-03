@@ -603,3 +603,27 @@ test('shared brief images reach every planner and a text-only revision, are froz
   assert.ok(sent.every((text) => !text.includes(frozen[0]!.path)), 'no image path is typed into a correlated prompt');
   await assert.rejects(plane.attachments.remove(image.id), /may already have been used/);
 });
+
+test('explicit Background risk delegation freezes its own authority and preserves the human-only Plan setting', async () => {
+  const { withBackgroundAuthorization } = await import('../src/server/background/action-context.ts');
+  const input = request({ requireApproval: true }); await plane.submitPlan(input); await finishPlan(input.requestId);
+  assert.equal(run(input.requestId).status, 'waiting');
+  const authority = { actionId: randomUUID(), decision: 'policy' as const, policyRevision: 7, at: new Date().toISOString() };
+  const before = run(input.requestId).automaticTurns;
+  await withBackgroundAuthorization(authority, () => plane.decidePlan(decision(input.requestId)));
+  const frozen = run(input.requestId).planning!.frozen!;
+  assert.equal(frozen.authority, 'background'); assert.deepEqual(frozen.backgroundAuthorization, authority);
+  assert.equal(frozen.automaticPolicy.requireApproval, true); assert.equal(run(input.requestId).automaticTurns, before + 1);
+});
+
+test('Background plan guidance, pause and takeover do not claim a human performed those decisions', async () => {
+  const { withBackgroundAuthorization } = await import('../src/server/background/action-context.ts');
+  const input = request(); await plane.submitPlan(input); await finishPlan(input.requestId);
+  const authority = { actionId: randomUUID(), decision: 'policy' as const, policyRevision: 1, at: new Date().toISOString() };
+  await withBackgroundAuthorization(authority, () => plane.decidePlan(decision(input.requestId, { action: 'changes', text: 'Cover the missing recovery case.', agentId: 'codex' })));
+  assert.match(run(input.requestId).planning!.brief, /Background under the owner’s saved permission changes/);
+  withBackgroundAuthorization(authority, () => plane.workflow.pause(input.requestId));
+  assert.match(run(input.requestId).reason, /Paused by Background/);
+  withBackgroundAuthorization(authority, () => plane.workflow.takeover(input.requestId));
+  assert.match(run(input.requestId).reason, /Background under the owner’s saved permission takeover/);
+});

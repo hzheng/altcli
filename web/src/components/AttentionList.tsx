@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import type { AttentionDestination, AttentionFeed, AttentionItem, AttentionPage } from '../contracts/attention';
+import type { BackgroundAttempt } from '../contracts/background';
 import { api } from '../client/api';
 import { useTildify } from '../client/home';
 
@@ -18,8 +19,9 @@ const PAGES = 20, ATTEMPTS = 3;
 
 /** The host-wide Attention list: deterministic records that a run, plan or launch needs the owner. Open only navigates to the existing
  * surface, and Mark seen records an acknowledgement shared by every browser; neither changes a run, approval, hold or launch. */
-export function AttentionList({ token, feed, stale, onOpen, onChanged }: {
+export function AttentionList({ token, feed, stale, onOpen, onChanged, attempts = [] }: {
   token: string; feed: AttentionFeed | undefined; stale: boolean; onOpen: (destination: AttentionDestination) => void; onChanged: () => Promise<void>;
+  attempts?: BackgroundAttempt[];
 }) {
   const tilde = useTildify();
   const [expanded, setExpanded] = useState(false), [snapshot, setSnapshot] = useState<Snapshot | null>(null), [reading, setReading] = useState(false);
@@ -80,6 +82,13 @@ export function AttentionList({ token, feed, stale, onOpen, onChanged }: {
       {item.detail && <p className="attention-detail">{item.detail}</p>}
       <p className="fine">{item.facets.map(f => FACETS[f] ?? f).join(' · ')} · revision {item.revision} · updated {timeOf(item.updatedAt)}
         {item.stale && ' · its record could not be read; kept open until it can'}</p>
+      {!stale && !item.stale && attempts.filter(a => a.itemId === item.id && a.itemRevision === item.revision && a.sourceVersion === item.sourceVersion && a.assessment).slice(0, 1).map(a => <div className="background-assessment" key={a.id}>
+        <h3>Background explanation</h3><p>{a.assessment!.summary}</p><p><strong>Likely cause:</strong> {a.assessment!.likelyCause}</p>
+        {!!a.assessment!.nextSteps.length && <><h4>Suggested next steps</h4><ul>{a.assessment!.nextSteps.map((step, i) => <li key={i}>{step}</li>)}</ul></>}
+        {!!a.assessment!.uncertainties.length && <><h4>Uncertainty</h4><ul>{a.assessment!.uncertainties.map((line, i) => <li key={i}>{line}</li>)}</ul></>}
+        <details><summary>Evidence ({a.assessment!.evidence.length})</summary><ul>{a.assessment!.evidence.map(e => <li key={e.id}>{e.note}<p className="fine mono">{e.source} · {e.revision}</p></li>)}</ul></details>
+        <p className="fine">AI interpretation of recorded evidence · {a.model ?? 'model not reported'}. Use the existing control below to decide what happens next.</p>
+      </div>)}
       <div className="pane-buttons">
         <button type="button" onClick={() => onOpen(item.destination)}>{OPEN[item.destination.surface]}</button>
         {unseen(item) && <button type="button" className="quiet" disabled={busy || stale} onClick={() => markSeen(item)}>Mark seen</button>}

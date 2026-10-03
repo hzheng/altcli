@@ -48,8 +48,8 @@ const ITEM = object({ id: str, key: str, kind: { enum: ['run', 'plan', 'launch']
   resolution: maybe, seenRevision: { type: ['integer', 'null'] }, stale: bool });
 const DATA: Record<string, Schema> = {
   get_capabilities: object({ product: { const: 'AltCLI' }, contract: str, flags: { type: 'object', additionalProperties: bool }, tools: list(str),
-    documents: { type: 'object', additionalProperties: str }, effects: { const: false }, model: { const: 'unknown' }, authority: str,
-    backgroundAssistant: object({ attention: bool, runtime: { enum: ['unavailable'] }, enabled: { const: false } }) }),
+    documents: { type: 'object', additionalProperties: str }, effects: bool, model: { const: 'unknown' }, authority: str,
+    backgroundAssistant: object({ attention: bool, runtime: { enum: ['unavailable', 'available'] }, enabled: bool }) }),
   list_workspaces: object({ discoveredAt: str, error: maybe, workspaces: list(object({ root: str, directory: str, branch: maybe, gitError: maybe,
     agents: list(object({ id: maybe, label: str, kind: str, reason: maybe })) }), 32) }),
   list_runs: object({ runs: list(object({ id: str, workspace: str, status: str, reason: str, phase: { enum: PHASES }, updatedAt: str }), 40), truncated: bool }),
@@ -100,6 +100,7 @@ export interface ReadServices {
   workspaces(): Promise<WorkspaceDiscovery>;
   run(id: string): RelayRun | undefined;
   featureFlags(): Record<string, boolean>;
+  background?(): { attention: boolean; runtime: 'unavailable' | 'available'; enabled: boolean };
   attention: { item(id: string): AttentionItem | undefined; open(limit: number): { items: AttentionItem[]; total: number } };
   launch(id: string): LaunchFacts | undefined;
   kb: KnowledgeBase;
@@ -131,8 +132,7 @@ export class AppReads {
     if (name === 'get_capabilities') {
       data = { product: 'AltCLI', contract: 'global-ai-read-v2', flags: this.services.featureFlags(), tools: toolsFor(principal).map(t => t.name),
         documents: Object.fromEntries(this.services.kb.documents.map(d => [d.name, d.description])), effects: false, model: 'unknown',
-        // Deterministic attention exists; no Background runtime, adapter or enablement does in this version.
-        backgroundAssistant: { attention: true, runtime: 'unavailable', enabled: false },
+        backgroundAssistant: this.services.background?.() ?? { attention: true, runtime: 'unavailable', enabled: false },
         authority: 'Read-only AltCLI tools. Native CLI permissions and provider billing remain separate.' };
     } else if (name === 'read_doc') {
       const doc = this.document(text(args.document));

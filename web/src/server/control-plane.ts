@@ -6,6 +6,7 @@ import type { ClearContextInput, CommandRecord, HostConfig, PairInput, Registrat
 import { clearContextCommand } from '../core/clear-context.ts';
 import { describeConfig } from './config.ts';
 import type { ActivityReset, BackgroundEvidence, Execution, HookEvent, HookReceipt, InstanceState, ManagedSession, ProcessRecord, RunAction, StartInput, WorkflowState, WorkspaceDiscovery, WorkspaceReset, WorkspaceResetResult } from '../contracts/workflow.ts';
+import { backgroundAuthorization, decisionActor } from './background/action-context.ts';
 import { AppError } from '../core/errors.ts';
 import { singleLine, slugify } from '../core/validation.ts';
 import { assertAgentCommand, assertIdentity, suggestAgentType } from '../core/policy.ts';
@@ -293,11 +294,17 @@ export class ControlPlane {
       // This decision releases only this period. Run holds, checkpoints and faults remain untouched.
       const settled = { ...manual, reconciliationRequired: false, recoveryRequired: false };
       delete settled.settlement;
+      const delegated = backgroundAuthorization();
+      if (delegated?.decision === 'policy') delete settled.humanDecision; else delete settled.backgroundDecision;
       const result = this.authority.save({ ...settled,
         ...('confirmReady' in input && handoffRequestId ? { settlement: { requestId: handoffRequestId, nativeRevision, keyboardRevision: this.authority.revisionFor(scopes) + 1 } } : {}),
         ...('confirmInspected' in input
-        ? { humanDecision: { requestId: input.requestId, note: input.note, at: new Date().toISOString() },
-          reason: 'Human inspection recorded possible prior and background effects. This period released; affected runs still require checkpoint review or takeover.' }
+        ? { ...(delegated?.decision === 'policy'
+            ? { backgroundDecision: { requestId: input.requestId, note: input.note, at: new Date().toISOString(), authorization: delegated } }
+            : { humanDecision: { requestId: input.requestId, note: input.note, at: new Date().toISOString() } }),
+          reason: delegated?.decision === 'policy'
+            ? `${decisionActor()} acknowledged possible prior and background effects. This period released; affected runs still require checkpoint review or takeover.`
+            : 'Human inspection recorded possible prior and background effects. This period released; affected runs still require checkpoint review or takeover.' }
         : { reason: 'Manual input recorded settled after inspection. Review each saved workflow checkpoint explicitly.' }) });
       this.authority.decide(input.requestId, input, result); return result;
     }).immediate();
@@ -1533,7 +1540,7 @@ export class ControlPlane {
     if (input.action === 'review_input') { await this.captureCheckpoint(run.id); await this.pump(run.id); }
   }
   action(input: RunAction): void | Promise<void> {
-    if (input.action === 'pause') { this.interactions.invalidate(input.runId, 'Explicit human pause requires takeover.'); this.workflow.pause(input.runId); }
+    if (input.action === 'pause') { this.interactions.invalidate(input.runId, backgroundAuthorization()?.decision === 'policy' ? 'Background paused under the owner’s saved permission; takeover remains explicit.' : 'Explicit human pause requires takeover.'); this.workflow.pause(input.runId); }
     else if (input.action === 'recheck') return this.authority.automated(() => this.recheckHandoff(input), this.runScopes(input.runId));
     else if (input.action === 'continue') {
       this.authority.assertAutomated(this.runScopes(input.runId));
@@ -1548,7 +1555,7 @@ export class ControlPlane {
       const observed = this.workflow.run(input.runId);
       if (input.expectedCommandId && observed && observed.currentCommandId !== input.expectedCommandId) throw new AppError('HANDOFF_CHANGED', 'The controller moved to another command after you inspected it. Review its current state before taking over.', 409);
       if (this.interactions.records().some((r) => r.input.runId === input.runId && ['recorded','sending'].includes(r.status))) throw new AppError('DELIVERY_PENDING', 'Wait for terminal input to finish before taking over.', 409);
-      this.interactions.invalidate(input.runId, 'Human takeover ended this checkpoint.'); this.workflow.takeover(input.runId);
+      this.interactions.invalidate(input.runId, `${decisionActor()} takeover ended this checkpoint.`); this.workflow.takeover(input.runId);
     }
   }
   private async recheckHandoff(input: RunAction): Promise<void> {

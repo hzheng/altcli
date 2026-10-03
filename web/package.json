@@ -32,7 +32,9 @@
     "probe:terminal:writers": "node --expose-gc --experimental-strip-types --test scripts/native-writers.test.ts",
     "probe:terminal:ws": "node scripts/terminal-websocket-probe.mjs",
     "pretest:global-ai": "npm run kb",
-    "test:global-ai": "node --experimental-strip-types --test scripts/global-ai.test.ts scripts/global-ai.integration.test.ts",
+    "test:global-ai": "node --experimental-strip-types --test scripts/global-ai.test.ts scripts/global-ai.integration.test.ts scripts/background.test.ts scripts/background-native.test.ts scripts/background.integration.test.ts scripts/background-actions.test.ts scripts/background-actions-http.test.ts",
+    "probe:background": "node --experimental-strip-types scripts/background-native-probe.ts",
+    "probe:background:actions": "node --experimental-strip-types scripts/background-action-probe.ts",
     "upgrade:check": "node --env-file-if-exists=.env.local --experimental-strip-types scripts/upgrade-check.ts"
   },
   "dependencies": {

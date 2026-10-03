@@ -13,12 +13,16 @@ import { AppReads, type LaunchFacts } from './reads.ts';
 import { GlobalAIService, type InstanceRepository } from './service.ts';
 import { NativeGlobalHost } from './host.ts';
 import { KB } from './kb.generated.ts';
+import { BackgroundService } from '../background/service.ts';
+import { NativeBackgroundHost } from '../background/host.ts';
+import { executeApp, executeCommand } from '../background/action-executor.ts';
 
 /** Adds a Git-free, user-operated role and app-wide attention without constructing another controller/store or changing
  * workspace dispatch. */
 export class GlobalControlPlane extends ControlPlane {
   readonly globalAI: GlobalAIService;
   readonly attention: AttentionService;
+  readonly background: BackgroundService;
   constructor(transport: Controller) {
     super(transport);
     // Optional metadata on the existing connection. No new workflow owner or effectful delegation schema.
@@ -36,18 +40,28 @@ export class GlobalControlPlane extends ControlPlane {
     const repoRoot = resolve(process.cwd(), '..');
     const reads = new AppReads({ kb: KB, state: () => this.state(), workspaces: () => this.workspaces(), run: id => this.workflow.run(id) ?? undefined,
       attention: { item: id => this.attention.item(id), open: limit => this.attention.open(limit) }, launch: id => this.launchFacts(id),
+      background: () => ({ attention: true, runtime: 'available', enabled: this.background?.settings().enabled ?? false }),
       featureFlags: () => ({ nativeTerminals: this.config.terminalEnabled === true, agentLaunch: this.config.launchEnabled === true,
-        input: this.config.inputEnabled, stageRelay: this.config.legacyEnabled === true, globalAIReadTools: true, delegatedActions: false }) });
+        input: this.config.inputEnabled, stageRelay: this.config.legacyEnabled === true, globalAIReadTools: true, delegatedActions: true }) });
     this.globalAI = new GlobalAIService({ repository, reads, host: new NativeGlobalHost({ ...this.config, dataDir: realpathSync(this.config.dataDir) }, repoRoot),
       directory: join(realpathSync(this.config.dataDir), 'global-ai'), profiles: () => this.launches.profiles(),
       enabled: () => this.config.mode === 'tmux' && this.config.inputEnabled && this.config.terminalEnabled === true && this.config.launchEnabled === true,
       launchGuard: work => this.authority.automated(work),
     });
     this.attention = attention;
+    this.background = new BackgroundService({ db: this.store.db, attention, reads,
+      host: new NativeBackgroundHost({ ...this.config, dataDir: realpathSync(this.config.dataDir) }, repoRoot),
+      directory: join(realpathSync(this.config.dataDir), 'background'), profiles: () => this.launches.profiles(),
+      enabled: () => this.config.mode === 'tmux' && this.config.inputEnabled && this.config.terminalEnabled === true && this.config.launchEnabled === true,
+      launchGuard: work => this.authority.automated(work),
+      actions: { ownerToken: this.config.token, execute: (action, signal, started, admitted, grant) => action.operation.kind === 'app'
+        ? executeApp(action, signal, admitted, grant, this.config.token, this.config.allowedOrigins)
+        : this.authority.automated(() => executeCommand(action, signal, started, admitted, this.config.token)) } });
     const signal = () => attention.schedule();
     this.workflow.attentionSignal = signal; this.interactions.attentionSignal = signal; this.launches.attentionSignal = signal;
     // The first pass reconciles markers recovery wrote before anything listened; a sweep then repairs any missed path.
     attention.start();
+    this.background.start();
   }
   /** Recorded facts for get_launch: a workspace launch or a Helper start, never live pane output. */
   private launchFacts(id: string): LaunchFacts | undefined {
@@ -84,10 +98,11 @@ export class GlobalControlPlane extends ControlPlane {
   }
   override async workspaces(): Promise<WorkspaceDiscovery> {
     const discovery = await super.workspaces();
-    const instances = this.globalAI?.services.repository.all() ?? [];
+    const background = this.background?.settings().instance;
+    const instances = [...this.globalAI?.services.repository.all() ?? [], ...(background ? [background] : [])];
     // Keep raw pane/process evidence for manual holds. Exclude only exact app-role panes from project collaboration offers.
-    const appPane = (identity: { paneId: string; serverPid: string; serverStarted: string; socketPath: string }) => instances.some(i => i.identity &&
-      i.identity.paneId === identity.paneId && i.identity.serverPid === identity.serverPid &&
+    const appPane = (identity: { paneId: string; panePid: string; serverPid: string; serverStarted: string; socketPath: string }) => instances.some(i => i.identity &&
+      i.identity.paneId === identity.paneId && i.identity.panePid === identity.panePid && i.identity.serverPid === identity.serverPid &&
       i.identity.serverStarted === identity.serverStarted && i.identity.socketPath === identity.socketPath);
     return { ...discovery, workspaces: discovery.workspaces.map(w => {
       const agents = w.agents.filter(a => !appPane(a.identity));

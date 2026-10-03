@@ -11,8 +11,8 @@ import { claudeProfileArgs } from './claude.ts';
 export function helperProfileArgs(profile: LaunchProfile): string[] {
   return profile.adapterHint === 'claude' ? claudeProfileArgs(profile) : codexProfileArgs(profile);
 }
-/** A Background assistant profile records only a direct Claude Code program, model and effort: the first adapter to be probed for
- * unattended structured jobs. The host would compose every restriction itself, so other arguments are refused, never dropped.
+/** A Background assistant profile records only a direct Claude Code program, model and effort, verified for unattended structured
+ * jobs. The host composes every restriction itself, so other arguments are refused, never dropped.
  * Codex is not a Background adapter until it passes the same probe. Saving a profile launches nothing. */
 export function backgroundProfileArgs(profile: LaunchProfile): string[] {
   if (profile.adapterHint !== 'claude') throw new GlobalAIError('PROFILE_UNSUPPORTED', 'Background assistant profiles use Claude Code for now. Codex is not yet a verified Background adapter.');

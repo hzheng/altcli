@@ -18,7 +18,7 @@ import { ClearContext } from './ClearContext';
 import { LaunchProfiles } from './LaunchProfiles';
 import { GlobalAISettings } from './GlobalAISettings';
 import { GlobalAI, type HelperSection } from './GlobalAI';
-import { AttentionList } from './AttentionList';
+import { BackgroundAssistant } from './BackgroundAssistant';
 import type { AttentionDestination } from '../contracts/attention';
 import { NativeTerminal, type NativeTerminalHandle } from './NativeTerminal';
 import { keyboardOwnerOf } from './KeyboardSelector';
@@ -47,8 +47,8 @@ const AGENT_KINDS: [AgentKind, string][] = [['workspace', 'Workspace agents'], [
 type WorkspaceSection = 'inventory' | 'profiles';
 const WORKSPACE_SECTIONS: [WorkspaceSection, string][] = [['inventory', 'Inventory'], ['profiles', 'Profiles']];
 const HELPER_SECTIONS: [HelperSection, string][] = [['chat', 'Chat'], ['session', 'Session'], ['profiles', 'Profiles'], ['evidence', 'Evidence'], ['guide', 'Guide']];
-type BackgroundSection = 'attention' | 'activity' | 'profiles' | 'settings';
-const BACKGROUND_SECTIONS: [BackgroundSection, string][] = [['attention', 'Attention'], ['activity', 'Activity'], ['profiles', 'Profiles'], ['settings', 'Settings']];
+type BackgroundSection = 'attention' | 'activity' | 'log' | 'profiles' | 'settings';
+const BACKGROUND_SECTIONS: [BackgroundSection, string][] = [['attention', 'Attention'], ['activity', 'Activity'], ['log', 'Log'], ['profiles', 'Profiles'], ['settings', 'Settings']];
 /** The selected workspace card and the checkout it belongs to; the console shows the agents registered on that checkout. */
 interface WorkspaceChoice { key: string; root: string; projectId?: string }
 /** What one Take control confirmation clears, with the identities its requests are checked against. */
@@ -1035,23 +1035,10 @@ export function Console({ initialTab, initialKind }: { initialTab?: Tab; initial
       <div hidden={agentKind !== 'background'}>
         <nav className="section-tabs settings-tabs" aria-label="Background assistant sections">
           {BACKGROUND_SECTIONS.map(([id, name]) => <button type="button" key={id} className={backgroundSection === id ? 'selected' : ''} aria-pressed={backgroundSection === id} onClick={() => setBackgroundSection(id)}>{name}</button>)}</nav>
-        {/* Rendered only while shown: items repeat run reasons that Control access also shows. */}
-        {tab === 'agents' && agentKind === 'background' && backgroundSection === 'attention'
-          && <AttentionList token={token} feed={state.attention} stale={stale} onOpen={openDestination} onChanged={refresh} />}
-        <section className="panel" aria-label="Background activity" hidden={backgroundSection !== 'activity'}>
-          <div className="section-heading"><h2>Activity</h2></div>
-          <p>No Background jobs have run. This version has no Background runtime, so nothing was assessed, launched or sent to a model provider.</p>
-          <p className="fine">Attention items come from the controller&apos;s own records and need no model.</p>
-        </section>
+        {tab === 'agents' && agentKind === 'background' && backgroundSection !== 'profiles'
+          && <BackgroundAssistant token={token} section={backgroundSection} feed={state.attention} stale={stale} onOpen={openDestination} onChanged={refresh} />}
         {backgroundSection === 'profiles' && <GlobalAISettings purpose="background" token={token} config={config} enabled={config?.launchEnabled === true && state.inputEnabled === true}
           onSaved={() => {}} />}
-        <section className="panel" aria-label="Background assistant settings" hidden={backgroundSection !== 'settings'}>
-          <div className="section-heading"><h2>Settings</h2><span className="badge warning">Runtime not available</span></div>
-          <p><strong>AI explanations are not available in this version.</strong> Attention is always on: the host records which runs, plans and launches need you
-            from its own state, and keeps one current item per issue until that issue changes or resolves.</p>
-          <p>The Background runtime is designed as one recorded app instance you enable explicitly, with one preview, to run bounded read-only jobs that explain an
-            attention item. It would never approve, resume, retry or answer a prompt. Until it lands, nothing here starts a process or sends data to a model provider.</p>
-        </section>
       </div>
     </div>
     </>}

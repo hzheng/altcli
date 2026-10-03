@@ -8,11 +8,13 @@ import type { AgentActivity, HookEvent, ManagedSession } from '../contracts/work
 import type { TerminalAdapter } from './adapters/terminal.ts';
 import { classifyAgent } from '../core/workspaces.ts';
 import { AppError } from '../core/errors.ts';
+import { backgroundAuthorization } from './background/action-context.ts';
 
 interface Observation {
   sessionId: string; sourceTurnId: string | null; startedAt: string;
   state: AgentActivity['state']; updatedAt: string; detail: string;
   finished: boolean;
+  /** Legacy flag for a non-native acknowledgement, including an explicitly delegated risk decision. */
   humanConfirmed?: true;
   completionSequence?: number;
   backgroundState?: HookEvent['backgroundState'];
@@ -63,7 +65,9 @@ export class AgentActivityTracker {
     if (!session.cliPid || current.state !== 'unknown' || current.updatedAt !== expectedUpdatedAt) throw new AppError('ACTIVITY_CHANGED', 'Activity changed or the CLI is unverified. Refresh and inspect the terminal again.', 409);
     const now = new Date().toISOString();
     this.observations.set(this.key(session, session.cliPid), { sessionId: '', sourceTurnId: null, startedAt: now,
-      state: 'ready', updatedAt: now, detail: 'Ready confirmed by you after inspecting the terminal. Native activity will update on the next turn.', finished: false, humanConfirmed: true });
+      state: 'ready', updatedAt: now, detail: backgroundAuthorization()?.decision === 'policy'
+        ? 'Background acknowledged readiness under your saved risk permission. This is not native process evidence; activity will update on the next turn.'
+        : 'Ready confirmed by you after inspecting the terminal. Native activity will update on the next turn.', finished: false, humanConfirmed: true });
     return this.read(session);
   }
   async record(input: HookEvent, observed?: ManagedSession): Promise<void> {

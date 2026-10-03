@@ -72,7 +72,8 @@ export interface PlanTurn { identity: PlanIdentity; resultPath: string; captured
 export interface FrozenPlan {
   transitionId: string;
   authorizedAt: string;
-  authority: 'human' | 'automatic';
+  authority: 'human' | 'automatic' | 'background';
+  backgroundAuthorization?: import('./background-actions.ts').BackgroundAuthorization;
   overrideReason: string | null;
   epoch: number;
   briefRevision: number;

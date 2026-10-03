@@ -1,5 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import type { AttentionFeed, AttentionItem } from '../src/contracts/attention';
+import { BACKGROUND_LIMITS, type BackgroundView } from '../src/contracts/background';
 import type { WorkflowState, WorkspaceDiscovery } from '../src/contracts/workflow';
 import { openAgents } from './ui';
 const TOKEN = 'a'.repeat(64);
@@ -168,9 +169,10 @@ test('Agents holds three kinds with their own profiles; a Background profile sta
     await inventory.getByRole('button', { name: 'Show Claude in Console', exact: true }).click();
     await expect(page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Console', exact: true })).toHaveAttribute('aria-pressed', 'true');
     await openAgents(page, 'Background assistant');
-    await expect(page.getByRole('navigation', { name: 'Background assistant sections' }).getByRole('button')).toHaveText(['Attention', 'Activity', 'Profiles', 'Settings']);
+    await expect(page.getByRole('navigation', { name: 'Background assistant sections' }).getByRole('button')).toHaveText(['Attention', 'Activity', 'Log', 'Profiles', 'Settings']);
     await page.getByRole('navigation', { name: 'Background assistant sections' }).getByRole('button', { name: 'Settings', exact: true }).click();
-    await expect(page.getByRole('region', { name: 'Background assistant settings' })).toContainText('AI explanations are not available in this version.');
+    await expect(page.getByRole('region', { name: 'Background assistant settings' })).toContainText('Background uses its own private tmux session');
+    await expect(page.getByRole('button', { name: 'Preview enablement', exact: true })).toBeDisabled();
     await page.getByRole('navigation', { name: 'Background assistant sections' }).getByRole('button', { name: 'Profiles', exact: true }).click();
     const profiles = page.getByRole('region', { name: 'Background assistant profiles' });
     // Only the adapter that is the first to be verified is offered; Codex is named as not yet verified.
@@ -179,7 +181,7 @@ test('Agents holds three kinds with their own profiles; a Background profile sta
     await profiles.getByLabel('Model', { exact: true }).fill('sonnet'); await profiles.getByLabel('Reasoning effort').selectOption('high');
     await expect(profiles.getByLabel('Background command preview')).toHaveText(JSON.stringify(['claude', '--model', 'sonnet', '--effort', 'high'], null, 2));
     await profiles.getByRole('button', { name: 'Create Background profile', exact: true }).click();
-    await expect(profiles.getByRole('status')).toContainText('Nothing was launched or enabled');
+    await expect(profiles.getByRole('status')).toContainText('nothing was launched or enabled');
     const saved = (await list()).find((p) => p.purpose === 'background')!;
     expect([saved.label, saved.args]).toEqual(['Background', ['--model', 'sonnet', '--effort', 'high']]);
     // Agent launch profiles and Helper list only their own purposes.
@@ -190,4 +192,97 @@ test('Agents holds three kinds with their own profiles; a Background profile sta
   } finally {
     for (const p of (await list()).filter((p) => p.purpose === 'background')) await request.delete(`/api/v1/launch-profiles/${p.id}`, { headers, data: { expectedRevision: p.revision } });
   }
+});
+
+test('Background enablement requires its exact preview and acknowledgement; viewing and switching tabs never enables it', async ({ page }) => {
+  const profile = { id: 'background-fixture', revision: 1, purpose: 'background' as const, label: 'Incident analyst', executable: 'claude', args: ['--model', 'haiku'], adapterHint: 'claude' as const, enabled: true };
+  const view: BackgroundView = { settings: { revision: 0, enabled: false, paused: false, needsInspection: false, failures: 0, instance: null, message: 'Background is disabled.' },
+    profiles: [profile], attempts: [], explanations: [], available: true, limits: BACKGROUND_LIMITS, pending: 0 };
+  const posts: string[] = [], id = crypto.randomUUID();
+  await page.route('**/api/v1/background', async route => {
+    if (route.request().method() === 'GET') { await route.fulfill({ json: view }); return; }
+    const body = route.request().postDataJSON(); posts.push(body.action);
+    if (body.action === 'preview') await route.fulfill({ json: { id, digest: 'bound-preview', profile, executable: '/installed/claude', args: profile.args,
+      directory: '/private/background', sessionName: `altcli-background-${id}`, providerVersion: 'fixture', expiresAt: new Date(Date.now() + 120000).toISOString(),
+      limits: BACKGROUND_LIMITS, disclosure: 'This fixture shares only scoped issue evidence with the selected provider.' } });
+    else { expect(body).toMatchObject({ action: 'enable', id, digest: 'bound-preview', confirm: true }); view.settings.enabled = true; view.settings.message = 'Enabled; waiting for an eligible issue.'; await route.fulfill({ json: view }); }
+  });
+  await unlock(page); await openAgents(page, 'Background assistant', 'Settings');
+  const settings = page.getByRole('region', { name: 'Background assistant settings' });
+  await expect(settings.getByRole('button', { name: 'Preview enablement' })).toBeEnabled();
+  expect(posts).toEqual([]);
+  await settings.getByRole('button', { name: 'Preview enablement' }).click();
+  await expect(settings.getByRole('button', { name: 'Enable Background', exact: true })).toBeDisabled();
+  await settings.getByRole('checkbox', { name: /I confirm this profile/ }).check();
+  await settings.getByRole('button', { name: 'Enable Background', exact: true }).click();
+  await expect(settings).toContainText('Enabled; waiting for an eligible issue.'); expect(posts).toEqual(['preview', 'enable']);
+  await openAgents(page, 'Background assistant', 'Activity'); await expect(page.getByRole('region', { name: 'Background activity' })).toContainText('No Background jobs have run.');
+  expect(posts).toEqual(['preview', 'enable']);
+});
+
+test('Background explanation is plain text and disappears on semantic supersession even before its own poll refreshes', async ({ page }) => {
+  const item = fixtureItem({ kind: 'run', title: 'Synthetic uncertainty' });
+  const feed: AttentionFeed = { open: 1, unseen: 1, items: [item], recent: [], truncated: false, revision: 'v1', observedAt: new Date().toISOString() };
+  await page.route('**/api/v1/state', async route => { const response = await route.fetch(); await route.fulfill({ response, json: { ...await response.json(), attention: feed } }); });
+  await page.route('**/api/v1/background', route => route.fulfill({ json: { settings: { enabled: true }, attempts: [], profiles: [],
+    explanations: [{ id: 'attempt', itemId: item.id, itemRevision: 1, sourceVersion: 1, model: 'fixture', assessment: { summary: '<script>fixture</script>',
+      likelyCause: 'A receipt is absent.', nextSteps: ['Inspect the original delivery.'], uncertainties: ['It may have run.'], evidence: [{ id: 'e', source: 'fixture', revision: 'r', note: 'Recorded receipt.' }] } }],
+    available: true, pending: 0, limits: BACKGROUND_LIMITS } }));
+  await unlock(page); await openAgents(page, 'Background assistant', 'Attention');
+  await expect(page.getByRole('heading', { name: 'Background explanation' })).toBeVisible();
+  await expect(page.getByText('<script>fixture</script>', { exact: true })).toBeVisible();
+  expect(await page.locator('.background-assessment script').count()).toBe(0);
+  item.sourceVersion = 3; feed.revision = 'v3';
+  await expect(page.getByRole('heading', { name: 'Background explanation' })).toHaveCount(0);
+  await expect(page.getByText('Synthetic uncertainty', { exact: true })).toBeVisible();
+});
+
+test('Background Log requires exact confirmation, renders requests as text, and navigation never approves', async ({ page }) => {
+  const now = new Date().toISOString(), id = crypto.randomUUID();
+  const action = { id, requestKey: 'fixture', digest: 'exact-request', attemptId: 'job', instanceId: 'instance', enablement: 1, itemId: 'issue', itemRevision: 1, sourceVersion: 1, policyRevision: 0,
+    operation: { kind: 'command', directory: '/synthetic', executable: '/bin/echo', args: ['<script>fixture</script>'] }, reason: 'Write the requested fixture output.', risk: false,
+    status: 'pending', createdAt: now, expiresAt: new Date(Date.now() + 1800000).toISOString(), updatedAt: now, authorization: null, pid: null, result: null, message: 'Waiting for confirmation.' };
+  const view = { permissions: { revision: 0, app: 'ask', command: 'ask', risk: 'ask' }, actions: [action], entries: [] as unknown[], next: null };
+  const posts: unknown[] = [];
+  await page.route('**/api/v1/background/actions', async route => {
+    if (route.request().method() === 'GET') { await route.fulfill({ json: view }); return; }
+    const body = route.request().postDataJSON(); posts.push(body);
+    expect(body).toEqual({ action: 'approve', id, digest: 'exact-request', confirm: true });
+    view.actions = []; view.entries = [{ id: 1, at: now, actor: 'owner', kind: 'running', actionId: id, attemptId: 'job', message: 'You approved this exact action.', detail: { operation: action.operation } }];
+    await route.fulfill({ json: { ...action, status: 'running' } });
+  });
+  await unlock(page); await openAgents(page, 'Background assistant', 'Log');
+  const log = page.getByRole('region', { name: 'Background action log' });
+  await expect(log.getByRole('button', { name: 'Approve and run' })).toBeDisabled();
+  await expect(log.getByLabel('Exact requested action')).toContainText('<script>fixture</script>');
+  expect(await log.locator('script').count()).toBe(0);
+  await openAgents(page, 'Background assistant', 'Activity'); await openAgents(page, 'Background assistant', 'Log');
+  expect(posts).toEqual([]);
+  await log.getByRole('checkbox', { name: /I reviewed this exact request/ }).check();
+  await log.getByRole('button', { name: 'Approve and run' }).click();
+  await expect(log).toContainText('You approved this exact action.'); expect(posts).toHaveLength(1);
+  await expect(log.getByRole('button', { name: 'Approve and run' })).toHaveCount(0);
+});
+
+test('Background permissions need an explicit save and acknowledgement; another client invalidates the draft', async ({ page }) => {
+  const view = { permissions: { revision: 0, app: 'ask', command: 'ask', risk: 'ask' }, actions: [], entries: [], next: null };
+  const posts: unknown[] = [];
+  await page.route('**/api/v1/background/actions', async route => {
+    if (route.request().method() === 'GET') { await route.fulfill({ json: view }); return; }
+    const body = route.request().postDataJSON(); posts.push(body);
+    expect(body).toMatchObject({ action: 'permissions', expectedRevision: 0, app: 'ask', command: 'allow', risk: 'ask', confirm: true });
+    view.permissions = { revision: 1, app: 'ask', command: 'allow', risk: 'ask' }; await route.fulfill({ json: view.permissions });
+  });
+  await unlock(page); await openAgents(page, 'Background assistant', 'Settings');
+  const settings = page.getByRole('region', { name: 'Background action permissions' });
+  await expect(settings.getByRole('combobox', { name: 'Host commands and file changes', exact: true })).toHaveValue('ask');
+  await settings.getByRole('combobox', { name: 'Host commands and file changes', exact: true }).selectOption('allow');
+  await expect(settings.getByRole('button', { name: 'Save action permissions' })).toBeDisabled(); expect(posts).toEqual([]);
+  await settings.getByRole('checkbox', { name: /I authorize these permissions/ }).check();
+  await settings.getByRole('button', { name: 'Save action permissions' }).click();
+  await expect(settings.getByRole('status')).toContainText('Saved action permissions.'); expect(posts).toHaveLength(1);
+  await settings.getByRole('combobox', { name: 'App actions', exact: true }).selectOption('allow');
+  view.permissions = { ...view.permissions, revision: 2, command: 'ask' };
+  await expect(settings).toContainText('Permissions changed in another client.');
+  await expect(settings.getByRole('button', { name: 'Save action permissions' })).toBeDisabled(); expect(posts).toHaveLength(1);
 });

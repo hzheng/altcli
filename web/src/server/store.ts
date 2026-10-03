@@ -64,6 +64,15 @@ export class Store {
         CREATE TABLE IF NOT EXISTS attention_items (id TEXT PRIMARY KEY, key TEXT NOT NULL, status TEXT NOT NULL, fingerprint TEXT NOT NULL, updated_at TEXT NOT NULL, value TEXT NOT NULL);
         CREATE UNIQUE INDEX IF NOT EXISTS attention_open_key ON attention_items(key) WHERE status = 'open';
         CREATE INDEX IF NOT EXISTS attention_items_order ON attention_items(status, updated_at);
+        CREATE TABLE IF NOT EXISTS background_state (id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS background_attempts (id TEXT PRIMARY KEY, item_id TEXT NOT NULL, admitted_at TEXT NOT NULL, status TEXT NOT NULL, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS background_versions (item_id TEXT PRIMARY KEY, version INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS background_candidates (item_id TEXT PRIMARY KEY, version INTEGER NOT NULL, since TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS background_admissions (id TEXT PRIMARY KEY, at TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS background_permissions (id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS background_actions (id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL, item_id TEXT NOT NULL, status TEXT NOT NULL, digest TEXT NOT NULL, value TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS background_action_digest ON background_actions(digest);
+        CREATE TABLE IF NOT EXISTS background_log (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, actor TEXT NOT NULL, kind TEXT NOT NULL, action_id TEXT, attempt_id TEXT, message TEXT NOT NULL, detail TEXT NOT NULL);
         CREATE UNIQUE INDEX IF NOT EXISTS managed_workspace_path ON managed_workspaces(path) WHERE status <> 'retired';
         CREATE UNIQUE INDEX IF NOT EXISTS worktree_creation_owner ON worktree_creations(project_id) WHERE status IN ('applying', 'uncertain');
         CREATE INDEX IF NOT EXISTS interactions_repository ON interactions(repository);

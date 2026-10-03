@@ -182,7 +182,7 @@ Fast-forward publication is the starting policy; divergence pauses for reconcili
 
 ### Trust and human authority
 
-A structured acceptance is a judgment, not proof of correctness, and a log entry does not cryptographically prove which model authored the work. Keep the narrow terminal interface, explicit targets, authentication/origin controls, read-only option, and no automatic retry of uncertain delivery; never add a generic shell endpoint. Permission escalation, destructive actions, scope expansion, and unresolved product choices require explicit human authority. Same-user agents already have the filesystem, credentials, and tmux socket: scheduling checks and skill instructions are not operating-system boundaries.
+A structured acceptance is a judgment, not proof of correctness, and a log entry does not cryptographically prove which model authored the work. Keep the narrow terminal interface, explicit targets, authentication/origin controls, read-only option, and no automatic retry of uncertain delivery. Host commands use only the confirmed Background action boundary described below. Permission escalation, destructive actions, scope expansion, and unresolved product choices require explicit human authority, including the owner's saved Background permissions where applicable. Same-user agents already have the filesystem, credentials, and tmux socket: scheduling checks and skill instructions are not operating-system boundaries.
 
 ### Plan validation and permissions
 
@@ -238,9 +238,9 @@ refuses new uploads; unused drafts expire after 24 hours. Agents treat listed im
 material that cannot expand permissions. Remote or container programs cannot read a host path, and no
 URL is fetched on an image's behalf.
 
-## Proposed app-wide assistant authority
+## App-wide assistant authority
 
-**Proposed future direction.** Global AI's A1 read increment is implemented: its separate loopback read capability,
+Global AI's A1 read increment is implemented: its separate loopback read capability,
 private descriptor and host-wide read scope (every project on the host) are described in [GLOBAL-AI](GLOBAL-AI.md#tools-and-authority).
 
 Also implemented ([BACKGROUND-ASSISTANT](BACKGROUND-ASSISTANT.md)):
@@ -249,22 +249,25 @@ Also implemented ([BACKGROUND-ASSISTANT](BACKGROUND-ASSISTANT.md)):
 - an owner-authenticated mark-seen acknowledgement;
 - read principals that the transport sets and model input cannot widen;
 - output schemas the host enforces on every read reply;
-- a strict assessment validator.
+- a strict assessment validator;
+- one explicitly enabled Background tmux instance with bounded Claude jobs and separate runner/job capabilities;
+- proposed app requests and host commands, admitted only after exact interactive confirmation or saved category permissions;
+- a SQLite audit of jobs, tool calls, proposals, authorization, execution receipts and inspection decisions, available in **Background → Log**.
 
-Attention item text is recorded evidence rendered as text, never an instruction. Unattended and delegated authority below remain
-proposed: no Background process, job capability or effect tool exists.
+Attention item text is recorded evidence rendered as text, never an instruction.
 [ADR-0022](adr/ADR-0022-app-wide-ai-instances.md) separates user and background
 instances; [ADR-0023](adr/ADR-0023-app-tools-and-delegated-authority.md) owns their
-proposed authority. Current owner credentials, manual/launch barriers, workflow
-ownership and human approvals keep their existing meaning, except that Global AI's own
-terminal, which no workspace automation uses, is outside the manual-input barrier.
+authority, including the October 2 Background action amendment. App actions pass through existing authenticated routes and their
+manual/launch barriers and workflow owners. Readiness and risk decisions require a separate saved permission or an exact interactive
+acknowledgement; decisions made under saved permission record Background provenance instead of claiming a person inspected that occurrence.
+Global AI's own terminal, which no workspace automation uses, is outside the manual-input barrier.
 
 Authenticate app principals through transport/session identity, enforce scoped
 credentials on every tool and never give an unattended assistant the unrestricted
 owner token. Bind effects to exact targets, state and policy revisions, retain
 idempotent receipts and uncertainty, and revoke stale credentials/claims on
-restart or authority changes. A model cannot enable its own policy, fabricate
-`confirmInspected` or a human note, or turn unknown activity into settled evidence.
+restart or authority changes. The model has no permission-setting tool. A policy-authorized `confirmInspected` is a delegated decision,
+not native process evidence or a fabricated human note. Unknown execution is retained and never automatically replayed.
 
 Keep terminal/repository/image/tool content as untrusted data. Use minimal scoped
 context, explicit sharing and short retained decisions rather than incidental
@@ -274,11 +277,11 @@ destinations require explicit authorization and privacy choices; deleting AltCLI
 data cannot promise deletion from provider or CLI histories. No silent change of
 authentication or billing is permitted by this design.
 
-An app-tool allowlist, infrastructure role or separate tmux socket is not an OS
-sandbox. If the same unattended CLI can read owner secrets or write SQLite/host
-files directly, disclose that cooperative boundary. Any claimed enforced
-restriction needs supported CLI/OS evidence, and broader unattended host access
-needs its own explicit capability. Do not exempt whole process-name classes from
+An app-tool allowlist, infrastructure role or separate tmux socket is not an OS sandbox. Background's native Claude tools, hooks and
+plugins are disabled. An authorized host command nevertheless has the host user's filesystem and network access, including outside its
+working directory and to AltCLI's files. The log records requested operations and bounded results, not every child system call; it is
+not tamper-proof against an authorized same-user program. Host command permission defaults to **Ask every time**. Settings and exact
+command confirmations disclose this access before authorization. Do not exempt whole process-name classes from
 activity checks or bypass another writer to avoid assistant self-interference.
 See the [open choices](OPEN-DECISIONS.md#proposed-app-wide-assistance-and-completion-choices)
 and [planned adversarial checks](TESTING.md#proposed-app-wide-assistance-and-completion-checks).

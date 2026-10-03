@@ -2,7 +2,7 @@
 
 > October 2, 2026: the [attention-first amendment](#october-2-amendment-attention-first-background-assistant) records the endorsed
 > design for the first Background increment. Deterministic attention, the Agents tab, profiles and read contracts are implemented locally;
-> the Background runtime is not.
+> the Background runtime now adds one private tmux runner, bounded Claude jobs and explicit controls (schema 23). A subsequent owner clarification adds confirmed/delegated actions and Log (schema 24), under the [ADR-0023 action amendment](ADR-0023-app-tools-and-delegated-authority.md#october-2-amendment-confirmed-background-actions).
 
 > October 1, 2026: [ADR-0024](ADR-0024-registered-repositories-and-managed-workspaces.md) resolves the app-owned socket choice: Helper and the future Background assistant run as recorded app-wide instances on AltCLI's dedicated tmux endpoint (not yet implemented), which is not isolation.
 
@@ -123,8 +123,7 @@ would ignore new effectful authority.
 
 Status: accepted through an endorsed two-planner Plan (run `aec693b1`, brief revision 1, plan revision 3); the transition into
 Implementation was authorized by that run's automatic policy. **Implemented locally:** deterministic attention, the Agents tab,
-role profiles, shared read contracts and the assessment validator. **Not implemented:** the Background runtime and its provider
-probe. [BACKGROUND-ASSISTANT](../BACKGROUND-ASSISTANT.md) describes the current behavior.
+role profiles, shared read contracts, assessment validation and the Background runtime. The Claude Code 2.1.288 probe passed with synthetic evidence; real tmux lifecycle coverage uses a fixture provider. [BACKGROUND-ASSISTANT](../BACKGROUND-ASSISTANT.md) describes the current behavior.
 
 The first increment diagnoses and notifies; it does not confirm, approve, resume, retry or answer prompts. It has two layers that fail
 independently:
@@ -134,7 +133,7 @@ independently:
 | Attention | Always on and model-free. Owned runs that cannot progress, Plan checkpoints that need the human, and uncertain launches or Helper starts become one durable item per issue key. A real change revises the item in place, the issue's end resolves it, and a recurrence opens a new item. Source fingerprints and monotonic versions are written in the same transaction as the source change. A boot pass and a 15-second sweep repair any missed path, and unchanged sources write nothing. Typed pause causes (`user`, `restart`) replace any reading of reason text. Delivery is the in-app list and a heading count; toasts, OS push and external channels are deferred |
 | Background diagnosis | After explicit enablement, a settled item version admits one bounded, read-only job. The host validates its answer independently of any CLI schema and attaches it only by compare-and-set to the exact item revision, source version, attempt and enablement. A late answer is recorded as stale. Model failure never affects attention |
 
-Runtime decisions for the pending increment:
+Runtime decisions implemented in the follow-up:
 
 - **Instance and endpoint.** One recorded Background instance in tmux, on the same endpoint resolver as Helper: the configured endpoint
   until [ADR-0024](ADR-0024-registered-repositories-and-managed-workspaces.md)'s I4 lands, then the dedicated endpoint. Existing
@@ -142,11 +141,10 @@ Runtime decisions for the pending increment:
 - **Runner and principals.** The host owns scheduling and storage; a runner in the instance only carries jobs. Job reads use a separate
   capability scoped to one item and its run or launch.
 - **Restart.** After a restart, new attempts need an explicit Inspect and Resume.
-- **First adapter.** Claude Code is the first candidate, enabled only after a disposable probe verifies structured output and the
-  removal of built-in tools. Codex follows only after passing the same probe.
+- **First adapter.** Claude Code 2.1.288 passed the disposable scoped-MCP and structured-output probe, including restricted startup and native process settlement. Other versions and Codex need equivalent verification.
 - **v1 limits.** One active job, a 20 s settle, 10 starts an hour at least 30 s apart, a 120 s deadline, 12 tool calls, one automatic
   attempt per item version, and a stop after three consecutive failures.
 
-Store schema 22 adds the attention tables and Background profiles. The change only adds data, so it needs no settlement; it keeps a
+Store schema 22 added attention and Background profiles; schema 23 adds durable Background settings and job accounting. The change only adds data, so it needs no settlement; it keeps a
 private backup, and older versions refuse the store. Standalone setup-operation attention and delegated handling under an owner policy
 remain later increments, with no authority granted here.

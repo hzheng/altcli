@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { backgroundAuthorization, decisionActor } from './background/action-context.ts';
 import { realpath, stat } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -327,9 +328,12 @@ export class LaunchService {
     const b=terminalFields(value,['requestId','confirmInspected','note']);requestId(b.requestId);if(b.confirmInspected!==true)throw new AppError('CONFIRM_REQUIRED','Inspect the host, including possible prior and background effects.');
     const note=terminalText(b.note,1000);const {batch,item}=this.lookup(id);
     if(item.cleanup&&!item.closed)throw new AppError('LAUNCH_BUSY','Inspect the pending cleanup; reconciliation cannot discard its ownership.',409);
-    if(item.humanDecision){if(item.humanDecision.requestId!==b.requestId||item.humanDecision.note!==note)throw new AppError('LAUNCH_CHANGED','This instance was already reconciled.',409);return item;}
+    const prior=item.humanDecision??item.backgroundDecision;
+    if(prior){if(prior.requestId!==b.requestId||prior.note!==note)throw new AppError('LAUNCH_CHANGED','This instance was already reconciled.',409);return item;}
     if(item.status==='applying'||this.authority.busyFor(scopesFor(item.worktree)))throw new AppError('LAUNCH_BUSY','Wait for the in-flight operation to settle.',409);
-    this.update(batch,item,{status:'reconciled',message:'Human acknowledged possible prior effects. History retained; a new launch needs new consent.',humanDecision:{requestId:b.requestId as string,note,at:new Date().toISOString()}});return item;
+    const delegated=backgroundAuthorization(),decision={requestId:b.requestId as string,note,at:new Date().toISOString()};
+    this.update(batch,item,{status:'reconciled',message:`${decisionActor()} acknowledged possible prior effects. History retained; a new launch needs new consent.`,
+      ...(delegated?.decision==='policy'?{backgroundDecision:{...decision,authorization:delegated}}:{humanDecision:decision})});return item;
   }
   async capture(id: string): Promise<{text: string}> {
     const {item} = this.lookup(id);

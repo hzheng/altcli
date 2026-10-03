@@ -103,7 +103,7 @@ export function runResolution(run: RelayRun): string {
   if (run.status === 'stopped') return 'Control returned to you. Taking control neither stops an agent nor proves its work settled.';
   if (run.status === 'running') return 'The controller is progressing this run again.';
   if (run.status === 'waiting') return 'The run now waits for a routine manual step in Control access.';
-  return 'Paused by you. It stays in Control access.';
+  return 'The run was explicitly paused. It stays in Control access.';
 }
 export const launchResolution = (item: LaunchInstance): string =>
   item.closed ? 'The launch was closed.' : `Inspection recorded this launch as ${item.status}.`;

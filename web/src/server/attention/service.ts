@@ -146,7 +146,7 @@ export class AttentionService {
   /** Digest of every open item's ID, material revision, seen revision and stale flag. It changes whenever any of them opens,
    * resolves, changes or is marked seen, so a client holding all pages can tell its copy is no longer current. */
   private openRevision(): string {
-    const rows = this.db.prepare(`SELECT id, json_extract(value,'$.revision') AS revision, json_extract(value,'$.seenRevision') AS seen,
+    const rows = this.db.prepare(`SELECT id, json_extract(value,'$.revision') AS revision, json_extract(value,'$.sourceVersion') AS sourceVersion, json_extract(value,'$.seenRevision') AS seen,
       json_extract(value,'$.stale') AS stale FROM attention_items WHERE status='open' ORDER BY id`).all();
     return createHash('sha256').update(JSON.stringify(rows)).digest('hex');
   }

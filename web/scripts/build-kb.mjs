@@ -11,6 +11,7 @@ export const DOCUMENTS = {
   'docs/SETUP.md': 'installed-host setup',
   'docs/GLOBAL-AI.md': 'Global AI A1 capabilities and limitations',
   'docs/BACKGROUND-ASSISTANT.md': 'Agents tab, deterministic attention, and what the Background assistant does and does not do yet',
+  'shared/openapi.yaml': 'Exact app HTTP paths and input schemas for Background action requests; use search_docs and bounded read_doc ranges',
 };
 const LIMIT = 256 * 1024;
 const web = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -21,7 +22,8 @@ export async function buildKnowledgeBase(root) {
   const documents = [];
   for (const [name, description] of Object.entries(DOCUMENTS)) {
     const path = join(root, name), info = await lstat(path);
-    if (!info.isFile() || info.isSymbolicLink() || info.size > LIMIT) throw new Error(`${name} must be an ordinary file of at most ${LIMIT} bytes.`);
+    const limit = name === 'shared/openapi.yaml' ? 1024 * 1024 : LIMIT;
+    if (!info.isFile() || info.isSymbolicLink() || info.size > limit) throw new Error(`${name} must be an ordinary file of at most ${limit} bytes.`);
     documents.push({ name, description, content: await readFile(path, 'utf8') });
   }
   return { documents };

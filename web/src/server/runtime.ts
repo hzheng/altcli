@@ -19,5 +19,7 @@ export function controller(): GlobalControlPlane {
   const plane = new GlobalControlPlane(new Controller(config, store, adapter));
   runtime.altcliControlPlane = plane;
   terminalHost().gateway = plane.terminals;
+  terminalHost().shutdownBackground = async () => { plane.attention.stop(); await plane.background.shutdown(); };
+  terminalHost().consumeBackgroundAction = (token, method, path, body) => plane.background.actions.consume(token, method, path, body);
   return plane;
 }

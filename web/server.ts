@@ -34,6 +34,7 @@ async function shutdown() {
   if (bridge.closing) return;
   bridge.closing = true;
   const force = setTimeout(() => process.exit(1), 30_000); force.unref();
+  await bridge.shutdownBackground?.();
   await bridge.gateway?.shutdown();
   for (const socket of sockets.clients) socket.terminate();
   sockets.close();

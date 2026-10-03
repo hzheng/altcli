@@ -108,6 +108,7 @@ test('the build packs every allowlisted document and refuses symlinked or oversi
   const root = await mkdtemp(join(tmpdir(), 'global-docs-'));
   try {
     await mkdir(join(root, 'docs'));
+    await mkdir(join(root, 'shared'));
     for (const name of Object.keys(DOCUMENTS)) await writeFile(join(root, name), `${name} body\n`);
     const packed = await buildKnowledgeBase(root);
     assert.deepEqual(packed.documents.map(d => [d.name, d.content]), Object.keys(DOCUMENTS).map(name => [name, `${name} body\n`]));
