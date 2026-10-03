@@ -579,6 +579,8 @@ test(`public squash ${entry} preserves normal ${filter} status filters but refus
   writeFileSync(join(root, '.gitattributes'), 'app.txt filter=fixture\n'); git(root, 'add', '.'); git(root, 'commit', '-qm', 'attributes');
   const { plane } = await squashPlane(); const preview = await plane.previewIntegration(target);
   git(root, 'config', `filter.fixture.${filter}`, `echo ran > ../filter-ran; ${filter === 'process' ? 'exit 1' : 'cat'}`);
+  // Optional filter failures may pass through unchanged; require this failure to surface in discovery.
+  if (filter === 'process') git(root, 'config', 'filter.fixture.required', 'true');
   const changed = new Date(Date.now() - 60000); utimesSync(join(root, 'app.txt'), changed, changed);
   const head = git(root, 'rev-parse', 'HEAD'); const index = readFileSync((await resolveWorktree(root))!.indexPath);
   if (entry === 'discovery') {
