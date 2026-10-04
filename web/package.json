@@ -28,7 +28,7 @@
     "postinstall": "node scripts/prepare-pty.mjs",
     "probe:terminal": "node --experimental-strip-types --test scripts/native-terminal.test.ts",
     "probe:terminal:http": "node scripts/terminal-http-probe.mjs",
-    "test:native": "node --experimental-strip-types --test scripts/native-terminal.test.ts scripts/native-launch.test.ts scripts/native-reconcile.test.ts scripts/native-global-ai.test.ts",
+    "test:native": "node --experimental-strip-types --test scripts/native-terminal.test.ts scripts/native-launch.test.ts scripts/native-reconcile.test.ts scripts/native-global-ai.test.ts scripts/native-observation.test.ts",
     "probe:terminal:writers": "node --expose-gc --experimental-strip-types --test scripts/native-writers.test.ts",
     "preprobe:terminal:ws": "npm run kb",
     "probe:terminal:ws": "node scripts/terminal-websocket-probe.mjs",

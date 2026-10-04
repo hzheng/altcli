@@ -14,6 +14,7 @@ import { InputAuthority } from '../src/server/input-authority.ts';
 import { MockAdapter, mockSessions } from '../src/server/adapters/mock.ts';
 import { loadConfig } from '../src/server/config.ts';
 import { parseStandalone } from '../src/core/implementation-validation.ts';
+import { AppError } from '../src/core/errors.ts';
 import type { TerminalFrame, TerminalConnection } from '../src/contracts/terminals.ts';
 class Socket extends EventEmitter {
   readyState=1; bufferedAmount=0; frames:TerminalFrame[]=[];
@@ -450,6 +451,20 @@ test('late observer attachment and old identity-check failure cannot replace or 
   holdWatch=true;for(let n=0;n<150&&!rejectWatch;n++)await settle();assert.ok(rejectWatch,'watcher must have started');
   const released=await plane.terminals.keyboard(c.opened.connectionId,{requestId:randomUUID(),expectedBootId:plane.authority.bootId,expectedGeneration:owner.generation,action:'release'});
   holdWatch=false;rejectWatch();await settle();assert.equal(c.socket.readyState,1);assert.equal(released.writer,false);
+});
+test('a saturated display budget skips a writer identity check; a failed check still closes the terminal',async()=>{
+  let failure:Error|null=null,checks=0;
+  plane.terminals.services.attach=async(_config,target)=>({pid:1,write:()=>{},resize:()=>{},pause:()=>{},resume:()=>{},close:async()=>{},active:async()=>{
+    checks++;if(failure)throw failure;return {paneId:target.identity.paneId,sessionId:target.sessionId,label:target.label,command:'fixture'};}});
+  const c=await connect(),owner=await grant(c);
+  failure=new AppError('OBSERVATION_BUSY','Host observation is busy. Wait for the next refresh.',503);
+  const before=checks;for(let n=0;n<400&&checks<before+2;n++)await settle();
+  assert.ok(checks>=before+2,'checks must have run while saturated');
+  assert.equal(c.socket.readyState,1);assert.equal(plane.authority.get(owner.manualSession!.id).live,true);
+  failure=Error('changed target');
+  for(let n=0;n<200&&c.socket.readyState===1;n++)await settle();
+  assert.equal(c.socket.readyState,3);
+  assert.ok(c.socket.frames.some(f=>f.type==='closed'&&/identity/.test(f.reason)));
 });
 test('acknowledgments and heartbeats in flight for a replaced generation are ignored; an unknown generation still closes the connection',async()=>{
   const c=await connect();const owned=await grant(c);assert.notEqual(owned.generation,c.generation);

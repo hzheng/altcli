@@ -10,10 +10,11 @@ import { inputAfterTyping, inputEraseCount } from "../../core/prompt-leftover.ts
 import type { ProcessRecord } from "../../contracts/workflow.ts";
 import type { ListedPane, TerminalAdapter } from "./terminal.ts";
 import { foregroundPid, hostPaneProcesses, paneProcesses } from "../processes.ts";
+import { observationProcess } from '../observation.ts';
 /** `input`, when given, is written to tmux's stdin (only `load-buffer -` reads it). */
 export type Runner = (args: string[], input?: string) => Promise<string>;
 export function createRunner(binary = "tmux", socket?: string): Runner {
-  return (args, input) => new Promise((resolve, reject) => {
+  return (args, input) => observationProcess(() => new Promise((resolve, reject) => {
     const child = execFile(binary, [...(socket ? ["-S", socket] : []), ...args],
       { encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024, shell: false },
       (error, stdout, stderr) => {
@@ -24,7 +25,7 @@ export function createRunner(binary = "tmux", socket?: string): Runner {
         reject(new AppError("TMUX_FAILED", `tmux ${args[0]} failed${detail ? `: ${detail}` : ""}. Inspect tmux on the host.`, 409));
       });
     if (input !== undefined) child.stdin?.end(input); else child.stdin?.end();
-  });
+  }));
 }
 const SEP = "\t";
 const PANE_FIELDS = ["pane_id", "pane_pid", "pid", "start_time", "socket_path", "pane_current_command", "pane_current_path", "pane_dead", "pane_in_mode", "synchronize-panes"];

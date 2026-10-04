@@ -6,18 +6,19 @@ import { AppError } from '../core/errors.ts';
 import type { BranchState, GitChange, HandoffArchive, HandoffEntry, HandoffIdentity, ImplementationRun, ImplementationTurn, Publication, ReviewPreview, ReviewPreviewInput, StageRelayEligibility, WorkspaceGit } from '../contracts/implementation.ts';
 import { readBounded } from './bounded-read.ts';
 import { gitEnvironment, worktreeFingerprint } from './worktree.ts';
+import { observationProcess } from './observation.ts';
 
 const fail = (message: string): never => { throw new AppError('COMMIT_HANDOFF', message, 409); };
 /** Argument-only Git calls with canonical environment; no repository config or network writes. */
 export function gitRead(root: string, args: string[], allowFailure = false): Promise<string> {
-  return new Promise((resolve, reject) => execFile('git', ['--no-replace-objects', '-C', root, ...args],
+  return observationProcess(() => new Promise((resolve, reject) => execFile('git', ['--no-replace-objects', '-C', root, ...args],
     { encoding: 'utf8', timeout: 10000, maxBuffer: 4 * 1024 * 1024, env: gitEnvironment(), shell: false },
-    (error, stdout) => error && !(allowFailure && error.code === 1) ? reject(new AppError('GIT_STATE', `Git inspection failed (${args[0]}). Recheck the checkout.`, 409)) : resolve(stdout)));
+    (error, stdout) => error && !(allowFailure && error.code === 1) ? reject(new AppError('GIT_STATE', `Git inspection failed (${args[0]}). Recheck the checkout.`, 409)) : resolve(stdout))));
 }
 /** Whether any index entry is assume-unchanged (lowercase tag) or skip-worktree (S). The listing is scanned as it streams,
  * so a large repository's tracked-file count never exceeds a buffer and turns a clean checkout into a failed inspection. */
 function hiddenIndexFlags(root: string): Promise<boolean> {
-  return new Promise((resolve, reject) => {
+  return observationProcess(() => new Promise((resolve, reject) => {
     const child = spawn('git', ['--no-replace-objects', '-C', root, 'ls-files', '-v', '-z'], { env: gitEnvironment(), stdio: ['ignore', 'pipe', 'ignore'] });
     const timer = setTimeout(() => child.kill(), 10000);
     let hidden = false; let entryStart = true;
@@ -30,7 +31,7 @@ function hiddenIndexFlags(root: string): Promise<boolean> {
     const failed = () => { clearTimeout(timer); reject(new AppError('GIT_STATE', 'Git inspection failed (ls-files). Recheck the checkout.', 409)); };
     child.on('error', failed);
     child.on('close', (code) => { if (code !== 0) return failed(); clearTimeout(timer); resolve(hidden); });
-  });
+  }));
 }
 /** The repository's default branch as recorded locally in origin/HEAD, read without fetching; null when unknown. */
 export async function defaultBranch(root: string): Promise<string | null> {

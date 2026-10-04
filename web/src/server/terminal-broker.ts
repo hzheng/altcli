@@ -12,6 +12,7 @@ import { scopesFor, scopesOverlap, type InputScopes } from '../core/input-scope.
 import type { WorktreeIdentity } from '../contracts/workflow.ts';
 import { assertObserverSize, attachTmux, type Attachment, type AttachTarget } from './tmux-attach.ts';
 import type { TerminalGateway } from './terminal-gateway.ts';
+import { observationBusy, observe } from './observation.ts';
 
 interface Connection {
   id: string; input: TerminalOpen; target: AttachTarget; ticket: string | null; expires: number;
@@ -405,8 +406,9 @@ export class TerminalBroker implements TerminalGateway {
       if (now - c.lastHb >= 15_000) { this.emit(c, { type: 'hb' }); c.lastHb = now; }
       if (c.attachment && !c.checking) {
         c.checking = true; const generation=c.generation, attachment=c.attachment;
-        void attachment.active().then(active => { if(c.generation===generation && c.attachment===attachment) this.emit(c, { type: 'active', ...active }); })
-          .catch(() => { if(c.generation===generation && c.attachment===attachment) return this.close(c.id, 'Terminal identity, lifetime or sizing policy changed.'); }).finally(() => { c.checking = false; });
+        void observe(() => attachment.active()).then(active => { if(c.generation===generation && c.attachment===attachment) this.emit(c, { type: 'active', ...active }); })
+          // A saturated display budget is no evidence either way; the next tick checks again.
+          .catch((error) => { if(!observationBusy(error) && c.generation===generation && c.attachment===attachment) return this.close(c.id, 'Terminal identity, lifetime or sizing policy changed.'); }).finally(() => { c.checking = false; });
       }
     }
   }

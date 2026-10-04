@@ -6,6 +6,7 @@ import type { PaneIdentity } from '../../contracts/api.ts';
 import { AppReads, fields, GlobalAIError, hash, HELPER, text, toolsFor } from './reads.ts';
 import { codexProfileArgs } from './codex.ts';
 import { claudeProfileArgs } from './claude.ts';
+import { observationBusy } from '../observation.ts';
 
 /** The profile arguments Helper accepts for its CLI, Codex or Claude Code; any other profile or argument is refused. */
 export function helperProfileArgs(profile: LaunchProfile): string[] {
@@ -65,6 +66,8 @@ export class GlobalAIService {
   private readonly previews = new Map<string, HeldPreview>();
   private grant: Grant | null = null;
   private grantRevision = 0;
+  /** Nonsecret display invalidation for renewal, revocation and expiry, including changes without a store write. */
+  get observationRevision(): string { return `${this.grantRevision}:${!!this.grant && this.grant.expires > Date.now()}`; }
   private tail: Promise<unknown> = Promise.resolve();
   private requests = 0;
   constructor(services: GlobalServices) {
@@ -101,7 +104,9 @@ export class GlobalAIService {
       const native = await this.services.host.inspect(instance);
       if (native.dead && this.grantRevision === inspectedGrantRevision && this.grant?.instanceId === instance.id) this.revoke();
       return this.publicView(instance, native.dead ? 'exited' : 'alive', native.dead ? 'The CLI exited. Its tmux record is retained.' : 'Process observed. Login, model and readiness are not certified; inspect the native terminal.');
-    } catch {
+    } catch (error) {
+      // A saturated display budget did not inspect the terminal, so it cannot justify revoking app access.
+      if (observationBusy(error)) throw error;
       if (this.grantRevision === inspectedGrantRevision && this.grant?.instanceId === instance.id) this.revoke();
       return this.publicView(instance, 'unavailable', 'The recorded terminal changed or cannot be verified. App tools are revoked; nothing is relaunched.');
     }

@@ -5,6 +5,7 @@ import { lstat, readlink, realpath } from 'node:fs/promises';
 import { dirname, join, isAbsolute } from 'node:path';
 import { AppError } from '../core/errors.ts';
 import type { WorktreeIdentity } from '../contracts/workflow.ts';
+import { observationProcess } from './observation.ts';
 
 export const gitEnvironment = (): NodeJS.ProcessEnv => {
   // Retain Next's required NODE_ENV typing as well as the inherited environment.
@@ -15,14 +16,14 @@ export const gitEnvironment = (): NodeJS.ProcessEnv => {
 /** Read-only discovery of the standard worktree/index. Per-process Git overrides are unsupported. */
 export async function resolveWorktree(cwd: string): Promise<WorktreeIdentity | null> {
   const directory = await realpath(cwd);
-  const output = await new Promise<string>((resolve, reject) => {
+  const output = await observationProcess(() => new Promise<string>((resolve, reject) => {
     execFile('git', ['-C', directory, 'rev-parse', '--path-format=absolute', '--show-toplevel', '--absolute-git-dir', '--git-path', 'index'],
       { encoding: 'utf8', timeout: 5000, maxBuffer: 65536, shell: false, env: gitEnvironment() }, (error, stdout, stderr) => {
         if (!error) return resolve(stdout);
         if (/not a git repository|must be run in a work tree/i.test(stderr)) return resolve('');
         reject(new AppError('GIT_IDENTITY', 'Could not inspect Git identity. Check Git availability and repository access.', 409));
       });
-  });
+  }));
   if (!output) return null;
   const paths = output.trimEnd().split('\n');
   if (paths.length !== 3 || paths.some((p) => !isAbsolute(p) || /[\u0000-\u001f]/.test(p))) throw new AppError('GIT_IDENTITY', 'Ambiguous Git paths. Registration refused.', 409);
@@ -36,14 +37,14 @@ export async function resolveWorktree(cwd: string): Promise<WorktreeIdentity | n
 }
 /** The checked-out branch, or null on a detached HEAD. Read-only; an unborn branch still reports its name. */
 export function currentBranch(root: string): Promise<string | null> {
-  return new Promise((resolve, reject) => {
+  return observationProcess(() => new Promise((resolve, reject) => {
     execFile('git', ['-C', root, 'symbolic-ref', '--short', '-q', 'HEAD'], { encoding: 'utf8', timeout: 5000, maxBuffer: 65536, shell: false, env: gitEnvironment() }, (error, stdout) => {
       const branch = stdout.trimEnd();
       if (!error && branch && !/[\u0000-\u001f]/.test(branch)) return resolve(branch);
       if (error?.code === 1 && !branch) return resolve(null); // -q exits 1 without output when HEAD is not a symbolic ref
       reject(new AppError('GIT_STATE', 'Could not read the checked-out branch.', 409));
     });
-  });
+  }));
 }
 export function sameWorktree(a: WorktreeIdentity | null, b: WorktreeIdentity | null): boolean {
   return !!a && !!b && a.root === b.root && a.gitDir === b.gitDir && a.indexPath === b.indexPath;

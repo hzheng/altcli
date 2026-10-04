@@ -3,6 +3,7 @@ import { basename } from "node:path";
 import type { ProcessRecord } from "../contracts/workflow.ts";
 import type { FinishProcess } from "../contracts/projects.ts";
 import { AppError } from "../core/errors.ts";
+import { observationProcess } from './observation.ts';
 export interface ProcessTableRow { pid: string; ppid: string; tty: string; command: string; args?: string }
 /** One `ps` read of the host process table: pid, parent pid, controlling terminal and executable. */
 function processTable(): Promise<ProcessTableRow[]> {
@@ -58,12 +59,12 @@ function processArguments(): Promise<Map<string, string>> {
 }
 /** The process group in the foreground of the pane's tty: the CLI itself, or the pane shell when nothing runs. Null when the pane process is gone. */
 export function foregroundPid(panePid: string): Promise<string | null> {
-  return new Promise((resolve) => {
+  return observationProcess(() => new Promise((resolve) => {
     execFile("ps", ["-o", "tpgid=", "-p", panePid], { encoding: "utf8", timeout: 5000, shell: false }, (error, stdout) => {
       const pid = stdout.trim();
       resolve(!error && /^\d+$/.test(pid) ? pid : null);
     });
-  });
+  }));
 }
 /** Codex's own helper processes, started lazily by the CLI (code-mode host, the ChatGPT app's computer-use REPL).
  * They are part of Codex, not work it left running. Anything else that appears during a turn is judged as work. */

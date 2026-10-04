@@ -1,7 +1,7 @@
 import { realpathSync } from 'node:fs';
 import { AppError } from '../../core/errors.ts';
 import { join, resolve } from 'node:path';
-import type { GlobalAIInstance } from '../../contracts/global-ai.ts';
+import type { GlobalAIInstance, GlobalAIView } from '../../contracts/global-ai.ts';
 import type { TerminalTarget } from '../../contracts/terminals.ts';
 import type { WorkflowState, WorkspaceDiscovery } from '../../contracts/workflow.ts';
 import { AttentionService } from '../attention/service.ts';
@@ -16,6 +16,7 @@ import { KB } from './kb.generated.ts';
 import { BackgroundService } from '../background/service.ts';
 import { NativeBackgroundHost } from '../background/host.ts';
 import { executeApp, executeCommand } from '../background/action-executor.ts';
+import { ObservedRead } from '../observation.ts';
 
 /** Adds a Git-free, user-operated role and app-wide attention without constructing another controller/store or changing
  * workspace dispatch. */
@@ -23,6 +24,7 @@ export class GlobalControlPlane extends ControlPlane {
   readonly globalAI: GlobalAIService;
   readonly attention: AttentionService;
   readonly background: BackgroundService;
+  private readonly helperObservation = new ObservedRead<GlobalAIView & { fallback: string; capturedAt: string }>(5000);
   constructor(transport: Controller) {
     super(transport);
     // Optional metadata on the existing connection. No new workflow owner or effectful delegation schema.
@@ -38,7 +40,7 @@ export class GlobalControlPlane extends ControlPlane {
       },
     };
     const repoRoot = resolve(process.cwd(), '..');
-    const reads = new AppReads({ kb: KB, state: () => this.state(), workspaces: () => this.workspaces(), run: id => this.workflow.run(id) ?? undefined,
+    const reads = new AppReads({ kb: KB, state: () => this.observedState(), workspaces: () => this.observedWorkspaces(), run: id => this.workflow.run(id) ?? undefined,
       attention: { item: id => this.attention.item(id), open: limit => this.attention.open(limit) }, launch: id => this.launchFacts(id),
       background: () => ({ attention: true, runtime: 'available', enabled: this.background?.settings().enabled ?? false }),
       featureFlags: () => ({ nativeTerminals: this.config.terminalEnabled === true, agentLaunch: this.config.launchEnabled === true,
@@ -75,8 +77,17 @@ export class GlobalControlPlane extends ControlPlane {
       identityRecorded: !!instance.identity };
   }
   /** The host-wide attention feed rides on the state every console page already polls. */
-  override async state(): Promise<WorkflowState> {
-    return { ...await super.state(), attention: this.attention.feed() };
+  override async state(observed = false): Promise<WorkflowState> {
+    return { ...await super.state(observed), attention: this.attention.feed() };
+  }
+  /** Helper's display poll includes native inspection and capture, so it shares the observation budget too. */
+  observedHelper() {
+    return this.helperObservation.read(async () => {
+      const view = await this.globalAI.view();
+      const fallback = view.instance && view.nativeState !== 'unavailable' && view.nativeState !== 'unverified'
+        ? await this.globalAI.services.host.capture(view.instance).catch(() => 'Capture unavailable; inspect the original terminal.') : '';
+      return { ...view, profiles: this.globalAI.launchableProfiles(), fallback, capturedAt: new Date().toISOString() };
+    }, () => `${this.observationRevision()}:${this.globalAI.observationRevision}`);
   }
   /** Global AI's own terminal: no project, run or automated delivery uses it, so typing there holds nothing. */
   override inputExempt(target: TerminalTarget): boolean {

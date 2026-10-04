@@ -46,6 +46,7 @@ import type { ManualPane, ManualReconcile, ManualSession, TerminalOpen, Terminal
 import { parseManualReconcile } from '../core/terminal-validation.ts';
 import { AttachmentService, imageAgent } from './attachments.ts';
 import type { AttachmentDescriptor, InstructionManifest } from '../contracts/attachments.ts';
+import { ObservedRead } from './observation.ts';
 
 /** The writer-guard wording for each way of aligning a task branch with main. */
 const ALIGN_ACTION = { update: 'Update', rebase: 'Rebase', reset: 'Reset' } as const;
@@ -71,6 +72,8 @@ export class ControlPlane {
   private readonly completingHooks = new Map<string, { commandId: string; reporters: Set<string> }>();
   /** Ephemeral identity proposals. Discovery never writes registrations or starts work. */
   private readonly discovered = new Map<string, ManagedSession>();
+  private readonly stateObservation = new ObservedRead<WorkflowState>(2000);
+  private readonly workspaceObservation = new ObservedRead<WorkspaceDiscovery>(5000);
   /** Stored generation replaced by an idle discovery candidate; checked again before an explicit action binds it. */
   private readonly renewalBases = new Map<string, string>();
   /** Read-only worktree digest. Mock mode has no repository, so its digest never changes unless a test supplies one. */
@@ -320,8 +323,12 @@ export class ControlPlane {
       throw new AppError('SETTLEMENT_CHANGED', 'Keyboard settlement changed. Inspect the agents and confirm readiness again.', 409);
     }
   }
-  async state(): Promise<WorkflowState> {
-    const discovery = await this.workspaces();
+  /** Shared display snapshots only. Actions keep calling the uncached inspection methods below. */
+  protected observationRevision = () => `${(this.store.db.prepare('SELECT total_changes() AS n').get() as { n: number }).n}:${this.lifecycleRevision}`;
+  observedState(): Promise<WorkflowState> { return this.stateObservation.read(() => this.state(true), this.observationRevision); }
+  observedWorkspaces(): Promise<WorkspaceDiscovery> { return this.workspaceObservation.read(() => this.workspaces(), this.observationRevision); }
+  async state(observed = false): Promise<WorkflowState> {
+    const discovery = await (observed ? this.observedWorkspaces() : this.workspaces());
     const sessions = this.workspaceSessions(discovery);
     const instances = await Promise.all(sessions.map((s) => this.instance(s)));
     const base = await this.transport.state(sessions);

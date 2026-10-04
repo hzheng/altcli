@@ -17,6 +17,7 @@ import { codexProfileArgs } from '../src/server/global-ai/codex.ts';
 import { claudeProfileArgs } from '../src/server/global-ai/claude.ts';
 import { NativeGlobalHost } from '../src/server/global-ai/host.ts';
 import { loadConfig } from '../src/server/config.ts';
+import { AppError } from '../src/core/errors.ts';
 import { buildKnowledgeBase, DOCUMENTS } from './build-kb.mjs';
 // JS stdio boundary is intentionally dependency-free; it never owns the application store.
 import { createProtocol, connectionFile, main as bridgeMain } from './global-ai-mcp.mjs';
@@ -298,6 +299,15 @@ test('a stale failed view inspection cannot revoke a newly renewed capability', 
   await f.service.refreshTools({ instanceId: view.instance!.id, confirm: true }, 'http://127.0.0.1:8787');
   const token = f.descriptor().token; gate.resolve(); await oldView;
   assert.equal(f.service.authenticate(token).instance.id, view.instance!.id);
+});
+test('a saturated display budget leaves app access granted; a failed inspection still revokes it', async () => {
+  const f = serviceFixture(); const { view } = await f.start(), token = f.descriptor().token;
+  f.host.inspect = async () => { throw new AppError('OBSERVATION_BUSY', 'Host observation is busy. Wait for the next refresh.', 503); };
+  await assert.rejects(f.service.view(), { code: 'OBSERVATION_BUSY' });
+  assert.equal(f.service.authenticate(token).instance.id, view.instance!.id);
+  f.host.inspect = async () => { throw new Error('changed terminal'); };
+  assert.equal((await f.service.view()).nativeState, 'unavailable');
+  assert.throws(() => f.service.authenticate(token), { code: 'APP_ACCESS_REVOKED' });
 });
 
 const attentionItem: AttentionItem = { id: '11111111-1111-4111-8111-111111111111', key: 'run:run-a', kind: 'run', facets: ['completion_gate'],

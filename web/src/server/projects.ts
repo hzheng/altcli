@@ -18,6 +18,7 @@ import type { Store } from './store.ts';
 import { currentBranch, gitEnvironment, resolveWorktree, sameWorktree, worktreeFingerprint } from './worktree.ts';
 import { idOf } from './ids.ts';
 import { pendingSettings } from './upgrade.ts';
+import { observationProcess } from './observation.ts';
 
 const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical)
   : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, canonical(v)])) : value;
@@ -29,8 +30,8 @@ async function exists(path: string): Promise<boolean> {
 }
 /** Bounded Git calls, with no inherited custom index or worktree. Never expose raw stderr (which may contain remote credentials). */
 function git(args: string[]): Promise<string> {
-  return new Promise((done, fail) => execFile('git', ['--no-replace-objects', ...args], { encoding: 'utf8', shell: false, timeout: 60000, maxBuffer: 2 * 1024 * 1024, env: gitEnvironment() },
-    (error, stdout) => error ? fail(new AppError('PROJECT_GIT', 'Git could not complete the project operation. Inspect the host; nothing will be retried automatically.', 409)) : done(stdout)));
+  return observationProcess(() => new Promise((done, fail) => execFile('git', ['--no-replace-objects', ...args], { encoding: 'utf8', shell: false, timeout: 60000, maxBuffer: 2 * 1024 * 1024, env: gitEnvironment() },
+    (error, stdout) => error ? fail(new AppError('PROJECT_GIT', 'Git could not complete the project operation. Inspect the host; nothing will be retried automatically.', 409)) : done(stdout))));
 }
 /** Like `git`, but exit status 1 is an answer (merge-tree reports conflicts that way), not a failure. */
 function gitAnswer(args: string[]): Promise<{ code: number; stdout: string }> {

@@ -91,6 +91,28 @@ captures before setting `ALTCLI_ENABLE_INPUT=true` and restarting the backend.
 After configuration or server-code changes, settle active deliveries before
 restarting; hot reload retains the running controller.
 
+Display polling shares one state read across browsers and app read tools, reused
+for two seconds after it finishes. State and workspace reads share an inventory
+reused for five seconds; Helper's display and capture also share a five-second
+read. Slow reads never overlap another read of the same kind;
+recorded changes and lifecycle events invalidate reuse immediately. Failed
+refreshes replace prior results and also wait before trying again. Display
+timestamps describe the captured evidence, not the time of each HTTP request.
+Git, tmux and process probes for these reads and periodic native-terminal checks
+share a budget: four running children, at least 25 ms between starts (40/second),
+and at most 256 queued probes. Saturation reports unavailable evidence; it never
+closes a native terminal or revokes Helper app access, which a failed inspection
+still does. Large inventories can take longer to refresh. Input, dispatch, setup
+and lifecycle checks still inspect fresh evidence outside this display budget.
+
+This bounds the repeated observation work implicated in the October 3 process
+churn incident. It does not repair an already affected operating system or prove
+the suspected macOS process-identity counter defect. After a settled rollout,
+verify subprocess activity with the intended browser/terminal load before
+returning an affected host to sustained use. `npm --prefix web run test:native`
+includes an isolated Git/tmux/ps load probe; it does not test installed providers
+or recovery of SSH and other system services.
+
 ### Upgrade to store schema 22
 
 Schema 22 adds attention records and Background assistant profiles

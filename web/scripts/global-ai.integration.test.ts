@@ -28,6 +28,15 @@ test('Global AI shares the existing SQLite/controller/terminal authority without
     assert.ok(Object.hasOwn((result.data as { documents: Record<string, string> }).documents, 'docs/GLOBAL-AI.md'));
     assert.equal(JSON.stringify(result).includes(config.token), false);
     assert.equal((await plane.globalAI.view()).instance, null);
+    // Helper's status and fallback capture are one shared display read, even with many browsers.
+    const view = plane.globalAI.view.bind(plane.globalAI), capture = plane.globalAI.services.host.capture.bind(plane.globalAI.services.host);
+    const empty = await view(); let inspections = 0, captures = 0;
+    plane.globalAI.view = async () => { inspections++; return { ...empty, nativeState: 'alive', instance: { id: 'fixture' } as GlobalAIInstance }; };
+    plane.globalAI.services.host.capture = async () => { captures++; return 'fixture output'; };
+    const displays = await Promise.all(Array.from({ length: 100 }, () => plane.observedHelper()));
+    assert.equal(inspections, 1); assert.equal(captures, 1); assert.ok(displays.every(display => display.fallback === 'fixture output'));
+    plane.globalAI.revoke(); await plane.observedHelper(); assert.equal(inspections, 2); assert.equal(captures, 2);
+    plane.globalAI.view = view; plane.globalAI.services.host.capture = capture;
     assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM global_ai_instances').get() && (store.db.prepare('SELECT COUNT(*) AS n FROM global_ai_instances').get() as { n: number }).n, 0);
     // Creating the service never starts a native CLI or another scheduler, even when host flags are enabled.
     const discovery = await plane.workspaces(); assert.ok(discovery.workspaces.length > 0);

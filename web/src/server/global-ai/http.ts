@@ -15,10 +15,7 @@ export async function globalOwner(request: Request): Promise<Response> {
       const plane = controller(), service = plane.globalAI;
       if (!service) throw new GlobalAIError('RESTART_REQUIRED', 'Restart the host to load Helper without replacing the live dispatcher.');
       if (request.method === 'GET') {
-        const view = await service.view();
-        const fallback = view.instance && view.nativeState !== 'unavailable' && view.nativeState !== 'unverified'
-          ? await service.services.host.capture(view.instance).catch(() => 'Capture unavailable; inspect the original terminal.') : '';
-        return { ...view, profiles: service.launchableProfiles(), fallback, capturedAt: new Date().toISOString(), manualHeld: plane.authority.blocked };
+        return { ...await plane.observedHelper(), manualHeld: plane.authority.blocked };
       }
       const value = await jsonBody(request), base = fields(value, ['action', 'profileId', 'id', 'digest', 'requestId', 'confirm', 'instanceId', 'stop', 'name', 'arguments']);
       const { action, ...body } = base;
