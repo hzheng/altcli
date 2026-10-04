@@ -6,6 +6,7 @@ import { dirname, join, isAbsolute } from 'node:path';
 import { AppError } from '../core/errors.ts';
 import type { WorktreeIdentity } from '../contracts/workflow.ts';
 import { observationProcess } from './observation.ts';
+import { spawnPath } from './config.ts';
 
 export const gitEnvironment = (): NodeJS.ProcessEnv => {
   // Retain Next's required NODE_ENV typing as well as the inherited environment.
@@ -17,7 +18,7 @@ export const gitEnvironment = (): NodeJS.ProcessEnv => {
 export async function resolveWorktree(cwd: string): Promise<WorktreeIdentity | null> {
   const directory = await realpath(cwd);
   const output = await observationProcess(() => new Promise<string>((resolve, reject) => {
-    execFile('git', ['-C', directory, 'rev-parse', '--path-format=absolute', '--show-toplevel', '--absolute-git-dir', '--git-path', 'index'],
+    execFile(spawnPath('git'), ['-C', directory, 'rev-parse', '--path-format=absolute', '--show-toplevel', '--absolute-git-dir', '--git-path', 'index'],
       { encoding: 'utf8', timeout: 5000, maxBuffer: 65536, shell: false, env: gitEnvironment() }, (error, stdout, stderr) => {
         if (!error) return resolve(stdout);
         if (/not a git repository|must be run in a work tree/i.test(stderr)) return resolve('');
@@ -38,7 +39,7 @@ export async function resolveWorktree(cwd: string): Promise<WorktreeIdentity | n
 /** The checked-out branch, or null on a detached HEAD. Read-only; an unborn branch still reports its name. */
 export function currentBranch(root: string): Promise<string | null> {
   return observationProcess(() => new Promise((resolve, reject) => {
-    execFile('git', ['-C', root, 'symbolic-ref', '--short', '-q', 'HEAD'], { encoding: 'utf8', timeout: 5000, maxBuffer: 65536, shell: false, env: gitEnvironment() }, (error, stdout) => {
+    execFile(spawnPath('git'), ['-C', root, 'symbolic-ref', '--short', '-q', 'HEAD'], { encoding: 'utf8', timeout: 5000, maxBuffer: 65536, shell: false, env: gitEnvironment() }, (error, stdout) => {
       const branch = stdout.trimEnd();
       if (!error && branch && !/[\u0000-\u001f]/.test(branch)) return resolve(branch);
       if (error?.code === 1 && !branch) return resolve(null); // -q exits 1 without output when HEAD is not a symbolic ref
@@ -54,7 +55,7 @@ const UNREADABLE = () => new AppError('GIT_STATE', 'Could not read the worktree 
 /** Stream a read-only Git command's stdout into the digest; the caller judges the exit status. */
 function gitInto(hash: Hash, root: string, args: string[]): Promise<{ status: number | null; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn('git', ['-C', root, ...args], { env: gitEnvironment(), stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000, shell: false });
+    const child = spawn(spawnPath('git'), ['-C', root, ...args], { env: gitEnvironment(), stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000, shell: false });
     let stderr = '';
     child.stdout.on('data', (chunk: Buffer) => hash.update(chunk));
     child.stderr.on('data', (chunk: Buffer) => { stderr += chunk; });
@@ -64,7 +65,7 @@ function gitInto(hash: Hash, root: string, args: string[]): Promise<{ status: nu
 }
 function untrackedPaths(root: string): Promise<string[]> {
   return new Promise((resolve, reject) => {
-    execFile('git', ['-C', root, 'ls-files', '--others', '--exclude-standard', '-z'], { encoding: 'utf8', timeout: 30000, maxBuffer: 16 * 1024 * 1024, shell: false, env: gitEnvironment() },
+    execFile(spawnPath('git'), ['-C', root, 'ls-files', '--others', '--exclude-standard', '-z'], { encoding: 'utf8', timeout: 30000, maxBuffer: 16 * 1024 * 1024, shell: false, env: gitEnvironment() },
       (error, stdout) => error ? reject(error) : resolve(stdout.split('\0').filter(Boolean)));
   });
 }

@@ -3,12 +3,13 @@ import { lstat, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { AppError } from '../core/errors.ts';
 import { gitEnvironment } from './worktree.ts';
+import { spawnPath } from './config.ts';
 
 /** Attribute inventories can exceed the usual Git output buffer in a large checkout. */
 function inspect(path: string, args: string[], input?: string, allowAbsent = false): Promise<string> {
   return new Promise((resolve, reject) => {
     // Read effective configuration unchanged; the inventory commands themselves never need a filesystem monitor.
-    const child = execFile('git', ['--no-replace-objects', '-C', path, ...(args[0] === 'config' ? [] : ['-c', 'core.fsmonitor=false']), ...args],
+    const child = execFile(spawnPath('git'), ['--no-replace-objects', '-C', path, ...(args[0] === 'config' ? [] : ['-c', 'core.fsmonitor=false']), ...args],
       { encoding: 'utf8', shell: false, timeout: 60000, maxBuffer: 256 * 1024 * 1024, env: gitEnvironment() },
       (error, stdout) => error && !(allowAbsent && error.code === 1)
         ? reject(new AppError('GIT_STATE', 'Git configuration or attributes could not be inspected. Recheck before continuing.', 409)) : resolve(stdout));

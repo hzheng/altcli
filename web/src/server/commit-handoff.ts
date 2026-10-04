@@ -7,11 +7,12 @@ import type { BranchState, GitChange, HandoffArchive, HandoffEntry, HandoffIdent
 import { readBounded } from './bounded-read.ts';
 import { gitEnvironment, worktreeFingerprint } from './worktree.ts';
 import { observationProcess } from './observation.ts';
+import { spawnPath } from './config.ts';
 
 const fail = (message: string): never => { throw new AppError('COMMIT_HANDOFF', message, 409); };
 /** Argument-only Git calls with canonical environment; no repository config or network writes. */
 export function gitRead(root: string, args: string[], allowFailure = false): Promise<string> {
-  return observationProcess(() => new Promise((resolve, reject) => execFile('git', ['--no-replace-objects', '-C', root, ...args],
+  return observationProcess(() => new Promise((resolve, reject) => execFile(spawnPath('git'), ['--no-replace-objects', '-C', root, ...args],
     { encoding: 'utf8', timeout: 10000, maxBuffer: 4 * 1024 * 1024, env: gitEnvironment(), shell: false },
     (error, stdout) => error && !(allowFailure && error.code === 1) ? reject(new AppError('GIT_STATE', `Git inspection failed (${args[0]}). Recheck the checkout.`, 409)) : resolve(stdout))));
 }
@@ -19,7 +20,7 @@ export function gitRead(root: string, args: string[], allowFailure = false): Pro
  * so a large repository's tracked-file count never exceeds a buffer and turns a clean checkout into a failed inspection. */
 function hiddenIndexFlags(root: string): Promise<boolean> {
   return observationProcess(() => new Promise((resolve, reject) => {
-    const child = spawn('git', ['--no-replace-objects', '-C', root, 'ls-files', '-v', '-z'], { env: gitEnvironment(), stdio: ['ignore', 'pipe', 'ignore'] });
+    const child = spawn(spawnPath('git'), ['--no-replace-objects', '-C', root, 'ls-files', '-v', '-z'], { env: gitEnvironment(), stdio: ['ignore', 'pipe', 'ignore'] });
     const timer = setTimeout(() => child.kill(), 10000);
     let hidden = false; let entryStart = true;
     child.stdout.on('data', (chunk: Buffer) => {
@@ -96,7 +97,7 @@ export function stageRelayEligibility(branch: string | null, primary: string | n
 /** False for a commit that does not exist here, so a mistyped user-supplied baseline is refused rather than reported as a Git failure. */
 export async function isAncestor(root: string, ancestor: string, descendant: string): Promise<boolean> {
   if (!(await gitRead(root, ['rev-parse', '--verify', '--quiet', `${ancestor}^{commit}`], true)).trim()) return false;
-  return new Promise((resolve, reject) => execFile('git', ['--no-replace-objects', '-C', root, 'merge-base', '--is-ancestor', ancestor, descendant],
+  return new Promise((resolve, reject) => execFile(spawnPath('git'), ['--no-replace-objects', '-C', root, 'merge-base', '--is-ancestor', ancestor, descendant],
     { encoding: 'utf8', timeout: 10000, maxBuffer: 65536, env: gitEnvironment(), shell: false },
     (error) => !error ? resolve(true) : error.code === 1 ? resolve(false) : reject(new AppError('GIT_STATE', 'Git inspection failed (merge-base). Recheck the checkout.', 409))));
 }
@@ -142,7 +143,7 @@ export async function validateNewBranch(root: string, name: string): Promise<voi
 }
 /** Existing-checkout setup mutation: called once under its persisted owner and scoped consent. Never retried. */
 export async function createConsentedBranch(root: string, name: string, head: string): Promise<void> {
-  await new Promise<void>((resolve, reject) => execFile('git', ['-C', root, '-c', 'core.hooksPath=/dev/null', 'switch', '-c', name, head],
+  await new Promise<void>((resolve, reject) => execFile(spawnPath('git'), ['-C', root, '-c', 'core.hooksPath=/dev/null', 'switch', '-c', name, head],
     { encoding: 'utf8', timeout: 10000, maxBuffer: 65536, env: gitEnvironment(), shell: false },
     (error) => error ? reject(new AppError('BRANCH_UNCERTAIN', 'Branch setup did not return a confirmed result. Inspect the checkout; it will not be retried.', 409)) : resolve()));
 }
@@ -164,7 +165,7 @@ const MAX_RESULT = 64 * 1024;
 const MAX_ARCHIVE = 1024 * 1024;
 /** Raw Git output bounded by `maxBuffer`; null when the output would exceed it. */
 function gitCapture(root: string, args: string[], maxBuffer: number): Promise<Buffer | null> {
-  return new Promise((resolve, reject) => execFile('git', ['--no-replace-objects', '-C', root, ...args],
+  return new Promise((resolve, reject) => execFile(spawnPath('git'), ['--no-replace-objects', '-C', root, ...args],
     { encoding: 'buffer', timeout: 10000, maxBuffer, env: gitEnvironment(), shell: false },
     (error, stdout) => !error ? resolve(stdout) : error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? resolve(null) : reject(new AppError('GIT_STATE', `Git inspection failed (${args[0]}). Recheck the checkout.`, 409))));
 }

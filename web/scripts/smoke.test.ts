@@ -1,16 +1,19 @@
 /** Dependency-free smoke suite. Node >=22.6 with --experimental-strip-types. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import type { ChildProcess } from "node:child_process";
+import { subscribe, unsubscribe } from "node:diagnostics_channel";
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { agentId, label, parseCommand, parseEvent, parsePair, parseRegistration, promptText, singleLine, slugify } from "../src/core/validation.ts";
 import { assertAgentCommand, assertIdentity, sameRequest, suggestAgentType } from "../src/core/policy.ts";
 import { authorize } from "../src/server/auth.ts";
-import { describeConfig, loadConfig, resolveExecutable } from "../src/server/config.ts";
+import { describeConfig, loadConfig, resolveExecutable, spawnPath } from "../src/server/config.ts";
 import { ENTER_SETTLE_MS, inputArgs, inspectPane, listPanes, createRunner, TmuxAdapter } from "../src/server/adapters/tmux.ts";
 import { MockAdapter, mockPanes, mockSessions } from "../src/server/adapters/mock.ts";
+import { terminalRunner } from "../src/server/terminal-environment.ts";
 import { jsonBody } from "../src/server/http.ts";
 import { isWithin } from "../src/server/paths.ts";
 import { hostProcessesForPane, isCodexHelper, processesForPane } from "../src/server/processes.ts";
@@ -289,6 +292,59 @@ test("tmux failures surface tmux's own first stderr line", async () => {
 test("process adapter executes argument arrays without a shell", async () => {
   assert.equal(await createRunner(process.execPath)(["-e", "process.stdout.write('adapter-ok')"]), "adapter-ok");
 });
+test("a host tool resolves to the file native PATH lookup would run, and otherwise is left to that lookup", async () => {
+  const root = await mkdtemp(join(tmpdir(), "altcli-spawn-"));
+  try {
+    const missing = join(root, "missing"), shadow = join(root, "shadow"), plain = join(root, "plain"), loop = join(root, "loop"), bin = join(root, "bin");
+    await mkdir(join(shadow, "tool"), { recursive: true }); // A directory: native lookup gets EACCES and keeps searching.
+    await mkdir(plain); await writeFile(join(plain, "tool"), "", { mode: 0o644 }); // Not executable: EACCES, keeps searching.
+    await mkdir(loop); await symlink(join(loop, "tool"), join(loop, "tool")); // ELOOP: native lookup stops with that error.
+    await mkdir(bin); await symlink(process.execPath, join(bin, "tool"));
+    const path = (...entries: string[]) => ({ PATH: entries.join(delimiter) });
+    const resolved = process.platform === "darwin" ? join(bin, "tool") : "tool";
+    assert.equal(spawnPath("tool", path(missing, shadow, plain, bin)), resolved);
+    assert.equal(spawnPath("tool", path(bin, "", "relative")), resolved);
+    for (const env of [path("", bin), path(missing, "relative", bin), path(loop, bin), path(missing), {}]) assert.equal(spawnPath("tool", env), "tool");
+    for (const name of ["./tool", join(missing, "tool")]) assert.equal(spawnPath(name, path(bin)), name);
+    // Outside macOS a single forked child's execvp searches PATH, so the name always stays with it.
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    try { Object.defineProperty(process, "platform", { value: "linux" }); assert.equal(spawnPath("tool", path(bin)), "tool"); }
+    finally { Object.defineProperty(process, "platform", platform); }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+test("on macOS tmux runners hand Node the resolved file, so libuv performs no PATH search", async () => {
+  const root = await mkdtemp(join(tmpdir(), "altcli-spawn-")); const saved = process.env.PATH; const marker = `spawn-${process.pid}-${Date.now()}`;
+  const spawned: ChildProcess[] = []; const observe = (message: unknown) => { spawned.push((message as { process: ChildProcess }).process); };
+  const files = () => spawned.filter((child) => child.spawnargs.includes(marker)).map((child) => child.spawnfile);
+  subscribe("child_process", observe);
+  try {
+    await symlink(process.execPath, join(root, "tmux"));
+    const args = ["-e", "process.stdout.write('tmux-ok\\n')", marker];
+    process.env.PATH = [join(root, "missing"), root].join(delimiter);
+    assert.equal(await createRunner("tmux")(args), "tmux-ok\n");
+    assert.equal(await terminalRunner({ tmuxBin: "tmux" })(args), "tmux-ok\n");
+    assert.deepEqual(files(), Array(2).fill(process.platform === "darwin" ? join(root, "tmux") : "tmux"));
+    // An empty entry searches the current directory first; that lookup stays native and still finds the same tool.
+    spawned.length = 0; process.env.PATH = ["", root].join(delimiter);
+    assert.equal(await createRunner("tmux")(args), "tmux-ok\n");
+    assert.deepEqual(files(), ["tmux"]);
+  } finally { unsubscribe("child_process", observe); process.env.PATH = saved; await rm(root, { recursive: true, force: true }); }
+});
+test("tmux runners preserve script precedence and PATH fallback when an interpreter is missing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "altcli-spawn-")); const saved = process.env.PATH;
+  try {
+    const stale = join(root, "stale"), working = join(root, "working");
+    await mkdir(stale); await mkdir(working);
+    await writeFile(join(stale, "tmux"), "#!/bin/sh\necho first-ok\n", { mode: 0o755 });
+    await writeFile(join(working, "tmux"), "#!/bin/sh\necho fallback-ok\n", { mode: 0o755 });
+    process.env.PATH = [stale, working].join(delimiter);
+    assert.equal(await createRunner("tmux")(["-V"]), "first-ok\n");
+    assert.equal(await terminalRunner({ tmuxBin: "tmux" })(["-V"]), "first-ok\n");
+    await writeFile(join(stale, "tmux"), `#!${root}/missing-interpreter\n`);
+    assert.equal(await createRunner("tmux")(["-V"]), "fallback-ok\n");
+    assert.equal(await terminalRunner({ tmuxBin: "tmux" })(["-V"]), "fallback-ok\n");
+  } finally { if (saved === undefined) delete process.env.PATH; else process.env.PATH = saved; await rm(root, { recursive: true, force: true }); }
+});
 test("pane preview is a bounded capture with a validated pane id and no identity check", async () => {
   const calls: string[][] = [];
   await new TmuxAdapter(async (args) => { calls.push(args); return "screen"; }).peek("%7");
@@ -413,6 +469,8 @@ test("the host configuration description resolves the tmux binary, names the var
   assert.equal(resolveExecutable("no-such-binary-for-altcli", { PATH: dirname(process.execPath) }), null);
   assert.equal(resolveExecutable("node", { PATH: dirname(process.execPath) }), join(dirname(process.execPath), "node"));
   assert.equal(resolveExecutable("/no/such/tmux", env), null);
+  assert.equal(spawnPath("node", { PATH: dirname(process.execPath) }), process.platform === "darwin" ? join(dirname(process.execPath), "node") : "node");
+  assert.equal(spawnPath("no-such-binary-for-altcli", { PATH: dirname(process.execPath) }), "no-such-binary-for-altcli");
 });
 
 test('key-only transport has a closed enum, checks modes and sends Escape without a following Enter', async () => {

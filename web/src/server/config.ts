@@ -1,4 +1,4 @@
-import { accessSync, constants } from "node:fs";
+import { accessSync, closeSync, constants, openSync, readSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, isAbsolute, join, resolve } from "node:path";
 import type { AdapterMode, HostConfig } from "../contracts/api.ts";
@@ -64,6 +64,32 @@ export function resolveExecutable(binary: string, env: Record<string, string | u
   const candidates = isAbsolute(binary) || binary.includes("/") ? [resolve(binary)] : (env.PATH ?? "").split(delimiter).filter(Boolean).map((dir) => join(dir, binary));
   for (const candidate of candidates) { try { accessSync(candidate, constants.X_OK); return candidate; } catch { /* keep looking */ } }
   return null;
+}
+/** What to spawn for a host tool. For a bare name, libuv on macOS creates a process for each PATH directory it tries
+ * before the match; the matched file costs one. Elsewhere libuv forks once and execvp searches PATH, where an ELF binary
+ * with a missing loader also fails with ENOENT and is skipped, so the name is always left to that lookup.
+ * `env` is the child's environment, whose PATH native lookup searches.
+ * Resolves native executables when each earlier entry is absolute and its candidate is
+ * missing (ENOENT, ENOTDIR) or refuses execution (EACCES, a directory or a non-executable file), which native lookup skips.
+ * A name with a slash, an unset PATH, an empty (current directory) or relative entry, or any other error is left to native lookup.
+ * Shebang scripts also keep native lookup: an executable script with a missing interpreter can be skipped during execution. */
+export function spawnPath(binary: string, env: Record<string, string | undefined> = process.env): string {
+  if (process.platform !== "darwin" || binary.includes("/") || env.PATH === undefined) return binary;
+  for (const directory of env.PATH.split(delimiter)) {
+    if (!isAbsolute(directory)) return binary;
+    const candidate = `${directory}/${binary}`; // Literal like native lookup: join() would fold ".." across a symlink.
+    try { if (!statSync(candidate).isFile()) continue; accessSync(candidate, constants.X_OK); }
+    catch (error) { if (["ENOENT", "ENOTDIR", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")) continue; return binary; }
+    try {
+      const fd = openSync(candidate, constants.O_RDONLY | constants.O_NONBLOCK);
+      try {
+        const header = Buffer.alloc(2);
+        if (readSync(fd, header, 0, header.length, 0) !== header.length || header.toString() === "#!") return binary;
+        return candidate;
+      } finally { closeSync(fd); }
+    } catch { return binary; } // An unreadable header cannot establish whether native lookup needs to fall through.
+  }
+  return binary;
 }
 /** The effective configuration for display. The token never leaves the server. */
 export function describeConfig(config: Config, env: Record<string, string | undefined> = process.env): HostConfig {

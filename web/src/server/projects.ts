@@ -13,7 +13,7 @@ import { parseDiscard, parseDiscardFinish, parseDiscardPreview, parseIntegrate, 
 import { defaultSquashMessage } from '../core/squash-message.ts';
 import { branchState, defaultBranch, integrationNames, validateNewBranch } from './commit-handoff.ts';
 import { assertGitInspection, gitListing, hasSubmodules } from './git-inspection.ts';
-import type { Config } from './config.ts';
+import { spawnPath, type Config } from './config.ts';
 import type { Store } from './store.ts';
 import { currentBranch, gitEnvironment, resolveWorktree, sameWorktree, worktreeFingerprint } from './worktree.ts';
 import { idOf } from './ids.ts';
@@ -30,18 +30,18 @@ async function exists(path: string): Promise<boolean> {
 }
 /** Bounded Git calls, with no inherited custom index or worktree. Never expose raw stderr (which may contain remote credentials). */
 function git(args: string[]): Promise<string> {
-  return observationProcess(() => new Promise((done, fail) => execFile('git', ['--no-replace-objects', ...args], { encoding: 'utf8', shell: false, timeout: 60000, maxBuffer: 2 * 1024 * 1024, env: gitEnvironment() },
+  return observationProcess(() => new Promise((done, fail) => execFile(spawnPath('git'), ['--no-replace-objects', ...args], { encoding: 'utf8', shell: false, timeout: 60000, maxBuffer: 2 * 1024 * 1024, env: gitEnvironment() },
     (error, stdout) => error ? fail(new AppError('PROJECT_GIT', 'Git could not complete the project operation. Inspect the host; nothing will be retried automatically.', 409)) : done(stdout))));
 }
 /** Like `git`, but exit status 1 is an answer (merge-tree reports conflicts that way), not a failure. */
 function gitAnswer(args: string[]): Promise<{ code: number; stdout: string }> {
-  return new Promise((done, fail) => execFile('git', ['--no-replace-objects', ...args], { encoding: 'utf8', shell: false, timeout: 60000, maxBuffer: 2 * 1024 * 1024, env: gitEnvironment() },
+  return new Promise((done, fail) => execFile(spawnPath('git'), ['--no-replace-objects', ...args], { encoding: 'utf8', shell: false, timeout: 60000, maxBuffer: 2 * 1024 * 1024, env: gitEnvironment() },
     (error, stdout) => !error ? done({ code: 0, stdout }) : error.code === 1 ? done({ code: 1, stdout }) : fail(new AppError('PROJECT_GIT', 'Git could not complete the project operation. Inspect the host; nothing will be retried automatically.', 409))));
 }
 /** Git with standard input and environment overrides: replayed commits and create-only ref transactions. */
 function gitWith(args: string[], options: { input?: string; env?: Record<string, string> } = {}): Promise<string> {
   return new Promise((done, fail) => {
-    const child = execFile('git', ['--no-replace-objects', ...args], { encoding: 'utf8', shell: false, timeout: 60000, maxBuffer: 2 * 1024 * 1024, env: { ...gitEnvironment(), ...options.env } },
+    const child = execFile(spawnPath('git'), ['--no-replace-objects', ...args], { encoding: 'utf8', shell: false, timeout: 60000, maxBuffer: 2 * 1024 * 1024, env: { ...gitEnvironment(), ...options.env } },
       (error, stdout) => error ? fail(new AppError('PROJECT_GIT', 'Git could not complete the project operation. Inspect the host; nothing will be retried automatically.', 409)) : done(stdout));
     child.stdin?.on('error', () => {}); // execFile reports an early exit.
     child.stdin?.end(options.input);
@@ -82,8 +82,8 @@ const treeDiff = (from: string, to: string) => ['diff', '--binary', '--full-inde
  * Both children are awaited; no shell, temporary index, branch movement or background mutation is involved. */
 async function stageIntegrationTree(path: string, from: string, to: string): Promise<void> {
   const options = { shell: false as const, timeout: 60000, env: gitEnvironment() };
-  const diff = spawn('git', ['--no-replace-objects', '-C', path, ...treeDiff(from, to)], { ...options, stdio: ['ignore', 'pipe', 'ignore'] });
-  const apply = spawn('git', ['--no-replace-objects', '-C', path, 'apply', '--index', '--binary', '--whitespace=nowarn'], { ...options, stdio: ['pipe', 'ignore', 'ignore'] });
+  const diff = spawn(spawnPath('git'), ['--no-replace-objects', '-C', path, ...treeDiff(from, to)], { ...options, stdio: ['ignore', 'pipe', 'ignore'] });
+  const apply = spawn(spawnPath('git'), ['--no-replace-objects', '-C', path, 'apply', '--index', '--binary', '--whitespace=nowarn'], { ...options, stdio: ['pipe', 'ignore', 'ignore'] });
   apply.stdin.on('error', () => { diff.kill(); });
   diff.stdout.pipe(apply.stdin);
   const outcomes = await Promise.all([diff, apply].map((child) => new Promise<boolean>((resolve) => {

@@ -4,11 +4,12 @@ import type { ProcessRecord } from "../contracts/workflow.ts";
 import type { FinishProcess } from "../contracts/projects.ts";
 import { AppError } from "../core/errors.ts";
 import { observationProcess } from './observation.ts';
+import { spawnPath } from './config.ts';
 export interface ProcessTableRow { pid: string; ppid: string; tty: string; command: string; args?: string }
 /** One `ps` read of the host process table: pid, parent pid, controlling terminal and executable. */
 function processTable(): Promise<ProcessTableRow[]> {
   return new Promise((resolve, reject) => {
-    const probe = execFile("ps", ["-axo", "pid=,ppid=,tty=,comm="], { encoding: "utf8", timeout: 5000, maxBuffer: 4 * 1024 * 1024, shell: false }, (error, stdout) => {
+    const probe = execFile(spawnPath("ps"), ["-axo", "pid=,ppid=,tty=,comm="], { encoding: "utf8", timeout: 5000, maxBuffer: 4 * 1024 * 1024, shell: false }, (error, stdout) => {
       if (error) return reject(new AppError("PS_FAILED", "Could not read the host process table.", 409));
       resolve(stdout.split("\n").flatMap((line) => {
         const match = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.*\S)\s*$/.exec(line);
@@ -49,7 +50,7 @@ export async function hostPaneProcesses(rootPid: string): Promise<HostPaneEviden
 /** Arguments are used transiently to identify CLI infrastructure, never returned or persisted. */
 function processArguments(): Promise<Map<string, string>> {
   return new Promise((resolve, reject) => {
-    execFile('ps', ['-axo', 'pid=,args='], { encoding: 'utf8', timeout: 5000, maxBuffer: 8 * 1024 * 1024, shell: false }, (error, stdout) => {
+    execFile(spawnPath('ps'), ['-axo', 'pid=,args='], { encoding: 'utf8', timeout: 5000, maxBuffer: 8 * 1024 * 1024, shell: false }, (error, stdout) => {
       if (error) return reject(new AppError('PS_FAILED', 'Could not identify CLI infrastructure.', 409));
       resolve(new Map(stdout.split('\n').flatMap((line) => {
         const match = /^\s*(\d+)\s+(.*)$/.exec(line); return match ? [[match[1]!, match[2]!]] : [];
@@ -60,7 +61,7 @@ function processArguments(): Promise<Map<string, string>> {
 /** The process group in the foreground of the pane's tty: the CLI itself, or the pane shell when nothing runs. Null when the pane process is gone. */
 export function foregroundPid(panePid: string): Promise<string | null> {
   return observationProcess(() => new Promise((resolve) => {
-    execFile("ps", ["-o", "tpgid=", "-p", panePid], { encoding: "utf8", timeout: 5000, shell: false }, (error, stdout) => {
+    execFile(spawnPath("ps"), ["-o", "tpgid=", "-p", panePid], { encoding: "utf8", timeout: 5000, shell: false }, (error, stdout) => {
       const pid = stdout.trim();
       resolve(!error && /^\d+$/.test(pid) ? pid : null);
     });
@@ -116,7 +117,7 @@ function paneMembers(rows: ProcessTableRow[], rootPid: string): Set<string> | nu
 /** Start time of every live PID (ps `lstart`), so a reused PID is never mistaken for a process seen earlier. Null when ps fails. */
 export function processStarts(): Promise<Map<string, string> | null> {
   return new Promise((resolve) => {
-    execFile("ps", ["-axo", "pid=,lstart="], { encoding: "utf8", timeout: 5000, maxBuffer: 4 * 1024 * 1024, shell: false }, (error, stdout) => {
+    execFile(spawnPath("ps"), ["-axo", "pid=,lstart="], { encoding: "utf8", timeout: 5000, maxBuffer: 4 * 1024 * 1024, shell: false }, (error, stdout) => {
       if (error) return resolve(null);
       resolve(new Map(stdout.split("\n").flatMap((line) => { const match = /^\s*(\d+)\s+(\S.*\S)\s*$/.exec(line); return match ? [[match[1]!, match[2]!] as const] : []; })));
     });

@@ -11,11 +11,12 @@ import type { ProcessRecord } from "../../contracts/workflow.ts";
 import type { ListedPane, TerminalAdapter } from "./terminal.ts";
 import { foregroundPid, hostPaneProcesses, paneProcesses } from "../processes.ts";
 import { observationProcess } from '../observation.ts';
+import { spawnPath } from '../config.ts';
 /** `input`, when given, is written to tmux's stdin (only `load-buffer -` reads it). */
 export type Runner = (args: string[], input?: string) => Promise<string>;
 export function createRunner(binary = "tmux", socket?: string): Runner {
   return (args, input) => observationProcess(() => new Promise((resolve, reject) => {
-    const child = execFile(binary, [...(socket ? ["-S", socket] : []), ...args],
+    const child = execFile(spawnPath(binary), [...(socket ? ["-S", socket] : []), ...args],
       { encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024, shell: false },
       (error, stdout, stderr) => {
         if (!error) return resolve(stdout);
