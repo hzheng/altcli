@@ -9,7 +9,7 @@ import { NativeGlobalHost, privateDirectory, privateFile, type NativeAppInstance
 import { GlobalAIError } from '../global-ai/reads.ts';
 import { backgroundProfileArgs } from '../global-ai/service.ts';
 import { resolveWorktree } from '../worktree.ts';
-import { VERIFIED_CLAUDE_VERSION } from '../../../scripts/background-native.mjs';
+import { VERIFIED_CLAUDE_VERSIONS } from '../../../scripts/background-native.mjs';
 
 export class NativeBackgroundHost extends NativeGlobalHost {
   protected override readonly marker = '@altcli_background';
@@ -21,9 +21,10 @@ export class NativeBackgroundHost extends NativeGlobalHost {
   async version(executable: string): Promise<string> {
     return new Promise((resolve, reject) => {
       execFile(executable, ['--version'], { env: this.environment() as NodeJS.ProcessEnv, timeout: 5000, maxBuffer: 4096 }, (error, stdout) => {
-        // This adapter's native probe is against this exact CLI release; upgrades need a new probe, not hopeful flag compatibility.
+        // Each accepted CLI release needs a native probe; an upgrade alone does not establish flag compatibility.
         const version = stdout.trim();
-        if (error || version !== VERIFIED_CLAUDE_VERSION) reject(new GlobalAIError('ADAPTER_VERSION', `Background requires the verified ${VERIFIED_CLAUDE_VERSION} adapter. Other versions need a native capability probe.`));
+        const observed = !error && /^\d+\.\d+\.\d+ \(Claude Code\)$/.test(version) ? `Detected ${version}.` : 'Could not verify the Claude Code version.';
+        if (error || !VERIFIED_CLAUDE_VERSIONS.includes(version)) reject(new GlobalAIError('ADAPTER_VERSION', `${observed} Background supports ${VERIFIED_CLAUDE_VERSIONS.join(' or ')}. Other versions need a native capability probe.`));
         else resolve(version);
       });
     });

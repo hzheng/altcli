@@ -12,8 +12,8 @@ Implemented locally on October 2, 2026, from the endorsed Plan of run `aec693b1`
 - owner-confirmed or explicitly delegated app actions and host commands, with a durable **Log** (schema 24).
 
 The runtime is implemented locally. Background is disabled by default; saving profiles and browsing never starts it. The installed
-Claude Code 2.1.288 probe passed using synthetic issue evidence, scoped MCP reads, validated structured output and verified process-group
-exit. The same real-tmux pipeline also passed with the installed provider; its restart and cancellation cases use a fixture provider. Neither is physical-device or production-data acceptance.
+Claude Code 2.1.288 probe, and on October 3, 2026 the 2.1.289 probe, passed using synthetic issue evidence, scoped MCP reads, validated
+structured output and verified process-group exit. The same real-tmux pipeline also passed with the installed provider; its restart and cancellation cases use a fixture provider. Neither is physical-device or production-data acceptance.
 
 ## The Agents tab
 
@@ -151,7 +151,9 @@ session and refuses extra panes or unresolved attempts. A changed profile requir
 Closing or locking a browser leaves enabled work running. Host shutdown/restart revokes capabilities, keeps unfinished work uncertain, and
 requires Inspect and Resume. It never creates a replacement session automatically.
 
-The adapter is verified against Claude Code **2.1.288**. It disables built-in tools, inherited settings and hooks, skills, automatic memory,
+The adapter accepts the verified Claude Code releases **2.1.288** and **2.1.289**. Preview reports the detected and supported versions
+when a CLI update is not yet supported; other versions require a native capability probe before enablement.
+It disables built-in tools, inherited settings and hooks, skills, automatic memory,
 connectors and the bundled instruction/authoring plugins; only the scoped MCP server and structured-output tool are accepted at initialization.
 It removes owner and tmux correlation variables from the child environment. Unexpected tools, plugins or hook events fail the invocation.
 This is a cooperative same-user CLI boundary, not an OS sandbox. Managed policy can prevent it from operating; it does not bypass that policy.
@@ -219,5 +221,5 @@ authentication; the model never receives that credential. Claims, decisions and 
 Action tests include a real temporary-file write, cancellation and surviving process groups; real owner HTTP, grant replay/forgery,
 source/policy revocation, queued work, restart, paging, and delegated Plan authority. Browser tests exercise Log confirmation and concurrent
 permission changes on desktop and iPhone Chromium viewports. `npm run probe:background:actions` is an opt-in installed-Claude probe:
-Claude Code 2.1.288 / Haiku proposed one synthetic file write; it remained pending until the fixture owner confirmed, then executed once
+Claude Code 2.1.288 / Haiku, and on October 3, 2026 2.1.289 / Haiku, each proposed one synthetic file write; it remained pending until the fixture owner confirmed, then executed once
 and produced SQLite audit records. This is synthetic local acceptance, not production-data or physical-device acceptance.

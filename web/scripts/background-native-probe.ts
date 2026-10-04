@@ -6,7 +6,7 @@ import { createServer } from 'node:http';
 import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { claudeJobArgs, invokeClaude, VERIFIED_CLAUDE_VERSION } from './background-native.mjs';
+import { claudeJobArgs, invokeClaude, VERIFIED_CLAUDE_VERSIONS } from './background-native.mjs';
 import { ASSESSMENT_SCHEMA, validateAssessment } from '../src/server/attention/assessment.ts';
 
 const directory = await realpath(await mkdtemp(join(tmpdir(), 'altcli-background-probe-')));
@@ -32,7 +32,7 @@ try {
   const descriptor = join(directory, 'job.json');
   await writeFile(descriptor, JSON.stringify({ schema: 1, endpoint: `http://127.0.0.1:${address.port}/api/v1/background/tools`, token }), { mode: 0o600 });
   const version = execFileSync('claude', ['--version'], { encoding: 'utf8' }).trim();
-  assert.equal(version, VERIFIED_CLAUDE_VERSION);
+  assert.ok(VERIFIED_CLAUDE_VERSIONS.includes(version), version);
   const result = await invokeClaude({ executable: 'claude', directory, sessionId, deadlineMs: 120000,
     onInit: event => console.log(JSON.stringify({ initialization: event })),
     args: claudeJobArgs(['--model', 'haiku', '--effort', 'low'], sessionId, ASSESSMENT_SCHEMA, resolve('scripts/global-ai-mcp.mjs'), descriptor),

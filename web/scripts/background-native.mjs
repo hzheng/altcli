@@ -1,6 +1,6 @@
 // The trusted runner's native invocation boundary. No shell, terminal scraping, or reusable provider conversation.
 import { spawn } from 'node:child_process';
-export const VERIFIED_CLAUDE_VERSION = '2.1.288 (Claude Code)';
+export const VERIFIED_CLAUDE_VERSIONS = ['2.1.288 (Claude Code)', '2.1.289 (Claude Code)'];
 
 export function claudeJobArgs(profileArgs, sessionId, schema, bridge, descriptor) {
   return [...profileArgs, '--print', '--output-format', 'stream-json', '--verbose', '--include-hook-events',

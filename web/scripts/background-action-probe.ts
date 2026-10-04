@@ -10,7 +10,7 @@ import { Store } from '../src/server/store.ts';
 import { BackgroundActions, ACTION_TOOLS, operation } from '../src/server/background/actions.ts';
 import { executeCommand } from '../src/server/background/action-executor.ts';
 import { hash } from '../src/server/global-ai/reads.ts';
-import { claudeJobArgs, invokeClaude, VERIFIED_CLAUDE_VERSION } from './background-native.mjs';
+import { claudeJobArgs, invokeClaude, VERIFIED_CLAUDE_VERSIONS } from './background-native.mjs';
 import { ASSESSMENT_SCHEMA, validateAssessment } from '../src/server/attention/assessment.ts';
 import type { BackgroundAttempt, BackgroundSettings } from '../src/contracts/background.ts';
 import type { AttentionItem } from '../src/contracts/attention.ts';
@@ -52,7 +52,7 @@ try {
   await new Promise<void>(r => server.listen(0, '127.0.0.1', r)); const address = server.address(); assert.ok(address && typeof address !== 'string');
   const descriptor = join(directory, 'job.json');
   await writeFile(descriptor, JSON.stringify({ schema: 1, endpoint: `http://127.0.0.1:${address.port}/api/v1/background/tools`, token }), { mode: 0o600 });
-  const version = execFileSync('claude', ['--version'], { encoding: 'utf8' }).trim(); assert.equal(version, VERIFIED_CLAUDE_VERSION);
+  const version = execFileSync('claude', ['--version'], { encoding: 'utf8' }).trim(); assert.ok(VERIFIED_CLAUDE_VERSIONS.includes(version), version);
   const result = await invokeClaude({ executable: 'claude', directory, sessionId, deadlineMs: 120000,
     args: claudeJobArgs(['--model', 'haiku', '--effort', 'low'], sessionId, ASSESSMENT_SCHEMA, resolve('scripts/global-ai-mcp.mjs'), descriptor),
     prompt: `This is a disposable Background action probe. Read get_attention_item for ${itemId}, then get_action_permissions. Use request_action exactly once to propose this exact operation: ${JSON.stringify(expected)}. Use requestKey "probe-write" and a brief reason. It must stay pending for owner approval. Do not try to approve it or claim it executed. Finish now with a structured assessment for itemId ${itemId}, itemRevision 1, surface control_access, citing evidenceId actually returned by tools and explaining that confirmation is pending.` });

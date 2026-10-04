@@ -16,9 +16,9 @@ export async function backgroundOwner(request: Request): Promise<Response> {
       if (!service) throw new GlobalAIError('RESTART_REQUIRED', 'Restart the settled host to load Background.');
       if (request.method === 'GET') return service.view();
       const { action, ...body } = fields(await jsonBody(request), ['action', 'profileId', 'id', 'digest', 'requestId', 'confirm', 'instanceId', 'attemptId']);
-      if (action === 'preview') return service.preview(body, origin());
-      if (action === 'enable') return service.enable(body);
-      return service.control({ action, ...body }, origin());
+      if (action === 'preview') return await service.preview(body, origin());
+      if (action === 'enable') return await service.enable(body);
+      return await service.control({ action, ...body }, origin());
     } catch (error) {
       if (error instanceof GlobalAIError) throw new AppError(error.code, error.message, error.status);
       throw error;

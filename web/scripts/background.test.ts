@@ -10,7 +10,7 @@ import { BackgroundService, type BackgroundServices } from '../src/server/backgr
 import { AppReads } from '../src/server/global-ai/reads.ts';
 import type { AttentionItem } from '../src/contracts/attention.ts';
 import type { LaunchProfile } from '../src/contracts/launches.ts';
-import { VERIFIED_CLAUDE_VERSION } from './background-native.mjs';
+import { VERIFIED_CLAUDE_VERSIONS } from './background-native.mjs';
 import { settlementBlockers } from '../src/server/upgrade.ts';
 
 const cleanups: (() => void)[] = [];
@@ -32,7 +32,7 @@ function fixture() {
   const reads = new AppReads({ attention, kb: { documents: [] }, featureFlags: () => ({}), launch: () => undefined, run: () => undefined,
     state: async () => { throw new Error('Unexpected state read.'); }, workspaces: async () => { throw new Error('Unexpected workspace read.'); } });
   const host: BackgroundServices['host'] = {
-    bridge: '/installed/bridge.mjs', executable: async () => '/bin/claude', version: async () => VERIFIED_CLAUDE_VERSION,
+    bridge: '/installed/bridge.mjs', executable: async () => '/bin/claude', version: async () => VERIFIED_CLAUDE_VERSIONS[0]!,
     environmentHash: () => 'env', args: p => p.args,
     prepare: async (_i, d) => { runnerToken = d.token; }, descriptor: async (_i, d) => { runnerToken = d.token; },
     jobDescriptor: async (_i, _id, d) => { jobToken = d.token; return '/private/job.json'; },

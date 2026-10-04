@@ -16,7 +16,7 @@ import { BackgroundService, type BackgroundServices } from '../src/server/backgr
 import { NativeBackgroundHost } from '../src/server/background/host.ts';
 import type { AttentionItem } from '../src/contracts/attention.ts';
 import type { LaunchProfile } from '../src/contracts/launches.ts';
-import { VERIFIED_CLAUDE_VERSION } from './background-native.mjs';
+import { VERIFIED_CLAUDE_VERSIONS } from './background-native.mjs';
 
 let tmux = true; try { execFileSync('tmux', ['-V'], { stdio: 'ignore' }); } catch { tmux = false; }
 async function eventually(check: () => boolean | Promise<boolean>) {
@@ -31,7 +31,7 @@ test(process.env.ALTCLI_BACKGROUND_REAL === '1' ? 'installed Claude in a recorde
   const run = terminalRunner(config), binary = join(directory, 'claude');
   await writeFile(binary, `#!${process.execPath}
 const {readFileSync}=require('node:fs');
-if(process.argv.includes('--version')){console.log(${JSON.stringify(VERIFIED_CLAUDE_VERSION)});process.exit(0)}
+if(process.argv.includes('--version')){console.log(${JSON.stringify(VERIFIED_CLAUDE_VERSIONS[0])});process.exit(0)}
 const args=process.argv.slice(2), sid=args[args.indexOf('--session-id')+1];
 const mcp=JSON.parse(args[args.indexOf('--mcp-config')+1]).mcpServers.altcli_job;
 const d=JSON.parse(readFileSync(mcp.args[1],'utf8'));
