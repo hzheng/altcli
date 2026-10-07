@@ -1283,7 +1283,9 @@ export class ControlPlane {
     finally { this.lifecycleRevision++; this.lifecycleObservations--; }
   }
   private async recordObservedEvent(input: HookEvent): Promise<HookReceipt> {
-    const observed = [...this.store.sessions() as ManagedSession[], ...this.discovered.values()].find((s) => s.identity.socketPath === input.socketPath && s.identity.paneId === input.paneId);
+    const panes = [...this.store.sessions() as ManagedSession[], ...this.discovered.values()].filter((s) => s.identity.socketPath === input.socketPath && s.identity.paneId === input.paneId);
+    // A restarted tmux server reuses pane numbers; a retired launch's registration must not observe its successor.
+    const observed = panes.find((s) => s.identity.serverPid === input.identity?.serverPid && s.identity.serverStarted === input.identity?.serverStarted) ?? panes[0];
     const key = observed?.worktree?.indexPath ?? null;
     const native = this.scopedNative.get(key) ?? { revision: 0, active: 0 }; this.scopedNative.set(key, native);
     native.revision++; native.active++;

@@ -20,6 +20,7 @@ import type { SessionRegistration } from '../src/contracts/api.ts';
 import { consumePlan, newPlanning, planAgreed } from '../src/server/planning-state.ts';
 import { parsePlan, parsePlanDecision } from '../src/core/planning-validation.ts';
 import type { Group } from '../src/contracts/implementation.ts';
+import type { LaunchBatch } from '../src/contracts/launches.ts';
 import type { PlanDecision, PlanResult, PlanStart, PlanningAssignment } from '../src/contracts/planning.ts';
 import type { HookEvent, ManagedSession } from '../src/contracts/workflow.ts';
 import { png, upload } from './lib/images.ts';
@@ -253,6 +254,39 @@ test('Plan binds discovered solo identity at Start and keeps the frozen binding 
   await plane.decidePlan(decision(input.requestId));
   assert.equal(run(input.requestId).implementation!.policy, 'solo');
   assert.equal(run(input.requestId).participants[0]!.registrationId, member.registrationId);
+});
+for (const field of ['serverPid', 'serverStarted'] as const) test(`Plan can bind a recreated launch reusing a retired pane number with a different ${field}`, async () => {
+  const template = request(); plane.removeGroup(group.id);
+  const historical = store.sessions() as ManagedSession[];
+  const batch: LaunchBatch = { requestId: randomUUID(), previewDigest: 'fixture', createdAt: historical[0]!.registeredAt,
+    items: historical.map(session => ({ id: randomUUID(), projectId: 'fixture', worktreeId: 'fixture', worktree: session.worktree!,
+      commonDir: session.worktree!.gitDir, branch: template.baseline.branch, head: template.baseline.head,
+      profile: { id: randomUUID(), revision: 1, label: session.label, executable: session.expectedCommand, args: [], adapterHint: session.agentType === 'codex' ? 'codex' : 'claude', enabled: true },
+      executable: session.expectedCommand, sessionName: session.label, environmentDigest: 'fixture', status: 'running', phase: 'observed',
+      message: 'Retired by confirmed recreation.', identity: session.identity, placeholder: null, sessionId: '$1', windowId: '@1',
+      updatedAt: session.registeredAt, closed: { recoveryId: randomUUID(), at: session.registeredAt } })) };
+  store.db.prepare('INSERT INTO launches(id,value) VALUES(?,?)').run(batch.requestId, JSON.stringify(batch));
+  const inspect = adapter.inspect.bind(adapter);
+  adapter.inspect = async id => { const pane = await inspect(id); return { ...pane, identity: { ...pane.identity, [field]: '999' } }; };
+  const list = adapter.listPanes.bind(adapter); adapter.listPanes = async () => (await list()).filter(pane => pane.identity.paneId === '%0');
+  adapter.foreground = async () => '500';
+  const view = await plane.state(), solo = view.groups[0]!, member = view.sessions[0]!;
+  assert.deepEqual(store.sessions(), historical, 'discovery keeps historical registrations unchanged');
+  assert.equal(member.identity.paneId, historical[0]!.identity.paneId);
+  assert.notEqual(member.id, historical[0]!.id);
+  const selection = { groupId: solo.id, groupRevision: solo.revision, registrations: { [member.id]: member.registrationId } };
+  const input = parsePlan({ ...template, ...selection, implementation: { ...template.implementation, ...selection, agentId: member.id, policy: 'solo', handoff: false } });
+  assert.equal((await plane.submitPlan(input)).status, 'delivered');
+  assert.equal(sent.length, 1);
+  assert.deepEqual(store.sessions().filter(session => historical.some(old => old.id === session.id)), historical);
+  assert.equal(run(input.requestId).participants[0]!.registrationId, member.registrationId);
+  assert.equal((await plane.submitPlan(input)).id, input.requestId);
+  assert.equal(sent.length, 1, 'duplicate Start does not redeliver');
+  const native = event(input.requestId, { event: 'turn_started', cliPid: '500', startedAt: '2026-10-06T00:00:00.000Z' });
+  await plane.recordEvent(native);
+  await plane.recordEvent({ ...native, event: 'turn_interrupted', settled: false, backgroundState: 'unknown' });
+  assert.equal(plane.workflow.execution(input.requestId)!.status, 'interrupted', 'the recreated pane, not its retired registration, observes the turn');
+  assert.throws(() => plane.resetWorkspace({ repository: root, confirmReady: true }), /run owns/i);
 });
 test('larger saved groups cannot bypass the Plan execution limit', async () => {
   plane.removeGroup(group.id); await plane.register({ paneId: '%3', label: 'Third' });

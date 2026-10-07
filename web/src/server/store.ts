@@ -245,7 +245,9 @@ export class Store {
       const previous = this.sessions().find((s) => s.id === session.id);
       if (previous) this.assertNoTurn(previous.repository, "changing registrations");
       this.assertNoTurn(session.repository, "changing registrations");
-      const duplicate = this.sessions().find((s) => s.id !== session.id && s.identity.socketPath === session.identity.socketPath && s.identity.paneId === session.identity.paneId);
+      // A restarted tmux server reuses pane numbers. Retired launches retain their registrations for history.
+      const duplicate = this.sessions().find((s) => s.id !== session.id && s.identity.socketPath === session.identity.socketPath &&
+        s.identity.serverPid === session.identity.serverPid && s.identity.serverStarted === session.identity.serverStarted && s.identity.paneId === session.identity.paneId);
       if (duplicate) throw new AppError("DUPLICATE_PANE", `This pane is already registered as "${duplicate.label}".`, 409);
       const pair = previous && previous.repository !== session.repository ? this.pairs().find((p) => p.sessions.includes(session.id)) : undefined;
       if (previous && previous.repository !== session.repository && this.groups().some((g) => g.members.includes(session.id))) throw new AppError('IN_GROUP', 'Remove this agent from its group before moving repositories.', 409);

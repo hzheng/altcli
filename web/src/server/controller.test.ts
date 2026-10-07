@@ -136,6 +136,11 @@ test("a shell pane, an already registered pane, and a missing pane cannot be reg
   await expect(controller.register({ paneId: "%9", label: "Ghost" })).rejects.toThrow(/does not exist/);
   expect(store.sessions()).toHaveLength(2);
 });
+test("respawning a pane on the same tmux server does not permit a duplicate registration", () => {
+  const session = store.sessions()[0]!;
+  expect(() => store.saveSession({ ...session, id: 'duplicate', identity: { ...session.identity, panePid: '999' } })).toThrow(/already registered/);
+  expect(store.sessions()).toHaveLength(2);
+});
 test("re-registering a label re-points it at a new pane and keeps its history position", async () => {
   const result = await controller.register({ paneId: "%3", label: "Codex", relayPrompt: "Use the review-handoff skill." });
   expect(result.replaced).toBe(true);
