@@ -7,7 +7,8 @@ import { GlobalAIError } from '../global-ai/reads.ts';
 import { jobEnvironment } from '../../../scripts/background-native.mjs';
 import { resolveExecutable } from '../config.ts';
 import { terminalHost } from '../terminal-gateway.ts';
-import { cleanActionValue, redactActionText, type ActionResult } from './actions.ts';
+import { cleanActionValue, redactActionText, type ActionGrant, type ActionResult } from './actions.ts';
+import { READ_APP_OPERATIONS } from './app-operations.ts';
 
 const alive = (pid: number) => { try { process.kill(-pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code !== 'ESRCH'; } };
 /** One bounded foreground command. File edits and explicit shell programs use this same audited boundary. */
@@ -21,7 +22,8 @@ export async function executeCommand(action: BackgroundAction, signal: AbortSign
   // Child processes never inherit the app bearer token, hook variables, tmux identity or arbitrary environment overrides.
   const executable = resolveExecutable(op.executable.includes('/') ? resolve(directory, op.executable) : op.executable, environment);
   if (!executable) throw new GlobalAIError('ACTION_EXECUTABLE', 'This command executable is unavailable.');
-  admitted(); if (signal.aborted) throw new GlobalAIError('ACTION_REVOKED', 'Action execution was canceled before launch.');
+  if (signal.aborted) throw new GlobalAIError('ACTION_REVOKED', 'Action execution was canceled before launch.');
+  admitted();
   return new Promise(resolve => {
     let child: ReturnType<typeof spawn>, pid: number | null = null, done = false, bytes = 0, output = Buffer.alloc(0), truncated = false, stopped = false;
     let deadline: ReturnType<typeof setTimeout>, kill: ReturnType<typeof setTimeout> | undefined, abandon: ReturnType<typeof setTimeout> | undefined;
@@ -59,25 +61,33 @@ export async function executeCommand(action: BackgroundAction, signal: AbortSign
   });
 }
 /** Uses the existing authenticated routes and their services. The action grant carries provenance, not permission to skip validation. */
-export async function executeApp(action: BackgroundAction, signal: AbortSignal, admitted: () => void, grant: () => string, ownerToken: string, allowedOrigins: string[] = []): Promise<ActionResult> {
+export async function executeApp(action: BackgroundAction, signal: AbortSignal, admitted: () => void, grant: () => ActionGrant, ownerToken: string, allowedOrigins: string[] = []): Promise<ActionResult> {
   const op = action.operation, origin = terminalHost().loopbackOrigin;
   if (op.kind !== 'app' || !origin || new URL(origin).hostname !== '127.0.0.1') throw new GlobalAIError('HOST_UNAVAILABLE', 'The app action needs this host’s loopback server.');
-  admitted(); if (signal.aborted) throw new GlobalAIError('ACTION_REVOKED', 'Action execution was canceled before delivery.');
+  if (signal.aborted) throw new GlobalAIError('ACTION_REVOKED', 'Action execution was canceled before delivery.');
   // Transport always stays on loopback, including hosts configured for browser access through a private HTTPS name only.
   const authOrigin = allowedOrigins.find(value => new URL(value).host === new URL(origin).host) ?? allowedOrigins[0] ?? origin;
-  const receipt = await new Promise<{ status: number; body: unknown }>((resolve, reject) => {
+  const read = READ_APP_OPERATIONS.includes(`${op.method} ${op.path}`);
+  admitted();
+  const handle = grant();
+  let receipt: { status: number; body: unknown } | null = null;
+  try { receipt = await new Promise<{ status: number; body: unknown }>((resolve, reject) => {
     // http.request preserves the configured Host header; fetch rewrites it to the transport address. Redirects are never followed.
     const call = request(origin + op.path, { method: op.method, signal: AbortSignal.any([signal, AbortSignal.timeout(120000)]),
-      headers: { Authorization: `Bearer ${ownerToken}`, Origin: authOrigin, Host: new URL(authOrigin).host, 'Content-Type': 'application/json', 'X-AltCLI-Background-Action': grant() } }, response => {
+      headers: { Authorization: `Bearer ${ownerToken}`, Origin: authOrigin, Host: new URL(authOrigin).host, 'Content-Type': 'application/json', 'X-AltCLI-Background-Action': handle.token } }, response => {
       const chunks: Buffer[] = []; let bytes = 0;
       response.on('data', (chunk: Buffer) => { bytes += chunk.length; if (bytes > 65536) { call.destroy(new Error('Action receipt exceeded its bound.')); return; } chunks.push(chunk); });
       response.once('error', reject);
       response.once('end', () => { try { resolve({ status: response.statusCode ?? 500, body: JSON.parse(Buffer.concat(chunks).toString('utf8')) }); } catch { reject(new Error('No structured app receipt.')); } });
     });
     call.once('error', reject); call.end(op.body === undefined ? undefined : JSON.stringify(op.body));
-  });
-  const result = cleanActionValue(receipt.body, ownerToken), ok = receipt.status >= 200 && receipt.status < 300;
-  // An HTTP response is an app receipt, never a claim that an agent or the underlying task has completed.
-  return { status: ok ? 'completed' : 'uncertain', message: ok ? 'App request returned a receipt. Its operation status below is authoritative.'
-    : 'App request was refused or did not settle. Inspect the returned error and the original app operation before reconciling; nothing will be replayed.', result: { httpStatus: receipt.status, body: result } };
+  }); } catch { /* Transport failure alone cannot establish whether the handler ran. */ }
+  const evidence = handle.settle(), result = receipt ? { httpStatus: receipt.status, body: cleanActionValue(receipt.body, ownerToken) } : null;
+  if (evidence === 'unused') return { status: 'failed', message: 'The app handler did not run. Its unused grant was revoked; nothing will be replayed.', result };
+  const ok = receipt !== null && receipt.status >= 200 && receipt.status < 300;
+  if (evidence === 'consumed' && read) return { status: ok ? 'completed' : 'failed',
+    message: ok ? 'App read completed.' : 'App read failed or its result was unavailable. This audited read has no effects.', result };
+  if (evidence === 'consumed' && ok) return { status: 'accepted',
+    message: 'App request accepted. Task completion is unverified; inspect the original operation and its ownership.', result };
+  return { status: 'uncertain', message: 'The app handler may have changed state. Inspect the original operation before reconciling; nothing will be replayed.', result };
 }

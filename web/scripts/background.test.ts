@@ -7,12 +7,14 @@ import { join } from 'node:path';
 import { Store } from '../src/server/store.ts';
 import { AttentionService } from '../src/server/attention/service.ts';
 import { BackgroundService, type BackgroundServices } from '../src/server/background/service.ts';
-import { AppReads } from '../src/server/global-ai/reads.ts';
+import { AppReads, GlobalAIError } from '../src/server/global-ai/reads.ts';
+import { AppError } from '../src/core/errors.ts';
 import type { AttentionItem } from '../src/contracts/attention.ts';
 import type { LaunchProfile } from '../src/contracts/launches.ts';
 import { VERIFIED_CLAUDE_VERSIONS } from './background-native.mjs';
 import { settlementBlockers } from '../src/server/upgrade.ts';
 
+function gate() { let resolve!: () => void; const promise = new Promise<void>(r => { resolve = r; }); return { promise, resolve }; }
 const cleanups: (() => void)[] = [];
 afterEach(() => { for (const cleanup of cleanups.splice(0)) cleanup(); });
 function fixture() {
@@ -147,6 +149,110 @@ test('launch uncertainty retains the original slot and cannot automatically crea
   assert.equal(f.launches(), 1); assert.equal(f.service.settings().instance!.status, 'uncertain');
   await assert.rejects(f.enable(), { code: 'BACKGROUND_EXISTS' });
 });
+test('held manual input defers lazy startup without native probes, repeated writes or lost authorization', async () => {
+  const f = fixture(); await f.enable(); await f.service.tick();
+  let versions = 0, prepares = 0;
+  const version = f.host.version, prepare = f.host.prepare;
+  f.host.version = async e => { versions++; return version(e); };
+  f.host.prepare = async (i, d) => { prepares++; return prepare(i, d); };
+  f.services.launchGuard = async () => { throw new AppError('MANUAL_INPUT_HELD', 'Reconcile the original input hold.', 409); };
+  await f.advance();
+  const held = f.service.settings();
+  assert.equal(held.instance!.status, 'launching'); assert.equal(held.paused, false); assert.equal(held.needsInspection, false);
+  assert.equal(held.startup?.state, 'deferred');
+  const changes = () => (f.store.db.prepare('SELECT total_changes() n').get() as { n: number }).n;
+  const before = changes();
+  for (let i = 0; i < 5; i++) await f.advance(1000);
+  assert.equal(changes(), before); assert.equal(versions, 0); assert.equal(prepares, 0); assert.equal(f.launches(), 0);
+  f.services.launchGuard = work => work(); await f.advance();
+  assert.equal(f.launches(), 1); assert.equal(versions, 1); assert.equal(prepares, 1);
+  assert.equal(f.service.settings().revision, held.revision); assert.equal(f.service.settings().startup, null);
+  assert.ok(await f.claim());
+});
+test('a deferral clears once no eligible issue waits, and a later issue under the same hold defers again', async () => {
+  const f = fixture(); await f.enable(); await f.service.tick();
+  f.services.launchGuard = async () => { throw new AppError('MANUAL_INPUT_HELD', 'Reconcile the original input hold.', 409); };
+  await f.advance(); assert.equal(f.service.settings().startup?.state, 'deferred');
+  f.item.status = 'resolved'; f.write(); await f.service.tick();
+  const idle = f.service.settings();
+  assert.equal(idle.startup, null); assert.equal(idle.message, idle.instance!.message); assert.equal(idle.paused, false);
+  const changes = () => (f.store.db.prepare('SELECT total_changes() n').get() as { n: number }).n, before = changes();
+  for (let i = 0; i < 3; i++) await f.advance(1000);
+  assert.equal(changes(), before);
+  f.item.status = 'open'; f.item.sourceVersion++; f.write(); await f.service.tick(); await f.advance();
+  assert.equal(f.service.settings().startup?.state, 'deferred'); assert.equal(f.launches(), 0);
+  f.services.launchGuard = work => work(); await f.advance();
+  assert.equal(f.launches(), 1); assert.equal(f.service.settings().startup, null);
+});
+test('prelaunch configuration, preparation and unexpected guard failures pause without process inspection or retries', async () => {
+  for (const failure of ['version', 'prepare', 'guard']) {
+    const f = fixture(); await f.enable(); await f.service.tick(); let calls = 0;
+    const fail = async () => { calls++; throw new GlobalAIError('FIXTURE_INVALID', 'Correct the fixture configuration.'); };
+    if (failure === 'version') f.host.version = fail;
+    if (failure === 'prepare') f.host.prepare = fail;
+    if (failure === 'guard') f.services.launchGuard = fail;
+    await f.advance(); await f.advance();
+    assert.equal(calls, 1); assert.equal(f.launches(), 0);
+    assert.equal(f.service.settings().paused, true); assert.equal(f.service.settings().needsInspection, false);
+    assert.equal(f.service.settings().startup?.state, 'invalid'); assert.notEqual(f.service.settings().instance!.status, 'uncertain');
+    assert.match(f.service.settings().message, /Private preparation files may remain\.$/);
+    await f.control('stop', { confirm: true }); assert.equal(f.stops(), 0); assert.equal(f.service.settings().startup, null);
+  }
+});
+test('shutdown during awaited startup preparation prevents launch and preserves the paused state', async () => {
+  const f = fixture(); await f.enable(); await f.service.tick();
+  const ready = gate(), release = gate();
+  f.host.prepare = async () => { ready.resolve(); await release.promise; };
+  const tick = f.advance(); await ready.promise; await f.service.shutdown(); release.resolve(); await tick;
+  assert.equal(f.launches(), 0); assert.equal(f.service.settings().paused, true);
+  assert.equal(f.service.settings().needsInspection, true); assert.match(f.service.settings().message, /Host stopped/);
+});
+test('a profile changed during startup preparation is refused before native launch', async () => {
+  const f = fixture(); await f.enable(); await f.service.tick();
+  f.host.prepare = async () => { f.profile.revision++; };
+  await f.advance(); assert.equal(f.launches(), 0);
+  assert.equal(f.service.settings().startup?.code, 'PROFILE_CHANGED'); assert.equal(f.service.settings().needsInspection, false);
+});
+test('idle and unsettled-item polls skip native validation; concurrent eligible polls claim once', async () => {
+  const f = fixture(), job = await f.start(); await f.complete(job); await f.advance(30000);
+  let inspections = 0, versions = 0, executables = 0;
+  const inspect = f.host.inspect, version = f.host.version, executable = f.host.executable;
+  f.host.inspect = async i => { inspections++; return inspect(i); };
+  f.host.version = async e => { versions++; return version(e); };
+  f.host.executable = async p => { executables++; return executable(p); };
+  for (let i = 0; i < 5; i++) assert.equal(await f.claim(), null);
+  f.item.sourceVersion++; f.write(); await f.service.tick(); assert.equal(await f.claim(), null);
+  assert.deepEqual([inspections, versions, executables], [0, 0, 0]);
+  await f.advance(20000); const jobs = await Promise.all([f.claim(), f.claim()]);
+  assert.equal(jobs.filter(Boolean).length, 1); assert.deepEqual([inspections, versions, executables], [1, 1, 1]);
+});
+test('poll-time configuration failure is known while native identity failure still needs inspection', async () => {
+  for (const failure of ['version', 'inspect']) {
+    const f = fixture(), job = await f.start(); await f.complete(job); f.item.sourceVersion++; f.write();
+    await f.service.tick(); await f.advance(30000);
+    const fail = async () => { throw new GlobalAIError('FIXTURE_INVALID', 'Correct the fixture.'); };
+    if (failure === 'version') f.host.version = fail; else f.host.inspect = fail;
+    await assert.rejects(f.claim(), { code: 'FIXTURE_INVALID' });
+    assert.equal(f.service.settings().paused, true); assert.equal(f.service.settings().needsInspection, failure === 'inspect');
+    assert.equal(f.service.view().attempts.length, 1);
+    // A started runner was not prepared again; the known failure must not describe preparation leftovers.
+    if (failure === 'version') assert.match(f.service.settings().message, /No job was admitted; the recorded runner is unchanged\.$/);
+  }
+});
+test('a source ABA during validation cannot substitute a newer candidate into the claim', async () => {
+  const f = fixture(), job = await f.start(); await f.complete(job); f.item.sourceVersion++; f.write();
+  await f.service.tick(); await f.advance(30000);
+  const version = f.host.version;
+  f.host.version = async e => { f.item.sourceVersion += 2; f.write(); return version(e); };
+  assert.equal(await f.claim(), null); assert.equal(f.service.view().attempts.length, 1);
+});
+test('shutdown while a job descriptor is written cannot publish a new claim', async () => {
+  const f = fixture(), job = await f.start(); await f.complete(job); f.item.sourceVersion++; f.write();
+  await f.service.tick(); await f.advance(30000);
+  f.host.jobDescriptor = async () => { await f.service.shutdown(); return '/private/unused.json'; };
+  assert.equal(await f.claim(), null); assert.equal(f.service.view().attempts.length, 1);
+  assert.equal(f.service.settings().paused, true);
+});
 test('three failed attempts open the circuit; manual retries obey durable spacing and hourly admission accounting', async () => {
   const f = fixture(); let job = await f.start();
   for (let i = 0; i < 3; i++) {
@@ -197,4 +303,42 @@ test('settled history is bounded while current referenced evidence and recorded 
   assert.ok(f.store.db.prepare('SELECT id FROM background_attempts WHERE id=?').get(retained));
   await f.control('stop', { confirm: true });
   assert.equal(settlementBlockers(f.store.db).some(b => b.kind.startsWith('background')), false);
+});
+
+test('shutdown during enablement validation or Resume cannot restore active settings', async () => {
+  const f = fixture(), p = await f.service.preview({ profileId: f.profile.id }, 'http://127.0.0.1:8787');
+  const version = f.host.version;
+  f.host.version = async e => { await f.service.shutdown(); return version(e); };
+  await assert.rejects(f.service.enable({ id: p.id, digest: p.digest, requestId: randomUUID(), confirm: true }), { code: 'BACKGROUND_DISABLED' });
+  assert.equal(f.service.settings().enabled, false);
+  const g = fixture(), job = await g.start(); await g.complete(job); await g.control('pause');
+  g.host.descriptor = async () => { await g.service.shutdown(); };
+  await assert.rejects(g.control('resume', { confirm: true }), { code: 'BACKGROUND_DISABLED' });
+  assert.equal(g.service.settings().paused, true); assert.equal(g.service.settings().needsInspection, true);
+  assert.match(g.service.settings().message, /Host stopped/);
+});
+
+test('every saved native launch phase after reservation retains uncertainty and cannot retry', async () => {
+  for (const phase of ['creating', 'placeholder', 'executing', 'observed'] as const) {
+    const f = fixture(); let launches = 0;
+    f.host.launch = async (_instance, save) => { launches++; save({ phase }); throw new Error('Native phase failure'); };
+    await f.enable(); await f.service.tick(); await f.advance();
+    const state = f.service.settings(); assert.equal(state.instance!.phase, phase);
+    assert.equal(state.instance!.status, 'uncertain'); assert.equal(state.needsInspection, true);
+    for (let i = 0; i < 3; i++) await f.service.tick();
+    await assert.rejects(f.control('resume', { confirm: true }), { code: 'BACKGROUND_UNCERTAIN' });
+    assert.equal(launches, 1);
+    const { startup: _startup, ...legacy } = state;
+    f.store.db.prepare('UPDATE background_state SET value=? WHERE id=1').run(JSON.stringify(legacy));
+    assert.equal(f.service.settings().startup, null); f.restart();
+    assert.equal(f.service.settings().instance!.status, 'uncertain');
+  }
+});
+
+test('an issue resolved during provider validation cannot claim work', async () => {
+  const f = fixture(), job = await f.start(); await f.complete(job); f.item.sourceVersion++; f.write();
+  await f.service.tick(); await f.advance(30000);
+  const version = f.host.version;
+  f.host.version = async e => { f.item.status = 'resolved'; f.write(); return version(e); };
+  assert.equal(await f.claim(), null); assert.equal(f.service.view().attempts.length, 1);
 });

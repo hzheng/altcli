@@ -16,7 +16,7 @@ export interface BackgroundAction {
   id: string; requestKey: string; digest: string; attemptId: string; instanceId: string; enablement: number;
   itemId: string; itemRevision: number; sourceVersion: number; policyRevision: number;
   operation: BackgroundOperation; reason: string; risk: boolean;
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'denied' | 'stale' | 'uncertain' | 'reconciled';
+  status: 'pending' | 'running' | 'accepted' | 'completed' | 'failed' | 'denied' | 'stale' | 'uncertain' | 'reconciled';
   createdAt: string; expiresAt: string; updatedAt: string;
   authorization: BackgroundAuthorization | null; pid: number | null;
   result: unknown; message: string;

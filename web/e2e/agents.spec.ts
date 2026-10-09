@@ -196,7 +196,7 @@ test('Agents holds three kinds with their own profiles; a Background profile sta
 
 test('Background enablement requires its exact preview and acknowledgement; viewing and switching tabs never enables it', async ({ page }) => {
   const profile = { id: 'background-fixture', revision: 1, purpose: 'background' as const, label: 'Incident analyst', executable: 'claude', args: ['--model', 'haiku'], adapterHint: 'claude' as const, enabled: true };
-  const view: BackgroundView = { settings: { revision: 0, enabled: false, paused: false, needsInspection: false, failures: 0, instance: null, message: 'Background is disabled.' },
+  const view: BackgroundView = { settings: { revision: 0, enabled: false, paused: false, needsInspection: false, failures: 0, startup: null, instance: null, message: 'Background is disabled.' },
     profiles: [profile], attempts: [], explanations: [], available: true, limits: BACKGROUND_LIMITS, pending: 0 };
   const posts: string[] = [], id = crypto.randomUUID();
   await page.route('**/api/v1/background', async route => {
@@ -285,4 +285,32 @@ test('Background permissions need an explicit save and acknowledgement; another 
   view.permissions = { ...view.permissions, revision: 2, command: 'ask' };
   await expect(settings).toContainText('Permissions changed in another client.');
   await expect(settings.getByRole('button', { name: 'Save action permissions' })).toBeDisabled(); expect(posts).toHaveLength(1);
+});
+
+test('Background Log distinguishes accepted requests, known refusals and uncertain effects without approving on read', async ({ page }) => {
+  const now = new Date().toISOString(), posts: unknown[] = [];
+  const entries = [
+    { kind: 'accepted', message: 'App request accepted. Task completion is unverified; inspect the original operation and its ownership.' },
+    { kind: 'failed', message: 'The app handler did not run. Its unused grant was revoked; nothing will be replayed.' },
+    { kind: 'uncertain', message: 'The app handler may have changed state. Inspect the original operation before reconciling; nothing will be replayed.' },
+  ].map((entry, i) => ({ ...entry, id: i + 1, at: now, actor: 'host', actionId: `action-${i}`, attemptId: 'job', detail: null }));
+  await page.route('**/api/v1/background/actions', async route => {
+    if (route.request().method() !== 'GET') posts.push(route.request().postDataJSON());
+    await route.fulfill({ json: { permissions: { revision: 0, app: 'ask', command: 'ask', risk: 'ask' }, next: null, entries,
+      actions: [{ id: 'action-2', digest: 'fixture', status: 'uncertain', operation: { kind: 'app', method: 'POST', path: '/api/v1/runs' },
+        reason: 'Inspect the original request.', message: entries[2]!.message, createdAt: now, expiresAt: now, pid: null, result: null }] } });
+  });
+  await unlock(page); await openAgents(page, 'Background assistant', 'Log');
+  const log = page.getByRole('region', { name: 'Background action log' });
+  for (const entry of entries) await expect(log).toContainText(entry.message);
+  await expect(log.getByText('accepted', { exact: true })).toBeVisible();
+  await expect(log.getByText('failed', { exact: true })).toBeVisible();
+  await expect(log.getByText('Record inspection', { exact: true })).toHaveCount(1);
+  // An app action has no command process; its acknowledgement names the app request and original operation.
+  await log.getByText('Record inspection', { exact: true }).click();
+  await expect(log.getByText('I inspected the possible effects of this app request and the state of its original operation.')).toBeVisible();
+  await expect(log.getByText(/command has stopped/)).toHaveCount(0);
+  await expect(log.getByRole('button', { name: 'Approve and run' })).toHaveCount(0);
+  await openAgents(page, 'Background assistant', 'Activity'); await openAgents(page, 'Background assistant', 'Log');
+  await expect(log).toContainText('Task completion is unverified'); expect(posts).toEqual([]);
 });

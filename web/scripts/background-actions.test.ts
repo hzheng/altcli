@@ -13,6 +13,7 @@ import type { BackgroundAttempt, BackgroundSettings } from '../src/contracts/bac
 import type { AttentionItem } from '../src/contracts/attention.ts';
 import { settlementBlockers } from '../src/server/upgrade.ts';
 import { InputAuthority } from '../src/server/input-authority.ts';
+import { GlobalAIError } from '../src/server/global-ai/reads.ts';
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => { for (const clean of cleanups.splice(0).reverse()) await clean(); });
@@ -91,6 +92,11 @@ test('permission revocation wins between durable admission and the first native 
   assert.equal(f.raw(a.id).status, 'failed');
   assert.ok(f.actions.view().entries.some(e => e.kind === 'running')); // authorization was retained, never erased
 });
+test('an application error after admission is not proof that an effect never started', async () => {
+  const f = fixture(async (_a, _s, _p, admitted) => { admitted(); throw new GlobalAIError('FIXTURE_ERROR', 'Failure after possible dispatch.'); });
+  const a = await f.propose(); f.approve(a); await f.actions.drain();
+  assert.equal(f.raw(a.id).status, 'uncertain'); assert.equal(f.actions.unsettled(), true);
+});
 test('forged authority, self-managed settings, hooks, remote URLs, escapes and credential literals are refused', async () => {
   const f = fixture();
   for (const path of ['https://example.com/api/v1/runs', '/api/v1/background/actions', '/api/v1/events', '/api/v1/global-ai/tools', '/api/v1/runs/../background', '/api/v1/%62ackground', '/api/v1/runs#other'])
@@ -110,12 +116,13 @@ test('changed payload under a request key conflicts; get_actions cannot read ano
 test('one-use app grants bind method, query, body, issue and policy; async actor context stays separate from model input', async () => {
   let inspect: (() => void) | undefined;
   const f = fixture(async (a, _s, _p, admitted, grant) => {
-    admitted(); const token = grant();
+    admitted(); const handle = grant(), token = handle.token;
     assert.throws(() => f.actions.consume(token, 'GET', '/api/v1/runs', null), { code: 'ACTION_GRANT' });
     const authority = f.actions.consume(token, 'POST', '/api/v1/runs', a.operation.kind === 'app' ? a.operation.body : null);
     assert.throws(() => f.actions.consume(token, 'POST', '/api/v1/runs', a.operation.kind === 'app' ? a.operation.body : null), { code: 'ACTION_GRANT' });
     await withBackgroundAuthorization(authority, async () => { await Promise.resolve(); assert.equal(backgroundAuthorization()?.actionId, a.id); });
     assert.equal(backgroundAuthorization(), undefined); inspect?.();
+    assert.equal(handle.settle(), 'consumed'); assert.equal(handle.settle(), 'consumed');
     return { status: 'completed', message: 'Receipt.', result: null };
   });
   inspect = () => assert.equal(f.actions.view().actions[0]!.status, 'running');

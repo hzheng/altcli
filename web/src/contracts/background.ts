@@ -27,6 +27,7 @@ export const BACKGROUND_LIMITS: BackgroundLimits = {
 };
 export interface BackgroundSettings {
   revision: number; enabled: boolean; paused: boolean; needsInspection: boolean; failures: number;
+  startup: { state: 'deferred' | 'invalid'; code: string; since: string } | null;
   instance: BackgroundInstance | null; message: string;
 }
 export interface BackgroundAttempt {

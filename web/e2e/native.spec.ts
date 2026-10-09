@@ -1034,8 +1034,8 @@ test('launch status refresh shows checking, unchanged results, changes and failu
     await expect(sibling.locator('strong').first()).toContainText(other.sessionName);
   } finally {release();}
 });
-for(const scenario of ['dead','missing','live','lost'] as const)test(`launch cleanup: ${scenario} session requires explicit acknowledgement and preserves other sessions`,async({page,request},info)=>{
-  const name=`cleanup-${scenario}-${info.project.name}`;
+for(const scenario of ['dead','missing','live','lost','polled'] as const)test(`launch cleanup: ${scenario} session requires explicit acknowledgement and preserves other sessions`,async({page,request},info)=>{
+  const name=`cleanup-${scenario}-${info.project.name}-${info.repeatEachIndex}`;
   const project=await post(request,'projects',{path:`/demo/${name}`});
   const discovery=await (await request.get('/api/v1/workspaces',{headers})).json();
   const tree=discovery.projects.find((p:{id:string})=>p.id===project.id).worktrees[0];
@@ -1050,25 +1050,29 @@ for(const scenario of ['dead','missing','live','lost'] as const)test(`launch cle
     expect(response.ok(),await response.text()).toBe(true);return response.json();
   };
   const removed=await rename(item.identity.paneId,`Remove ${name}`),kept=await rename(other.identity.paneId,`Keep ${name}`);
+  const beforeCleanup=structuredClone(batch);
+  // Lost delivery and observed cleanup are separate events. Keep the manual-inspection
+  // scenario unresolved to readers until inspection; polled exercises recovery through observation.
+  const observedClosed=()=>!!item.closed&&(scenario!=='lost'||inspections>0);
   // Cleanup effects and their read model are fixtures here. Server regressions exercise the real
   // registration projection; native tests exercise actual removal on private tmux servers.
   await page.route('**/api/v1/state',async route=>{
     const response=await route.fetch(),body=await response.json() as WorkflowState;
-    if(item.closed){body.sessions=body.sessions.filter(s=>s.id!==removed.id);body.groups=body.groups.map(g=>({...g,members:g.members.filter(id=>id!==removed.id)}));}
+    if(observedClosed()){body.sessions=body.sessions.filter(s=>s.id!==removed.id);body.groups=body.groups.map(g=>({...g,members:g.members.filter(id=>id!==removed.id)}));}
     await route.fulfill({response,json:body});
   });
   await page.route('**/api/v1/workspaces',async route=>{
     const response=await route.fetch(),body=await response.json();
-    if(item.closed)for(const workspace of body.workspaces)workspace.agents=workspace.agents.filter((a:{identity:{paneId:string}})=>a.identity.paneId!==item.identity.paneId);
+    if(observedClosed())for(const workspace of body.workspaces)workspace.agents=workspace.agents.filter((a:{identity:{paneId:string}})=>a.identity.paneId!==item.identity.paneId);
     await route.fulfill({response,json:body});
   });
-  await page.route('**/api/v1/launches',route=>route.fulfill({json:[batch]}));
+  await page.route('**/api/v1/launches',route=>route.fulfill({json:[observedClosed()?batch:beforeCleanup]}));
   await page.route(`**/api/v1/launches/${item.id}/cleanup/preview`,route=>route.fulfill({json:{requestId:crypto.randomUUID(),digest:'fixture',expiresAt:new Date(Date.now()+120000).toISOString(),launchId:item.id,sessionName:item.sessionName,state:scenario==='live'?'live':scenario==='missing'?'missing':'dead',blockers:[]}}));
   await page.route(`**/api/v1/launches/${item.id}/cleanup`,async route=>{
     confirms++;expect(route.request().postDataJSON()).toMatchObject({confirmInspected:true,digest:'fixture'});
     expect(route.request().postDataJSON().confirmStop).toBe(scenario==='live'?true:undefined);
     item.closed={cleanupId:route.request().postDataJSON().requestId,at:new Date().toISOString()};
-    if(scenario==='lost')await route.abort('failed');else await route.fulfill({json:item});
+    if(['lost','polled'].includes(scenario))await route.abort('failed');else await route.fulfill({json:item});
   });
   await page.route(`**/api/v1/launches/${item.id}/inspect`,route=>{inspections++;return route.fulfill({json:item});});
   await page.goto('/');await page.getByLabel('Host access token').fill('a'.repeat(64));await page.getByRole('button',{name:'Open console'}).click();
@@ -1092,6 +1096,7 @@ for(const scenario of ['dead','missing','live','lost'] as const)test(`launch cle
   await panel.getByRole('checkbox').check();await remove.click();
   if(scenario==='lost'){await expect(card).toContainText('response was lost');expect(confirms).toBe(1);await card.getByRole('button',{name:'Inspect cleanup result'}).click();expect(inspections).toBe(1);}
   await expect(card).toHaveCount(0);expect(confirms).toBe(1);
+  if(scenario==='polled')expect(inspections).toBe(0);
   await expect(page.getByRole('group',{name:`Launch ${kept.label}`,exact:true})).toBeVisible();
   await page.getByRole('navigation',{name:'Sections'}).getByRole('button',{name:'Console',exact:true}).click();
   await expect(keptPane).toHaveCount(1);

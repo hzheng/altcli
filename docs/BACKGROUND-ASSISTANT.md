@@ -130,6 +130,22 @@ provider allowance. The first eligible issue starts one recorded private tmux se
 It stays outside Git and has no browser terminal or workspace-input exemption. **Activity** shows recent jobs; current explanations appear
 beneath the corresponding **Attention** item with likely cause, next steps, uncertainty and citations.
 
+Startup reports `settings.startup: { state, code, since } | null`. Existing records without this field read as `null`;
+this does not reclassify an uncertain instance. The global manual-input guard is unchanged.
+
+| Evidence at startup | State and recovery |
+| --- | --- |
+| Manual-input guard refuses before its callback | `deferred`, with no pause or inspection requirement. No provider probe or launch ran. Keep the same reservation and authorization; retry the guard when the hold clears. Identical polls do not rewrite settings or advance their revision. When no eligible issue waits any longer, the deferral clears to the ordinary enabled state; a later issue under the same hold defers again. |
+| Configuration, provider validation or preparation fails while phase is still `reserved` | `invalid` and paused, with no native inspection requirement. Correct the error and Resume, or Stop and preview again. Private preparation files may remain. |
+| Native phase advanced beyond `reserved` before failure | Uncertain, paused and requiring inspection. Keep the original identity and ownership; never retry automatically. |
+
+Runner polls first select one settled, eligible issue using stored state. Empty or unsettled polls do not inspect tmux or resolve/probe the
+provider. For an eligible issue, the host verifies the runner and configuration, then rechecks that exact issue ID, material revision,
+source version, enablement and admission limits after awaited validation and descriptor work. It never substitutes a newer candidate.
+An unverifiable runner needs inspection; a configuration failure after verified runner inspection pauses as a known `invalid` failure.
+Its message says that no job was admitted and the recorded runner is unchanged, because preparation did not run again.
+Shutdown or a revoked enablement cannot publish a new claim or restore an older active settings snapshot.
+
 The host, not the browser, admits work. A trusted runner receives one persisted claim and starts a fresh Claude invocation. A lost delivery
 is never replayed. The runner's private transport capability is separate from the model's issue-scoped MCP capability; neither is the owner
 token. Prompts use stdin, tools use private descriptors, and results use bounded structured stdout. The host independently checks the result
@@ -190,10 +206,10 @@ Plan keeps its original human-only setting: a separately delegated approval free
 revision. Delegated inspection records are separate from human inspection. Neither type changes unknown process evidence into idle.
 
 **Log** shows requests needing a decision before the history. Inspect the exact command or app body, check the acknowledgement, then
-**Approve and run** or **Deny action**. Permitted future requests may run with the browser closed. Only one effect runs at a time;
-other allowed requests wait for its settlement and are revalidated before admission. There are at most four proposals per investigation
+**Approve and run** or **Deny action**. Permitted future requests may run with the browser closed. Background holds one action slot;
+other allowed requests wait for its release and are revalidated before admission. There are at most four proposals per investigation
 and 100 pending proposals. Duplicate request keys and equivalent payloads return their original record instead of replaying a possible
-effect. A completed action after its investigation ended may trigger a fresh investigation, within the existing job rates and budgets.
+effect. A settled action after its investigation ended may trigger a fresh investigation, within the existing job rates and budgets.
 That follow-up grants no further effects by itself.
 
 Host commands use argument arrays, stdin, a 120-second bound, an 8 KiB captured-output bound and process-group cancellation. They do not
@@ -204,6 +220,24 @@ A command exit or app HTTP receipt does not prove that all effects or a workflow
 While manual terminal input holds any worktree, a host command is refused before it starts. Like any refusal before launch, it is recorded
 as failed and does not hold the action slot.
 
+App outcomes depend on exact grant evidence, not an HTTP status or exception class alone. Settlement atomically revokes an unused grant,
+so a delayed handler cannot consume it afterward. Missing evidence is never treated as unused. All reachable owner handlers, including
+the Helper wrapper, are covered by an explicit route inventory and behavioral guard tests.
+
+| App evidence | Action result |
+| --- | --- |
+| Grant is proven unused and revoked | `failed`: the handler never ran, including a refusal before handler entry or an unknown route. Release only Background's slot. |
+| Consumed grant for an audited read, with a valid 2xx receipt | `completed`: the read returned its result. |
+| Consumed grant for an audited read, with an error or unavailable result | `failed`: the read had no effects. |
+| Other consumed grant with a valid 2xx receipt | `accepted`: request receipt only; task completion remains unverified. Inspect the original operation. |
+| Other consumed grant with an error, malformed/oversized receipt, disconnect, timeout or abort; or missing grant evidence | `uncertain`: retain Background's slot until inspection; never replay. |
+
+The audited reads are exactly `GET /api/v1/launch-profiles` and `GET /api/v1/launches`, without query strings. GET alone is not read proof:
+Helper's view can revoke a capability and Attention's GET can reconcile stored state. Other routes stay unclassified here.
+As an interim rule, `accepted` releases Background's slot just as the old successful receipt did, while the original app operation keeps
+its own ownership and gates. This is not end-to-end effect serialization. Durable receipt tracking and retry policy are later increments.
+Log and `get_actions` retain these distinct outcomes; an accepted receipt never grants a completion claim.
+
 The database retains action payloads, rationale, principal, authorization source and revision, timestamps, native PID, bounded/redacted
 results, refusals and unknown outcomes. It also logs tool requests/results, job starts/finishes, lifecycle controls and permission changes.
 History pages contain 50 entries and have stable cursors; audit history is not automatically pruned. Credential literals are refused in
@@ -211,7 +245,8 @@ proposals and recognized credentials are redacted in results. No model reasoning
 
 Disable cancels the active command or app delivery; earlier effects may remain. Restart changes in-flight actions to **uncertain**,
 never retries them, and retains their slot. **Record inspection** requires an owner note and refuses a still-running recorded command
-process group. It releases only the Background action slot; original app operations and their holds remain authoritative. Stop Background
+process group. Its acknowledgement names what was inspected: a stopped command for a host command, or the app request and its original
+operation for an app action. It releases only the Background action slot; original app operations and their holds remain authoritative. Stop Background
 refuses unresolved effects as well as unresolved model jobs.
 
 `GET /api/v1/background/actions?before=<entry-id>` reads Log and unresolved requests. Owner POST on the same route saves permissions or

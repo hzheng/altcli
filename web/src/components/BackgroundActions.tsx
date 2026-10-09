@@ -24,7 +24,8 @@ function ActionCard({ action, disabled, decide }: { action: BackgroundAction; di
     {action.status === 'uncertain' && <details><summary>Record inspection</summary>
       <p>Inspect this action’s actual effects and the original app operation. This releases only Background’s action slot and never retries the operation or clears other app holds.</p>
       <label>Inspection note<textarea value={note} maxLength={1000} onChange={e => setNote(e.target.value)} /></label>
-      <label><input type="checkbox" checked={confirm} onChange={e => setConfirm(e.target.checked)} /> I inspected the possible effects and verified that the command has stopped.</label>
+      <label><input type="checkbox" checked={confirm} onChange={e => setConfirm(e.target.checked)} /> {op.kind === 'command' ? 'I inspected the possible effects and verified that the command has stopped.'
+        : 'I inspected the possible effects of this app request and the state of its original operation.'}</label>
       <button disabled={disabled || !confirm || !note.trim()} onClick={() => void decide({ action: 'reconcile', id: action.id, digest: action.digest, confirm: true, note })}>Record inspected outcome</button>
     </details>}
   </li>;

@@ -409,22 +409,27 @@ Scenarios naming `PLAN-OUTCOME` assume the final-line transport. [ADR-0016](adr/
 
 ## Fixture reliability follow-ups
 
-Source inspection at `13283632c826e462768bfdbecc0cfbc1e265c4c5` supports two
-focused investigations from the [next-step source](SOURCES.md#september-30-next-step-design-source).
-These are not tests executed for the documentation integration or proof that all
-historical failures share one cause.
+The [next-step source](SOURCES.md#september-30-next-step-design-source) identified two fixture issues.
+Their focused fixes have landed:
 
-- [projects.test.ts](../web/scripts/projects.test.ts) passes fixture identity as
-  invocation-local `git -c` options, whereas [projects.ts](../web/src/server/projects.ts)
-  independently checks `git var GIT_COMMITTER_IDENT`. Recommend local identity in
-  each disposable repository that application Git touches, isolated from the real
-  home/global configuration. Preserve the production identity check and test the
-  actual application invocation, not only the fixture helper.
-- [native-launch.test.ts](../web/scripts/native-launch.test.ts) starts two workers
-  with one PID-file path, reads that file and checks descendant/survivor evidence
-  for the first session. This supports a race hypothesis, not a reproduction here.
-  Recommend per-instance PID evidence and repeated private-socket runs; keep the
-  descendant assertion and inspect any remaining failures.
+- `435c231` gives disposable repositories local Git identity and isolates global/system Git configuration, including application Git calls. The production identity check remains.
+- `d104e5a` gives each native-launch instance its own PID file, preserving descendant/survivor assertions. Later flake follow-ups are separate evidence, not proof that every archived CI failure shared this cause.
+
+Background stabilization adds regressions for deferred startup, known preparation failures, unchanged idle polling, exact claim revalidation,
+shutdown races, grant revocation before handler entry, audited reads, accepted receipts and uncertain effects. The owner-route inventory
+imports the actual route exports and checks grant refusal before operation entry, including the Helper wrapper. HTTP fixtures cover malformed
+and oversized receipts, disconnect/abort, late delivery after revocation and missing evidence. These are synthetic checks; native and provider
+acceptance remain separately labeled. The handoff commit/result records the commands actually run.
+
+The captured October 3 review also reports intermittent GitHub `web` failures: check runs `37179041726`, `37175376994`,
+`37168156686`, `37134939417`, and e2e runs `37168160424`, `37130896465`, `37130892741`. Read-only log requests on
+October 7 returned HTTP 403 for all seven, so failing test names and remote root causes remain unverified. Local checks
+cannot certify those Ubuntu runs fixed; an exact published CI run remains acceptance evidence to collect.
+
+A local browser run reproduced a cleanup fixture race: it published a closed launch to polling while also expecting the
+manual lost-response inspection card to remain. The fixture now separates the effect from its observed state, retaining the
+explicit-inspection assertion and separately covering a polled closed result without replay. Repeated cases use distinct
+fixture names. This local reproduction does not identify the archived GitHub failures above.
 
 Historical CI/provider results retain their original provenance. Exact counts
 are not copied here as current health. Future repairs must record the commands,
@@ -434,7 +439,7 @@ environment and actual outcomes, rather than weakening checks to obtain a pass.
 
 **Planned requirements; no results are claimed by this catalog.** Global AI's A1
 read increment is implemented, and so is deterministic attention, whose local checks are listed
-above and in [BACKGROUND-ASSISTANT](BACKGROUND-ASSISTANT.md#tests); the Background runtime is not. A1's fixture checks and their limits are listed in
+above and in [BACKGROUND-ASSISTANT](BACKGROUND-ASSISTANT.md#tests). The Background runtime and confirmed actions are also implemented locally; the guide distinguishes fixture and installed-provider evidence. A1's fixture checks and their limits are listed in
 [GLOBAL-AI](GLOBAL-AI.md#storage-rollout-and-tests), and installed-provider acceptance
 remains open. [ADR-0022](adr/ADR-0022-app-wide-ai-instances.md) and
 [ADR-0023](adr/ADR-0023-app-tools-and-delegated-authority.md) own the proposed

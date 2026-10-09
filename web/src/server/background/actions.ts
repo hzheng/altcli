@@ -56,11 +56,16 @@ export function cleanActionValue(value: unknown, token = ''): unknown {
     [k, /^(?:token|accessToken|refreshToken|password|secret|authorization|cookie|privateKey)$/i.test(k) ? '<REDACTED>' : cleanActionValue(v, token)]));
   return value;
 }
-export interface ActionResult { status: 'completed' | 'failed' | 'uncertain'; message: string; result: unknown }
+export interface ActionResult { status: 'accepted' | 'completed' | 'failed' | 'uncertain'; message: string; result: unknown }
+export interface ActionGrant {
+  token: string;
+  /** Atomically revokes future consumption. Repeated settlement returns the same evidence. */
+  settle(): 'unused' | 'consumed' | 'unknown';
+}
 export interface ActionServices {
   db: Database.Database; settings(): BackgroundSettings; item(id: string): AttentionItem | undefined; enabled(): boolean;
   /** Starts no process or request before `admitted()` returns. */
-  execute(action: BackgroundAction, signal: AbortSignal, started: (pid: number) => void, admitted: () => void, grant: () => string): Promise<ActionResult>;
+  execute(action: BackgroundAction, signal: AbortSignal, started: (pid: number) => void, admitted: () => void, grant: () => ActionGrant): Promise<ActionResult>;
   settled(action: BackgroundAction): void; ownerToken?: string; now?: () => number;
 }
 const out = { type: 'object', properties: { source: { type: 'string' }, revision: { type: 'string' }, observedAt: { type: 'string' }, data: { type: 'object' } }, required: ['source', 'revision', 'observedAt', 'data'], additionalProperties: false };
@@ -68,7 +73,7 @@ const input = (properties: Record<string, unknown>, required: string[] = []) => 
 export const ACTION_TOOLS: AppTool[] = [
   { name: 'get_action_permissions', description: 'Read Background action permissions, limits and request formats. The model cannot change permissions. App contracts are in shared/openapi.yaml via read_doc/search_docs.', inputSchema: input({}), outputSchema: out,
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } },
-  { name: 'get_actions', description: 'Read recent actions for this issue, or one actionId for its bounded result. Pending is not approval; uncertain actions must not be repeated.', inputSchema: input({ actionId: { type: 'string' } }), outputSchema: out,
+  { name: 'get_actions', description: 'Read recent actions for this issue, or one actionId for its bounded result. Pending is not approval. Accepted is an app request receipt, not task completion; inspect the original operation. Uncertain actions must not be repeated.', inputSchema: input({ actionId: { type: 'string' } }), outputSchema: out,
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } },
   { name: 'request_action', description: 'Propose one exact app request or host command (including file edits). Returns a durable action ID immediately. Ask-first actions wait in Background → Log; saved permissions may start them. Never assume completion; read get_actions. Do not repeat uncertain effects or use commands to evade app checks.',
     inputSchema: input({ requestKey: { type: 'string', minLength: 1, maxLength: 100 }, reason: { type: 'string', minLength: 1, maxLength: 1000 }, operation: { oneOf: [
@@ -213,15 +218,23 @@ export class BackgroundActions {
       let admitted = false;
       try {
         const result = await this.services.execute(action, abort.signal, pid => { action.pid = pid; this.save(action); }, () => { this.assertCurrent(action); admitted = true; }, () => {
-          const token = randomBytes(32).toString('hex'); this.grants.set(token, { id: action.id, consumed: false }); return token;
+          const token = randomBytes(32).toString('hex'), record = { id: action.id, consumed: false };
+          this.grants.set(token, record);
+          let evidence: ReturnType<ActionGrant['settle']> | undefined;
+          return { token, settle: () => {
+            if (evidence !== undefined) return evidence;
+            evidence = this.grants.get(token) !== record ? 'unknown' : record.consumed ? 'consumed' : 'unused';
+            this.grants.delete(token); return evidence;
+          } };
         });
         const next = this.transition(action, result.status, result.message, 'host', result.result);
         if (result.status !== 'uncertain') this.services.settled(next);
       } catch (error) {
         // Nothing starts before admission, so a refusal there (such as held manual input) is known, never an unknown outcome.
-        const known = error instanceof GlobalAIError || !admitted;
-        this.transition(action, known ? 'failed' : 'uncertain', known ? (error instanceof Error ? error.message : 'Refused before execution; nothing started.')
+        const known = !admitted;
+        const next = this.transition(action, known ? 'failed' : 'uncertain', known ? (error instanceof Error ? error.message : 'Refused before execution; nothing started.')
           : 'Execution outcome is unknown. Inspect the host and the app operation; do not replay.', 'host');
+        if (known) this.services.settled(next);
       } finally { this.running.delete(action.id); for (const [token, grant] of this.grants) if (grant.id === action.id) this.grants.delete(token); }
     });
     this.running.set(action.id, { abort, promise });
